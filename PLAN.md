@@ -55,7 +55,7 @@ SHA.
 
 ### T1 · Model and file format (docs/FORMAT.md)
 - [x] T1.1 [L] `splice_model` (edda50c): arenas (SoA, u32 slots), typed IDs that print as `clp_2x`, `Frame = i32`, project, spine, lanes, clips, items, markers, effects, media table, words. Accept: unit tests; capacity reserve means no growth during warm edits.
-- [ ] T1.2 [L] `splice_json`: borrowing tokenizer, canonical writer (fixed key order, shortest round-trip floats, in-house), errors with byte offset and path. Accept: round-trip of every fixture is byte-identical; a warm write to a reused buffer allocates nothing; malformed-input table test.
+- [x] T1.2 [L] `splice_json` (2505b11): borrowing tokenizer, canonical writer (fixed key order, shortest round-trip floats, in-house), errors with byte offset and path. Accept: round-trip of every fixture is byte-identical; a warm write to a reused buffer allocates nothing; malformed-input table test.
 - [ ] T1.3 [L] `.splice` package: read/write `project.json` and `media.json`, atomic writes (tmp + fsync + rename), `lock` (flock, pid, host), format version checks. Port the prototype's sample project as `fixtures/projects/sample.splice`. Accept: load → save → load gives an identical hash; a newer major is refused with `FORMAT_TOO_NEW`; a second writer gets `LOCKED`.
 - [ ] T1.4 [L] Journal: append one batch per line, fsync per commit, hash chain, snapshots every 64 batches, recovery (snapshot + replay, truncate a torn tail). Accept: a crash simulated at **every byte offset** of a 3-batch journal recovers to the last complete batch with the right hash.
 
@@ -187,3 +187,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T0.3 · done · 0e16998 · `make check` 0.96 s (slowest: source shape rules 0.024 s)
 - 2026-11-18 · T0.4 · done · 748047c · `make check` 0.87 s (7 tests, slowest: source shape rules 0.022 s)
 - 2026-11-18 · T1.1 · done · edda50c · `cargo t -p splice_model` 0.64 s, `make check` 1.58 s (10 tests, slowest: transcript stub 0.022 s)
+- 2026-11-18 · T1.2 · done · 2505b11 · `cargo t -p splice_json` 0.57 s, `make check` 1.05 s (15 tests, slowest: source shape rules 0.023 s)
