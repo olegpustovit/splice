@@ -8,3 +8,7 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+mem_sys = { path = "../../pxui/crates/open/mem_sys", features = ["counting"] }
+splice_testkit = { path = "../splice_testkit" }

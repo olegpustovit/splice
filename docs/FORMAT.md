@@ -5,6 +5,8 @@ A project is a **package directory** `Name.splice/`. Finder shows it as one file
 written by `splice_json`, which is canonical: fixed key order, no insignificant whitespace in
 `journal.ops`, integers for every time value, shortest round-trip floats. The same project therefore
 always serializes to the same bytes, and hashes (FNV-1a 64, PXUI's `hash_of`) are stable.
+Schema encoders supply keys in the order shown below. Integer fields keep their exact decimal
+spelling. The decoder reports invalid JSON with a byte offset and path and rejects duplicate keys.
 
 ```
 Name.splice/
