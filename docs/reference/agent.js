@@ -151,9 +151,10 @@ const TOOLS = {
       JOBS[id]={id,kind:"export",state:"running",progress:0,revision:rid(),settings:{width:w,height:h,fps:FPS,codec:a.preset==="social-h264"?"H.264":"HEVC",container:"MP4",encoder:"VideoToolbox (hardware)",path,durationFrames:endOf(proj())}};
       EXPORTED.add(path);runJob(JOBS[id]);
       return {jobId:id,state:"running",settings:JOBS[id].settings};}},
-  "record.start":{group:"Jobs",hint:"edit",desc:"Starts a headless recording (screen or window, mic, system audio, camera, input events) into the project. No UI opens. Simulated here; built in 0.2 (PLAN.md T8).",
+  "record.start":{group:"Jobs",hint:"edit",desc:"Starts a headless recording of a display, window or area (with mic, system audio, camera and input events) into the project. Runs in Splice.app's capture agent, so grants stay with the signed bundle. dryRun:true lists sources and permission states. Simulated here; built in M1 (PLAN.md T8).",
     example:()=>({projectId:PROJECT_ID,display:"main",mic:true,events:true}),
     run(a){needProject(a);needAccess("live");
+      if(a.dryRun)return {sources:{displays:[{id:"main",width:3024,height:1964}],windows:[{id:"win_41",app:"com.apple.Safari",title:"Docs"}]},permissions:{screen:"granted",microphone:"granted",camera:"notDetermined",inputMonitoring:"granted"},identity:{path:"~/Applications/Splice.app",team:"7ZH3FYV964",requirementMatches:true}};
       if(Object.values(JOBS).some(j=>j.state==="recording"))throw fail("BUSY","A recording is already running.","record.stop it first.");
       const id="job_"+(SERIAL++).toString(36);
       JOBS[id]={id,kind:"record",state:"recording",progress:0,settings:{display:a.display??"main",window:a.window??null,mic:!!a.mic,systemAudio:!!a.systemAudio,camera:!!a.camera,events:a.events!==false}};

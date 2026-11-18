@@ -37,6 +37,9 @@ says. The Mini is shared: no polling, `nice`, 2 jobs.
 3. Add a zero-allocation check where the task touches a steady-state path.
 4. Mark any shortcut with `ponytail:` and its upgrade trigger.
 
+If a step needs a person (granting privacy permissions, re-confirming screen recording), finish the
+rest, mark the task `- [~] … HUMAN: <exactly what to click>`, commit, and stop.
+
 If you are blocked after two honest attempts, write `blocked: <why, what you tried, what would unblock
 it>` under the task in PLAN.md, commit that note, and stop.
 

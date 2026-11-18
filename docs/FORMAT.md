@@ -12,8 +12,11 @@ Name.splice/
   journal.ops           append-only command log, one batch per line (the source of truth)
   media.json            media table: med_ id → location and probe
   transcripts/<med>.json  words for a media item, with its hash
-  takes/<med>/events.json  Recorder-compatible input events of a recorded take
-  takes/<med>/*.mov     recorded media (recordings live in the package; imports stay where they are)
+  takes/<med>/          a recorded take, in Recorder's layout (recordings live in the package; imports stay where they are):
+    screen.mov          HEVC, cursor-less, variable frame rate
+    mic.m4a  system.m4a camera.mov   optional, one file per source, AAC 48 kHz / HEVC
+    events.json         {"t0","source":{kind,rect,scale},"events":[{t,k:move|down|up|drag|scroll|key|flags|cursor,…}]}, t in seconds since t0, positions normalized 0…1
+    cursors/<hash>.png  + <hash>.json {hotX, hotY, scale}
   exports/              rendered output; never overwritten unless asked
   friction.jsonl        MCP friction log for this project (docs/LOOP.md)
   cache/                disposable: thumbnails, peaks, proxies. Never in git, never required

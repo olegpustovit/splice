@@ -14,7 +14,9 @@ Build loop, self-improvement and Mac testing: [docs/LOOP.md](docs/LOOP.md).
 
 - `crates/splice_model`, `splice_json`, `splice_core`, `splice_eval`, `splice_mcp`, `splice_cli`,
   `splice_testkit`, `splice_kit`: portable, build and test on Linux.
-- `crates/*_sys`, `splice_media`, `splice_av`, `splice_app`: macOS only. Their contents sit behind
+- `crates/apple_sys` (LocalWave's `lw_apple_sys` pattern: ARC Objective-C shims + one C header + safe
+  Rust modules; ScreenCaptureKit, AVFoundation, events, permissions), `splice_media`, `splice_av`,
+  `splice_capture`, `splice_app`: macOS only. Their contents sit behind
   `#![cfg(target_os = "macos")]` so `cargo check --workspace` stays green on Linux.
 - `pxui/`: PXUI submodule pinned on its `rust-port` branch. Apps use `pxui` (public) and the open tier
   (`pxui_host`, `mem_sys`, `file_access_sys`, …). Never name `pxui/crates/private`.

@@ -27,11 +27,15 @@ reference implementation.
 | 15 | `export.start` | edit | Export job, **no approval**. Default path `<project>.splice/exports/<name>-r<rev>.mp4`; refuses to overwrite unless `overwrite:true` |
 | 16 | `jobs.status` | read | Progress and result of export, transcription and recording jobs |
 | 17 | `jobs.cancel` | edit | Cancel a job |
-| 18 | `record.start` | edit | (0.2) Headless screen, window, mic, camera and event capture into the project |
-| 19 | `record.stop` | edit | (0.2) Finish recording; the take lands as a clip with components |
+| 18 | `record.start` | edit | Headless capture of a display, window or area, with mic, system audio, camera and input events, into a project (`create:true` makes one). `dryRun:true` lists sources and permission states without recording; `duration` auto-stops |
+| 19 | `record.stop` | edit | Finish recording: the take lands in `takes/` and on the spine as one undoable agent batch (`insert:false` keeps it in media only) |
 
 Changes from the prototype's 17 tools: no export approval (`NEEDS_APPROVAL` and `DENIED` are gone),
 `history.undo` gains `scope:"to"`, `project.info` opens by path, and the recording pair is added.
+Recording runs in Splice.app's capture agent (LaunchServices-launched, accessory, no window), so
+privacy grants belong to the stably signed `~/Applications/Splice.app`, never to the terminal or MCP
+client that spawned `splice mcp` (PLAN.md T8).
+
 Stay under 20 tools: new capabilities become `edit.apply` commands or parameters, not tools.
 
 ## Every call
@@ -50,7 +54,9 @@ Stay under 20 tools: new capabilities become `edit.apply` commands or parameters
 `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
 `MEDIA_OFFLINE`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`,
 `UNSUPPORTED_PLATFORM` (Linux: export, frames, recording), `TCC_DENIED` (recording without a grant;
-the fix names the System Settings pane).
+the fix names the System Settings pane and `splice permissions --request`; `needsHuman:true` when only
+a person can click), `IDENTITY_MISMATCH` (the running bundle is not the installed, Developer ID–signed
+Splice.app, so grants would not apply).
 
 ## Tests
 

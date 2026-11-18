@@ -80,6 +80,12 @@ the latest example. Each cluster gets exactly one of these outcomes:
 <id> <sha>` closes the entry. Skill pitfalls are deleted once a core change makes them unnecessary, so
 the skill shrinks as the core improves.
 
+### Real projects from recordings
+
+`splice record` and `record.start` turn any screen activity into an editable project. The loop uses
+this to make eval seed projects from real recordings (an eval task may name a `record:` seed recipe),
+and to capture a repro of a viewer bug as a project an agent can inspect frame by frame.
+
 ### Measured by evals (0.2)
 
 `make eval` runs `evals/tasks/*.toml` (a natural-language task, a seed project, and end-state
@@ -104,3 +110,7 @@ recoveries, undos. A drop from the baseline is a red check for the loop.
   `make mac-pull F=/tmp/f.png` copies a result back into `target/mac/` to look at.
 - GUI checks use `--snapshot` (offscreen). Never take over the Mini's screen.
 - Signing over ssh: unlock the passwordless `splice-signing` keychain (T7.2) and never print keychain contents.
+- Recording checks are 3 s captures. Never record for longer, and never leave a capture agent running.
+- Privacy grants are a **HUMAN** step (`splice permissions --request` on the Mini, then a person
+  clicks). The loop marks such a task `- [~] … HUMAN: <what to click>` and moves on; it never tries
+  to script System Settings or edit the TCC database.

@@ -6,6 +6,7 @@
 #   make loop      run the build loop (Codex by default; AGENT=claude for Claude Code)
 PROFILE ?= release
 PREFIX  ?= $(HOME)/.local
+# One fixed install location: privacy grants follow bundle ID + signature, and capture runs only from here.
 APPDIR  ?= $(HOME)/Applications
 CARGOFLAGS = $(if $(filter release,$(PROFILE)),--release)
 PRODUCTS   = target/$(if $(filter release,$(PROFILE)),release,debug)

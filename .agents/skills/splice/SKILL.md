@@ -28,6 +28,16 @@ has the project open in the viewer, they see your edits as you make them.
 8. `export.start` when done. It writes `<project>.splice/exports/…`, refuses to overwrite unless
    `overwrite:true`, and reports through `jobs.status`.
 
+## Recording the screen
+
+- `record.start {path:"…/New.splice", create:true, dryRun:true}` first: it lists displays, windows
+  and apps, and says which permissions are granted. Then record with a `source`
+  (`{display:"main"}`, `{window:{app:"com.apple.Safari"}}` or `{area:{display, rect}}`), plus
+  `mic`, `systemAudio`, `camera` and `events:true`. Set `duration` for unattended runs.
+- `record.stop {jobId}`: the take lands on the spine as one undoable batch, with its cursor, clicks
+  and keys as components you can query (`takes.events`) and edit.
+- `TCC_DENIED` with `needsHuman:true`: stop and tell the human the exact fix. Don't retry in a loop.
+
 ## When a call fails
 
 Errors come back as results: `{code, message, fix, current?, valid?}`.

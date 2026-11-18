@@ -15,9 +15,11 @@ A Rust core that does **all** editing, exposed 1:1 over MCP and the CLI, plus th
 | `make install` | Same with the release profile. Both share one bundle ID and signer, so TCC grants persist |
 | `splice` | Opens the viewer with the native macOS open panel (`pxui_sdl::Window::show_dialog`) to pick a `.splice` project |
 | `splice <path>` / `splice open <path>` | Opens the viewer on that project directly; `splice new <path>` creates one |
-| `splice mcp` | MCP over stdio. **Never opens UI.** Editing, export and (0.2) recording all work headless. If a viewer has the project open, it forwards to it over the socket so the human sees edits live |
+| `splice mcp` | MCP over stdio. **Never opens UI.** Editing, export and screen recording all work headless. If a viewer has the project open, it forwards to it over the socket so the human sees edits live |
 | `splice apply ops.json` · `snapshot` · `describe` · `export` · `frame` · `friction` · `check` | Headless CLI over the same core |
 | Viewer | One window: the program frame letterboxed to the project aspect, a play bar (play/pause, scrubber, timecode). Space plays/pauses, ←/→ steps a frame, ⌘Z/⇧⌘Z undo/redo. Nothing else |
+| `splice record <new.splice> [--display main \| --window <app> \| --area …] [--duration s] [--mic] [--system-audio] [--camera]` | Records the screen into a new (or existing) project: the take lands as an editable clip with its components and events |
+| `splice permissions [--request]` | Shows (or requests once) Screen Recording, Microphone, Camera and Input Monitoring for Splice.app, plus the signing identity and install path |
 | Export | AVFoundation, no approval, writes `<project>.splice/exports/<name>-r<rev>.mp4`, never overwrites unless `overwrite:true` |
 
 **Out of 0.1:** timeline UI, inspector, menus, palette, effects UI, the Metal compositor (M3), and any
@@ -31,8 +33,10 @@ Build the core on the Linux box. Reach for the Mac only for `[mac]` tasks:
 
 ## Cut lines
 
-- **0.1 · today:** T0, T1, T2 (Tier A commands), T3, T4, T5.1–T5.5, T6.1–T6.2, T7.1–T7.5.
-- **0.2:** T2.7 (Tier B commands), T3.6 evals, T6.3, T8 recording, T9 captions with transcription.
+- **0.1 · today:** T0, T1, T2 (Tier A commands), T3, T4, T5.1–T5.5, T6.1–T6.2, T7.1–T7.5, then T8
+  (recording through MCP). Recording is secondary to editing but in 0.1, so agents can generate real
+  projects to edit and to feed the self-improvement loop.
+- **0.2:** T2.7 (Tier B commands), T3.6 evals, T6.3, T9 captions with transcription.
 - **0.3 · M1 exit:** every registry row built (the 20 planned rows too), T7.6 notarization,
   performance budgets met, the friction backlog empty or triaged.
 
@@ -73,7 +77,7 @@ SHA.
 - [ ] T3.6 [L] (0.2) `.mcp.json` dogfood and `make eval`: `evals/tasks/*.toml` (prompt, seed project, end-state assertions checked by `splice check`) run `claude -p` with the `splice` skill against `splice mcp`. Results go to `evals/results.tsv` (pass, calls, errors, recoveries). Accept: 5 tasks; a baseline recorded.
 
 ### T4 · Media on macOS (no ffmpeg)
-- [ ] T4.1 [M] Sys crates: `objc_sys` (msgSend, autorelease pools, NSString, NSURL, minimal blocks), `av_sys`, `cm_sys`, `cv_sys`: hand-written, the only `unsafe`. Accept: probe of a fixture movie on the Mini.
+- [ ] T4.1 [M] `apple_sys`, in LocalWave's `lw_apple_sys` pattern: one crate, one ARC Objective-C shim per service (`media.m`, `capture.m`, `events.m`, `permissions.m`, `panel.m`, …) behind one C header `platform.h` with `_Static_assert` layout checks, built by `cc` in build.rs (macOS only), and a small safe Rust module per shim. Native → Rust traffic is a bounded event ring polled with `peek`/`ack` plus a `wake` callback; callbacks never hold Rust references; errors come back as `char **error`. This crate is the only `unsafe`. Accept: probe of a fixture movie on the Mini.
 - [ ] T4.2 [M] `splice_media`: import + probe (fps, duration, size, tracks, channels) into `media.json` with a bookmark; the core receives descriptors only. Accept: `splice apply` with `clip.insert {path}` on the Mini; on Linux the same transcript uses fixture descriptors.
 - [ ] T4.3 [M] `splice_av`: lower the eval plan to `AVMutableComposition` + `AVMutableVideoComposition` (cuts, speed via scaleTimeRange, overlay layers with transform/opacity/fades, audio mix volumes). Preview and export use this one lowering. `ponytail:` titles and captions use the CoreAnimation tool in export and PXUI text in preview; upgrade trigger: the M3 Metal compositor, or any visible mismatch reported in friction.
 - [ ] T4.4 [M] Export job: H.264 and HEVC presets, progress via `jobs.status`, cancellation, no approval, the default path rules above. Accept: exporting the sample yields an mp4 whose probed duration and frame count match the timeline.
@@ -93,15 +97,81 @@ SHA.
 
 ### T7 · Install, locate, sign (LocalWave model) [M]
 - [ ] T7.1 `packaging/Info.plist`: `com.olegpustovit.splice`, `LSMinimumSystemVersion 15.0`, microphone/camera usage strings, a `.splice` package UTI (`com.olegpustovit.splice.project`, conforms to `com.apple.package`), document types. `packaging/splice.entitlements`: hardened runtime, `device.audio-input`, `device.camera`, no sandbox (CLI and MCP read arbitrary paths).
-- [ ] T7.2 `packaging/bundle-macos.sh` (from LocalWave `packaging/bundle-macos.sh`): binary + `libpxui.1.dylib` → `Splice.app/Contents/{MacOS,Frameworks}`; rpath `@executable_path/../Frameworks`; refuse unbundled dylibs; codesign with the first of Developer ID (team 7ZH3FYV964) › Apple Development › ad-hoc; hardened runtime only with a real identity. Over ssh, unlock the keychain first (`security unlock-keychain`; Recorder keeps a passwordless `recorder-signing.keychain-db`; do the same as `splice-signing`).
-- [ ] T7.3 `make dev` (debug) and `make install` (release) → `$(APPDIR)/Splice.app` (default `~/Applications`) + `ln -sfn …/Contents/MacOS/splice ~/.local/bin/splice`, then `lsregister` so `.splice` packages open in Splice. Accept: both run on the Mini; `which splice` resolves; `splice version` prints the build.
+- [ ] T7.2 `packaging/bundle-macos.sh` (from LocalWave `packaging/bundle-macos.sh`): binary + `libpxui.1.dylib` → `Splice.app/Contents/{MacOS,Frameworks}`; rpath `@executable_path/../Frameworks`; refuse unbundled dylibs; codesign **always** with the Developer ID Application identity of team 7ZH3FYV964 and the hardened runtime, for `make dev` and `make install` alike. An installed build never falls back to ad-hoc or another identity: it fails with instructions (Recorder's rule), because a different signer silently loses every privacy grant. Over ssh, use a passwordless `splice-signing.keychain-db` holding that identity (Recorder's `recorder-signing` model), unlocked by the Makefile.
+- [ ] T7.3 `make dev` (debug) and `make install` (release) → the one fixed location `$(APPDIR)/Splice.app` (default `~/Applications`; dev and release replace the same bundle in place) + `ln -sfn …/Contents/MacOS/splice ~/.local/bin/splice`, then `lsregister` so `.splice` packages open in Splice. Accept: both run on the Mini; `which splice` resolves; `splice version` prints the build.
 - [ ] T7.4 Locate: the binary finds its bundle through `_NSGetExecutablePath` + realpath (safe through the symlink); resources come from `Contents/Resources`; state lives in `~/Library/Application Support/Splice` (Linux: `$XDG_STATE_HOME/splice`); the socket goes in the state dir. Accept: unit tests for path resolution; `splice --smoke-test` run through the symlink.
 - [ ] T7.5 `tools/check-macos-bundle.sh` (from LocalWave): Info.plist keys, minos ≤ 15.0, rpaths, no unbundled dependencies, entitlements, `--smoke-test`. Run by `make mac-check`.
 - [ ] T7.6 (0.3) Notarize (`tools/notarize-macos.sh`) and a `.dmg`.
 
-### T8 · Recording through MCP, headless (0.2) [M]
-- [ ] T8.1 `record.start {display|window, mic, systemAudio, camera, events}` → ScreenCaptureKit + AVAssetWriter into `<project>.splice/takes/<med>/` with Recorder's `events.json` (cursor, clicks; keys follow the privacy policy). `record.stop` finalizes and imports the take as a clip with components. No UI.
-- [ ] T8.2 TCC attribution: `splice mcp` re-spawns the bundled binary with responsibility disclaimed, so Screen Recording and Microphone grants belong to Splice.app's signature, not to the terminal or MCP client. `ponytail:` private spawn attribute; upgrade trigger: it breaks → a LaunchServices helper (`open -g -j`, Recorder D6). Accept: on the Mini, an ssh-launched `splice mcp` records 3 s after a one-time grant.
+### T8 · Screen recording through MCP, almost headless (0.1, after T7) [M]
+
+Recorder's capture, exposed as MCP and CLI. The key requirement: a **stable signature, a stable
+location and permissions granted once**, so an agent can record from ssh or a terminal without a prompt.
+Depends on T1.3, T4.1, T7.
+
+- [ ] T8.0 Stable identity. One install location (`~/Applications/Splice.app`, symlinked from
+  `~/.local/bin/splice`); capture only ever runs from that bundle, never from `target/`. One signer
+  (T7.2). `packaging/designated-requirement.txt` pins `identifier "com.olegpustovit.splice" and anchor
+  apple generic and certificate leaf[subject.OU] = "7ZH3FYV964"` (as `codesign -d -r-` prints it), and
+  `tools/check-macos-bundle.sh` refuses a bundle whose requirement differs, because privacy grants are
+  keyed on bundle ID + designated requirement. Install replaces the bundle in place after quitting
+  running Splice processes normally. If the signer ever changes, it runs a targeted
+  `tccutil reset {ScreenCapture,Microphone,Camera,ListenEvent} com.olegpustovit.splice` and says so;
+  it never runs `tccutil reset All`. Accept: two consecutive `make dev` builds have an identical
+  designated requirement, and the check refuses a re-signed copy.
+- [ ] T8.1 Capture agent. macOS attributes capture to the *responsible* process, so a `splice mcp` that
+  Codex or Claude spawns in a terminal would make the terminal ask for permission. Capture therefore
+  runs inside Splice.app, launched by LaunchServices: `open -g -j -a ~/Applications/Splice.app --args
+  --capture-agent` starts it with the accessory activation policy (no Dock icon, no window). It
+  listens on the state-dir unix socket (getpeereid, same user only) and exits after 60 s idle.
+  `splice mcp` and `splice record` are its clients. `ponytail:` an on-demand LaunchAgent
+  plist instead, if `open` ever needs a GUI session the agent lacks. Accept: a socket round trip; an
+  ssh-launched client starts the agent; the agent exits when idle.
+- [ ] T8.2 Permissions. `splice permissions` and `record.start {dryRun:true}` report Screen Recording
+  (`CGPreflightScreenCaptureAccess`), Microphone and Camera (`AVCaptureDevice authorizationStatus`),
+  Input Monitoring (`CGPreflightListenEventAccess`), plus the identity (team, path, designated
+  requirement match). `splice permissions --request` asks *from the agent process*
+  (`CGRequestScreenCaptureAccess`, `requestAccessForMediaType`, `CGRequestListenEventAccess`) and opens
+  the matching System Settings pane. **HUMAN, once on the Mini:** grant those four to Splice. A missing
+  grant is `TCC_DENIED`, with a `fix` that names the pane and `splice permissions --request`.
+  Risk: macOS 15+ can periodically ask the user to re-confirm screen-recording access for apps that
+  capture without the system picker. The agent then gets `TCC_DENIED` with `needsHuman:true`, and the
+  loop marks the task `HUMAN:` instead of retrying.
+- [ ] T8.3 `apple_sys::capture`, `events`, `screenshot`: modern ScreenCaptureKit, bound the T4.1 way.
+  - Sources: `SCShareableContent` lists displays, windows and apps, excluding Splice's own windows.
+    `SCContentFilter` covers a display, a window, or a display area (`sourceRect`).
+  - `SCStreamConfiguration` per Recorder SPEC §4.8: `showsCursor=false`, 60 fps, 420v for
+    displays and BGRA for windows, queue depth 6, `capturesAudio` with `excludesCurrentProcessAudio`,
+    `captureMicrophone` with the device ID, 48 kHz stereo.
+  - Writers: `SCStream` outputs → one `AVAssetWriter` per source. Video is HEVC in realtime at about
+    `pixels × 4` bps, capped at 60 Mbps; audio is AAC 48 kHz 192 kbps. Only complete frames are
+    written. `t0` is the first complete screen frame; pauses are subtracted.
+  - Camera: `AVCaptureSession` → `camera.mov`.
+  - Events: a listen-only `CGEventTap` (move, down/up, drag, scroll, keyDown with the typed
+    character, flagsChanged) in normalized source coordinates, polling the window frame at 10 Hz for
+    window capture. Cursor images come from `NSCursor.currentSystem`, hashed into `cursors/`.
+  - Stills: `SCScreenshotManager` for `record.start {still:true}` and agent screenshots.
+  - The Rust side drains the event ring with no allocations in steady state.
+  - Accept: 3 s display capture on the Mini: the files probe correctly, `events.json` parses, and the
+    take duration matches wall time within 2 frames.
+- [ ] T8.4 MCP and CLI.
+  - `record.start {projectId | path, create, source: {display:"main"|id} | {window:{app, title}|id} | {area:{display, rect}}, mic, systemAudio, camera, events:true, duration?, countdown:0, insert:true, dryRun}`
+    returns a `jobId`. `dryRun` returns the available sources and the permission states without recording.
+  - `record.stop {jobId}` finalizes. `jobs.status` shows elapsed time, bytes and dropped frames;
+    `jobs.cancel` discards the take.
+  - On stop: the take is written to `<project>.splice/takes/<med>/` in Recorder's layout
+    (`screen.mov`, `mic.m4a`, `system.m4a`, `camera.mov`, `events.json`, `cursors/`). It becomes a
+    `kind:"take"` media entry with components (screen, mic, system, camera, cursor, keys) and is
+    inserted on the spine as one agent batch (undoable). With `insert:false` it only lands in media.
+  - `splice record` is the same thing in one command and creates the project when the path is new.
+  - Linux: transcripts with fixture takes; live capture returns `UNSUPPORTED_PLATFORM`.
+- [ ] T8.5 Acceptance on the Mini, after the one-time grant, all from ssh with short runs (the Mini is
+  shared):
+  1. `splice record /tmp/r.splice --display main --duration 3 --mic` gives a project with one take
+     clip of 90 ± 6 frames and its events.
+  2. `make dev`, then the same again: no prompt (stable signature).
+  3. `make install`, then a `splice mcp` transcript from a Codex-spawned process: no prompt
+     (responsible process = Splice.app).
 
 ### T9 · Text and captions (0.2) [M + L]
 - [ ] T9.1 [M] `splice_speech`: SpeechAnalyzer transcription job → words with frame-accurate timing (forced alignment), transcript hash. Linux uses fixture transcripts.
