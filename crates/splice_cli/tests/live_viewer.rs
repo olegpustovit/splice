@@ -14,6 +14,7 @@ mod live {
     use std::{
         fs,
         io::{BufRead, BufReader, Write},
+        os::unix::fs::FileTypeExt,
         path::Path,
         process::{ChildStdin, ChildStdout, Command, Stdio},
         sync::mpsc,
@@ -67,7 +68,10 @@ mod live {
     }
 
     pub(super) fn native_viewer_live_mcp_updates_snapshots_and_undo_restores_them() {
-        let dir = std::env::temp_dir().join(format!("splice-live-viewer-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "splice-live-viewer-with-a-long-state-path-for-darwin-sockets-{}",
+            std::process::id()
+        ));
         fs::create_dir(&dir).unwrap();
         let state = dir.join("Library/Application Support/Splice");
         let path = dir.join("Live.splice");
@@ -81,6 +85,10 @@ mod live {
         let title = items.id(items.order()[0]).unwrap().to_string();
         let mut viewer = Viewer::new(store, Some(state.clone()));
         let server = Server::start(viewer.store(), &state, || true).unwrap();
+        let mut sockets = fs::read_dir(state.join("live")).unwrap();
+        let socket = sockets.next().unwrap().unwrap();
+        assert!(socket.file_type().unwrap().is_socket());
+        assert!(sockets.next().is_none());
         let (undo, undo_request) = mpsc::channel();
         let (complete, undone) = mpsc::channel();
         let remote = dir.clone();

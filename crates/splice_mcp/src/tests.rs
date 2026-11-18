@@ -223,6 +223,43 @@ impl Drop for TestDirectory {
 }
 
 #[test]
+fn bundle_paths_follow_the_installed_executable_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let root = TestDirectory::new("bundle-paths");
+    let bundle = root.0.join("Applications/Splice Test.app");
+    let executable = bundle.join("Contents/MacOS/splice");
+    fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    fs::write(&executable, b"").unwrap();
+    let bin = root.0.join(".local/bin");
+    fs::create_dir_all(&bin).unwrap();
+    let link = bin.join("splice");
+    symlink(
+        "../../Applications/Splice Test.app/Contents/MacOS/splice",
+        &link,
+    )
+    .unwrap();
+
+    let expected = Some(bundle.canonicalize().unwrap());
+    assert_eq!(
+        paths::bundle_from_executable(&executable).unwrap(),
+        expected
+    );
+    assert_eq!(paths::bundle_from_executable(&link).unwrap(), expected);
+
+    let loose = root.0.join("target/debug/splice");
+    fs::create_dir_all(loose.parent().unwrap()).unwrap();
+    fs::write(&loose, b"").unwrap();
+    assert_eq!(paths::bundle_from_executable(&loose).unwrap(), None);
+    assert_eq!(
+        paths::bundle_from_executable(&bin.join("missing"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound,
+    );
+}
+
+#[test]
 fn friction_transcript_tracks_session_recovery_and_writes_repro() {
     let root = TestDirectory::new("friction");
     let global = root.0.join("state");

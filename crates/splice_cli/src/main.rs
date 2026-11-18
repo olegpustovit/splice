@@ -197,8 +197,20 @@ fn viewer(args: &[String], smoke: bool, output: &mut dyn Write) -> Result<(), St
     } else {
         Some(project_arg(args)?)
     };
-    let state = splice_mcp::friction::state_dir().ok();
+    let state = splice_mcp::paths::state_dir().ok();
     if smoke {
+        if let Some(resources) = splice_mcp::paths::resources_dir().map_err(io_error)?
+            && !resources.join("SDL3-LICENSE.txt").is_file()
+        {
+            return Err(StoreError::new(
+                "BUNDLE_RESOURCES",
+                &format!(
+                    "The bundled SDL license is missing in {}.",
+                    resources.display()
+                ),
+                "Reinstall Splice.app with make install.",
+            ));
+        }
         let frame = splice_app::smoke_test(path.as_deref(), state.as_deref())?;
         let mut fields = vec![("ok".into(), Json::Bool(true))];
         if let Some(frame) = frame {

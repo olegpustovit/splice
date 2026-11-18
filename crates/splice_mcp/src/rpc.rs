@@ -1,10 +1,4 @@
-use super::{
-    Json,
-    friction::{self, Recorder},
-    object,
-    project::Projects,
-    text, tools,
-};
+use super::{Json, friction::Recorder, object, paths, project::Projects, text, tools};
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 
@@ -25,7 +19,7 @@ struct Connection {
 
 /// Serves one MCP connection, flushing each reply and returning on end of input.
 pub fn serve(input: &mut dyn BufRead, output: &mut dyn Write) -> io::Result<()> {
-    let global = match friction::state_dir() {
+    let global = match paths::state_dir() {
         Ok(dir) => Some(dir),
         Err(error) => {
             eprintln!("splice friction: {error}");

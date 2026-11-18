@@ -16,6 +16,8 @@ mod history;
 /// The private command channel between a project viewer and same-user clients.
 pub mod live;
 mod media;
+/// Locations shared by the CLI, the viewer and the MCP server.
+pub mod paths;
 mod platform;
 mod project;
 mod rpc;

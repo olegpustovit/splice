@@ -1,4 +1,4 @@
-use crate::{Json, friction};
+use crate::{Json, paths};
 use apple_sys::ipc::{user, verify_peer};
 use splice_core::history::Store;
 use std::{
@@ -130,7 +130,7 @@ impl Drop for Server {
 
 /// Calls the viewer that holds this package, or returns `None` before sending if none is listening.
 pub fn request(project: &Path, body: &Json) -> io::Result<Option<Json>> {
-    let Ok(state) = friction::state_dir() else {
+    let Ok(state) = paths::state_dir() else {
         return Ok(None);
     };
     let path = match socket_path(&state, project, false) {

@@ -10,6 +10,8 @@ cleanup() {
 }
 trap cleanup EXIT
 scratch=$(cd "$scratch" && pwd -P)
+ln -s "$app/Contents/MacOS/splice" "$scratch/splice"
+(cd "$scratch" && HOME="$scratch" ./splice --smoke-test)
 project="$scratch/Finder launch.splice"
 "$app/Contents/MacOS/splice" new "$project" >/dev/null
 touch "$scratch/stdout" "$scratch/stderr"

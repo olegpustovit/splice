@@ -16,30 +16,7 @@ use std::{
 
 const FILE: &str = "friction.jsonl";
 
-/// Finds the common Splice state directory for this platform.
-pub fn state_dir() -> io::Result<PathBuf> {
-    let home = || {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "HOME does not name an absolute path",
-                )
-            })
-    };
-    if cfg!(target_os = "macos") {
-        Ok(home()?.join("Library/Application Support/Splice"))
-    } else if let Some(state) = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-    {
-        Ok(state.join("splice"))
-    } else {
-        Ok(home()?.join(".local/state/splice"))
-    }
-}
+pub use crate::paths::state_dir;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Scope {

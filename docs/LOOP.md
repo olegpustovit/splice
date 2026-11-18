@@ -126,6 +126,8 @@ recoveries, undos. A drop from the baseline is a red check for the loop.
 - `make dev` installs debug and `make install` installs release at the same
   `~/Applications/Splice.app` path. Both update `~/.local/bin/splice` and register the installed
   application with Launch Services so Finder can open `.splice` packages.
+  The executable resolves the link before looking in `Contents/Resources`. The viewer places its
+  local sockets under `live/` in the Splice state directory.
 - Recording checks are 3 s captures. Never record for longer, and never leave a capture agent running.
 - Privacy grants are a **HUMAN** step (`splice permissions --request` on the Mini, then a person
   clicks). The loop marks such a task `- [~] … HUMAN: <what to click>` and moves on; it never tries
