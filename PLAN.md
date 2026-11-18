@@ -91,7 +91,7 @@ SHA.
 - [ ] T5.5 `splice open <p> --snapshot out.png [--at N]`: offscreen render of the window for ssh verification; `make mac-pull` copies it back.
 
 ### T6 · `splice_kit`: commands and undo, PXUI-shaped (docs/KIT.md)
-- [ ] T6.1 [L] Command table, responder chain resolution, validation (enabled, checked, title), `Invoked {id, source, target}`, keymap file with overrides and a conflict test. Accept: unit tests; zero allocations on warm resolution.
+- [x] T6.1 [L] Command table, responder chain resolution, validation (enabled, checked, title), `Invoked {id, source, target}`, keymap file with overrides and a conflict test (b84e72c). Unit tests verify zero allocations on warm resolution with default and user shortcuts.
 - [ ] T6.2 [L] Undo manager: preallocated ring, `Merge::{Step, Gesture(u64), Burst{key, window}, Repair}`, `seal`, count/byte caps, payload `u64` (= core revision), titles from the core. Accept: merge-policy table tests ported from rays `editor_history`.
 - [ ] T6.3 [L] (0.2) Gesture phases (`Began/Changed/Ended/Cancelled`) for continuous controls; one gesture = one undo step.
 
@@ -208,3 +208,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T4.5 · done · b3125f2 · `make check` 3.65 s (65 tests, slowest: seeded history replay 1.673 s), `make mac-check` 4.40 s (7 tests, slowest: stereo and title export 0.442 s), `cargo t -p splice_cli native_` on the Mini 4.31 s (4 tests, frame case 1.222 s). `tools/check-macos-export.sh` took 25.95 s and matched four 1080 × 1920 PNGs against both codecs, with a worst-case mean RGB difference of 1.551/255.
 - 2026-11-18 · T5.1 · done · 62db338 · `make check` 2.74 s (65 tests, slowest: seeded history replay 1.606 s), `make mac-check` 5.17 s (viewer smoke 1.108 s, first PXUI library build 42.59 s), full Mac `cargo t -p splice_cli` 2.17 s (8 tests, slowest: CLI export 1.172 s). The hidden viewer opened and closed both with and without a package and persisted the selected path.
 - 2026-11-18 · T5.2 · done · df39fac · `make check` 3.59 s (65 tests, slowest: seeded history replay 1.609 s), `make mac-check` 11.40 s (9 native tests, 2 CLI smoke cases, slowest: viewer media smoke 1.633 s). The hidden viewer presented frame zero. The 4K test advanced and sought on the native player, measured zero warm Rust allocations and spent at most 4.079 ms converting, drawing and submitting after drawable acquisition.
+- 2026-11-18 · T6.1 · done · b84e72c · `cargo t -p splice_kit commands` 0.38 s (3 tests, slowest: validation 0.021 s); `make check` 3.18 s (68 tests, slowest: seeded history replay 1.671 s). Default and overridden shortcut resolution allocated nothing after warm-up. Viewer wiring is part of T5.3.
