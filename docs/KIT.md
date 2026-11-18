@@ -53,22 +53,28 @@ pub fn validate(table: &[Command], states: &mut [CommandState],
 
 ```rust
 pub enum Merge { Step, Gesture(u64), Burst { key: u64, window_ms: u32 }, Repair }
-pub struct Entry { pub label: &'static str, pub merge: Merge, pub time_ms: u64, pub payload: u64 }
+pub struct Entry { pub label: Cow<'static, str>, pub merge: Merge, pub time_ms: u64, pub payload: u64 }
 pub struct UndoStack { /* preallocated ring, count and byte caps */ }
 impl UndoStack {
+    pub fn new(present: u64, capacity: usize, byte_capacity: usize) -> Self;
     pub fn push(&mut self, e: Entry);      // merges per policy
     pub fn seal(&mut self);                 // end of gesture / burst
     pub fn undo(&mut self) -> Option<u64>;  // payload to restore
     pub fn redo(&mut self) -> Option<u64>;
-    pub fn titles(&self) -> (Option<&'static str>, Option<&'static str>); // "Undo Move Clip"
+    pub fn titles(&self) -> (Option<&str>, Option<&str>);
 }
 ```
 
-- The merge policy is rays' proven `editor_history` (one gesture = one step, keystroke bursts
-  coalesce, repairs fold into the step they repair).
+- The merge policy follows rays' `editor_history`. Consecutive updates with the same gesture ID
+  merge until sealed. Key bursts use the gap from the last update and start a new step at the
+  window boundary. Repairs replace the current revision and preserve existing undo and redo steps.
+- The byte budget counts retained ring slots and owned title buffers. Oldest steps are evicted
+  first. The newest step stays available even when it alone exceeds the byte budget.
 - In Splice the payload is a **core revision**. The core's history (journal, sessions, revert with
-  replay) is the truth; `UndoStack` only decides what ⌘Z means for the human and labels it. Agent
-  batches arrive as `Step`s labelled `Agent: …`, so ⌘Z reverts an agent edit exactly like a human one.
+  replay) is the source of truth. Feed the kit the revision after each edit with the core's batch
+  label. The stack accepts owned labels from the journal and borrowed labels for constant actions.
+  Agent batches are `Step`s labelled `Agent: …`. The viewer uses `titles` for the actions on each
+  side of the current revision.
 
 ## Gesture phases
 

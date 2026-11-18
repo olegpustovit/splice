@@ -3,9 +3,11 @@
 
 mod commands;
 mod keymap;
+mod undo;
 
 pub use commands::{Command, CommandId, CommandState, Invoked, Responders, Source, validate};
 pub use keymap::{Key, Keymap, KeymapError, Modifiers, Shortcut};
+pub use undo::{Entry, Merge, UndoStack};
 
 #[cfg(test)]
 mod tests;
