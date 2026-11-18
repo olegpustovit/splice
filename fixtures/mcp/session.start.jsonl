@@ -1,0 +1,4 @@
+> {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"$sample"}}}
+< {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"projectId":"prj_1","revision":"r0","fps":30,"durationFrames":660,"offlineMedia":"…"},"isError":false}}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session.start","arguments":{"projectId":"prj_1","agent":"fixture"}}}
+< {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"sessionId":"ses_1","checkpoint":"r0","revision":"r0"},"isError":false}}

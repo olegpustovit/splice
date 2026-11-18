@@ -153,6 +153,13 @@ impl Store {
         Ok(())
     }
 
+    /// Checks whether an agent may start an operation against the current project revision.
+    pub fn check_write(&self, options: &WriteOptions) -> Result<(), StoreError> {
+        self.authorize(options)?;
+        self.writable()?;
+        self.guard_revision(options)
+    }
+
     /// Previews or durably commits one batch, with stale-write and idempotency checks.
     pub fn apply(
         &mut self,

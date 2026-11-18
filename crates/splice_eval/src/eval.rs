@@ -445,7 +445,7 @@ impl Evaluator {
             }
             ItemKind::Caption { words, edits } => {
                 if let Some(style) = style::caption(&[&p.effects, lane, local]) {
-                    let words = caption_words(p, timing.anchor, words, edits, style)?;
+                    let words = caption_tokens(p, timing.anchor, words, edits, style.uppercase)?;
                     if !words.is_empty() {
                         self.captions.push(PreparedCaption {
                             id,
@@ -676,12 +676,13 @@ fn overlay_tracks(media: &Media) -> Vec<(Track, f64)> {
     )
 }
 
-fn caption_words(
+/// Resolves cue words through the source timeline and applies display edits.
+pub fn caption_tokens(
     p: &Project,
     anchor: Anchor,
     ids: &[WordId],
     edits: &[CaptionEdit],
-    style: CaptionStyle,
+    uppercase: bool,
 ) -> Result<Vec<CaptionWord>, EvalError> {
     let hash = match anchor {
         Anchor::ClipSource { clip, .. } => p
@@ -720,7 +721,7 @@ fn caption_words(
         let text = edit
             .and_then(|edit| edit.text.as_deref())
             .unwrap_or(&word.text);
-        let text = if style.uppercase {
+        let text = if uppercase {
             text.to_uppercase()
         } else {
             text.into()

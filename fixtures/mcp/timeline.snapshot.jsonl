@@ -1,0 +1,6 @@
+> {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"$sample"}}}
+< {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"projectId":"prj_1","revision":"r0","fps":30,"durationFrames":660,"offlineMedia":"…"},"isError":false}}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"timeline.snapshot","arguments":{"projectId":"prj_1","from":0,"to":540,"limit":1}}}
+< {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"spine":[{"id":"clp_open","from":0,"to":120}],"nextCursor":"c1"},"isError":false}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"timeline.snapshot","arguments":{"projectId":"prj_1","from":0,"to":540,"limit":1,"cursor":"c1","detail":"full"}}}
+< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"spine":[{"id":"clp_take","source":0,"resolved":{"from":120,"to":540}}],"nextCursor":"c2"},"isError":false}}

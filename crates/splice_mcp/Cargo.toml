@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 splice_core = { path = "../splice_core" }
+splice_eval = { path = "../splice_eval" }
+splice_model = { path = "../splice_model" }
 splice_json = { path = "../splice_json" }
 [lints]
 workspace = true

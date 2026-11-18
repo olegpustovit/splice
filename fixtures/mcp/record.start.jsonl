@@ -1,0 +1,2 @@
+> {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"record.start","arguments":{"path":"$new","create":true,"dryRun":true}}}
+< {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"error":{"code":"UNSUPPORTED_PLATFORM","message":"…","fix":"…"}},"isError":true}}

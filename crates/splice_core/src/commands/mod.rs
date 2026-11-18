@@ -182,6 +182,11 @@ pub fn lookup(id: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|row| row.id == id)
 }
 
+/// Returns the effect schema catalog used by command discovery.
+pub fn effect_schemas() -> Json {
+    splice_json::parse(include_str!("effects.json")).expect("checked effect schemas")
+}
+
 /// Returns the documented schema for an ID or a filtered catalog when the ID is absent.
 pub fn describe(id: Option<&str>, query: Option<&str>) -> Result<Json, CommandError> {
     if let Some(id) = id {
@@ -228,9 +233,7 @@ pub fn describe(id: Option<&str>, query: Option<&str>) -> Result<Json, CommandEr
             ));
         }
         if id.starts_with("effect.") {
-            let effects =
-                splice_json::parse(include_str!("effects.json")).expect("checked effect schemas");
-            fields.push(("effectTypes".into(), effects));
+            fields.push(("effectTypes".into(), effect_schemas()));
             fields.push(("resolution".into(), text("Effects inherit each parameter through project, lane, and item. Set enabled:false at a scope to turn off an inherited effect.")));
         }
         return Ok(Json::Object(fields));

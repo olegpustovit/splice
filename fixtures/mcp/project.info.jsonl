@@ -1,0 +1,12 @@
+> {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"$new","create":true}}}
+< {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"projectId":"prj_1","revision":"r0","fps":30,"durationFrames":0,"lanes":"…"},"isError":false}}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"$new"}}}
+< {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"projectId":"prj_1","revision":"r0"},"isError":false}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"project.info","arguments":{"projectId":"prj_1"}}}
+< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"access":"live"},"isError":false}}
+> {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"project.info","arguments":{"projectId":"prj_missing"}}}
+< {"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"error":{"code":"NOT_FOUND","fix":"…"}},"isError":true}}
+> {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"$sample"}}}
+< {"jsonrpc":"2.0","id":5,"result":{"structuredContent":{"projectId":"prj_2","durationFrames":660},"isError":false}}
+> {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"project.info","arguments":{"projectId":"prj_1"}}}
+< {"jsonrpc":"2.0","id":6,"result":{"structuredContent":{"projectId":"prj_1","durationFrames":0},"isError":false}}

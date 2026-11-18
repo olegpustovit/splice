@@ -3,8 +3,14 @@
 
 use splice_json::Value as Json;
 
+mod history;
+mod media;
+mod platform;
+mod project;
 mod rpc;
+mod timeline;
 mod tools;
+mod wire;
 
 pub use rpc::serve;
 

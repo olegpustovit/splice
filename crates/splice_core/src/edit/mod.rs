@@ -129,6 +129,13 @@ pub fn apply(
     Ok(report)
 }
 
+/// Computes the timeline difference between two retained project states.
+pub fn diff(before: &Project, after: &Project) -> Result<Vec<Diff>, CommandError> {
+    let mut changes = Vec::new();
+    time::diff(before, after, &mut changes)?;
+    Ok(changes)
+}
+
 /// Rebuilds a batch using its exact recorded ID sequence.
 pub fn replay(
     project: &mut Project,

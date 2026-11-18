@@ -80,7 +80,9 @@ name = "splice_mcp"
 version = "0.1.0"
 dependencies = [
  "splice_core",
+ "splice_eval",
  "splice_json",
+ "splice_model",
  "splice_testkit",
 ]
 

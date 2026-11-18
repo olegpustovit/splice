@@ -1,5 +1,5 @@
-use super::{Json, object, text};
-use splice_core::commands::{self, CommandError};
+use super::{Json, history, media, object, platform, project::Projects, text, timeline, wire::*};
+use splice_core::{commands, history::StoreError};
 
 const REVISION: &str =
     r#"{"anyOf":[{"type":"integer","minimum":0},{"type":"string","pattern":"^r[0-9]+$"}]}"#;
@@ -41,6 +41,7 @@ const TOOLS: &[Tool] = &[
             ("access", "string"),
             ("lanes", "array"),
             ("media", "array"),
+            ("offlineMedia", "array"),
             ("transcript", "object"),
             ("effects", "object"),
             ("openSession", r#"{"type":["string","null"]}"#),
@@ -152,7 +153,7 @@ const TOOLS: &[Tool] = &[
         required: &["projectId"],
         output: &[
             ("revision", REVISION),
-            ("hash", "string"),
+            ("hash", r#"{"type":["string","null"]}"#),
             ("clip", "string"),
             ("words", "array"),
             ("fillers", IDS),
@@ -294,13 +295,15 @@ const TOOLS: &[Tool] = &[
             ("ifRevision", REVISION),
             ("scope", r#"{"enum":["last","session","to"]}"#),
             ("revision", REVISION),
-            ("idempotencyKey", "string"),
+            ("dryRun", "boolean"),
         ],
         required: &["projectId", "sessionId", "ifRevision", "scope"],
         output: &[
             ("revision", REVISION),
             ("skipped", "array"),
-            ("replayed", "boolean"),
+            ("replayed", "integer"),
+            ("reverted", "array"),
+            ("restored", r#"{"type":["string","null"]}"#),
         ],
         success: &[&["revision"]],
     },
@@ -352,7 +355,7 @@ const TOOLS: &[Tool] = &[
         description: "Check the progress and result of an export, transcription or recording job.",
         read_only: true,
         input: &[("projectId", "string"), ("jobId", "string")],
-        required: &["projectId", "jobId"],
+        required: &["jobId"],
         output: &[
             ("jobId", "string"),
             ("id", "string"),
@@ -375,7 +378,7 @@ const TOOLS: &[Tool] = &[
             ("sessionId", "string"),
             ("ifRevision", REVISION),
         ],
-        required: &["projectId", "jobId", "sessionId", "ifRevision"],
+        required: &["jobId"],
         output: &[("jobId", "string"), ("id", "string"), ("state", "string")],
         success: &[&["state", "jobId"], &["state", "id"]],
     },
@@ -389,6 +392,7 @@ const TOOLS: &[Tool] = &[
             ("create", "boolean"),
             ("sessionId", "string"),
             ("ifRevision", REVISION),
+            ("source", "object"),
             ("display", "string"),
             ("window", "string"),
             ("area", "object"),
@@ -396,6 +400,9 @@ const TOOLS: &[Tool] = &[
             ("systemAudio", "boolean"),
             ("camera", "boolean"),
             ("events", "boolean"),
+            ("insert", "boolean"),
+            ("still", "boolean"),
+            ("countdown", FRAME),
             ("dryRun", "boolean"),
             ("duration", r#"{"type":"number","exclusiveMinimum":0}"#),
         ],
@@ -421,7 +428,7 @@ const TOOLS: &[Tool] = &[
             ("ifRevision", REVISION),
             ("insert", "boolean"),
         ],
-        required: &["projectId", "jobId", "sessionId", "ifRevision"],
+        required: &["jobId"],
         output: &[
             ("jobId", "string"),
             ("id", "string"),
@@ -500,8 +507,12 @@ fn strings(values: &[&str]) -> Json {
     Json::Array(values.iter().map(|value| text(value)).collect())
 }
 
-pub(super) fn call(name: &str, args: &Json) -> Result<Json, splice_json::NonFiniteNumber> {
-    let result = execute(name, args);
+pub(super) fn call(
+    projects: &mut Projects,
+    name: &str,
+    args: &Json,
+) -> Result<Json, splice_json::NonFiniteNumber> {
+    let result = execute(projects, name, args);
     let is_error = result.is_err();
     let (payload, mirror) = match result {
         Ok(payload) => {
@@ -510,16 +521,8 @@ pub(super) fn call(name: &str, args: &Json) -> Result<Json, splice_json::NonFini
             (payload, mirror)
         }
         Err(error) => {
-            let mirror = format!("{}: {} {}", error.code, error.message, error.fix);
-            let mut fields = vec![
-                ("code".into(), text(error.code)),
-                ("message".into(), Json::String(error.message)),
-                ("fix".into(), Json::String(error.fix)),
-            ];
-            if !error.valid.is_empty() {
-                fields.push(("valid".into(), strings(&error.valid)));
-            }
-            (object(vec![("error", Json::Object(fields))]), mirror)
+            let mirror = error.to_string();
+            (object(vec![("error", error_payload(error))]), mirror)
         }
     };
     Ok(object(vec![
@@ -535,36 +538,44 @@ pub(super) fn call(name: &str, args: &Json) -> Result<Json, splice_json::NonFini
     ]))
 }
 
-fn execute(name: &str, args: &Json) -> Result<Json, CommandError> {
+fn execute(projects: &mut Projects, name: &str, args: &Json) -> Result<Json, StoreError> {
     args.optional_string("friction")?;
-    if name == "commands.describe" {
-        args.optional_string("projectId")?;
-        return commands::describe(args.optional_string("id")?, args.optional_string("query")?);
-    }
-    // ponytail: use the live command registry until T3.2 wires the project tools.
-    Err(CommandError {
-        code: "PLANNED",
-        message: format!("{name} has no tool handler yet."),
-        fix: "Call commands.describe to inspect the edit command registry.".into(),
-        valid: Vec::new(),
-    })
-}
-
-trait Args {
-    fn optional_string(&self, field: &str) -> Result<Option<&str>, CommandError>;
-}
-
-impl Args for Json {
-    fn optional_string(&self, field: &str) -> Result<Option<&str>, CommandError> {
-        self.field(field)
-            .map(|value| {
-                value.as_str().ok_or_else(|| CommandError {
-                    code: "BAD_ARGS",
-                    message: format!("Invalid {field}."),
-                    fix: format!("Pass {field} as a string."),
-                    valid: Vec::new(),
-                })
-            })
-            .transpose()
+    match name {
+        "commands.describe" => {
+            args.optional_string("projectId")?;
+            Ok(commands::describe(
+                args.optional_string("id")?,
+                args.optional_string("query")?,
+            )?)
+        }
+        "project.info" => projects.info(args),
+        "ui.show" => {
+            if args.field("projectId").is_some() {
+                projects.lookup(args)?;
+            }
+            Ok(object(vec![
+                ("applied", Json::Bool(false)),
+                ("reason", text("headless")),
+            ]))
+        }
+        "timeline.snapshot" => timeline::snapshot(projects.lookup(args)?.project(), args),
+        "items.inspect" => timeline::inspect(projects.lookup(args)?.project(), args),
+        "timeline.find" => timeline::find(projects.lookup(args)?.project(), args),
+        "transcript.get" => media::transcript(projects.lookup(args)?.project(), args),
+        "takes.events" => media::events(projects.lookup(args)?, args),
+        "audio.summary" => media::audio(projects.lookup(args)?, args),
+        "session.start" => history::start(projects.lookup(args)?, args),
+        "edit.apply" => history::apply(projects.lookup(args)?, args),
+        "history.list" => history::list(projects.lookup(args)?, args),
+        "history.undo" => history::undo(projects.lookup(args)?, args),
+        "view.frames" => {
+            projects.lookup(args)?;
+            platform::frames(args)
+        }
+        "export.start" => platform::export(projects.lookup(args)?, args),
+        "jobs.status" | "jobs.cancel" => platform::job(projects, name, args),
+        "record.start" => platform::record_start(projects, args),
+        "record.stop" => platform::record_stop(projects, args),
+        _ => unreachable!("RPC only dispatches advertised tools"),
     }
 }

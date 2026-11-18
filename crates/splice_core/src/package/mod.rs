@@ -15,6 +15,16 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Encodes timeline data using the package vocabulary.
+pub fn snapshot(project: &Project) -> Json {
+    project::encode(project)
+}
+
+/// Encodes an anchor in the same form used by the package and edit commands.
+pub fn anchor(anchor: splice_model::Anchor) -> Json {
+    timeline::encode_anchor(anchor)
+}
+
 /// A held writer lock and the directory it protects.
 #[derive(Debug)]
 pub struct Package {

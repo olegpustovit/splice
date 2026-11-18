@@ -7,9 +7,10 @@ mod eval;
 mod layout;
 mod style;
 
-pub use eval::{EvalError, Evaluator};
+pub use eval::{EvalError, Evaluator, caption_tokens};
 pub use style::{
     Background, CaptionPreset, CaptionStyle, ClickZoom, Cursor, KeyPosition, Keys, Window,
+    resolve_effect,
 };
 
 #[cfg(test)]

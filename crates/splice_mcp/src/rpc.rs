@@ -1,4 +1,4 @@
-use super::{Json, object, text, tools};
+use super::{Json, object, project::Projects, text, tools};
 use std::io::{self, BufRead, Read, Write};
 
 const LEGACY: &str = "2025-11-25";
@@ -11,6 +11,7 @@ const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
 /// Serves one MCP connection, flushing each reply and returning on end of input.
 pub fn serve(input: &mut dyn BufRead, output: &mut dyn Write) -> io::Result<()> {
     let mut initialized = false;
+    let mut projects = Projects::default();
     let mut line = Vec::new();
     let mut wire = String::new();
     loop {
@@ -19,7 +20,7 @@ pub fn serve(input: &mut dyn BufRead, output: &mut dyn Write) -> io::Result<()> 
             .take(MAX_LINE_BYTES + 1)
             .read_until(b'\n', &mut line)?;
         if line.is_empty() {
-            return Ok(());
+            return projects.close();
         }
         let response = if line.len() as u64 > MAX_LINE_BYTES {
             if !line.ends_with(b"\n") {
@@ -27,7 +28,7 @@ pub fn serve(input: &mut dyn BufRead, output: &mut dyn Write) -> io::Result<()> 
             }
             Some(rpc_error(&Json::Null, -32700, "Message exceeds 16 MiB"))
         } else {
-            handle_line(&line, &mut initialized)
+            handle_line(&line, &mut initialized, &mut projects)
         };
         if let Some(response) = response {
             splice_json::write(&response, &mut wire).map_err(io::Error::other)?;
@@ -38,7 +39,7 @@ pub fn serve(input: &mut dyn BufRead, output: &mut dyn Write) -> io::Result<()> 
     }
 }
 
-fn handle_line(line: &[u8], initialized: &mut bool) -> Option<Json> {
+fn handle_line(line: &[u8], initialized: &mut bool, projects: &mut Projects) -> Option<Json> {
     let Some(request) = str::from_utf8(line)
         .ok()
         .and_then(|line| splice_json::parse(line).ok())
@@ -68,12 +69,18 @@ fn handle_line(line: &[u8], initialized: &mut bool) -> Option<Json> {
     if params.as_object().is_none() {
         return Some(rpc_error(id, -32602, "params must be an object"));
     }
-    Some(dispatch(id, method, params, initialized))
+    Some(dispatch(id, method, params, initialized, projects))
 }
 
 static EMPTY_OBJECT: Json = Json::Object(Vec::new());
 
-fn dispatch(id: &Json, method: &str, params: &Json, initialized: &mut bool) -> Json {
+fn dispatch(
+    id: &Json,
+    method: &str,
+    params: &Json,
+    initialized: &mut bool,
+    projects: &mut Projects,
+) -> Json {
     let meta = params.field("_meta").unwrap_or(&EMPTY_OBJECT);
     if meta.as_object().is_none() {
         return rpc_error(id, -32602, "params._meta must be an object");
@@ -181,7 +188,7 @@ fn dispatch(id: &Json, method: &str, params: &Json, initialized: &mut bool) -> J
             if !tools::known(name) {
                 return rpc_error(id, -32602, &format!("Unknown tool: {name}"));
             }
-            match tools::call(name, args) {
+            match tools::call(projects, name, args) {
                 Ok(result) => result,
                 Err(_) => return rpc_error(id, -32603, "Tool returned invalid JSON"),
             }

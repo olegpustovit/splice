@@ -235,6 +235,12 @@ pub(super) fn caption(scopes: &[&[Effect]]) -> Option<CaptionStyle> {
     })
 }
 
+/// Returns an effect's enabled state and merged overrides in project-to-item scope order.
+pub fn resolve_effect(scopes: &[&[Effect]], kind: &str) -> Option<(bool, Vec<EffectParam>)> {
+    let result = Resolution::new(scopes, kind);
+    result.enabled.map(|enabled| (enabled, result.params))
+}
+
 struct Resolution {
     enabled: Option<bool>,
     params: Vec<EffectParam>,

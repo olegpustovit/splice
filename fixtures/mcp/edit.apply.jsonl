@@ -1,0 +1,14 @@
+> {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"$sample"}}}
+< {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"projectId":"prj_1","revision":"r0","fps":30,"durationFrames":660,"offlineMedia":"…"},"isError":false}}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session.start","arguments":{"projectId":"prj_1","agent":"fixture"}}}
+< {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"sessionId":"ses_1","checkpoint":"r0","revision":"r0"},"isError":false}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"edit.apply","arguments":{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r0","ops":[{"cmd":"item.set","items":"clp_take","name":"Edited"}],"dryRun":true}}}
+< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"revision":"r0","dryRun":true,"changes":"…"},"isError":false}}
+> {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"edit.apply","arguments":{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r0","ops":[{"cmd":"item.set","items":"clp_take","name":"Edited"}],"idempotencyKey":"one"}}}
+< {"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"revision":"r1","replayed":false,"diff":[{"id":"clp_take","before":{"from":120,"to":540},"after":{"from":120,"to":540}}]},"isError":false}}
+> {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"edit.apply","arguments":{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r0","ops":[{"cmd":"item.set","items":"clp_take","name":"Edited"}],"idempotencyKey":"one"}}}
+< {"jsonrpc":"2.0","id":5,"result":{"structuredContent":{"revision":"r1","replayed":true},"isError":false}}
+> {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"edit.apply","arguments":{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r0","ops":[{"cmd":"item.set","items":"clp_take","name":"Edited"}]}}}
+< {"jsonrpc":"2.0","id":6,"result":{"structuredContent":{"error":{"code":"STALE_REVISION","current":"r1","changedSince":[{"revision":"r1","source":"agent"}]}},"isError":true}}
+> {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"edit.apply","arguments":{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r1","ops":[{"cmd":"item.trim","item":"clp_missing","edge":"out","delta":2}]}}}
+< {"jsonrpc":"2.0","id":7,"result":{"structuredContent":{"error":{"code":"NOT_FOUND","op":0}},"isError":true}}

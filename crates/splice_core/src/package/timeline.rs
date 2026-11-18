@@ -356,7 +356,7 @@ fn optional_frame(value: &Json, key: &'static str) -> Result<Frame, PackageError
     value.field(key).map_or(Ok(0), |_| frame(value, key))
 }
 
-fn encode_anchor(anchor: Anchor) -> Json {
+pub(super) fn encode_anchor(anchor: Anchor) -> Json {
     object(match anchor {
         Anchor::Pinned(at) => vec![("pinned", Json::Bool(true)), ("frame", frame_json(at))],
         Anchor::ClipSource { clip, source } => vec![

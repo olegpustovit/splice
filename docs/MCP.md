@@ -54,7 +54,8 @@ Stay under 20 tools: new capabilities become `edit.apply` commands or parameters
 
 - Project tools use `projectId`. Use `path` with `project.info` to open a package, or with
   `record.start` when creating one. Writes to an existing project also need `sessionId` and
-  `ifRevision`. `commands.describe` works before a project is opened.
+  `ifRevision`. A `projectId` identifies an open package in the current server process.
+  `commands.describe` works before a project is opened.
 - Any tool accepts an optional `friction` string: a note from the agent about what was hard. It is
   logged and has no effect (docs/LOOP.md).
 - Results carry `structuredContent` matching the tool's `outputSchema` and a text block. The text
@@ -93,6 +94,16 @@ Use `history.undo` with `scope:"last"` or `"session"` to remove edits from that 
 the remaining edits in order. A later edit that depended on a removed object appears in
 `skipped`. Use `scope:"to"` with a retained revision to restore its exact project content.
 Agents cannot restore a revision that would change the project's access level.
+
+## Headless media reads
+
+`takes.events` reports timeline frame numbers and source frame numbers. Key events expose their
+indexes, visibility and categories. Captured characters and raw key codes stay in the take.
+`audio.summary` returns track settings and labels transcript-derived pauses. Loudness and peaks
+are null when the current build cannot measure the audio.
+
+On Linux, rendering, export and capture return `UNSUPPORTED_PLATFORM`. A job ID with no retained
+job returns `NOT_FOUND`. Headless `ui.show` returns `{"applied":false,"reason":"headless"}`.
 
 ## Error codes
 

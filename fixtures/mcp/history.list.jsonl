@@ -1,0 +1,8 @@
+> {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"$sample"}}}
+< {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"projectId":"prj_1","revision":"r0","fps":30,"durationFrames":660,"offlineMedia":"…"},"isError":false}}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session.start","arguments":{"projectId":"prj_1","agent":"fixture"}}}
+< {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"sessionId":"ses_1","checkpoint":"r0","revision":"r0"},"isError":false}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"edit.apply","arguments":{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r0","ops":[{"cmd":"item.set","items":"clp_take","name":"Edited"}]}}}
+< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"revision":"r1","changes":"…","diff":"…"},"isError":false}}
+> {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"history.list","arguments":{"projectId":"prj_1","sessionId":"ses_1"}}}
+< {"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"revision":"r1","checkpoint":"r0","batches":[{"revision":"r1","source":"agent","state":"live","summary":"Agent: Updated 1 item(s)"}]},"isError":false}}

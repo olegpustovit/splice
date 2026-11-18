@@ -1,0 +1,299 @@
+use super::{Json, object, text, timeline, wire::*};
+use splice_core::{
+    history::{Store, StoreError},
+    package,
+};
+use splice_model::{Access, Aspect, LaneKind, Media, MediaId, MediaKind, Project};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
+
+#[derive(Default)]
+pub(super) struct Projects {
+    open: Vec<Store>,
+}
+
+impl Projects {
+    pub(super) fn lookup(&mut self, args: &Json) -> Result<&mut Store, StoreError> {
+        let id = args.string("projectId")?;
+        let index: Option<usize> = id
+            .strip_prefix("prj_")
+            .and_then(|n| n.parse::<usize>().ok())
+            .and_then(|n| n.checked_sub(1))
+            .filter(|&i| project_id(i) == id);
+        let store = index
+            .and_then(|index| self.open.get_mut(index))
+            .ok_or_else(|| {
+                failure(
+                    "NOT_FOUND",
+                    &format!("Project {id} is not open."),
+                    "Call project.info with the package path.",
+                )
+            })?;
+        read_access(store)?;
+        Ok(store)
+    }
+
+    pub(super) fn info(&mut self, args: &Json) -> Result<Json, StoreError> {
+        let create = args.flag("create")?;
+        let id = args.optional_string("projectId")?;
+        if let Some(path) = args.optional_string("path")? {
+            if id.is_some() {
+                return Err(bad("path", "the only project selector, or pass projectId"));
+            }
+            let path = package_path(path)?;
+            let canonical = fs::canonicalize(&path);
+            let index = if let Ok(existing) = &canonical
+                && let Some(index) = self.open.iter().position(|store| store.path() == existing)
+            {
+                index
+            } else {
+                let store = match canonical {
+                    Ok(path) => Store::open(&path)?,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
+                        Store::create(&path, &Project::default())?
+                    }
+                    Err(error) => return Err(path_error(&path, &error)),
+                };
+                read_access(&store)?;
+                self.open.push(store);
+                self.open.len() - 1
+            };
+            return info(&self.open[index], &project_id(index));
+        }
+        if create {
+            return Err(bad(
+                "path",
+                "a new .splice package path when create is true",
+            ));
+        }
+        let store = self.lookup(args)?;
+        info(store, id.expect("lookup validates project ID"))
+    }
+
+    pub(super) fn close(self) -> io::Result<()> {
+        for store in self.open {
+            if store.problem().is_none() {
+                store.close().map_err(io::Error::other)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn project_id(index: usize) -> String {
+    format!("prj_{}", index + 1)
+}
+
+pub(super) fn package_path(value: &str) -> Result<PathBuf, StoreError> {
+    let path = if let Some(relative) = value.strip_prefix("~/") {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(relative))
+            .ok_or_else(|| bad("path", "an explicit .splice path when HOME is unavailable"))?
+    } else {
+        PathBuf::from(value)
+    };
+    if value.contains('\0') || path.extension().and_then(|ext| ext.to_str()) != Some("splice") {
+        return Err(bad("path", "a path ending in .splice"));
+    }
+    Ok(path)
+}
+
+fn path_error(path: &Path, error: &io::Error) -> StoreError {
+    if error.kind() == io::ErrorKind::NotFound {
+        failure(
+            "NOT_FOUND",
+            &format!("No package at {}.", path.display()),
+            "Pass an existing .splice path or add create:true to project.info.",
+        )
+    } else {
+        failure(
+            "IO",
+            &format!("{}: {error}", path.display()),
+            "Check the project path and filesystem permissions.",
+        )
+    }
+}
+
+fn read_access(store: &Store) -> Result<(), StoreError> {
+    if store.project().access == Access::Off {
+        return Err(failure(
+            "PERMISSION_DENIED",
+            "Agent access is off for this project.",
+            "Ask the editor to enable read or live agent access.",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn access(level: Access) -> Json {
+    text(match level {
+        Access::Live => "live",
+        Access::Read => "read",
+        Access::Off => "off",
+    })
+}
+
+pub(super) fn lane_kind(kind: LaneKind) -> &'static str {
+    match kind {
+        LaneKind::Graphics => "graphics",
+        LaneKind::Captions => "captions",
+        LaneKind::Overlay => "overlay",
+        LaneKind::Motion => "motion",
+    }
+}
+
+pub(super) fn media_path(store: &Store, media: &Media) -> PathBuf {
+    store.path().join(&media.path)
+}
+
+pub(super) fn media_name(p: &Project, id: MediaId) -> String {
+    p.media
+        .iter()
+        .find(|media| media.id == id)
+        .and_then(|media| {
+            Path::new(&media.path)
+                .file_name()
+                .and_then(|name| name.to_str())
+        })
+        .map_or_else(|| id.to_string(), str::to_owned)
+}
+
+fn info(store: &Store, id: &str) -> Result<Json, StoreError> {
+    let p = store.project();
+    let mut lanes: Vec<_> = p
+        .lanes
+        .iter()
+        .map(|lane| {
+            let items = p
+                .items
+                .order()
+                .iter()
+                .filter(|&&slot| p.items.data(slot).unwrap().lane == lane.id)
+                .count();
+            object(vec![
+                ("id", display(&lane.id)),
+                ("name", text(&lane.name)),
+                ("kind", text(lane_kind(lane.kind))),
+                ("items", count(items)),
+            ])
+        })
+        .collect();
+    lanes.push(object(vec![
+        ("id", display(&p.spine.id)),
+        ("name", text(&p.spine.name)),
+        ("kind", text("spine")),
+        ("items", count(p.clips.order().len())),
+    ]));
+
+    let mut offline = Vec::new();
+    let media = p
+        .media
+        .iter()
+        .map(|media| {
+            let missing = !media_path(store, media).is_file();
+            if missing {
+                offline.push(object(vec![
+                    ("id", display(&media.id)),
+                    ("path", text(&media.path)),
+                ]));
+            }
+            object(vec![
+                ("id", display(&media.id)),
+                ("name", Json::String(media_name(p, media.id))),
+                (
+                    "type",
+                    text(match media.kind {
+                        MediaKind::Take => "take",
+                        MediaKind::Video => "video",
+                        MediaKind::Audio => "audio",
+                        MediaKind::Image => "image",
+                    }),
+                ),
+                ("frames", frame(media.probe.frames)),
+                ("path", text(&media.path)),
+                ("offline", Json::Bool(missing)),
+            ])
+        })
+        .collect();
+
+    let transcript = if let Some(first) = p.transcripts.first() {
+        object(vec![
+            ("state", text("ready")),
+            ("hash", hash(first.hash)),
+            ("words", count(first.words.len())),
+        ])
+    } else {
+        object(vec![("state", text("unavailable")), ("words", count(0))])
+    };
+    let snapshot = package::snapshot(p);
+    let mut effects = vec![
+        ("project".into(), snapshot.field("effects").unwrap().clone()),
+        (
+            p.spine.id.to_string(),
+            snapshot
+                .field("spine")
+                .unwrap()
+                .field("effects")
+                .unwrap()
+                .clone(),
+        ),
+    ];
+    for lane in snapshot.field("lanes").and_then(Json::as_array).unwrap() {
+        let applied = lane.field("effects").unwrap();
+        if applied
+            .as_array()
+            .is_some_and(|effects| !effects.is_empty())
+        {
+            effects.push((
+                lane.field("id").and_then(Json::as_str).unwrap().into(),
+                applied.clone(),
+            ));
+        }
+    }
+    let mut fields = vec![
+        ("projectId", text(id)),
+        ("revision", rev(p.rev)),
+        ("fps", Json::Unsigned(u64::from(p.fps))),
+        (
+            "size",
+            Json::Array(
+                p.size
+                    .map(|value| Json::Unsigned(u64::from(value)))
+                    .to_vec(),
+            ),
+        ),
+        (
+            "aspect",
+            text(match p.aspect {
+                Aspect::Portrait => "9:16",
+                Aspect::Landscape => "16:9",
+                Aspect::Square => "1:1",
+                Aspect::Social => "4:5",
+                Aspect::Standard => "4:3",
+            }),
+        ),
+        ("durationFrames", frame(timeline::duration(p)?)),
+        ("access", access(p.access)),
+        ("lanes", Json::Array(lanes)),
+        ("media", Json::Array(media)),
+        ("offlineMedia", Json::Array(offline)),
+        ("transcript", transcript),
+        ("effects", Json::Object(effects)),
+        (
+            "openSession",
+            store
+                .sessions()
+                .iter()
+                .rev()
+                .find(|item| item.open)
+                .map_or(Json::Null, |item| display(&item.id)),
+        ),
+    ];
+    if let Some(problem) = store.problem() {
+        fields.push(("warning", error_payload(problem.clone().into())));
+    }
+    Ok(object(fields))
+}

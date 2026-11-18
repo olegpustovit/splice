@@ -1,0 +1,2 @@
+> {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"commands.describe","arguments":{"id":"item.trim"}}}
+< {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"id":"item.trim","cut":"0.1","example":{"cmd":"item.trim"}},"isError":false}}
