@@ -26,17 +26,28 @@ pub struct Invoked { pub id: CommandId, pub source: Source, pub target: u64 }
 
 pub struct Responders { /* preallocated: node → &'static [CommandId] */ }
 impl Responders {
+    pub fn new(capacity: usize) -> Self;
     pub fn responds(&mut self, node: u64, parent: u64, ids: &'static [CommandId]);
     /// focused node → ancestors → window → app; text fields first for their editing keys
     pub fn resolve(&self, focus: u64, key: Shortcut, table: &[Command]) -> Option<Invoked>;
+    pub fn invoke(&self, focus: u64, id: CommandId, source: Source) -> Option<Invoked>;
+    pub fn set_keymap(&mut self, keymap: Keymap);
 }
-pub fn validate(table: &[Command], fill: &mut dyn FnMut(CommandId, &mut CommandState));
+pub fn validate(table: &[Command], states: &mut [CommandState],
+                fill: &mut dyn FnMut(CommandId, &mut CommandState));
 ```
 
 - Splice's command table is generated from the core registry plus view commands
   (`transport.play`, `transport.step`, `history.undo`, `history.redo`). A key, a menu item, the palette
   and MCP all produce the same `Invoked` → the same core op, so parity holds below the UI.
-- Keymap: a flat `key = command` file with user overrides and a conflict test (from rays' `Router`).
+- Call `validate` with a reusable state buffer in table order. Check the command's current
+  `enabled` state before handling its `Invoked` intent.
+- Load the UTF-8 keymap with `Keymap::read`. Each `key = command` line overrides one chord.
+  Other default chords stay available. Use `#` for full-line comments. Chords use `Cmd`, `Shift`,
+  `Ctrl` or `Alt` and a key joined by `+`, as in `Cmd+Shift+Z = history.redo`.
+  Keys include characters, `Space`, the arrows (`Left`, `Right`, `Up`, `Down`), `F1` through `F12`,
+  and named navigation keys. Spell the delimiters `Plus`, `Equals` and `Hash` when binding them.
+  The loader reports the line number for unknown commands and both line numbers for duplicate chords.
 
 ## Undo
 

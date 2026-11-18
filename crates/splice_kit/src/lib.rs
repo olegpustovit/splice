@@ -1,2 +1,11 @@
-//! PXUI-shaped app kit that PXUI does not have yet: command table, responder chain, validation, keymap, undo manager with merge policy, gesture phases. Depends on std only so it can move into PXUI verbatim (docs/KIT.md).
+//! PXUI-shaped app kit. Product code depends only on std so it can move into PXUI.
 #![deny(missing_docs)]
+
+mod commands;
+mod keymap;
+
+pub use commands::{Command, CommandId, CommandState, Invoked, Responders, Source, validate};
+pub use keymap::{Key, Keymap, KeymapError, Modifiers, Shortcut};
+
+#[cfg(test)]
+mod tests;

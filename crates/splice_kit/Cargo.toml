@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[dependencies]
+[dev-dependencies]
+mem_sys = { path = "../../pxui/crates/open/mem_sys", features = ["counting"] }
+splice_testkit = { path = "../splice_testkit" }
 
 [lints]
 workspace = true
