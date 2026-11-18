@@ -28,6 +28,8 @@ mod project;
 #[cfg(target_os = "macos")]
 mod record;
 #[cfg(any(target_os = "macos", test))]
+mod record_cli;
+#[cfg(any(target_os = "macos", test))]
 mod record_options;
 #[cfg(any(target_os = "macos", test))]
 mod record_publish;
@@ -50,6 +52,23 @@ pub fn record_preflight() -> Result<Json, splice_core::history::StoreError> {
         &mut project::Projects::default(),
         &object(vec![("dryRun", Json::Bool(true))]),
     )
+}
+
+/// Runs the public recording jobs for the CLI and returns their JSON receipt or error payload.
+/// For a manual recording, `stop` waits for the user and returns false to discard the capture.
+pub fn record_project(
+    args: &Json,
+    stop: &mut dyn FnMut() -> std::io::Result<bool>,
+) -> Result<Json, Json> {
+    #[cfg(target_os = "macos")]
+    {
+        rpc::record_project(args, stop)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = stop;
+        platform::record_start(&mut project::Projects::default(), args).map_err(error_payload)
+    }
 }
 
 /// Reports capture authorization or explicitly requests one missing macOS grant.

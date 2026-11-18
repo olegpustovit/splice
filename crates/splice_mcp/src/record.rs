@@ -12,7 +12,7 @@ use splice_model::{
 use std::{
     fs::{self, File},
     io::{self, Read},
-    os::unix::fs::MetadataExt,
+    os::unix::{fs::MetadataExt, net::UnixStream},
     path::Path,
 };
 
@@ -23,6 +23,7 @@ pub(super) struct Job {
     insert: bool,
     still: bool,
     terminal: Option<Json>,
+    peer: Option<UnixStream>,
 }
 
 pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
@@ -52,7 +53,7 @@ pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreE
         fields.retain(|(key, _)| key != "package");
         fields.push(("package".into(), text(package)));
     }
-    let reply = capture_agent::request("take.begin", &request).inspect_err(|_| {
+    let (reply, peer) = capture_agent::begin(&request).inspect_err(|_| {
         if args.field("sessionId").is_none() {
             let _ = store.end_session(session);
         }
@@ -75,6 +76,7 @@ pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreE
         insert,
         still,
         terminal: None,
+        peer: Some(peer),
     });
     Ok(reply)
 }
@@ -176,15 +178,8 @@ pub(super) fn command(
         reply
     };
     projects.recordings[index].terminal = Some(reply.clone());
+    projects.recordings[index].peer = None;
     Ok(reply)
-}
-
-impl Drop for Job {
-    fn drop(&mut self) {
-        if self.terminal.is_none() {
-            capture_agent::cancel_running(self.id);
-        }
-    }
 }
 
 fn public_status(mut status: Json) -> Json {

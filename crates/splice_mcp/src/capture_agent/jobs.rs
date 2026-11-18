@@ -14,8 +14,11 @@ use splice_core::history::StoreError;
 use splice_model::JobId;
 use std::{
     fs::{self, DirBuilder, File, OpenOptions},
-    io::{self, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    io::{self, Read, Write},
+    os::unix::{
+        fs::{DirBuilderExt, OpenOptionsExt},
+        net::UnixStream,
+    },
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -35,6 +38,7 @@ struct Job {
     state: State,
     stage: Option<Stage>,
     stats: RecordingStats,
+    peer: Option<UnixStream>,
 }
 
 enum State {
@@ -85,6 +89,7 @@ impl Jobs {
             state: State::Pending(ready),
             stage: Some(Stage::create(package, id)?),
             stats: RecordingStats::default(),
+            peer: None,
         };
         job.tick(Instant::now());
         let receipt = job.status()?;
@@ -93,8 +98,24 @@ impl Jobs {
     }
 
     pub(super) fn tick(&mut self, now: Instant) {
+        for job in &mut self.jobs {
+            if let Some(peer) = &mut job.peer
+                && !matches!(peer.read(&mut [0]), Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted))
+            {
+                job.discard(State::Cancelled);
+            }
+        }
         if let Some(job) = self.jobs.last_mut() {
             job.tick(now);
+        }
+    }
+
+    pub(super) fn attach_peer(&mut self, peer: Option<UnixStream>) {
+        let job = self.jobs.last_mut().expect("begin succeeded");
+        if peer.is_some() {
+            job.peer = peer;
+        } else {
+            job.discard(State::Cancelled);
         }
     }
 
@@ -132,6 +153,7 @@ impl Jobs {
                 job.state = State::Cancelled;
                 stage.remove()?;
                 job.stage = None;
+                job.peer = None;
             }
             "take.cancel" => (),
             _ => unreachable!("validated capture method"),
@@ -248,6 +270,7 @@ impl Job {
     fn discard(&mut self, state: State) {
         self.state = state;
         self.stage = None;
+        self.peer = None;
     }
 
     fn status(&self) -> Result<Json, StoreError> {
@@ -461,6 +484,34 @@ mod tests {
             .unwrap();
         assert_ne!(second.string("jobId").unwrap(), id);
         drop(jobs);
+        assert_eq!(fs::read_dir(package.join("takes")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn capture_agent_discards_pending_take_when_writer_disconnects() {
+        let temp = crate::tests::TestDirectory::new("capture-writer-disconnect");
+        let package = temp.0.canonicalize().unwrap().join("recording.splice");
+        fs::create_dir(&package).unwrap();
+        let mut jobs = Jobs::default();
+        let args = object(vec![("countdown", Json::Unsigned(60))]);
+        let started = jobs
+            .begin(&package, Options::parse(&args).unwrap())
+            .unwrap();
+        let (writer, agent) = UnixStream::pair().unwrap();
+        agent.set_nonblocking(true).unwrap();
+        jobs.attach_peer(Some(agent));
+        jobs.tick(Instant::now());
+        assert!(jobs.active());
+        drop(writer);
+        jobs.tick(Instant::now());
+        let query = object(vec![("jobId", text(started.string("jobId").unwrap()))]);
+        assert_eq!(
+            jobs.command("take.status", &query)
+                .unwrap()
+                .string("state")
+                .unwrap(),
+            "cancelled"
+        );
         assert_eq!(fs::read_dir(package.join("takes")).unwrap().count(), 0);
     }
 }

@@ -17,6 +17,37 @@ struct Connection {
     routes: super::live::proxy::Routes,
 }
 
+#[cfg(target_os = "macos")]
+pub(super) fn record_project(
+    args: &Json,
+    stop: &mut dyn FnMut() -> io::Result<bool>,
+) -> Result<Json, Json> {
+    let mut connection = Connection {
+        initialized: true,
+        projects: Projects::default(),
+        friction: Recorder::new(paths::state_dir().ok()),
+        routes: Default::default(),
+    };
+    let reply = super::record_cli::run(args, stop, &mut |name, arguments| {
+        let reply = connection
+            .call(name, arguments, None)
+            .map_err(|error| super::record_cli::io_error(&error))?;
+        if let Some(result) = reply.field("structuredContent") {
+            if let Some(error) = result.field("error") {
+                return Err(error.clone());
+            }
+            Ok(result.clone())
+        } else {
+            Err(super::record_cli::io_error(&"Missing recording reply."))
+        }
+    });
+    let closed = connection
+        .projects
+        .close()
+        .map_err(|error| super::record_cli::io_error(&error));
+    reply.and_then(|value| closed.map(|()| value))
+}
+
 /// Serves one MCP connection, flushing each reply and returning on end of input.
 pub fn serve(input: &mut dyn BufRead, output: &mut dyn Write) -> io::Result<()> {
     let global = match paths::state_dir() {

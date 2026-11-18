@@ -54,6 +54,16 @@ PNG pixels, and `scale` is pixels per point.
 
 ## Headless CLI
 
+- On macOS, `splice record project.splice --display main --duration 3 --mic` records a take and
+  appends it as one undoable edit. A new path creates a project. An existing path uses its current
+  writer, including a viewer. Omit `--duration` in an interactive terminal to record until Return.
+  Control-D discards an interactive recording. Use `--still` for a PNG, `--no-insert` to keep the
+  media off the timeline, or `--no-events` to omit cursor and input capture. `splice record --dry-run`
+  reports sources and grant status without opening or creating a project.
+- Use `--window win_<id>` or `--source '<json>'` for a window or area selector from `record.start`.
+  `--countdown` sets a whole number of seconds before capture. `--system-audio` and `--camera`
+  enable those tracks.
+
 - On macOS, `splice open Name.splice` opens the viewer. Run `splice` or `splice open`
   to choose a project in the native open panel. The panel starts in the last project's directory
   when that project is available.

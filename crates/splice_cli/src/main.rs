@@ -13,12 +13,17 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+mod record;
+
 const HELP: &str = "Usage: splice [<project.splice>]
        splice open [<project.splice>]
        splice open <project.splice> --snapshot <out.png> [--at <frame>]
        splice new <project.splice>
        splice mcp
        splice record --dry-run
+       splice record <project.splice> [--display <main|id> | --window <id> | --source <json>]
+                     [--duration <seconds> | --still] [--countdown <seconds>]
+                     [--mic] [--system-audio] [--camera] [--no-events] [--no-insert] [--dry-run]
        splice permissions [--request [screen|microphone|camera|inputMonitoring]]
        splice apply <ops.json|-> [<project.splice>] [--project <project.splice>]
                     [--dry-run] [--if-revision <revision>] [--idempotency-key <key>]
@@ -76,6 +81,7 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
             };
         }
         ("record", [flag]) if flag == "--dry-run" => splice_mcp::record_preflight()?,
+        ("record", args) => record::command(args)?,
         ("permissions", []) => splice_mcp::capture_permissions(false, None)?,
         ("permissions", [flag]) if flag == "--request" => {
             splice_mcp::capture_permissions(true, None)?

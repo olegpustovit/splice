@@ -150,35 +150,34 @@ fn launch() -> Result<(), StoreError> {
 }
 
 pub(super) fn request(method: &str, args: &Json) -> Result<Json, StoreError> {
+    exchange(&mut dial()?, method, args)
+}
+
+pub(super) fn begin(args: &Json) -> Result<(Json, UnixStream), StoreError> {
+    let mut stream = dial()?;
+    let result = exchange(&mut stream, "take.begin", args)?;
+    Ok((result, stream))
+}
+
+fn dial() -> Result<UnixStream, StoreError> {
     let directory = paths::state_dir()
         .map_err(|error| transport(&error))?
         .join("capture");
-    let mut stream = if let Some(stream) = connect(&directory).map_err(|error| transport(&error))? {
-        stream
-    } else {
-        launch()?;
-        let deadline = Instant::now() + STARTUP;
-        loop {
-            if let Some(stream) = connect(&directory).map_err(|error| transport(&error))? {
-                break stream;
-            }
-            if Instant::now() >= deadline {
-                return Err(transport(
-                    &"The installed capture agent did not open its socket.",
-                ));
-            }
-            thread::sleep(Duration::from_millis(20));
+    if let Some(stream) = connect(&directory).map_err(|error| transport(&error))? {
+        return Ok(stream);
+    }
+    launch()?;
+    let deadline = Instant::now() + STARTUP;
+    loop {
+        if let Some(stream) = connect(&directory).map_err(|error| transport(&error))? {
+            return Ok(stream);
         }
-    };
-    exchange(&mut stream, method, args)
-}
-
-pub(super) fn cancel_running(id: splice_model::JobId) {
-    if let Ok(directory) = paths::state_dir()
-        && let Ok(Some(mut stream)) = connect(&directory.join("capture"))
-    {
-        let args = object(vec![("jobId", crate::wire::display(&id))]);
-        let _ = exchange(&mut stream, "take.cancel", &args);
+        if Instant::now() >= deadline {
+            return Err(transport(
+                &"The installed capture agent did not open its socket.",
+            ));
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -287,8 +286,8 @@ fn listen(
             None => break,
         };
         let delay = match listener.accept() {
-            Ok((mut stream, _)) => {
-                if serve_peer(&mut stream, identity, &mut jobs).is_ok() {
+            Ok((stream, _)) => {
+                if serve_peer(stream, identity, &mut jobs).is_ok() {
                     activity = Instant::now();
                 }
                 Duration::ZERO
@@ -312,20 +311,29 @@ fn listen(
 }
 
 fn serve_peer(
-    stream: &mut UnixStream,
+    mut stream: UnixStream,
     identity: &Identity,
     jobs: &mut jobs::Jobs,
 ) -> io::Result<()> {
-    verify_peer(stream)?;
+    verify_peer(&stream)?;
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    let request = receive(stream, REQUEST_LIMIT)?;
-    let reply = match dispatch(&request, identity, jobs) {
+    let request = receive(&stream, REQUEST_LIMIT)?;
+    let result = dispatch(&request, identity, jobs);
+    let owns_take = result.is_ok() && request.string("method").ok() == Some("take.begin");
+    let reply = match result {
         Ok(value) => object(vec![("result", value)]),
         Err(error) => object(vec![("error", error_payload(error))]),
     };
-    send(stream, &reply)
+    let written = send(&mut stream, &reply);
+    if owns_take {
+        // The open socket bounds capture to the lifetime of the project writer.
+        let ready = written.and_then(|()| stream.set_nonblocking(true));
+        jobs.attach_peer(ready.is_ok().then_some(stream));
+        return ready;
+    }
+    written
 }
 
 fn dispatch(
