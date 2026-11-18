@@ -116,15 +116,12 @@ Depends on T1.3, T4.1, T7.
   signer migration reports and resets the four Splice grants individually with `tccutil`. Two
   consecutive debug installs matched the pinned requirement, and the verifier rejected a re-signed
   copy.
-- [ ] T8.1 Capture agent. macOS attributes capture to the *responsible* process, so a `splice mcp` that
-  Codex or Claude spawns in a terminal would make the terminal ask for permission. Capture therefore
-  runs inside Splice.app, launched by LaunchServices: `open -g -j -a ~/Applications/Splice.app --args
-  --capture-agent` starts it with the accessory activation policy (no Dock icon, no window). It
-  accepts capture only from the signed `~/Applications/Splice.app` and rejects staged builds. It
-  listens on the state-dir unix socket (getpeereid, same user only) and exits after 60 s idle.
-  `splice mcp` and `splice record` are its clients. `ponytail:` an on-demand LaunchAgent
-  plist instead, if `open` ever needs a GUI session the agent lacks. Accept: a socket round trip; an
-  ssh-launched client starts the agent; the agent exits when idle.
+- [x] T8.1 Capture agent (3a73473). Both `splice mcp` recording calls and `splice record --dry-run`
+  start the signed `~/Applications/Splice.app` via Launch Services as an accessory without a window.
+  The agent checks the bundle path, signing requirement and launchd parent, and verifies the peer's
+  effective user. It removes `capture/agent.sock` and exits after 60 s idle. Both clients shared one
+  agent from SSH on the Mini. `ponytail:` use an on-demand LaunchAgent if `open` needs a GUI session
+  the caller lacks. Permission handling and the native recorder follow in T8.2–T8.4.
 - [ ] T8.2 Permissions. `splice permissions` and `record.start {dryRun:true}` report Screen Recording
   (`CGPreflightScreenCaptureAccess`), Microphone and Camera (`AVCaptureDevice authorizationStatus`),
   Input Monitoring (`CGPreflightListenEventAccess`), plus the identity (team, path, designated
@@ -217,3 +214,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T7.4 · done · 35a3859 · `cargo t -p splice_mcp paths` 0.82 s Linux, 2.55 s Mac (two cases); `make check` 3.69 s (76 tests, slowest: seeded history replay 1.687 s); `make mac-check` 14.63 s (18 tests plus symlink and Finder smoke, slowest: offscreen viewer snapshots 1.435 s). The live viewer test found its socket in a state path longer than Darwin permits in a socket address. The installed release smoke persisted the opened project to macOS state, and an ad hoc signed test copy without the license returned `BUNDLE_RESOURCES`.
 - 2026-11-18 · T7.5 · done · 9792f32 · `make check` 3.22 s (76 tests, slowest: seeded history replay 1.646 s); `make mac-check` 9.98 s (18 tests, smoke, corrupt metadata regression and Finder launch, slowest: live MCP viewer 1.237 s). A 2.09 s Mini run also rejected missing metadata, a 15.0.1 deployment target, an extra rpath, an external dylib, a mismatched dylib ID and an extra entitlement. The installed release passed the full verifier.
 - 2026-11-18 · T8.0 · done · 76ceb0d · `make check` 4.15 s (76 tests, slowest: seeded history replay 2.330 s); `make mac-check` 10.77 s (18 tests and bundle checks, slowest: live MCP viewer 1.188 s). Consecutive debug installs took 3.44 s and 2.81 s and matched the installed release's requirement. A hidden AppKit fixture took the normal quit path, a live installed MCP subprocess vetoed replacement, and a mocked migration issued exactly four bundle-specific resets and kept the previous app after a simulated failure. The real grants were untouched. The matching release was reinstalled in 2.98 s.
+- 2026-11-18 · T8.1 · done · 3a73473 · `make check` 3.55 s (77 tests, slowest: seeded history replay 1.690 s); `make mac-check` 14.30 s (20 tests and bundle checks, slowest: offscreen viewer snapshots 1.293 s). The installed release took 21.49 s to build and install. The 83.15 s SSH check rejected staged and direct launches, verified the shared installed process's accessory policy and absence of windows, and observed socket cleanup and process exit after 60.19 s idle.
