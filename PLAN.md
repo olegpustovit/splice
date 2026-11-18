@@ -133,7 +133,9 @@ Depends on T1.3, T4.1, T7.
   Risk: macOS 15+ can periodically ask the user to re-confirm screen-recording access for apps that
   capture without the system picker. The agent then gets `TCC_DENIED` with `needsHuman:true`, and the
   loop marks the task `HUMAN:` instead of retrying.
-- [ ] T8.3 `apple_sys::capture`, `events`, `screenshot`: modern ScreenCaptureKit, bound the T4.1 way.
+- [~] T8.3 `apple_sys::capture`, `events`, `screenshot`: modern ScreenCaptureKit, bound the T4.1 way.
+  Native code and fixtures are in place (a3673ed). HUMAN: the three-second acceptance run needs the
+  T8.2 Mini grants and the T8.4 recording job.
   - Partial (958c27a): installed preflight lists active displays without prompting. The
     ScreenCaptureKit bridge can list shareable windows and apps after the grant and defines the
     same display, window and area targets for PNG screenshots and the stream writer.
@@ -146,8 +148,9 @@ Depends on T1.3, T4.1, T7.
     offset and resumed without a timestamp gap. Hardware and input event acceptance remain open.
   - Partial (f78af91): a listen-only input tap feeds the take clock and a bounded ring. The fixture
     verified normalized positions, secure-input filtering, keyboard destination and pause cutoff.
-    Rust drained and decoded 1,024 records with zero allocations. Cursor assets, event-file writing
-    and live input acceptance remain open.
+    Rust drained and decoded 1,024 records with zero allocations.
+  - `events.json` writes input relative to the screen clock, and cursor events reuse PNG and hotspot
+    files by digest. Fixtures verify the format, shape reuse and allocation-free input serialization.
   - Sources: `SCShareableContent` lists displays, windows and apps, excluding Splice's own windows.
     `SCContentFilter` covers a display, a window, or a display area (`sourceRect`).
   - `SCStreamConfiguration` per Recorder SPEC §4.8: `showsCursor=false`, 60 fps, 420v for
@@ -235,3 +238,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T8.3 · partial · a3585f9 · `cargo t -p apple_sys native_recording_` 6.58 s (case 0.265 s); `make check` 3.37 s (78 tests, slowest: seeded history replay 1.628 s); `make mac-check` 21.92 s (24 tests and bundle checks, slowest: offscreen viewer snapshots 1.491 s). Generated 420v frames produced a 96 × 64 HEVC movie with a one-second duration after removing a one-second pause. Both optional audio writers produced stereo AAC. Live capture, camera, input events and agent job wiring remain open.
 - 2026-11-18 · T8.3 · partial · eed54ae · `make check` 3.29 s (78 tests, slowest: seeded history replay 1.648 s); `make mac-check` 21.09 s (24 tests and bundle checks, slowest: offscreen viewer snapshots 1.439 s). The 0.309 s native recording fixture verified that HEVC `camera.mov` retained a two-frame offset in its QuickTime edit list, resumed at the correct sample time after a one-second pause, and ended on the screen timeline. The camera hardware was not opened during testing.
 - 2026-11-18 · T8.3 · partial · f78af91 · `cargo t -p apple_sys input_events_` 10.73 s (case 0.031 s); `make check` 3.39 s (78 tests, slowest: seeded history replay 1.646 s); `make mac-check` 24.78 s (25 tests and bundle checks, slowest: offscreen viewer snapshots 1.496 s). A synthetic Quartz event verified normalization and scope without posting input or opening a live tap.
+- 2026-11-18 · T8.3 · HUMAN · a3673ed · `cargo t -p apple_sys -p splice_capture` 9.46 s (10 tests, slowest: native HEVC and AAC writer 0.296 s); `make check` 3.91 s (78 tests, slowest: seeded history replay 1.707 s); `make mac-check` 17.60 s (28 tests and bundle checks, slowest: offscreen viewer snapshots 1.476 s). Generated cursor and input fixtures verified the saved event format, pixel hotspots, stable digests, asset reuse, and zero allocations during input serialization. The three-second live check requires the Mini grants and the recording job.
