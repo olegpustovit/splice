@@ -24,7 +24,7 @@ check:
 	cargo run -q -p gate -- all
 	cargo fmt --all --check
 	cargo clippy -q --workspace --all-targets -- -D warnings
-	cargo t
+	cargo t --workspace
 
 lib:
 	@test -e pxui/Cargo.toml || git submodule update --init pxui
@@ -68,7 +68,7 @@ mac-check: mac-sync
 
 # Runs on the Mini only (invoked by mac-check).
 mac-local-check:
-	cargo t $(if $(MAC_CRATES),$(foreach c,$(MAC_CRATES),-p $(c)))
+	cargo t $(if $(MAC_CRATES),$(foreach c,$(MAC_CRATES),-p $(c)),--workspace)
 	@if [ -x packaging/bundle-macos.sh ]; then $(MAKE) dev && tools/check-macos-bundle.sh $(APPDIR)/Splice.app; else echo 'mac-check: bundle not built yet (T7)'; fi
 
 mac-run: mac-sync
