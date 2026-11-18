@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{Error, TimedText};
 use apple_sys::composition::{
     AudioRamp, Builder, Composition, Source, TextLayer, Timing, VideoLayer,
 };
@@ -16,6 +16,7 @@ enum Key {
 
 struct Lowering {
     builder: Builder,
+    text: Vec<TimedText>,
     end: Frame,
     tracks: Vec<(Key, i32)>,
 }
@@ -26,9 +27,10 @@ pub(super) fn build(
     evaluator: &Evaluator,
     cuts: &[Frame],
     end: Frame,
-) -> Result<Composition, Error> {
+) -> Result<(Composition, Vec<TimedText>), Error> {
     let mut state = Lowering {
         builder: Builder::new(project.size, project.fps, end)?,
+        text: Vec::new(),
         end,
         tracks: Vec::new(),
     };
@@ -115,9 +117,9 @@ pub(super) fn build(
                     Layer::Title { opacity: b, .. },
                 ) => {
                     if let Some(text) = evaluator.title(item) {
-                        state.builder.text(
+                        state.add_text(
                             range,
-                            &TextLayer {
+                            TextLayer {
                                 text: text.into(),
                                 bounds: coordinates(bounds),
                                 font: bounds.h * 0.6,
@@ -161,9 +163,9 @@ pub(super) fn build(
                                 height * top,
                                 (height * (1.0 - bottom) - content_height).max(height * top),
                             );
-                            state.builder.text(
+                            state.add_text(
                                 range,
-                                &TextLayer {
+                                TextLayer {
                                     text,
                                     bounds: [
                                         width * left,
@@ -193,10 +195,15 @@ pub(super) fn build(
         }
         state.builder.range(range, &video, &audio)?;
     }
-    state.builder.finish().map_err(Into::into)
+    Ok((state.builder.finish()?, state.text))
 }
 
 impl Lowering {
+    fn add_text(&mut self, range: [Frame; 2], layer: TextLayer) -> Result<(), Error> {
+        self.builder.text(range, &layer)?;
+        self.text.push(TimedText { range, layer });
+        Ok(())
+    }
     fn cached(&self, key: Key) -> Option<i32> {
         // ponytail: use linear lookup until it shows up in composition rebuild profiles.
         self.tracks

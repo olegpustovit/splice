@@ -684,3 +684,13 @@ fn native_frames_cli_and_mcp_render_pngs_from_the_same_revision() {
         assert_eq!(&fs::read(cached).unwrap()[..8], signature);
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_viewer_smoke_presents_media() {
+    let scratch = Scratch::new("viewer-media");
+    let project = export_sample(&scratch);
+    let output = success(scratch.run(&["--smoke-test", project.to_str().unwrap()]));
+    assert_eq!(output.field("ok").and_then(Json::as_bool), Some(true));
+    assert_eq!(output.field("programFrame").and_then(Json::as_u64), Some(0));
+}

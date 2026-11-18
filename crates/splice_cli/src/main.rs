@@ -127,8 +127,12 @@ fn viewer(args: &[String], smoke: bool, output: &mut dyn Write) -> Result<(), St
     };
     let state = splice_mcp::friction::state_dir().ok();
     if smoke {
-        splice_app::smoke_test(path.as_deref(), state.as_deref())?;
-        write_json(&Json::Object(vec![("ok".into(), Json::Bool(true))]), output)
+        let frame = splice_app::smoke_test(path.as_deref(), state.as_deref())?;
+        let mut fields = vec![("ok".into(), Json::Bool(true))];
+        if let Some(frame) = frame {
+            fields.push(("programFrame".into(), Json::Signed(i64::from(frame))));
+        }
+        write_json(&Json::Object(fields), output)
     } else {
         splice_app::open(path.as_deref(), state.as_deref())
     }

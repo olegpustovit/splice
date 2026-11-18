@@ -171,7 +171,10 @@ On macOS, `splice_av` divides that plan at cuts and at changes in the linear ram
 source intervals to composition tracks, scales those intervals for speed changes, and applies
 the planned layer order, crop, transform, opacity and audio gain. Frame reads and MP4 encoding
 share those tracks and instructions. Export and frame grabs use the same title and caption
-bitmaps and opacity ramps. The prepared evaluator supplies text and timing for the PXUI viewer.
+bitmaps and opacity ramps. The viewer samples the same video composition through
+`AVPlayerItemVideoOutput`, displays the image at the project's aspect, and paints the resolved
+titles and captions with PXUI. The color conversion writes directly into three reusable shared
+Metal textures. A texture becomes writable again when its last draw completes.
 
 ## Versioning
 

@@ -1,9 +1,11 @@
 #include "platform.h"
 
+#import <Accelerate/Accelerate.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreText/CoreText.h>
 #import <CoreVideo/CoreVideo.h>
 #import <ImageIO/ImageIO.h>
+#import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 
 #include <dispatch/dispatch.h>
@@ -61,6 +63,28 @@ enum { SourceVideo, SourceAudio, SourceStill, SourceColor };
 @interface SpliceAVExport : NSObject
 @property(nonatomic, strong) SpliceAVAssembly *assembly;
 @property(nonatomic, strong) AVAssetExportSession *session;
+@end
+
+@interface SpliceAVPlayer : NSObject
+@property(nonatomic, strong) SpliceAVAssembly *assembly;
+@property(nonatomic, strong) AVPlayer *player;
+@property(nonatomic, strong) AVPlayerItemVideoOutput *output;
+@end
+
+@implementation SpliceAVPlayer
+- (void)dealloc {
+    [_player pause];
+    [_player replaceCurrentItemWithPlayerItem:nil];
+}
+@end
+
+@interface SpliceAVTexture : NSObject
+@property(nonatomic, strong) id<MTLBuffer> storage;
+@property(nonatomic, strong) id<MTLTexture> image;
+@property(nonatomic) size_t stride;
+@end
+
+@implementation SpliceAVTexture
 @end
 
 // These Objective-C editing APIs support the deployment target, including macOS 15.
@@ -639,6 +663,149 @@ bool splice_av_read_frame(void *raw, int32_t frame, uint8_t *rgba, size_t length
         CGImageRelease(image);
         return true;
     }
+}
+
+void *splice_av_player(void *raw, char **error) {
+    @autoreleasepool {
+        SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
+        AVPlayerItem *item = [AVPlayerItem playerItemWithAsset:assembly.asset];
+        AVPlayerItemVideoOutput *output = [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:@{
+            (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+        }];
+        if (item == nil || output == nil) {
+            splice_set_error(error, "Could not create AVFoundation's program video output.");
+            return NULL;
+        }
+        item.videoComposition = assembly.video;
+        item.audioMix = assembly.audio;
+        [item addOutput:output];
+        AVPlayer *player = [AVPlayer playerWithPlayerItem:item];
+        if (player == nil) {
+            splice_set_error(error, "Could not create the program player.");
+            return NULL;
+        }
+        SpliceAVPlayer *preview = [SpliceAVPlayer new];
+        preview.assembly = assembly;
+        preview.player = player;
+        preview.output = output;
+        [player seekToTime:kCMTimeZero toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+        return (__bridge_retained void *)preview;
+    }
+}
+
+void splice_av_player_play(void *raw, bool playing) {
+    @autoreleasepool {
+        SpliceAVPlayer *preview = (__bridge SpliceAVPlayer *)raw;
+        if (playing) [preview.player play]; else [preview.player pause];
+    }
+}
+
+bool splice_av_player_seek(void *raw, int32_t frame) {
+    @autoreleasepool {
+        SpliceAVPlayer *preview = (__bridge SpliceAVPlayer *)raw;
+        if (frame < 0 || frame >= preview.assembly.end) return false;
+        [preview.player seekToTime:time_for(preview.assembly, frame)
+                   toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+        return true;
+    }
+}
+
+static int32_t copy_player_frame(SpliceAVPlayer *preview, vImage_Buffer destination,
+                                 int32_t *frame, char **error) {
+    @autoreleasepool {
+        SpliceAVAssembly *assembly = preview.assembly;
+        const size_t width = (size_t)assembly.size.width, height = (size_t)assembly.size.height;
+        if (destination.width != width || destination.height != height ||
+            destination.rowBytes < width * 4 || destination.data == NULL) {
+            splice_set_error(error, "The playback frame needs a matching RGBA buffer.");
+            return -1;
+        }
+        AVPlayerItem *item = preview.player.currentItem;
+        if (item.status == AVPlayerItemStatusFailed) {
+            fail(error, item.error, "The program player failed.");
+            return -1;
+        }
+        if (item.status != AVPlayerItemStatusReadyToPlay) return 0;
+        CMTime time = CMTimeMinimum(preview.player.currentTime, time_for(assembly, assembly.end - 1));
+        if (!CMTIME_IS_NUMERIC(time) || ![preview.output hasNewPixelBufferForItemTime:time]) return 0;
+        CMTime display = kCMTimeInvalid;
+        CVPixelBufferRef pixels = [preview.output copyPixelBufferForItemTime:time itemTimeForDisplay:&display];
+        if (pixels == NULL) return 0;
+        if (CVPixelBufferGetWidth(pixels) != width || CVPixelBufferGetHeight(pixels) != height ||
+            CVPixelBufferGetPixelFormatType(pixels) != kCVPixelFormatType_32BGRA ||
+            CVPixelBufferGetBytesPerRow(pixels) < width * 4 ||
+            CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
+            CFRelease(pixels);
+            splice_set_error(error, "The video output returned an unsupported pixel buffer.");
+            return -1;
+        }
+        vImage_Buffer source = {CVPixelBufferGetBaseAddress(pixels), height, width, CVPixelBufferGetBytesPerRow(pixels)};
+        const uint8_t bgra_to_rgba[4] = {2, 1, 0, 3};
+        vImage_Error converted = kvImageNullPointerArgument;
+        if (source.data != NULL) {
+            // One conversion into the final RGBA storage. Preview uses a
+            // shared Metal buffer so the conversion also populates the texture.
+            converted = vImagePermuteChannels_ARGB8888(&source, &destination, bgra_to_rgba, kvImageNoFlags);
+        }
+        CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+        CFRelease(pixels);
+        if (converted != kvImageNoError) {
+            splice_set_error(error, "Could not convert the video output to RGBA.");
+            return -1;
+        }
+        if (!CMTIME_IS_NUMERIC(display)) display = time;
+        int64_t at = CMTimeConvertScale(display, assembly.fps, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value;
+        *frame = (int32_t)MAX(0, MIN(assembly.end - 1, at));
+        return 1;
+    }
+}
+
+int32_t splice_av_player_copy(void *raw, uint8_t *rgba, size_t length, int32_t *frame, char **error) {
+    SpliceAVPlayer *preview = (__bridge SpliceAVPlayer *)raw;
+    const size_t width = (size_t)preview.assembly.size.width, height = (size_t)preview.assembly.size.height;
+    if (length != width * height * 4) {
+        splice_set_error(error, "The playback frame needs a matching RGBA buffer.");
+        return -1;
+    }
+    return copy_player_frame(preview, (vImage_Buffer){rgba, height, width, width * 4}, frame, error);
+}
+
+void *splice_av_texture(uint32_t width, uint32_t height, void **owner, void **image, char **error) {
+    @autoreleasepool {
+        if (width == 0 || height == 0 || width > 16384 || height > 16384) {
+            splice_set_error(error, "Invalid dimensions for the program texture.");
+            return NULL;
+        }
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        MTLPixelFormat format = MTLPixelFormatRGBA8Unorm;
+        size_t alignment = MAX((size_t)1, [device minimumLinearTextureAlignmentForPixelFormat:format]);
+        size_t row = ((width * (size_t)4 + alignment - 1) / alignment) * alignment;
+        id<MTLBuffer> storage = [device newBufferWithLength:row * height options:MTLResourceStorageModeShared];
+        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
+                    width:width height:height mipmapped:NO];
+        descriptor.storageMode = MTLStorageModeShared;
+        descriptor.usage = MTLTextureUsageShaderRead;
+        id<MTLTexture> texture = [storage newTextureWithDescriptor:descriptor offset:0 bytesPerRow:row];
+        if (texture == nil || storage.contents == NULL) {
+            splice_set_error(error, "Metal could not allocate a shared RGBA program texture.");
+            return NULL;
+        }
+        SpliceAVTexture *frame = [SpliceAVTexture new];
+        frame.storage = storage;
+        frame.image = texture;
+        frame.stride = row;
+        *owner = (__bridge void *)device;
+        *image = (__bridge void *)texture;
+        return (__bridge_retained void *)frame;
+    }
+}
+
+int32_t splice_av_player_into_texture(void *raw, void *texture, int32_t *frame, char **error) {
+    SpliceAVPlayer *preview = (__bridge SpliceAVPlayer *)raw;
+    SpliceAVTexture *target = (__bridge SpliceAVTexture *)texture;
+    return copy_player_frame(preview,
+        (vImage_Buffer){target.storage.contents, target.image.height, target.image.width, target.stride},
+        frame, error);
 }
 
 void *splice_av_export(void *raw, const char *file, bool hevc, char **error) {

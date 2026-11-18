@@ -16,6 +16,7 @@ fn main() {
         .warnings_into_errors(true)
         .compile("splice_apple");
     for framework in [
+        "Accelerate",
         "AVFoundation",
         "CoreGraphics",
         "CoreMedia",
@@ -23,6 +24,7 @@ fn main() {
         "CoreVideo",
         "Foundation",
         "ImageIO",
+        "Metal",
         "QuartzCore",
     ] {
         println!("cargo:rustc-link-lib=framework={framework}");

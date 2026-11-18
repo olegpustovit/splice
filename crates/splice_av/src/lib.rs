@@ -10,7 +10,7 @@ use splice_model::{Frame, Project};
 use std::{fmt, path::Path};
 
 pub use apple_sys::image::png as encode_png;
-pub use composition::{Export, ExportState};
+pub use composition::{Export, ExportState, Player};
 
 /// A prepared timeline and its native composition for playback and delivery.
 pub struct Composition {
@@ -18,6 +18,23 @@ pub struct Composition {
     evaluator: Evaluator,
     size: [u32; 2],
     end: Frame,
+    text: Vec<TimedText>,
+}
+
+/// A resolved title or caption shared by the export and viewer.
+pub struct TimedText {
+    range: [Frame; 2],
+    /// Resolved text, placement, color and opacity ramp.
+    pub layer: composition::TextLayer,
+}
+
+impl TimedText {
+    /// Samples the opacity ramp at a frame in the cue's interval.
+    pub fn opacity(&self, at: Frame) -> f32 {
+        let fraction = (at - self.range[0]) as f32 / (self.range[1] - self.range[0]) as f32;
+        let [a, b] = self.layer.opacity;
+        a + (b - a) * fraction
+    }
 }
 
 /// Why the program could not be prepared or rendered.
@@ -55,12 +72,13 @@ impl Composition {
         let evaluator = Evaluator::prepare(project).map_err(Error::Plan)?;
         let cuts = evaluator.breakpoints();
         let end = *cuts.last().unwrap_or(&0);
-        let native = lower::build(project, package, &evaluator, &cuts, end)?;
+        let (native, text) = lower::build(project, package, &evaluator, &cuts, end)?;
         Ok(Self {
             native,
             evaluator,
             size: project.size,
             end,
+            text,
         })
     }
 
@@ -77,6 +95,18 @@ impl Composition {
     /// Playback evaluator for overlays drawn by the viewer.
     pub fn evaluator(&self) -> &Evaluator {
         &self.evaluator
+    }
+
+    /// Title and caption cards visible at this timeline frame, in paint order.
+    pub fn text_at(&self, at: Frame) -> &[TimedText] {
+        let first = self.text.partition_point(|cue| cue.range[1] <= at);
+        let rest = &self.text[first..];
+        &rest[..rest.partition_point(|cue| cue.range[0] <= at)]
+    }
+
+    /// Creates a paused playback output for this revision.
+    pub fn player(&self) -> Result<Player, Error> {
+        self.native.player().map_err(Into::into)
     }
 
     /// Reads one offscreen program frame into a caller-owned RGBA8 buffer.

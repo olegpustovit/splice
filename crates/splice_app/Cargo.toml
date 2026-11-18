@@ -5,11 +5,26 @@ edition.workspace = true
 license.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+apple_sys = { path = "../apple_sys" }
 input = { path = "../../pxui/crates/open/input" }
+metal_sys = { path = "../../pxui/crates/open/metal_sys" }
+ogpu_core = { path = "../../pxui/crates/open/ogpu_core" }
+ogpu_metal = { path = "../../pxui/crates/open/ogpu_metal" }
 pxui = { path = "../../pxui/crates/public/pxui" }
 pxui_host = { path = "../../pxui/crates/host/pxui_host" }
 pxui_sdl = { path = "../../pxui/crates/open/pxui_sdl" }
 splice_core = { path = "../splice_core" }
+splice_av = { path = "../splice_av" }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mem_sys = { path = "../../pxui/crates/open/mem_sys", features = ["counting"] }
+splice_model = { path = "../splice_model" }
+splice_testkit = { path = "../splice_testkit" }
+
+[[test]]
+name = "window_preview"
+path = "tests/window_preview.rs"
+harness = false
 
 [lints]
 workspace = true

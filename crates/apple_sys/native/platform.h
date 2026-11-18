@@ -80,6 +80,12 @@ bool splice_av_range(void *composition, int32_t from, int32_t to,
 bool splice_av_text(void *composition, int32_t from, int32_t to, const SpliceAVText *text, char **error);
 bool splice_av_finish(void *composition, char **error);
 bool splice_av_read_frame(void *composition, int32_t frame, uint8_t *rgba, size_t length, char **error);
+void *splice_av_player(void *composition, char **error);
+void splice_av_player_play(void *player, bool playing);
+bool splice_av_player_seek(void *player, int32_t frame);
+int32_t splice_av_player_copy(void *player, uint8_t *rgba, size_t length, int32_t *frame, char **error);
+void *splice_av_texture(uint32_t width, uint32_t height, void **device, void **image, char **error);
+int32_t splice_av_player_into_texture(void *player, void *texture, int32_t *frame, char **error);
 void *splice_av_export(void *composition, const char *file, bool hevc, char **error);
 int32_t splice_av_export_status(void *job, float *progress, char **error);
 void splice_av_export_cancel(void *job);

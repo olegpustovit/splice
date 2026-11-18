@@ -128,7 +128,19 @@ fn source_issues(source: &str, sys: bool) -> Vec<(usize, &'static str)> {
 fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
     let allowed: &[&str] = match name {
         "splice_cli" => &["splice_app", "splice_core", "splice_json", "splice_mcp"],
-        "splice_app" => &["input", "pxui", "pxui_host", "pxui_sdl", "splice_core"],
+        "splice_app" => &[
+            "apple_sys",
+            "input",
+            "metal_sys",
+            "ogpu_core",
+            "ogpu_metal",
+            "pxui",
+            "pxui_host",
+            "pxui_sdl",
+            "splice_av",
+            "splice_core",
+            "splice_model",
+        ],
         "splice_av" => &["apple_sys", "splice_eval", "splice_model"],
         "splice_core" => &["splice_model", "splice_json"],
         "splice_eval" => &["splice_model"],

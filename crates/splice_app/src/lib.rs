@@ -3,8 +3,8 @@
 #![deny(missing_docs)]
 
 use input::Event;
-use pxui::{FrameIn, Label, Ui, UiDesc};
-use pxui_host::{Accessibility, Graphics, Platform, Window};
+use pxui::{FrameIn, Label, Node, Ui, UiDesc, ui::Size};
+use pxui_host::{Accessibility, Events, Platform, Window};
 use pxui_sdl::{DialogFilter, DialogKind};
 use splice_core::history::{Store, StoreError};
 use std::{
@@ -17,19 +17,23 @@ use std::{
         fs::OpenOptionsExt,
     },
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
+
+mod program;
+mod surface;
 
 /// Opens a viewer on the application thread. With no project, presents the native open panel.
 pub fn open(path: Option<&Path>, state: Option<&Path>) -> Result<(), StoreError> {
-    run(path, state, false)
+    run(path, state, false).map(|_| ())
 }
 
-/// Exercises the same window and renderer while keeping the window hidden.
-pub fn smoke_test(path: Option<&Path>, state: Option<&Path>) -> Result<(), StoreError> {
+/// Presents the first available program frame to a hidden window.
+pub fn smoke_test(path: Option<&Path>, state: Option<&Path>) -> Result<Option<i32>, StoreError> {
     run(path, state, true)
 }
 
-fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<(), StoreError> {
+fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<Option<i32>, StoreError> {
     let mut project = path.map(Store::open).transpose()?;
     let mut window = Window::open_with("Splice", 960, 640, !smoke, smoke, !smoke)
         .map_err(|error| viewer_error(&error))?;
@@ -45,7 +49,8 @@ fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<(), Sto
             .and_then(Path::parent)
             .and_then(Path::to_str);
         let Some(selected) = choose_project(&mut window, &mut events, folder)? else {
-            return window.destroy().map_err(|error| viewer_error(&error));
+            window.destroy().map_err(|error| viewer_error(&error))?;
+            return Ok(None);
         };
         project = Some(Store::open(&selected)?);
     }
@@ -61,15 +66,26 @@ fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<(), Sto
             .unwrap_or_default()
             .to_string_lossy()
     });
-    let result = run_surface(&mut window, &mut events, name.as_deref(), smoke);
+    let mut program = project
+        .as_ref()
+        .map(program::Program::prepare)
+        .transpose()?
+        .flatten();
+    let result = run_surface(
+        &mut window,
+        &mut events,
+        name.as_deref(),
+        program.as_mut(),
+        smoke,
+    );
     window.destroy().map_err(|error| viewer_error(&error))?;
-    result?;
+    let shown = result?;
     if let Some(store) = project
         && store.problem().is_none()
     {
         store.close()?;
     }
-    Ok(())
+    Ok(shown)
 }
 
 fn choose_project(
@@ -115,12 +131,17 @@ fn run_surface(
     window: &mut Window,
     events: &mut Vec<Event>,
     name: Option<&str>,
+    mut program: Option<&mut program::Program>,
     smoke: bool,
-) -> Result<(), StoreError> {
+) -> Result<Option<i32>, StoreError> {
     let mut ui = Ui::new(&UiDesc::DEFAULT).map_err(|error| viewer_error(&error))?;
-    let mut graphics = Graphics::open(window, &ui).map_err(|error| viewer_error(&error))?;
+    let mut surface =
+        surface::Surface::open(window, &ui, program.as_deref().map(program::Program::size))?;
     let mut accessibility = Accessibility::open(window).map_err(|error| viewer_error(&error))?;
     let mut platform = Platform::default();
+    let mut encoded = Events::default();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut presented = None;
     loop {
         events.clear();
         let open = platform
@@ -132,32 +153,57 @@ fn run_surface(
         if !open {
             break;
         }
-        let (width, height) = window.size();
-        let input = FrameIn::new(width as f32, height as f32)
-            .scale(window.scale() as f32)
-            .time(window.time())
-            .environment(platform.environment())
-            .keyboard(platform.keyboard());
-        accessibility.frame(&mut ui);
-        ui.frame(&input, &mut |ui| {
-            if let Some(name) = name {
-                ui.label(name, Label::DEFAULT);
+        if surface.begin(window)? {
+            if let Some(program) = program.as_deref_mut() {
+                program.sample(&mut surface)?;
             }
-        })
-        .map_err(|error| viewer_error(&error))?;
-        platform
-            .apply(window, &ui)
+            let (width, height) = window.size();
+            let mut input = FrameIn::new(width as f32, height as f32)
+                .scale(window.scale() as f32)
+                .time(window.time())
+                .environment(platform.environment())
+                .keyboard(platform.keyboard());
+            let packets = encoded.encode(events);
+            input.wire.events = packets.as_ptr();
+            input.wire.event_count = packets.len();
+            accessibility.frame(&mut ui);
+            ui.frame(&input, &mut |ui| {
+                ui.column(
+                    Node {
+                        w: Size::Grow,
+                        h: Size::Grow,
+                        ..Node::DEFAULT
+                    },
+                    |ui| {
+                        if let Some(name) = name {
+                            ui.label(name, Label::DEFAULT);
+                        }
+                        program::paint(ui, program.as_deref(), surface.image());
+                    },
+                );
+            })
             .map_err(|error| viewer_error(&error))?;
-        graphics
-            .draw(window, &ui, None)
-            .map_err(|error| viewer_error(&error))?;
-        if smoke {
-            break;
+            platform
+                .apply(window, &ui)
+                .map_err(|error| viewer_error(&error))?;
+            if surface.draw(window, &ui)? {
+                presented = program.as_deref().and_then(program::Program::shown);
+                if smoke && (program.is_none() || presented.is_some()) {
+                    break;
+                }
+            }
         }
-        window.wait(None);
+        let waiting = program.is_some() && presented.is_none();
+        if smoke && Instant::now() >= deadline {
+            return Err(viewer_error(
+                &"Timed out presenting the first program frame.",
+            ));
+        }
+        window.wait((waiting || smoke).then(|| window.time() + 1.0 / 120.0));
     }
     drop(accessibility);
-    graphics.close().map_err(|error| viewer_error(&error))
+    surface.close()?;
+    Ok(presented)
 }
 
 fn recall(file: &Path) -> Option<PathBuf> {
