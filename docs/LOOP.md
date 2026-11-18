@@ -112,7 +112,8 @@ recoveries, undos. A drop from the baseline is a red check for the loop.
   Splice ssh session at a time. Never `cargo clean` there.
 - `make mac-sync` rsyncs the Linux tree (without `target/` and `.git/`) to `~/projects/editor` on the
   Mini. The Mini is never edited by hand, and nothing on it outlives a sync.
-- `make mac-check` = sync + `cargo t` of the mac crates + bundle check + `splice --smoke-test`.
+- `make mac-check` syncs, runs the native tests and checks the signed bundle with
+  `tools/check-macos-bundle.sh`, including `splice --smoke-test` through a symlink.
   `make mac-run CMD='splice frame --at 30 /tmp/f.png fixtures/projects/sample.splice'` runs one command.
   `make mac-pull F=/tmp/f.png` copies a result back into `target/mac/` to look at.
 - GUI checks use `--snapshot` (offscreen). Never take over the Mini's screen.

@@ -96,7 +96,9 @@ ifneq ($(filter splice_app,$(MAC_CRATES)),)
 	cargo t -p splice_cli native_viewer_
 endif
 	$(MAKE) bundle PROFILE=debug
-	sh tools/check-macos-open.sh target/bundle/Splice.app
+	tools/check-macos-bundle.sh '$(BUNDLE_DIR)/Splice.app'
+	sh tools/test-macos-bundle.sh '$(BUNDLE_DIR)/Splice.app'
+	sh tools/check-macos-open.sh '$(BUNDLE_DIR)/Splice.app'
 
 mac-run: mac-sync
 	ssh $(MAC) '$(MAC_ENV) $(MAC_NICE) $(CMD)'

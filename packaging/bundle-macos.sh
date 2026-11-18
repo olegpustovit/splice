@@ -48,8 +48,6 @@ app=$stage/Splice.app
 binary=$app/Contents/MacOS/splice
 library=$app/Contents/Frameworks/libpxui.1.dylib
 sdl=$app/Contents/Frameworks/libSDL3.0.dylib
-pxui_name=@rpath/libpxui.1.dylib
-sdl_name=@rpath/libSDL3.0.dylib
 /bin/mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
 /bin/cp packaging/Info.plist "$app/Contents/Info.plist"
 /bin/cp "$products/splice" "$binary"
@@ -57,40 +55,8 @@ sdl_name=@rpath/libSDL3.0.dylib
 /bin/cp -L "$sdl_prefix/lib/libSDL3.0.dylib" "$sdl"
 /bin/cp "$sdl_prefix/share/licenses/SDL3/LICENSE.txt" "$app/Contents/Resources/SDL3-LICENSE.txt"
 
-check_links() {
-    file=$1
-    shift
-    linked=$(/usr/bin/otool -L "$file")
-    deps=$(printf '%s\n' "$linked" | /usr/bin/awk '
-        /^[[:space:]].* \(compatibility version / {
-            sub(/^[[:space:]]+/, ""); sub(/ \(compatibility version .*$/, ""); print
-        }
-    ')
-    while IFS= read -r dep; do
-        case "$dep" in
-            "$pxui_name"|"$sdl_name"|/usr/lib/*|/System/Library/*) ;;
-            *) fail "Unbundled dependency $dep in $file." ;;
-        esac
-    done <<DEPS
-$deps
-DEPS
-    for required in "$@"; do
-        printf '%s\n' "$deps" | /usr/bin/grep -Fxq "$required" || fail "Expected $required in $file."
-    done
-}
-
 clear_rpaths() {
     loads=$(/usr/bin/otool -l "$1")
-    printf '%s\n' "$loads" | /usr/bin/awk '
-        /cmd LC_BUILD_VERSION/ { field = "minos"; next }
-        /cmd LC_VERSION_MIN_MACOSX/ { field = "version"; next }
-        field && $1 == field {
-            n = split($2, version, "."); found++
-            if (version[1] > 15 || (version[1] == 15 && (version[2] > 0 || (n > 2 && version[3] > 0)))) bad = 1
-            field = ""
-        }
-        END { exit (!found || bad) }
-    ' || fail "The minimum macOS version of $1 must be 15.0 or earlier."
     paths=$(printf '%s\n' "$loads" | /usr/bin/awk '
         /cmd LC_RPATH/ { path = 1; next }
         path && $1 == "path" {
@@ -104,9 +70,6 @@ $paths
 PATHS
 }
 
-check_links "$binary" "$pxui_name" "$sdl_name"
-check_links "$library" "$pxui_name"
-check_links "$sdl" "$sdl_name"
 for file in "$binary" "$library" "$sdl"; do
     /usr/bin/codesign --remove-signature "$file" 2>/dev/null || true
     clear_rpaths "$file"
@@ -121,6 +84,7 @@ done
 /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" --timestamp --options runtime \
     --entitlements packaging/splice.entitlements "$app"
 /usr/bin/codesign --verify --deep --strict --test-requirement "=$requirement" "$app"
+tools/check-macos-bundle.sh "$app" --static-only
 
 /bin/mkdir "$lock" 2>/dev/null || fail "Another bundle is being published in $root."
 locked=yes
