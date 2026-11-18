@@ -14,6 +14,9 @@ void splice_set_error(char **error, const char *message);
 
 // Cancels the attached project picker on the application thread.
 void splice_app_cancel_open_panel(void);
+bool splice_app_start_accessory(void);
+bool splice_app_wait_accessory(double seconds);
+char *splice_app_user_home(void);
 
 typedef struct {
     int32_t track_id;

@@ -18,6 +18,7 @@ const HELP: &str = "Usage: splice [<project.splice>]
        splice open <project.splice> --snapshot <out.png> [--at <frame>]
        splice new <project.splice>
        splice mcp
+       splice record --dry-run
        splice apply <ops.json|-> [<project.splice>] [--project <project.splice>]
                     [--dry-run] [--if-revision <revision>] [--idempotency-key <key>]
        splice snapshot [<project.splice>]
@@ -73,6 +74,9 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
                 result => result.map_err(io_error),
             };
         }
+        ("record", [flag]) if flag == "--dry-run" => splice_mcp::record_preflight()?,
+        #[cfg(target_os = "macos")]
+        ("--capture-agent", []) => return splice_mcp::capture_agent::run(),
         ("friction", args) => {
             return splice_mcp::friction::command(args, output).map_err(io_error);
         }

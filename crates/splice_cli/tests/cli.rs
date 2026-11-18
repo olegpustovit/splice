@@ -327,6 +327,23 @@ fn native_viewer_smoke_opens_and_closes_a_hidden_window() {
     );
 }
 
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn recording_preflight_requires_the_macos_agent() {
+    let scratch = Scratch::new("recording-preflight");
+    error(
+        scratch.run(&["record", "--dry-run"]),
+        "UNSUPPORTED_PLATFORM",
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_capture_agent_rejects_an_uninstalled_executable() {
+    let scratch = Scratch::new("capture-uninstalled");
+    error(scratch.run(&["--capture-agent"]), "CAPTURE_IDENTITY");
+}
+
 #[test]
 fn cli_imports_media_and_persists_the_descriptor() {
     let scratch = Scratch::new("import");

@@ -94,6 +94,8 @@ ifneq ($(strip $(MAC_CRATES)),)
 endif
 ifneq ($(filter splice_app,$(MAC_CRATES)),)
 	cargo t -p splice_cli native_viewer_
+	cargo t -p splice_cli native_capture_agent_
+	cargo t -p splice_mcp capture_agent_
 endif
 	$(MAKE) bundle PROFILE=debug
 	tools/check-macos-bundle.sh '$(BUNDLE_DIR)/Splice.app'

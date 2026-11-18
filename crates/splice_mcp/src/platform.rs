@@ -237,7 +237,14 @@ pub(super) fn record_start(projects: &mut Projects, args: &Json) -> Result<Json,
             "an open project ID or a .splice path",
         ));
     }
-    Err(unavailable("Recording"))
+    #[cfg(target_os = "macos")]
+    {
+        super::capture_agent::request("record.start", args)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(unavailable("Recording"))
+    }
 }
 
 pub(super) fn record_stop(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
@@ -246,7 +253,14 @@ pub(super) fn record_stop(projects: &mut Projects, args: &Json) -> Result<Json, 
     if args.field("projectId").is_some() {
         projects.lookup(args)?.check_write(&write_options(args)?)?;
     }
-    Err(unavailable("Recording"))
+    #[cfg(target_os = "macos")]
+    {
+        super::capture_agent::request("record.stop", args)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(unavailable("Recording"))
+    }
 }
 
 fn job_id(args: &Json) -> Result<JobId, StoreError> {
@@ -255,8 +269,8 @@ fn job_id(args: &Json) -> Result<JobId, StoreError> {
         .map_err(|_| bad("jobId", "a job ID returned by export.start or record.start"))
 }
 
+#[cfg(not(target_os = "macos"))]
 fn unavailable(feature: &str) -> StoreError {
-    // ponytail: replace this boundary with AVFoundation in T4 and the signed capture agent in T8.
     failure(
         "UNSUPPORTED_PLATFORM",
         &format!("{feature} requires the native macOS backend."),

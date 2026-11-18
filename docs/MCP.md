@@ -11,6 +11,12 @@ If a viewer closes during a call, read the current revision with `project.info {
 retrying the edit. The client returns `VIEWER_DISCONNECTED` when the outcome of a sent request
 is uncertain. Use `idempotencyKey` on edits that a client may retry.
 
+On macOS, recording calls and `splice record --dry-run` connect to the installed Splice.app over
+the same-user socket at `capture/agent.sock` in the state directory. The client starts the app
+through Launch Services when needed. The accessory process runs without a window and exits after
+60 seconds of inactivity. Until the native recorder is available, it replies with
+`CAPTURE_NOT_READY` after accepting the request.
+
 ## Stdio lifecycle
 
 Clients on `2025-11-25` send `initialize` and then `notifications/initialized`. The compatibility
