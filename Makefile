@@ -70,6 +70,7 @@ mac-check: mac-sync
 
 # Runs on the Mini only (invoked by mac-check).
 mac-local-check:
+	/usr/bin/plutil -lint packaging/Info.plist packaging/splice.entitlements
 ifneq ($(filter splice_app,$(MAC_CRATES)),)
 	$(MAKE) lib PROFILE=debug
 endif
