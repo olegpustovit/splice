@@ -41,8 +41,14 @@ pub fn png(pixels: &[u8], [width, height]: [u32; 2], max_edge: u32) -> Result<Ve
         return Err(unsafe { Error::from_native(error, "PNG encoding failed.") });
     }
     // SAFETY: on success the retained native object owns a nonempty byte buffer of this length.
+    Ok(unsafe { take_bytes(result, data, length) })
+}
+
+// The caller transfers a retained native owner and its borrowed byte range.
+pub(crate) unsafe fn take_bytes(owner: *mut c_void, data: *const u8, length: usize) -> Vec<u8> {
+    // SAFETY: the native object is alive and owns the byte range.
     let bytes = unsafe { std::slice::from_raw_parts(data, length) }.to_vec();
-    // SAFETY: the copy owns its data, allowing us to release the retained native object.
-    unsafe { splice_image_release(result) };
-    Ok(bytes)
+    // SAFETY: the copy owns its data and the caller transferred the native reference.
+    unsafe { splice_image_release(owner) };
+    bytes
 }

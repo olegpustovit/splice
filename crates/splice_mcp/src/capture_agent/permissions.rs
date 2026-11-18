@@ -64,6 +64,14 @@ pub(super) fn snapshot() -> [Status; 4] {
     GRANTS.map(|grant| native::status(grant.permission))
 }
 
+pub(super) fn screen_granted(snapshot: &[Status; 4]) -> bool {
+    GRANTS[Permission::Screen as usize].status(snapshot) == Status::Granted
+}
+
+pub(super) fn screen_denied() -> StoreError {
+    denied(&GRANTS[Permission::Screen as usize])
+}
+
 pub(super) fn report(identity: &Identity, snapshot: &[Status; 4]) -> Vec<(&'static str, Json)> {
     let permissions = GRANTS
         .iter()

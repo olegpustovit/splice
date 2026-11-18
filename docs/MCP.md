@@ -21,8 +21,9 @@ for `screen`, `microphone`, `camera` and `inputMonitoring` with the signed agent
 designated requirement match. Only `splice permissions --request [screen|microphone|camera|inputMonitoring]`
 opens System Settings and requests a grant. Omit the selector to open the first missing grant.
 A capture blocked by a missing grant returns `TCC_DENIED` with `needsHuman:true` and the matching
-privacy pane. Request only the inputs the recording uses. Source enumeration and capture follow
-with the native recorder.
+privacy pane. Preflight lists active displays in points, with `main` as the default display ID.
+With screen recording permission, it also lists shareable windows and applications, excluding
+Splice. Window IDs use `win_<id>`.
 
 ## Stdio lifecycle
 

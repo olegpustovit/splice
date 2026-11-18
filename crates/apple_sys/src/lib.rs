@@ -10,6 +10,9 @@ pub use error::Error;
 /// AppKit integration for the viewer.
 pub mod app;
 
+/// ScreenCaptureKit source discovery and capture targets.
+pub mod capture;
+
 /// AVFoundation composition, video instructions and audio mix.
 pub mod composition;
 
@@ -27,6 +30,9 @@ pub mod ipc;
 
 /// macOS capture authorization and privacy settings.
 pub mod permissions;
+
+/// Still capture with ScreenCaptureKit.
+pub mod screenshot;
 
 #[cfg(test)]
 mod tests;

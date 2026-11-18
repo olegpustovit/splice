@@ -37,6 +37,41 @@ uint32_t splice_permission_status(uint32_t permission);
 bool splice_permission_request(uint32_t permission);
 
 typedef struct {
+    double x, y, width, height;
+} SpliceCaptureRect;
+
+typedef enum {
+    SPLICE_CAPTURE_DISPLAY,
+    SPLICE_CAPTURE_WINDOW,
+    SPLICE_CAPTURE_AREA,
+    SPLICE_CAPTURE_APPLICATION,
+} SpliceCaptureKind;
+
+typedef struct {
+    SpliceCaptureRect rect;
+    uint32_t kind, id, main_display, owner_pid;
+    char *app, *name;
+} SpliceCaptureSource;
+
+typedef struct {
+    SpliceCaptureSource *items;
+    size_t count;
+} SpliceCaptureSources;
+
+typedef struct {
+    SpliceCaptureRect rect;
+    uint32_t kind, id;
+} SpliceCaptureTarget;
+
+_Static_assert(sizeof(SpliceCaptureSource) == 64, "capture source ABI");
+_Static_assert(sizeof(SpliceCaptureTarget) == 40, "capture target ABI");
+
+bool splice_capture_sources(bool include_windows, SpliceCaptureSources *out, bool *denied, char **error);
+void splice_capture_sources_dispose(SpliceCaptureSources *sources);
+void *splice_capture_screenshot(const SpliceCaptureTarget *target, const uint8_t **data,
+                                size_t *size, bool *denied, char **error);
+
+typedef struct {
     int32_t track_id;
     uint32_t codec;
     uint32_t channels;

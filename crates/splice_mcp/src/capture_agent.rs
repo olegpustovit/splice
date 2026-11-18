@@ -5,7 +5,7 @@ use crate::{
     wire::{Args, bad, error_payload},
 };
 use apple_sys::{
-    app,
+    app, capture,
     ipc::{user, verify_peer},
 };
 use splice_core::history::StoreError;
@@ -28,10 +28,13 @@ const SOCK: &str = "agent.sock";
 const IDLE: Duration = Duration::from_secs(60);
 const STARTUP: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(1);
-const LIMIT: u64 = 64 * 1024;
+const REPLY_TIMEOUT: Duration = Duration::from_secs(4);
+const REQUEST_LIMIT: u64 = 64 * 1024;
+const REPLY_LIMIT: u64 = 16 * 1024 * 1024;
 const REQUIREMENT: &str = include_str!("../../../packaging/designated-requirement.txt");
 
 mod permissions;
+mod sources;
 
 struct Identity {
     bundle: PathBuf,
@@ -166,7 +169,7 @@ pub(super) fn request(method: &str, args: &Json) -> Result<Json, StoreError> {
         }
     };
     stream
-        .set_read_timeout(Some(IO_TIMEOUT))
+        .set_read_timeout(Some(REPLY_TIMEOUT))
         .map_err(|error| transport(&error))?;
     stream
         .set_write_timeout(Some(IO_TIMEOUT))
@@ -176,12 +179,13 @@ pub(super) fn request(method: &str, args: &Json) -> Result<Json, StoreError> {
         &object(vec![("method", text(method)), ("args", args.clone())]),
     )
     .map_err(|error| transport(&error))?;
-    let reply = receive(&stream, LIMIT).map_err(|error| transport(&error))?;
+    let reply = receive(&stream, REPLY_LIMIT).map_err(|error| transport(&error))?;
     if let Some(error) = reply.field("error") {
         let code = match error.string("code")? {
             "CAPTURE_NOT_READY" => "CAPTURE_NOT_READY",
             "BAD_ARGS" => "BAD_ARGS",
             "TCC_DENIED" => "TCC_DENIED",
+            "CAPTURE_SOURCE" => "CAPTURE_SOURCE",
             _ => return Err(transport(&"The capture agent returned an unknown error.")),
         };
         return Err(StoreError::new(
@@ -267,7 +271,7 @@ fn serve_peer(stream: &mut UnixStream, identity: &Identity) -> io::Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    let request = receive(stream, LIMIT)?;
+    let request = receive(stream, REQUEST_LIMIT)?;
     let reply = match dispatch(&request, identity) {
         Ok(value) => object(vec![("result", value)]),
         Err(error) => object(vec![("error", error_payload(error))]),
@@ -290,8 +294,9 @@ fn dispatch(request: &Json, identity: &Identity) -> Result<Json, StoreError> {
             let snapshot = permissions::snapshot();
             if args.flag("dryRun")? {
                 let mut result = permissions::report(identity, &snapshot);
-                // The native capture engine supplies source enumeration in T8.3.
-                result.push(("sources", object(Vec::new())));
+                let sources = capture::sources(permissions::screen_granted(&snapshot))
+                    .map_err(capture_source_error)?;
+                result.push(("sources", sources::payload(&sources)));
                 return Ok(object(result));
             }
             permissions::required(args, &snapshot)?;
@@ -307,6 +312,17 @@ fn capture_not_ready() -> StoreError {
         "CAPTURE_NOT_READY",
         "The signed capture agent is reachable. Recording is under development.",
         "Use a build with the native recorder.",
+    )
+}
+
+fn capture_source_error(error: capture::CaptureError) -> StoreError {
+    if error.permission_denied {
+        return permissions::screen_denied();
+    }
+    StoreError::new(
+        "CAPTURE_SOURCE",
+        &error.to_string(),
+        "Check that the requested display or window is available and retry.",
     )
 }
 
@@ -357,7 +373,7 @@ mod tests {
         )
         .unwrap();
         assert!(started.elapsed() >= timeout);
-        let reply = receive(&peer, LIMIT).unwrap();
+        let reply = receive(&peer, REPLY_LIMIT).unwrap();
         assert_eq!(
             reply
                 .field("result")

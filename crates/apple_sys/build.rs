@@ -6,6 +6,7 @@ fn main() {
     cc::Build::new()
         .files([
             "native/app.m",
+            "native/capture.m",
             "native/error.m",
             "native/events.m",
             "native/media.m",
@@ -29,6 +30,7 @@ fn main() {
         "ImageIO",
         "Metal",
         "QuartzCore",
+        "ScreenCaptureKit",
     ] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
