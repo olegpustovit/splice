@@ -37,6 +37,101 @@ const _: () = {
     assert!(offset_of!(Event, payload) == 16);
 };
 
+/// Input activity from a capture source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputKind {
+    /// Pointer moved with no button held.
+    Move,
+    /// Pointer button pressed.
+    Down,
+    /// Pointer button released.
+    Up,
+    /// Pointer moved with a button held.
+    Drag,
+    /// Scroll wheel or trackpad scroll.
+    Scroll,
+    /// A keyboard press.
+    Key,
+    /// Modifier state changed.
+    Flags,
+}
+
+/// One normalized, take-relative input event.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InputEvent {
+    /// Nanoseconds since the first screen frame with paused time removed.
+    pub time_ns: u64,
+    /// Input category.
+    pub kind: InputKind,
+    /// Coordinates within the captured source, from its upper-left corner.
+    pub point: [f64; 2],
+    /// Horizontal and vertical scroll deltas in points.
+    pub scroll: [f64; 2],
+    /// Native modifier flags for keyboard events.
+    pub modifiers: u64,
+    /// Mouse button or virtual key code, as appropriate for the kind.
+    pub code: u32,
+    text: [u16; 8],
+    text_len: u32,
+}
+
+#[repr(C)]
+struct InputPayload {
+    x: f64,
+    y: f64,
+    dx: f64,
+    dy: f64,
+    modifiers: u64,
+    code: u32,
+    text_len: u32,
+    text: [u16; 8],
+}
+
+const _: () = assert!(size_of::<InputPayload>() == 64);
+
+impl InputEvent {
+    /// Decodes one record from `Recording::read_input` without allocating.
+    pub fn decode(record: &Event) -> Option<Self> {
+        let kind = match record.kind {
+            1 => InputKind::Move,
+            2 => InputKind::Down,
+            3 => InputKind::Up,
+            4 => InputKind::Drag,
+            5 => InputKind::Scroll,
+            6 => InputKind::Key,
+            7 => InputKind::Flags,
+            _ => return None,
+        };
+        // SAFETY: the payload ABI is 64 initialized bytes consisting only of
+        // native-endian integers and floats. The pointer need not be aligned.
+        let payload = unsafe {
+            record
+                .payload
+                .as_ptr()
+                .cast::<InputPayload>()
+                .read_unaligned()
+        };
+        if payload.text_len > 8 {
+            return None;
+        }
+        Some(Self {
+            time_ns: record.time_ns,
+            kind,
+            point: [payload.x, payload.y],
+            scroll: [payload.dx, payload.dy],
+            modifiers: payload.modifiers,
+            code: payload.code,
+            text: payload.text,
+            text_len: payload.text_len,
+        })
+    }
+
+    /// Returns the key's UTF-16 text when it produced a printable character.
+    pub fn text(&self) -> &[u16] {
+        &self.text[..self.text_len as usize]
+    }
+}
+
 /// Called on the producer's thread when an empty queue becomes ready. The
 /// callback receives only a numeric token and must return promptly.
 pub type Wake = extern "C" fn(u64);

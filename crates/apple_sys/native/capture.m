@@ -134,13 +134,18 @@ void splice_capture_sources_dispose(SpliceCaptureSources *sources) {
 }
 
 static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShareableContent *content,
-                                       SCStreamConfiguration *configuration, char **error) {
+                                       SCStreamConfiguration *configuration, SpliceCaptureGeometry *geometry,
+                                       char **error) {
     SCContentFilter *filter = nil;
+    CGRect frame = CGRectZero;
+    uint32_t owner = 0;
     if (target->kind == SPLICE_CAPTURE_WINDOW) {
         for (SCWindow *window in content.windows) {
             if (window.windowID == target->id && window.owningApplication != nil &&
                 !is_splice(window.owningApplication)) {
                 filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:window];
+                frame = window.frame;
+                owner = (uint32_t)window.owningApplication.processID;
                 break;
             }
         }
@@ -153,6 +158,7 @@ static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShar
         for (SCDisplay *display in content.displays) {
             if (display.displayID == id) {
                 filter = [[SCContentFilter alloc] initWithDisplay:display excludingApplications:excluded exceptingWindows:@[]];
+                frame = display.frame;
                 break;
             }
         }
@@ -169,6 +175,7 @@ static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShar
             return nil;
         }
         configuration.sourceRect = region;
+        frame = CGRectOffset(region, frame.origin.x, frame.origin.y);
         bounds = region.size;
     }
     double width = round(bounds.width * filter.pointPixelScale);
@@ -180,20 +187,27 @@ static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShar
     configuration.width = (size_t)width;
     configuration.height = (size_t)height;
     configuration.showsCursor = NO;
+    if (geometry != NULL) {
+        *geometry = (SpliceCaptureGeometry){
+            .rect = capture_rect(frame),
+            .window_id = target->kind == SPLICE_CAPTURE_WINDOW ? target->id : 0,
+            .owner_pid = owner,
+        };
+    }
     return filter;
 }
 
 SCContentFilter *splice_capture_prepare(const SpliceCaptureTarget *target, SCStreamConfiguration *configuration,
-                                        bool *denied, char **error) {
+                                        SpliceCaptureGeometry *geometry, bool *denied, char **error) {
     SCShareableContent *content = shareable_content(denied, error);
-    return content == nil ? nil : capture_filter(target, content, configuration, error);
+    return content == nil ? nil : capture_filter(target, content, configuration, geometry, error);
 }
 
 void *splice_capture_screenshot(const SpliceCaptureTarget *target, const uint8_t **data, size_t *size,
                                 bool *denied, char **error) {
     @autoreleasepool {
         SCStreamConfiguration *configuration = [SCStreamConfiguration new];
-        SCContentFilter *filter = splice_capture_prepare(target, configuration, denied, error);
+        SCContentFilter *filter = splice_capture_prepare(target, configuration, NULL, denied, error);
         if (filter == nil) return NULL;
         dispatch_semaphore_t ready = dispatch_semaphore_create(0);
         __block NSData *bytes;

@@ -1,5 +1,5 @@
 use super::{CaptureError, RawTarget, Target};
-use crate::Error;
+use crate::{Error, events::Event};
 use std::{
     ffi::{CString, c_char, c_void},
     mem::size_of,
@@ -25,6 +25,7 @@ const _: () = assert!(size_of::<RecordingStats>() == 24);
 /// Owns ScreenCaptureKit outputs and their real-time writers.
 pub struct Recording {
     handle: NonNull<c_void>,
+    finished: bool,
 }
 
 unsafe extern "C" {
@@ -34,6 +35,7 @@ unsafe extern "C" {
         microphone: *const c_char,
         system_audio: bool,
         camera: bool,
+        events: bool,
         denied: *mut bool,
         error: *mut *mut c_char,
     ) -> *mut c_void;
@@ -51,18 +53,22 @@ unsafe extern "C" {
         error: *mut *mut c_char,
     ) -> bool;
     fn splice_recording_release(handle: *mut c_void);
+    fn splice_recording_read_input(handle: *mut c_void, out: *mut Event, capacity: usize) -> usize;
+    fn splice_recording_dropped_input(handle: *mut c_void) -> u64;
 }
 
 impl Recording {
     /// Starts an authorized recording in an existing staging directory.
     /// Pass an empty microphone ID for the system default, or `None` to omit it.
     /// When camera is enabled, records the default video device into `camera.mov`.
+    /// Input defaults to the caller's explicit selection and requires Input Monitoring permission.
     pub fn start(
         directory: &Path,
         target: Target,
         microphone: Option<&str>,
         system_audio: bool,
         camera: bool,
+        events: bool,
     ) -> Result<Self, CaptureError> {
         let raw = target.native()?;
         let directory = c_string(directory.as_os_str().as_bytes())?;
@@ -82,12 +88,16 @@ impl Recording {
                     .map_or(ptr::null(), |device| device.as_ptr()),
                 system_audio,
                 camera,
+                events,
                 &mut denied,
                 &mut diagnostic,
             )
         };
         NonNull::new(handle)
-            .map(|handle| Self { handle })
+            .map(|handle| Self {
+                handle,
+                finished: false,
+            })
             .ok_or_else(|| {
                 // SAFETY: the failed start transferred its optional diagnostic.
                 unsafe {
@@ -107,9 +117,28 @@ impl Recording {
         unsafe { splice_recording_pause(self.handle.as_ptr(), pause) };
     }
 
-    /// Stops capture and seals each output file.
-    pub fn finish(self) -> Result<RecordingStats, CaptureError> {
+    /// Stops capture and seals each output file. Queued input can still be drained.
+    pub fn finish(&mut self) -> Result<RecordingStats, CaptureError> {
+        if self.finished {
+            return Err(CaptureError {
+                permission_denied: false,
+                error: Error::message("The recording is already finished."),
+            });
+        }
+        self.finished = true;
         self.stats(splice_recording_finish)
+    }
+
+    /// Drains at most the capacity of the caller's fixed buffer without allocating.
+    pub fn read_input(&mut self, out: &mut [Event]) -> usize {
+        // SAFETY: the output range is writable and the mutable receiver is the only consumer.
+        unsafe { splice_recording_read_input(self.handle.as_ptr(), out.as_mut_ptr(), out.len()) }
+    }
+
+    /// Returns how many input records could not be queued.
+    pub fn dropped_input(&self) -> u64 {
+        // SAFETY: the bridge reference remains alive and the native counter is synchronized.
+        unsafe { splice_recording_dropped_input(self.handle.as_ptr()) }
     }
 
     fn stats(

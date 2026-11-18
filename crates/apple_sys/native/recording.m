@@ -1,4 +1,5 @@
 #include "recording_internal.h"
+#include "input_events.h"
 
 #import <CoreVideo/CoreVideo.h>
 
@@ -16,6 +17,12 @@ static CMTime host_time(void) {
 
 static CMTime positive(CMTime time) {
     return CMTimeMaximum(kCMTimeZero, time);
+}
+
+static uint64_t nanoseconds(CMTime time) {
+    if (!CMTIME_IS_NUMERIC(time)) return 0;
+    int64_t value = CMTimeConvertScale(time, 1000000000, kCMTimeRoundingMethod_RoundTowardZero).value;
+    return (uint64_t)MAX(0, value);
 }
 
 static NSDictionary *video_settings(NSInteger width, NSInteger height, NSNumber *frame_rate) {
@@ -158,6 +165,7 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
     AVCaptureVideoDataOutput *_cameraOutput;
     dispatch_queue_t _cameraControl;
     id _cameraErrorObserver;
+    SpliceInputMonitor *_inputMonitor;
     NSError *_failure;
     CMTime _first, _pausedSoFar, _pauseStart, _resumeCutoff, _finalTime;
     uint64_t _frames, _dropped;
@@ -238,6 +246,38 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
     return YES;
 }
 
+- (BOOL)prepareInput:(SpliceCaptureGeometry)geometry denied:(bool *)denied error:(char **)error {
+    if (!CGPreflightListenEventAccess()) {
+        *denied = true;
+        splice_set_error(error, "Input Monitoring permission is unavailable.");
+        return NO;
+    }
+    _inputMonitor = [[SpliceInputMonitor alloc] initWithGeometry:geometry error:error];
+    if (_inputMonitor == nil) return NO;
+    if (![_inputMonitor start]) {
+        *denied = !CGPreflightListenEventAccess();
+        splice_set_error(error, "Could not start the listen-only input monitor.");
+        return NO;
+    }
+    return YES;
+}
+
+- (void)publishInputClock {
+    [_inputMonitor updateClock:(SpliceInputClock){
+        .first = nanoseconds(_first), .paused = nanoseconds(_pausedSoFar),
+        .resumed = nanoseconds(_resumeCutoff),
+        .active = !_stopping && CMTIME_IS_NUMERIC(_first) && !CMTIME_IS_NUMERIC(_pauseStart),
+    }];
+}
+
+- (size_t)readInput:(SpliceEvent *)out capacity:(size_t)capacity {
+    return [_inputMonitor read:out capacity:capacity];
+}
+
+- (uint64_t)droppedInput {
+    return [_inputMonitor dropped];
+}
+
 - (void)activateCamera {
     AVCaptureSession *session = _cameraSession;
     dispatch_async(_cameraControl, ^{
@@ -310,6 +350,7 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
         if (!screen) return;
         _first = pts;
         _pausedSoFar = kCMTimeZero;
+        [self publishInputClock];
     }
     SpliceRecordingTrack *track = screen ? _screen : type == SCStreamOutputTypeMicrophone ? _microphone : _audio;
     if (track == nil) return;
@@ -353,6 +394,7 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
         _pauseStart = kCMTimeInvalid;
         _resumeCutoff = now;
     }
+    [self publishInputClock];
 }
 
 - (CMTime)elapsedAt:(CMTime)now {
@@ -367,6 +409,9 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
 }
 
 - (NSError *)failure {
+    if (_failure == nil && [_inputMonitor wasDisabled]) {
+        return recording_error(@"The input monitor was disabled during the recording.");
+    }
     return _failure;
 }
 
@@ -387,12 +432,16 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
     dispatch_sync(_queue, ^{
         self->_finalTime = [self elapsedAt:now];
         self->_stopping = YES;
-        failure = self->_failure;
+        [self publishInputClock];
+        failure = [self failure];
         if (self->_camera != nil) [tracks addObject:self->_camera];
         else if (self->_cameraURL != nil && failure == nil) {
             failure = recording_error(@"No camera frames arrived during the recording.");
         }
     });
+    if (_inputMonitor != nil && ![_inputMonitor stop] && failure == nil) {
+        failure = recording_error(@"The input monitor did not stop.");
+    }
     if (![self stopCamera] && failure == nil) failure = recording_error(@"The camera did not stop.");
     if (_stream != nil) {
         dispatch_semaphore_t stopped = dispatch_semaphore_create(0);
@@ -435,6 +484,7 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
 - (void)cancel {
     dispatch_sync(_queue, ^{
         self->_stopping = YES;
+        [self publishInputClock];
         [self->_stream stopCaptureWithCompletionHandler:nil];
         [self detach];
         [self->_screen cancel];
@@ -442,16 +492,18 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
         [self->_audio cancel];
         [self->_camera cancel];
     });
+    [_inputMonitor stop];
     [self stopCamera];
 }
 @end
 
 void *splice_recording_start(const SpliceCaptureTarget *target, const char *directory, const char *microphone,
-                             bool system_audio, bool camera, bool *denied, char **error) {
+                             bool system_audio, bool camera, bool events, bool *denied, char **error) {
     @autoreleasepool {
         NSURL *root = [NSURL fileURLWithFileSystemRepresentation:directory isDirectory:YES relativeToURL:nil];
         SCStreamConfiguration *configuration = [SCStreamConfiguration new];
-        SCContentFilter *filter = splice_capture_prepare(target, configuration, denied, error);
+        SpliceCaptureGeometry geometry;
+        SCContentFilter *filter = splice_capture_prepare(target, configuration, &geometry, denied, error);
         if (filter == nil) return NULL;
         configuration.width = configuration.width & ~(size_t)1;
         configuration.height = configuration.height & ~(size_t)1;
@@ -485,6 +537,10 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const char *dire
                 splice_capture_error(failure, "Could not configure the camera.", denied, error);
                 return NULL;
             }
+        }
+        if (events && ![recording prepareInput:geometry denied:denied error:error]) {
+            [recording cancel];
+            return NULL;
         }
         SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:configuration delegate:recording];
         recording.stream = stream;
@@ -554,4 +610,14 @@ void splice_recording_release(void *handle) {
         SpliceRecording *recording = (__bridge_transfer SpliceRecording *)handle;
         [recording cancel];
     }
+}
+
+size_t splice_recording_read_input(void *handle, SpliceEvent *out, size_t capacity) {
+    SpliceRecording *recording = (__bridge SpliceRecording *)handle;
+    return [recording readInput:out capacity:capacity];
+}
+
+uint64_t splice_recording_dropped_input(void *handle) {
+    SpliceRecording *recording = (__bridge SpliceRecording *)handle;
+    return [recording droppedInput];
 }

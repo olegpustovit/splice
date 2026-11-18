@@ -1,5 +1,5 @@
 use super::{
-    events::{Event, EventRing},
+    events::{Event, EventRing, InputEvent, InputKind},
     media,
 };
 use std::{
@@ -11,6 +11,32 @@ fn fixture(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/media")
         .join(name)
+}
+
+#[test]
+fn input_events_respect_capture_scope_and_drain_without_allocations() {
+    unsafe extern "C" {
+        fn splice_input_fixture(out: *mut Event) -> bool;
+    }
+    let mut event = Event::default();
+    // SAFETY: the fixture fills a writable record and does not modify system input.
+    assert!(unsafe { splice_input_fixture(&mut event) });
+    let decoded = InputEvent::decode(&event).unwrap();
+    assert_eq!(decoded.kind, InputKind::Key);
+    assert_eq!(decoded.point, [0.25, 0.5]);
+    assert_eq!(decoded.time_ns, 1_100_000_000);
+    assert_eq!(decoded.text(), &[u16::from(b'a')]);
+    let mut ring = EventRing::new(4, None, 0).unwrap();
+    let mut scratch = [Event::default(); 1];
+    let meter = splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset);
+    meter.warm(&mut || {
+        for _ in 0..1024 {
+            assert!(ring.try_push(event));
+            assert_eq!(ring.peek(&mut scratch), 1);
+            assert_eq!(InputEvent::decode(&scratch[0]), Some(decoded));
+            assert!(ring.ack(1));
+        }
+    });
 }
 
 #[test]
