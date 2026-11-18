@@ -167,7 +167,7 @@ Depends on T1.3, T4.1, T7.
   - The Rust side drains the event ring with no allocations in steady state.
   - Accept: 3 s display capture on the Mini: the files probe correctly, `events.json` parses, and the
     take duration matches wall time within 2 frames.
-- [x] T8.4 MCP and CLI (063d7e0).
+- [x] T8.4 MCP and CLI (063d7e0, bfd4a08).
   - Partial (f239a6d): the signed capture agent schedules and seals takes in a private staging
     directory. The agent validates source selection, maintains countdown and elapsed time, and can
     cancel and discard staged output.
@@ -184,8 +184,11 @@ Depends on T1.3, T4.1, T7.
     inserted on the spine as one agent batch (undoable). With `insert:false` it only lands in media.
   - `splice record` is the same thing in one command and creates the project when the path is new.
   - Linux: transcripts with fixture takes; live capture returns `UNSUPPORTED_PLATFORM`.
-- [ ] T8.5 Acceptance on the Mini, after the one-time grant, all from ssh with short runs (the Mini is
+- [~] T8.5 Acceptance on the Mini, after the one-time grant, all from ssh with short runs (the Mini is
   shared):
+  HUMAN: the current signed release is installed. The read-only preflight reported `notGranted`
+  for screen and input monitoring and `notDetermined` for microphone and camera. Confirm the grants
+  under T8.2 before starting the live runs.
   1. `splice record /tmp/r.splice --display main --duration 3 --mic` gives a project with one take
      clip of 90 ± 6 frames and its events.
   2. `make dev`, then the same again: no prompt (stable signature).
@@ -248,3 +251,5 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T8.4 · partial · f239a6d · `make check` 3.32 s (79 tests, slowest: seeded history replay 1.748 s); `make mac-check` 18.84 s (30 tests and bundle checks, slowest: offscreen viewer snapshots 1.543 s). Fixtures verified selector validation, ambiguous window rejection, countdown, exclusive capture and staged output cleanup on cancellation. Publication by the project writer, public MCP and CLI wiring, and the live take remain open.
 - 2026-11-18 · T8.4 · partial · 7219a41 · `make check` 18.10 s (80 tests, slowest: seeded history replay 3.016 s); `make mac-check` 24.79 s (31 tests and bundle checks, slowest: offscreen viewer snapshots 1.693 s). Fixture captures verified one-batch import, media-only import, stale-write preservation, undo and journal replay. Native publication probed a movie and a generated PNG in 0.173 s. The CLI and live Mini acceptance remain open.
 - 2026-11-18 · T8.4 · done · 063d7e0 · `make check` 3.97 s (83 tests, slowest: seeded history replay 1.968 s); `make mac-check` 21.77 s (32 tests and bundle checks, slowest: live MCP viewer 1.335 s). The CLI uses the same project and job routes as MCP. Fixture jobs verified timed publication and manual cancellation. The native receiver discards unfinished takes on writer disconnect (0.031 s). Live Mini acceptance remains in T8.5.
+- 2026-11-18 · T8.4 · done · bfd4a08 · `make check` 3.33 s (83 tests, slowest: seeded history replay 1.566 s); `make mac-check` 19.70 s (32 tests and bundle checks, slowest: live MCP viewer and playbar golden 1.298 s). Direct area and app-name flags now cover the selectors in the cut contract. Ambiguous app selections require a title or ID.
+- 2026-11-18 · T8.5 · HUMAN · bfd4a08 · Signed release installation and read-only preflight on the Mini took 89.41 s including the idle exit. The CLI showed the new selectors and the bundle matched Team ID 7ZH3FYV964 and the pinned requirement. Screen and input monitoring are `notGranted`; microphone and camera are `notDetermined`. Live capture, debug reinstallation without a prompt, and live MCP capture remain pending.
