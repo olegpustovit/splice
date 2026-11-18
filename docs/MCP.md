@@ -48,9 +48,20 @@ Stay under 20 tools: new capabilities become `edit.apply` commands or parameters
   The `fix` says exactly what to call or change. If an agent had to guess, the fix hint was wrong;
   that is a friction entry and a bug.
 
+## Command descriptions
+
+`commands.describe {id}` returns the argument descriptions and an example operation for the
+sample project. A leading `!` in a description marks a required argument. With `query` it
+searches command IDs, titles and groups without regard to case.
+
+The `cut` field gives the command's release tier. The 20 registry-only commands carry
+`planned:true` and return `PLANNED` if submitted as edits. Commands in 0.2 also require that
+cut to execute. In `edit.apply`, an operation can bind a result with `ref:"$cut"`. Later operations
+can use `"$cut"` for its primary item and `"$cut.right"` or `"$cut.new"` for its first created item.
+
 ## Error codes
 
-`BAD_ARGS`, `NOT_FOUND`, `STALE_REVISION`, `CONFLICT`, `OUT_OF_RANGE`, `INVARIANT`, `PLANNED`,
+`BAD_ARGS`, `UNKNOWN_COMMAND`, `NOT_FOUND`, `STALE_REVISION`, `CONFLICT`, `OUT_OF_RANGE`, `INVARIANT`, `PLANNED`,
 `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
 `MEDIA_OFFLINE`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`,
 `UNSUPPORTED_PLATFORM` (Linux: export, frames, recording), `TCC_DENIED` (recording without a grant;

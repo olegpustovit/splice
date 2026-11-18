@@ -5,3 +5,6 @@
 pub mod package;
 #[cfg(test)]
 mod package_tests;
+
+/// The command registry and argument decoders shared by editor clients.
+pub mod commands;

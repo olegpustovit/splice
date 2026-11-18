@@ -1,0 +1,479 @@
+use super::{CommandError as Error, Json, args::*, op::*};
+use splice_model::{Fit, Placement};
+
+type DecodedOp = Result<Op, Error>;
+
+pub(super) fn item_split(a: &Json) -> DecodedOp {
+    Ok(Op::ItemSplit {
+        item: a.target("item")?,
+        at: a.frame("at")?,
+    })
+}
+
+pub(super) fn item_trim(a: &Json) -> DecodedOp {
+    let edge = match a.string("edge")? {
+        "in" => TrimEdge::In,
+        "out" => TrimEdge::Out,
+        _ => return Err(Error::bad("edge", "in or out")),
+    };
+    Ok(Op::ItemTrim {
+        item: a.target("item")?,
+        edge,
+        position: position(a)?,
+        ripple: a.flag("ripple", true)?,
+    })
+}
+
+pub(super) fn item_move(a: &Json) -> DecodedOp {
+    Ok(Op::ItemMove {
+        items: a.targets("items")?,
+        position: position(a)?,
+        carry_overlays: a.flag("carryOverlays", true)?,
+        ripple: a.flag("ripple", true)?,
+    })
+}
+
+pub(super) fn item_delete(a: &Json) -> DecodedOp {
+    let keep_overlays = match a.opt_string("overlays")?.as_deref() {
+        None | Some("delete") => false,
+        Some("keep") => true,
+        _ => return Err(Error::bad("overlays", "delete or keep")),
+    };
+    Ok(Op::ItemDelete {
+        items: a.targets("items")?,
+        ripple: a.flag("ripple", true)?,
+        keep_overlays,
+    })
+}
+
+pub(super) fn item_duplicate(a: &Json) -> DecodedOp {
+    Ok(Op::ItemDuplicate {
+        items: a.targets("items")?,
+        at: a.opt_frame("at")?,
+    })
+}
+
+pub(super) fn item_set(a: &Json) -> DecodedOp {
+    let color = patch_string(a, "color")?;
+    if let Some(Some(color)) = &color
+        && !["red", "orange", "yellow", "green", "blue", "purple", "gray"].contains(&color.as_str())
+    {
+        return Err(Error::bad(
+            "color",
+            "red, orange, yellow, green, blue, purple, gray, or null",
+        ));
+    }
+    Ok(Op::ItemSet {
+        items: a.targets("items")?,
+        name: patch_string(a, "name")?,
+        color,
+        fade_in: a.opt_int("fadeIn")?,
+        fade_out: a.opt_int("fadeOut")?,
+    })
+}
+
+pub(super) fn clip_speed(a: &Json) -> DecodedOp {
+    let speed = a.number("speed")?;
+    if !(0.25..=16.0).contains(&speed) {
+        return Err(Error::bad("speed", "a number from 0.25 to 16"));
+    }
+    Ok(Op::ClipSpeed {
+        items: a.targets("items")?,
+        speed,
+        ripple: a.flag("ripple", true)?,
+    })
+}
+
+pub(super) fn clip_insert(a: &Json) -> DecodedOp {
+    let source = match (a.opt_target("media")?, a.opt_string("path")?) {
+        (Some(id), None) => InsertSource::Media(id),
+        (None, Some(path)) if !path.is_empty() && !path.contains('\0') => InsertSource::Path(path),
+        _ => {
+            return Err(Error::bad(
+                "media or path",
+                "exactly one media ID or nonempty file path",
+            ));
+        }
+    };
+    Ok(Op::ClipInsert {
+        source,
+        at: a.opt_frame("at")?,
+        ripple: a.flag("ripple", true)?,
+    })
+}
+
+pub(super) fn clip_lift(a: &Json) -> DecodedOp {
+    Ok(Op::ClipLift {
+        items: a.targets("items")?,
+        lane: a.opt_target("lane")?,
+    })
+}
+
+pub(super) fn overlay_replace_spine(a: &Json) -> DecodedOp {
+    Ok(Op::OverlayReplaceSpine {
+        item: a.target("item")?,
+        target: a.opt_target("target")?,
+    })
+}
+
+pub(super) fn overlay_add(a: &Json) -> DecodedOp {
+    let content = match a.string("kind")? {
+        "title" => OverlayContent::Title(a.opt_string("text")?),
+        "motion" => OverlayContent::Motion {
+            from: a.opt_number("from")?.unwrap_or(1.0),
+            to: a.opt_number("to")?.unwrap_or(1.32),
+        },
+        "media" => OverlayContent::Media {
+            media: a.target("media")?,
+            source: a.opt_int("source")?.unwrap_or(0),
+            placement: a
+                .opt_string("placement")?
+                .as_deref()
+                .map(placement)
+                .transpose()?
+                .unwrap_or(Placement::Card),
+            behind_presenter: a.flag("behindPresenter", false)?,
+            muted: a.flag("muted", true)?,
+            crop: crop(a)?.flatten(),
+            fit: a
+                .opt_string("fit")?
+                .as_deref()
+                .map(fit)
+                .transpose()?
+                .unwrap_or(Fit::Fill),
+        },
+        _ => return Err(Error::bad("kind", "title, motion, or media")),
+    };
+    Ok(Op::OverlayAdd {
+        content,
+        at: a.opt_frame("at")?,
+        anchor: a.field("anchor").map(anchor).transpose()?,
+        lane: a.opt_target("lane")?,
+        length: a.opt_int("length")?,
+    })
+}
+
+pub(super) fn title_add(a: &Json) -> DecodedOp {
+    Ok(Op::TitleAdd {
+        at: a.frame("at")?,
+        length: a.opt_int("length")?.unwrap_or(90),
+        text: a.opt_string("text")?,
+        lane: a.opt_target("lane")?,
+    })
+}
+
+pub(super) fn title_set(a: &Json) -> DecodedOp {
+    Ok(Op::TitleSet {
+        item: a.target("item")?,
+        text: a.string("text")?.into(),
+    })
+}
+
+pub(super) fn motion_add(a: &Json) -> DecodedOp {
+    Ok(Op::MotionAdd {
+        at: a.frame("at")?,
+        length: a.opt_int("length")?.unwrap_or(120),
+        from: a.opt_number("from")?.unwrap_or(1.0),
+        to: a.opt_number("to")?.unwrap_or(1.32),
+    })
+}
+
+pub(super) fn motion_set(a: &Json) -> DecodedOp {
+    Ok(Op::MotionSet {
+        item: a.target("item")?,
+        from: a.opt_number("from")?,
+        to: a.opt_number("to")?,
+    })
+}
+
+pub(super) fn item_anchor(a: &Json) -> DecodedOp {
+    let pinned = a.flag("pinned", false)?;
+    let mode = a
+        .field("anchor")
+        .map(anchor)
+        .transpose()?
+        .map_or(AnchorMode::Current(pinned), AnchorMode::Explicit);
+    Ok(Op::ItemAnchor {
+        item: a.target("item")?,
+        mode,
+    })
+}
+
+pub(super) fn item_lane(a: &Json) -> DecodedOp {
+    let destination = if let Some(lane) = a.opt_target("lane")? {
+        LaneMove::To(lane)
+    } else {
+        match a.opt_string("dir")?.as_deref() {
+            Some("up") => LaneMove::Up,
+            Some("down") => LaneMove::Down,
+            _ => {
+                return Err(Error::bad(
+                    "lane or dir",
+                    "a lane ID or a direction of up or down",
+                ));
+            }
+        }
+    };
+    Ok(Op::ItemLane {
+        items: a.targets("items")?,
+        destination,
+    })
+}
+
+pub(super) fn overlay_set(a: &Json) -> DecodedOp {
+    Ok(Op::OverlaySet {
+        item: a.target("item")?,
+        placement: a
+            .opt_string("placement")?
+            .as_deref()
+            .map(placement)
+            .transpose()?,
+        behind_presenter: a.opt_flag("behindPresenter")?,
+        muted: a.opt_flag("muted")?,
+    })
+}
+
+pub(super) fn lane_create(a: &Json) -> DecodedOp {
+    Ok(Op::LaneCreate {
+        kind: lane_kind(a.string("kind")?)?,
+        name: a.opt_string("name")?,
+    })
+}
+
+pub(super) fn lane_rename(a: &Json) -> DecodedOp {
+    Ok(Op::LaneRename {
+        lane: a.target("lane")?,
+        name: a.string("name")?.into(),
+    })
+}
+
+pub(super) fn lane_delete(a: &Json) -> DecodedOp {
+    Ok(Op::LaneDelete {
+        lane: a.target("lane")?,
+    })
+}
+
+pub(super) fn component_set(a: &Json) -> DecodedOp {
+    Ok(Op::ComponentSet {
+        clip: a.target("clip")?,
+        component: component(a.string("component")?)?,
+        enabled: a.flag("enabled", false)?,
+    })
+}
+
+pub(super) fn audio_set(a: &Json) -> DecodedOp {
+    let component = component(a.string("component")?)?;
+    if !matches!(component, Component::Mic | Component::System) {
+        return Err(Error::bad("component", "mic or system"));
+    }
+    Ok(Op::AudioSet {
+        clip: a.target("clip")?,
+        component,
+        volume: a.number("volume")?,
+    })
+}
+
+pub(super) fn cursor_set(a: &Json) -> DecodedOp {
+    Ok(Op::CursorSet {
+        clip: a.target("clip")?,
+        size: a.opt_number("size")?,
+        click_rings: a.opt_flag("clickRings")?,
+    })
+}
+
+pub(super) fn keys_set(a: &Json) -> DecodedOp {
+    Ok(Op::KeysSet {
+        clip: a.target("clip")?,
+        size: a.opt_number("size")?,
+    })
+}
+
+pub(super) fn keys_hide(a: &Json) -> DecodedOp {
+    let mut events = Vec::new();
+    for value in list(a.required("events")?) {
+        let index = value
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or_else(|| Error::bad("events", "nonnegative 32-bit keystroke event indices"))?;
+        events.push(index);
+    }
+    Ok(Op::KeysHide {
+        clip: a.target("clip")?,
+        events,
+        hidden: a.flag("hidden", false)?,
+    })
+}
+
+pub(super) fn marker_add(a: &Json) -> DecodedOp {
+    Ok(Op::MarkerAdd {
+        at: a.frame("at")?,
+        name: a.opt_string("name")?,
+    })
+}
+
+pub(super) fn marker_set(a: &Json) -> DecodedOp {
+    Ok(Op::MarkerSet {
+        marker: a.target("marker")?,
+        name: a.opt_string("name")?,
+        at: a.opt_frame("at")?,
+    })
+}
+
+pub(super) fn project_set(a: &Json) -> DecodedOp {
+    Ok(Op::ProjectSet {
+        aspect: a.opt_string("aspect")?.as_deref().map(aspect).transpose()?,
+        access: a.opt_string("access")?.as_deref().map(access).transpose()?,
+    })
+}
+
+pub(super) fn clip_crop(a: &Json) -> DecodedOp {
+    let rect = crop(a)?;
+    let fit = a.opt_string("fit")?.as_deref().map(fit).transpose()?;
+    if rect.is_none() && fit.is_none() {
+        return Err(Error::bad("rect or fit", "a crop, a fit mode, or both"));
+    }
+    Ok(Op::ClipCrop {
+        items: a.targets("items")?,
+        rect,
+        fit,
+    })
+}
+
+pub(super) fn cut_range(a: &Json) -> DecodedOp {
+    Ok(Op::CutRange {
+        from: a.frame("from")?,
+        to: a.frame("to")?,
+        ripple: a.flag("ripple", true)?,
+    })
+}
+
+pub(super) fn cut_words(a: &Json) -> DecodedOp {
+    Ok(Op::CutWords {
+        words: list(a.required("words")?)
+            .iter()
+            .map(|value| word(value, "words"))
+            .collect::<Result<Vec<_>, _>>()?,
+        transcript_hash: hash(a)?,
+    })
+}
+
+pub(super) fn effect_add(a: &Json) -> DecodedOp {
+    Ok(Op::EffectAdd {
+        target: a.target("target")?,
+        kind: a.string("type")?.into(),
+        params: effect_params(a)?,
+        enabled: a.opt_flag("enabled")?,
+    })
+}
+
+pub(super) fn effect_set(a: &Json) -> DecodedOp {
+    let target = if let Some(effect) = a.opt_target("effect")? {
+        EffectSelection::Id(effect)
+    } else {
+        EffectSelection::Owner {
+            target: a.target("target")?,
+            kind: a.string("type")?.into(),
+        }
+    };
+    let mut reset = Vec::new();
+    if let Some(words) = a.field("reset") {
+        for word in list(words) {
+            reset.push(
+                word.as_str()
+                    .ok_or_else(|| Error::bad("reset", "parameter names"))?
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(Op::EffectSet {
+        target,
+        params: effect_params(a)?,
+        enabled: a.opt_flag("enabled")?,
+        reset,
+    })
+}
+
+pub(super) fn effect_remove(a: &Json) -> DecodedOp {
+    let effects = a
+        .field("effects")
+        .map(|value| targets(value, "effects"))
+        .transpose()?
+        .unwrap_or_default();
+    Ok(Op::EffectRemove {
+        effects,
+        target: a.opt_target("target")?,
+        kind: a.opt_string("type")?,
+    })
+}
+
+pub(super) fn effect_paste(a: &Json) -> DecodedOp {
+    let replace = match a.opt_string("mode")?.as_deref() {
+        None | Some("merge") => false,
+        Some("replace") => true,
+        _ => return Err(Error::bad("mode", "merge or replace")),
+    };
+    Ok(Op::EffectPaste {
+        from: a.target("from")?,
+        to: a.targets("to")?,
+        replace,
+    })
+}
+
+pub(super) fn effect_promote(a: &Json) -> DecodedOp {
+    let to_project = match a.string("to")? {
+        "project" => true,
+        "lane" => false,
+        _ => return Err(Error::bad("to", "lane or project")),
+    };
+    Ok(Op::EffectPromote {
+        effect: a.target("effect")?,
+        to_project,
+        clear_overrides: a.flag("clearOverrides", false)?,
+    })
+}
+
+pub(super) fn captions_generate(a: &Json) -> DecodedOp {
+    let max_words = a.opt_int("maxWords")?.unwrap_or(3);
+    if !(1..=8).contains(&max_words) {
+        return Err(Error::bad("maxWords", "an integer from 1 to 8"));
+    }
+    let style = a.opt_string("style")?;
+    if let Some(style) = &style
+        && !CAPTION_PRESETS.contains(&style.as_str())
+    {
+        return Err(Error::bad("style", &CAPTION_PRESETS.join(", ")));
+    }
+    Ok(Op::CaptionsGenerate {
+        clips: a
+            .field("clips")
+            .map(|values| targets(values, "clips"))
+            .transpose()?,
+        max_words,
+        fillers: a.flag("fillers", false)?,
+        lane: a.opt_target("lane")?,
+        style,
+    })
+}
+
+pub(super) fn caption_set(a: &Json) -> DecodedOp {
+    Ok(Op::CaptionSet {
+        item: a.target("item")?,
+        text: a.opt_string("text")?,
+        words: caption_patches(a)?,
+    })
+}
+
+pub(super) fn caption_split(a: &Json) -> DecodedOp {
+    Ok(Op::CaptionSplit {
+        item: a.target("item")?,
+        word: word(a.required("word")?, "word")?,
+    })
+}
+
+pub(super) fn caption_merge(a: &Json) -> DecodedOp {
+    let items = a.targets("items")?;
+    if items.len() < 2 {
+        return Err(Error::bad("items", "two or more caption IDs"));
+    }
+    Ok(Op::CaptionMerge { items })
+}

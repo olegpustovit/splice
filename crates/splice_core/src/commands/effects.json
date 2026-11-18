@@ -1,0 +1,240 @@
+{
+  "window": {
+    "title": "Window",
+    "appliesTo": "spine clips and media overlays",
+    "params": {
+      "padding": {
+        "type": "number",
+        "def": 0.07,
+        "min": 0,
+        "max": 0.3,
+        "step": 0.01,
+        "label": "Padding"
+      },
+      "corner": {
+        "type": "number",
+        "def": 0.03,
+        "min": 0,
+        "max": 0.12,
+        "step": 0.005,
+        "label": "Corners"
+      },
+      "shadow": {
+        "type": "number",
+        "def": 0.6,
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "label": "Shadow"
+      },
+      "inset": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 0.02,
+        "step": 0.001,
+        "label": "Inset"
+      },
+      "background": {
+        "type": "enum",
+        "def": "gradient",
+        "options": [
+          "gradient",
+          "color",
+          "none"
+        ],
+        "label": "Background"
+      },
+      "color": {
+        "type": "color",
+        "def": "#5b6f63",
+        "label": "Color"
+      },
+      "color2": {
+        "type": "color",
+        "def": "#1d2420",
+        "label": "Color 2"
+      }
+    }
+  },
+  "cursor": {
+    "title": "Cursor",
+    "appliesTo": "screen takes",
+    "params": {
+      "size": {
+        "type": "number",
+        "def": 1.5,
+        "min": 0.5,
+        "max": 4,
+        "step": 0.1,
+        "label": "Size"
+      },
+      "clickRings": {
+        "type": "bool",
+        "def": true,
+        "label": "Click rings"
+      },
+      "hidden": {
+        "type": "bool",
+        "def": false,
+        "label": "Hide cursor"
+      }
+    }
+  },
+  "clickZoom": {
+    "title": "Click Zoom",
+    "appliesTo": "screen takes",
+    "params": {
+      "scale": {
+        "type": "number",
+        "def": 1.6,
+        "min": 1.05,
+        "max": 2.5,
+        "step": 0.05,
+        "label": "Scale"
+      },
+      "hold": {
+        "type": "number",
+        "def": 45,
+        "min": 15,
+        "max": 120,
+        "step": 1,
+        "label": "Hold (f)"
+      }
+    }
+  },
+  "camera": {
+    "title": "Camera Layout",
+    "appliesTo": "screen takes",
+    "params": {
+      "corner": {
+        "type": "enum",
+        "def": "br",
+        "options": [
+          "br",
+          "bl",
+          "tr",
+          "tl"
+        ],
+        "label": "Corner"
+      },
+      "size": {
+        "type": "number",
+        "def": 0.24,
+        "min": 0.12,
+        "max": 0.45,
+        "step": 0.01,
+        "label": "Size"
+      },
+      "roundness": {
+        "type": "number",
+        "def": 0.2,
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "label": "Roundness"
+      },
+      "shadow": {
+        "type": "number",
+        "def": 0.5,
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "label": "Shadow"
+      }
+    }
+  },
+  "captions": {
+    "title": "Caption Style",
+    "appliesTo": "captions lanes, caption cues and the project",
+    "params": {
+      "preset": {
+        "type": "enum",
+        "def": "bold",
+        "options": [
+          "bold",
+          "karaoke",
+          "pop",
+          "box",
+          "clean",
+          "typewriter"
+        ],
+        "label": "Preset"
+      },
+      "size": {
+        "type": "number",
+        "def": 0.075,
+        "min": 0.03,
+        "max": 0.14,
+        "step": 0.005,
+        "label": "Size"
+      },
+      "position": {
+        "type": "number",
+        "def": 0.68,
+        "min": 0.1,
+        "max": 0.9,
+        "step": 0.01,
+        "label": "Position"
+      },
+      "color": {
+        "type": "color",
+        "def": "#ffffff",
+        "label": "Text"
+      },
+      "active": {
+        "type": "color",
+        "def": "#ffd23f",
+        "label": "Highlight"
+      },
+      "stroke": {
+        "type": "number",
+        "def": 0.14,
+        "min": 0,
+        "max": 0.3,
+        "step": 0.01,
+        "label": "Stroke"
+      },
+      "uppercase": {
+        "type": "bool",
+        "def": true,
+        "label": "Uppercase"
+      },
+      "safe": {
+        "type": "enum",
+        "def": "tiktok",
+        "options": [
+          "tiktok",
+          "reels",
+          "shorts",
+          "none"
+        ],
+        "label": "Safe zone"
+      }
+    }
+  },
+  "keystrokes": {
+    "title": "Keystroke Chips",
+    "appliesTo": "screen takes",
+    "params": {
+      "size": {
+        "type": "number",
+        "def": 1,
+        "min": 0.5,
+        "max": 3,
+        "step": 0.1,
+        "label": "Size"
+      },
+      "position": {
+        "type": "enum",
+        "def": "bottom-left",
+        "options": [
+          "bottom-left",
+          "bottom-center",
+          "top-left"
+        ],
+        "label": "Position"
+      }
+    }
+  }
+}
