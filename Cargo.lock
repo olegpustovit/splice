@@ -77,6 +77,10 @@ dependencies = [
 [[package]]
 name = "splice_model"
 version = "0.1.0"
+dependencies = [
+ "mem_sys",
+ "splice_testkit",
+]
 
 [[package]]
 name = "splice_testkit"
