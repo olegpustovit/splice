@@ -81,6 +81,8 @@ pub enum Op {
         at: Option<FrameArg>,
         /// Shift clips at or after the destination.
         ripple: bool,
+        /// Whether to create a clip after registering the file.
+        insert: bool,
     },
     /// Lift to Overlay.
     ClipLift {

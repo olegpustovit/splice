@@ -89,9 +89,12 @@ impl Editor {
                 speed,
                 ripple,
             } => self.speed(&items, speed, ripple),
-            Op::ClipInsert { source, at, ripple } => {
-                self.insert_clip(source, at.as_ref(), ripple, load)
-            }
+            Op::ClipInsert {
+                source,
+                at,
+                ripple,
+                insert,
+            } => self.insert_clip(source, at.as_ref(), ripple, insert, load),
             Op::LaneDelete { lane } => self.delete_lane(&lane),
             Op::LaneRename { lane, name } => self.rename_lane(&lane, name),
             Op::ItemLane { items, destination } => self.move_to_lane(&items, &destination),

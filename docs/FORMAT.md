@@ -155,6 +155,9 @@ Audio entries are track names or `{name, channels}` when the probe has a channel
 descriptors can include a `components` object with paths relative to the take directory.
 
 On macOS, `clip.insert {path}` accepts an absolute path or one relative to the project package.
+Set `insert:false` with `path` to add only the media descriptor. A recorded take's primary
+file is `takes/<med>/screen.mov`. The project saves the descriptor and optional clip in a single
+journal batch. The take files remain available after undo for history restores.
 New audio and video descriptors include a base64-encoded Foundation file bookmark. Paths
 inside the package are stored relative to it. A successful checkpoint writes descriptors to
 `media.json`. Portable clients can insert paths already present in that table.

@@ -15,6 +15,8 @@ pub(super) struct Projects {
     viewer_only: bool,
     #[cfg(target_os = "macos")]
     pub(super) exports: Vec<super::export::Job>,
+    #[cfg(target_os = "macos")]
+    pub(super) recordings: Vec<super::record::Job>,
 }
 
 enum OpenProject {
@@ -65,6 +67,8 @@ impl Projects {
             viewer_only: true,
             #[cfg(target_os = "macos")]
             exports: Vec::new(),
+            #[cfg(target_os = "macos")]
+            recordings: Vec::new(),
         }
     }
 
@@ -204,6 +208,8 @@ impl Projects {
     }
 
     pub(super) fn close(self) -> io::Result<()> {
+        #[cfg(target_os = "macos")]
+        drop(self.recordings);
         #[cfg(target_os = "macos")]
         for mut job in self.exports {
             job.wait();

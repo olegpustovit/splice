@@ -113,7 +113,12 @@ impl Routes {
             .field("result")
             .ok_or_else(|| disconnected(&"The viewer result is missing."))?
             .clone();
-        if name == "project.info" && result.field("isError").and_then(Json::as_bool) == Some(false)
+        if matches!(name, "project.info" | "record.start")
+            && result.field("isError").and_then(Json::as_bool) == Some(false)
+            && result
+                .field("structuredContent")
+                .and_then(|payload| payload.field("projectId"))
+                .is_some()
         {
             let id = projects.remember_remote(path.clone(), owner.clone());
             rewrite(&mut result, "projectId", text(&id));
@@ -129,11 +134,10 @@ impl Routes {
         reply: &mut Json,
         remote: Option<(PathBuf, String)>,
     ) {
-        let Some(job) = reply
-            .field("structuredContent")
-            .and_then(|value| value.field("jobId"))
-            .and_then(Json::as_str)
-        else {
+        let Some(payload) = reply.field("structuredContent") else {
+            return;
+        };
+        let Some(job) = payload.field("jobId").and_then(Json::as_str) else {
             return;
         };
         let id = if matches!(name, "export.start" | "record.start") {
@@ -141,6 +145,7 @@ impl Routes {
                 inner: job.into(),
                 project: args
                     .field("projectId")
+                    .or_else(|| payload.field("projectId"))
                     .and_then(Json::as_str)
                     .map(str::to_owned),
                 remote,

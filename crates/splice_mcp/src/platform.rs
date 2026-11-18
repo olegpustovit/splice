@@ -165,6 +165,15 @@ pub(super) fn job(projects: &mut Projects, name: &str, args: &Json) -> Result<Js
     if cancel && args.flag("dryRun")? {
         return Err(bad("dryRun", "false or omitted for jobs.cancel"));
     }
+    #[cfg(target_os = "macos")]
+    if projects.recordings.iter().any(|job| job.id == id) {
+        return super::record::command(
+            projects,
+            id,
+            if cancel { "take.cancel" } else { "take.status" },
+            args,
+        );
+    }
     if let Some(project) = project {
         let store = projects.lookup_id(project)?;
         if cancel {
@@ -206,7 +215,7 @@ pub(super) fn job(projects: &mut Projects, name: &str, args: &Json) -> Result<Js
     Err(missing_job(id))
 }
 
-fn missing_job(id: JobId) -> StoreError {
+pub(super) fn missing_job(id: JobId) -> StoreError {
     failure(
         "NOT_FOUND",
         &format!("No job {id} is running or retained."),
@@ -239,7 +248,11 @@ pub(super) fn record_start(projects: &mut Projects, args: &Json) -> Result<Json,
     }
     #[cfg(target_os = "macos")]
     {
-        super::capture_agent::request("record.start", args)
+        if dry {
+            super::capture_agent::request("record.start", args)
+        } else {
+            super::record::start(projects, args)
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -248,17 +261,18 @@ pub(super) fn record_start(projects: &mut Projects, args: &Json) -> Result<Json,
 }
 
 pub(super) fn record_stop(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
-    job_id(args)?;
+    let id = job_id(args)?;
     args.flag("insert")?;
-    if args.field("projectId").is_some() {
-        projects.lookup(args)?.check_write(&write_options(args)?)?;
-    }
     #[cfg(target_os = "macos")]
     {
-        super::capture_agent::request("record.stop", args)
+        super::record::command(projects, id, "take.stop", args)
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = id;
+        if args.field("projectId").is_some() {
+            projects.lookup(args)?.check_write(&write_options(args)?)?;
+        }
         Err(unavailable("Recording"))
     }
 }

@@ -170,6 +170,19 @@ pub(super) fn request(method: &str, args: &Json) -> Result<Json, StoreError> {
             thread::sleep(Duration::from_millis(20));
         }
     };
+    exchange(&mut stream, method, args)
+}
+
+pub(super) fn cancel_running(id: splice_model::JobId) {
+    if let Ok(directory) = paths::state_dir()
+        && let Ok(Some(mut stream)) = connect(&directory.join("capture"))
+    {
+        let args = object(vec![("jobId", crate::wire::display(&id))]);
+        let _ = exchange(&mut stream, "take.cancel", &args);
+    }
+}
+
+fn exchange(stream: &mut UnixStream, method: &str, args: &Json) -> Result<Json, StoreError> {
     stream
         .set_read_timeout(Some(if method.starts_with("take.") {
             TAKE_REPLY_TIMEOUT
@@ -181,14 +194,13 @@ pub(super) fn request(method: &str, args: &Json) -> Result<Json, StoreError> {
         .set_write_timeout(Some(IO_TIMEOUT))
         .map_err(|error| transport(&error))?;
     send(
-        &mut stream,
+        stream,
         &object(vec![("method", text(method)), ("args", args.clone())]),
     )
     .map_err(|error| transport(&error))?;
-    let reply = receive(&stream, REPLY_LIMIT).map_err(|error| transport(&error))?;
+    let reply = receive(stream, REPLY_LIMIT).map_err(|error| transport(&error))?;
     if let Some(error) = reply.field("error") {
         let code = match error.string("code")? {
-            "CAPTURE_NOT_READY" => "CAPTURE_NOT_READY",
             "BAD_ARGS" => "BAD_ARGS",
             "TCC_DENIED" => "TCC_DENIED",
             "CAPTURE_SOURCE" => "CAPTURE_SOURCE",
@@ -266,8 +278,13 @@ fn listen(
             }
             tick = now + jobs::POLL;
         }
-        let Some(remaining) = idle.checked_sub(activity.elapsed()) else {
-            break;
+        let remaining = match idle.checked_sub(activity.elapsed()) {
+            Some(remaining) => remaining,
+            None if jobs.has_sealed_take() => {
+                activity = Instant::now();
+                idle
+            }
+            None => break,
         };
         let delay = match listener.accept() {
             Ok((mut stream, _)) => {
@@ -328,33 +345,24 @@ fn dispatch(
         "permissions" => permissions::command(args, identity),
         "record.start" => {
             let snapshot = permissions::snapshot();
-            if args.flag("dryRun")? {
-                let mut result = permissions::report(identity, &snapshot);
-                let sources = capture::sources(permissions::screen_granted(&snapshot))
-                    .map_err(capture_source_error)?;
-                result.push(("sources", sources::payload(&sources)));
-                return Ok(object(result));
-            }
-            permissions::required(args, &snapshot)?;
-            Err(capture_not_ready())
+            let mut result = permissions::report(identity, &snapshot);
+            let sources = capture::sources(permissions::screen_granted(&snapshot))
+                .map_err(capture_source_error)?;
+            result.push(("sources", sources::payload(&sources)));
+            Ok(object(result))
         }
-        "record.stop" => Err(capture_not_ready()),
+        "take.check" => {
+            permissions::required(args, &permissions::snapshot())?;
+            Ok(object(Vec::new()))
+        }
         "take.begin" => {
             let options = crate::record_options::Options::parse(args)?;
             permissions::require_options(&options, &permissions::snapshot())?;
             jobs.begin(Path::new(args.string("package")?), options)
         }
         method @ ("take.status" | "take.stop" | "take.cancel") => jobs.command(method, args),
-        _ => Err(bad("method", "permissions, record.start or record.stop")),
+        _ => Err(bad("method", "a capture agent command")),
     }
-}
-
-fn capture_not_ready() -> StoreError {
-    StoreError::new(
-        "CAPTURE_NOT_READY",
-        "The signed capture agent is reachable. Recording is under development.",
-        "Use a build with the native recorder.",
-    )
 }
 
 fn capture_source_error(error: capture::CaptureError) -> StoreError {

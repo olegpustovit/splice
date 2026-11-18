@@ -99,8 +99,9 @@ pub(super) fn clip_speed(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
 }
 
 pub(super) fn clip_insert(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let insert = a.flag("insert", true)?;
     let source = match (a.opt_target("media")?, a.opt_string("path")?) {
-        (Some(id), None) => InsertSource::Media(id),
+        (Some(id), None) if insert => InsertSource::Media(id),
         (None, Some(path)) if !path.is_empty() && !path.contains('\0') => InsertSource::Path(path),
         _ => {
             return Err(Error::bad(
@@ -113,6 +114,7 @@ pub(super) fn clip_insert(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         source,
         at: a.opt_frame("at")?,
         ripple: a.flag("ripple", true)?,
+        insert,
     })
 }
 

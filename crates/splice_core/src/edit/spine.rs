@@ -192,6 +192,7 @@ impl Editor {
         source: InsertSource,
         at: Option<&FrameArg>,
         ripple: bool,
+        insert: bool,
         load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
     ) -> Result<Outcome, CommandError> {
         let media_id = match source {
@@ -203,6 +204,12 @@ impl Editor {
             }
             InsertSource::Path(path) => self.import_path(path, load)?,
         };
+        if !insert {
+            return Ok(Outcome::create(
+                format!("Imported {media_id}"),
+                Target::Media(media_id),
+            ));
+        }
         let descriptor = media(&self.project, media_id)?;
         let length = rounded(
             (f64::from(descriptor.probe.frames) * f64::from(self.project.fps)

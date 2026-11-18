@@ -71,9 +71,10 @@ Stay under 20 tools: new capabilities become `edit.apply` commands or parameters
 
 ## Every call
 
-- Project tools use `projectId`. Use `path` with `project.info` to open a package, or with
-  `record.start` when creating one. Writes to an existing project also need `sessionId` and
-  `ifRevision`. A `projectId` identifies an open package in the current server process.
+- Project tools use `projectId`. Use `path` with `project.info` to open a package or with
+  `record.start` to record into one. A `projectId` identifies an open package in the current server
+  process. Pass `sessionId` and `ifRevision` for edits. Recording job calls can use the session
+  and current revision of the job's project.
   `commands.describe` works before a project is opened.
 - Any tool accepts an optional `friction` string: a note from the agent about what was hard. It is
   logged and has no effect (docs/LOOP.md).
@@ -145,12 +146,34 @@ The server publishes the finished MP4 even when the client makes no status calls
 and `jobs.status` reports `cancelled` once the encoder stops. Jobs are retained by the connection
 that started them. A clean end to MCP input lets active exports finish.
 
+## Recording jobs
+
+Use `record.start` with an open `projectId`, `sessionId` and `ifRevision`, or pass a `path` ending
+in `.splice`. With `path`, use `create:true` for a new project. The server opens a session if you
+omit `sessionId` and `ifRevision` with `path`. The start receipt identifies the project, session,
+and job. Include the session in later edits or undo calls.
+
+Pass one `source` containing `display`, `window`, or `area`. A display is `"main"` or a display ID.
+A window is a `win_<id>` from preflight or an object with `app` and `title`. An area has a display
+and a `rect` with `x`, `y`, `width` and `height` in display-local points. The default is the main
+display. Enable `mic`, `systemAudio` and `camera` to add those tracks. Set `events:false` to omit
+cursor and input events. `countdown` and optional `duration` are in seconds.
+
+`jobs.status {jobId}` reports elapsed seconds, bytes, dropped frames, and whether the capture is
+pending, recording, ready, done, or cancelled. A timed capture stops automatically and becomes
+ready. Call `record.stop {jobId}` to stop a manual capture or publish a ready capture. It returns
+the new revision and `mediaId` and, when inserted, a `clipId`. The media entry and clip form one
+undoable edit. Set `insert:false` at start or stop to save the media without a clip. `jobs.cancel`
+discards a take before publication. `still:true` captures a PNG with a three-frame default span
+if inserted. A successful still stop also returns its package-relative `output` path.
+
 ## Error codes
 
 `BAD_ARGS`, `UNKNOWN_COMMAND`, `NOT_FOUND`, `STALE_REVISION`, `CONFLICT`, `OUT_OF_RANGE`, `INVARIANT`, `PLANNED`,
 `WRONG_KIND`, `OUT_OF_SOURCE`, `TOO_SHORT`, `LANE_CONFLICT`, `TRANSCRIPT_CHANGED`,
 `LANE_NOT_EMPTY`, `OVERLAP`, `REPLAY_MINTS`, `REPLAY_MEDIA`, `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
 `MEDIA_OFFLINE`, `BAD_MEDIA`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`, `EXPORT_FAILED`, `FRAME_FAILED`,
+`CAPTURE_FAILED`, `CAPTURE_SOURCE`,
 `UNSUPPORTED_PLATFORM` (Linux: export, frames, recording), `TCC_DENIED` (recording without a grant;
 the fix names the System Settings pane and `splice permissions --request`; `needsHuman:true` when only
 a person can click), `IDENTITY_MISMATCH` (the running bundle is not the installed, Developer ID–signed

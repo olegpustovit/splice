@@ -25,8 +25,12 @@ mod media;
 pub mod paths;
 mod platform;
 mod project;
+#[cfg(target_os = "macos")]
+mod record;
 #[cfg(any(target_os = "macos", test))]
 mod record_options;
+#[cfg(any(target_os = "macos", test))]
+mod record_publish;
 mod rpc;
 mod timeline;
 mod tools;

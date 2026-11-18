@@ -56,6 +56,13 @@ impl Jobs {
         self.jobs.last().is_some_and(Job::active)
     }
 
+    pub(super) fn has_sealed_take(&self) -> bool {
+        self.jobs.iter().any(|job| {
+            matches!(job.state, State::Ready)
+                && job.stage.as_ref().is_some_and(|stage| stage.0.exists())
+        })
+    }
+
     pub(super) fn begin(&mut self, package: &Path, options: Options) -> Result<Json, StoreError> {
         if self.active() {
             return Err(failure(
@@ -309,7 +316,7 @@ impl Stage {
         if !fs::symlink_metadata(&takes).map_err(storage)?.is_dir() {
             return Err(bad("takes", "a real directory within the project package"));
         }
-        let stage = takes.join(format!(".{id}"));
+        let stage = crate::record_publish::stage_path(package, id);
         DirBuilder::new()
             .mode(0o700)
             .create(&stage)
