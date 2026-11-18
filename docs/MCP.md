@@ -18,8 +18,11 @@ of inactivity.
 
 `splice permissions`, `splice record --dry-run` and `record.start {dryRun:true}` report authorization
 for `screen`, `microphone`, `camera` and `inputMonitoring` with the signed agent's path, team and
-designated requirement match. Only `splice permissions --request [screen|microphone|camera|inputMonitoring]`
-opens System Settings and requests a grant. Omit the selector to open the first missing grant.
+designated requirement match. Only `splice permissions --request [all|screen|microphone|camera|inputMonitoring]`
+opens System Settings and starts permission requests. Use `all` to request every missing grant
+and open the first missing privacy pane. The JSON reply lists the requested permissions and their
+panes. Omit the selector to request just the first missing grant. macOS asks you to approve each
+permission separately. Run `splice permissions` after responding to check the updated states.
 A capture blocked by a missing grant returns `TCC_DENIED` with `needsHuman:true` and the matching
 privacy pane. Preflight lists active displays in points, with `main` as the default display ID.
 With screen recording permission, it also lists shareable windows and applications, excluding

@@ -124,10 +124,10 @@ Depends on T1.3, T4.1, T7.
   the caller lacks. Permission handling and the native recorder follow in T8.2–T8.4.
 - [~] T8.2 Permissions (d8cc54f). The signed agent reports four read-only authorization states and
   its verified team, path and designated requirement match. `splice permissions --request` requests
-  the first missing grant or the selected service and opens its privacy pane. Capture fails with
+  the first missing grant or the selected service and opens its privacy pane. `--request all`
+  starts every missing request and opens the first missing pane. Capture fails with
   `TCC_DENIED` and `needsHuman:true` when a requested input lacks a grant.
-  **HUMAN on the Mini:** Run `splice permissions --request screen`, then repeat with `microphone`,
-  `camera` and `inputMonitoring`, one at a time. In System Settings → Privacy & Security, enable
+  **HUMAN on the Mini:** Run `splice permissions --request all`. In System Settings → Privacy & Security, enable
   Splice under Screen & System Audio Recording, Microphone, Camera and Input Monitoring. Accept
   Quit & Reopen if macOS offers it, then run `splice permissions` to confirm all four are granted.
   Risk: macOS 15+ can periodically ask the user to re-confirm screen-recording access for apps that
@@ -254,3 +254,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T8.4 · done · bfd4a08 · `make check` 3.33 s (83 tests, slowest: seeded history replay 1.566 s); `make mac-check` 19.70 s (32 tests and bundle checks, slowest: live MCP viewer and playbar golden 1.298 s). Direct area and app-name flags now cover the selectors in the cut contract. Ambiguous app selections require a title or ID.
 - 2026-11-18 · T8.5 · HUMAN · bfd4a08 · Signed release installation and read-only preflight on the Mini took 89.41 s including the idle exit. The CLI showed the new selectors and the bundle matched Team ID 7ZH3FYV964 and the pinned requirement. Screen and input monitoring are `notGranted`; microphone and camera are `notDetermined`. Live capture, debug reinstallation without a prompt, and live MCP capture remain pending.
 - 2026-11-18 · T8.5 · HUMAN · Signed release check from SSH took 63.07 s including the idle exit. Both CLI and MCP returned the same `TCC_DENIED` with `needsHuman:true` for Screen & System Audio Recording and left both requested project paths absent. MCP preflight still listed the main display. `make check` passed in 3.34 s (83 tests, slowest: seeded history replay 1.607 s). The 0.1 release budget check passed in 6.37 s at 236 µs p99 over 300 samples on 2,000 items, with zero warm allocations.
+- 2026-11-18 · T8.2 · `--request all` starts every missing permission request and opens one Settings pane. `make check` passed in 3.69 s (83 tests, slowest: seeded history replay 1.666 s). `make mac-check` passed in 25.90 s (33 tests and bundle checks, slowest: offscreen viewer snapshots 1.533 s). The batch permission fixture verified one Settings launch and skipped granted permissions in 0.031 s.

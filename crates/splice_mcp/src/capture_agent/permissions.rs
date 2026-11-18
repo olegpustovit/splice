@@ -51,10 +51,12 @@ pub(crate) fn ask(request: bool, permission: Option<&str>) -> Result<Json, Store
 }
 
 fn validate_target(target: Option<&str>) -> Result<(), StoreError> {
-    if target.is_some_and(|target| !GRANTS.iter().any(|grant| grant.key == target)) {
+    if target
+        .is_some_and(|target| target != "all" && !GRANTS.iter().any(|grant| grant.key == target))
+    {
         return Err(bad(
             "permission",
-            "screen, microphone, camera or inputMonitoring",
+            "all, screen, microphone, camera or inputMonitoring",
         ));
     }
     Ok(())
@@ -100,25 +102,47 @@ pub(super) fn report(identity: &Identity, snapshot: &[Status; 4]) -> Vec<(&'stat
 }
 
 pub(super) fn command(args: &Json, identity: &Identity) -> Result<Json, StoreError> {
+    permission_reply(args, identity, &snapshot(), &mut native::request)
+}
+
+fn permission_reply(
+    args: &Json,
+    identity: &Identity,
+    snapshot: &[Status; 4],
+    request_permission: &mut dyn FnMut(Permission, bool) -> bool,
+) -> Result<Json, StoreError> {
     let request = args.flag("request")?;
     let target = args.optional_string("permission")?;
     validate_target(target)?;
     if !request && target.is_some() {
         return Err(bad("permission", "a selector used with --request"));
     }
-    let snapshot = snapshot();
-    let mut result = report(identity, &snapshot);
-    if request
-        && let Some(grant) = GRANTS.iter().find(|grant| {
-            target.is_none_or(|target| grant.key == target)
-                && grant.status(&snapshot) != Status::Granted
-        })
-    {
-        if !native::request(grant.permission) {
+    let mut result = report(identity, snapshot);
+    if !request {
+        return Ok(object(result));
+    }
+    let all = target == Some("all");
+    let mut requested = Vec::new();
+    for grant in GRANTS.iter().filter(|grant| {
+        (all || target.is_none_or(|target| grant.key == target))
+            && grant.status(snapshot) != Status::Granted
+    }) {
+        if !request_permission(grant.permission, requested.is_empty()) {
             return Err(denied(grant));
+        }
+        if all {
+            requested.push(object(vec![
+                ("permission", text(grant.key)),
+                ("pane", text(grant.pane)),
+            ]));
+            continue;
         }
         result.push(("requested", text(grant.key)));
         result.push(("pane", text(grant.pane)));
+        break;
+    }
+    if all {
+        result.push(("requested", Json::Array(requested)));
     }
     Ok(object(result))
 }
@@ -156,6 +180,68 @@ fn denied(grant: &Grant) -> StoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_agent_requests_all_missing_grants_and_opens_one_pane() {
+        let identity = Identity {
+            bundle: "Splice.app".into(),
+            team: "test".into(),
+        };
+        let snapshot = [
+            Status::NotGranted,
+            Status::NotDetermined,
+            Status::Granted,
+            Status::NotGranted,
+        ];
+        let all = object(vec![
+            ("request", Json::Bool(true)),
+            ("permission", text("all")),
+        ]);
+        let mut calls = Vec::new();
+        let reply = permission_reply(&all, &identity, &snapshot, &mut |permission, settings| {
+            calls.push((permission, settings));
+            true
+        })
+        .unwrap();
+        assert_eq!(
+            calls,
+            [
+                (Permission::Screen, true),
+                (Permission::Microphone, false),
+                (Permission::InputMonitoring, false)
+            ]
+        );
+        assert_eq!(
+            reply
+                .field("requested")
+                .and_then(Json::as_array)
+                .unwrap()
+                .len(),
+            3
+        );
+        let granted = permission_reply(&all, &identity, &[Status::Granted; 4], &mut |_, _| {
+            panic!("already granted")
+        })
+        .unwrap();
+        assert!(
+            granted
+                .field("requested")
+                .and_then(Json::as_array)
+                .unwrap()
+                .is_empty()
+        );
+
+        let next = object(vec![("request", Json::Bool(true))]);
+        let reply = permission_reply(&next, &identity, &snapshot, &mut |permission, settings| {
+            assert_eq!((permission, settings), (Permission::Screen, true));
+            true
+        })
+        .unwrap();
+        assert_eq!(
+            reply.field("requested").and_then(Json::as_str),
+            Some("screen")
+        );
+    }
 
     #[test]
     fn capture_agent_permissions_require_only_the_selected_inputs() {

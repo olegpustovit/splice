@@ -31,7 +31,7 @@ uint32_t splice_permission_status(uint32_t permission) {
     }
 }
 
-bool splice_permission_request(uint32_t permission) {
+bool splice_permission_request(uint32_t permission, bool open_settings) {
     if (![NSThread isMainThread] || permission > SPLICE_PERMISSION_INPUT) return false;
     @autoreleasepool {
         if (splice_permission_status(permission) == SPLICE_PERMISSION_GRANTED) return true;
@@ -56,6 +56,7 @@ bool splice_permission_request(uint32_t permission) {
                 }
             }
         }
+        if (!open_settings) return true;
         NSArray<NSString *> *panes = @[@"Privacy_ScreenCapture", @"Privacy_Microphone",
                                         @"Privacy_Camera", @"Privacy_ListenEvent"];
         NSString *uri = [@"x-apple.systempreferences:com.apple.preference.security?" stringByAppendingString:panes[permission]];

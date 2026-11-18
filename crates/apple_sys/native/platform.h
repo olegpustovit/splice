@@ -34,7 +34,7 @@ typedef enum {
 } SplicePermissionStatus;
 
 uint32_t splice_permission_status(uint32_t permission);
-bool splice_permission_request(uint32_t permission);
+bool splice_permission_request(uint32_t permission, bool open_settings);
 
 typedef struct {
     double x, y, width, height;

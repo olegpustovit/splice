@@ -1,6 +1,6 @@
 unsafe extern "C" {
     fn splice_permission_status(permission: u32) -> u32;
-    fn splice_permission_request(permission: u32) -> bool;
+    fn splice_permission_request(permission: u32, open_settings: bool) -> bool;
 }
 
 /// One macOS authorization used by screen recording.
@@ -44,9 +44,9 @@ pub fn status(permission: Permission) -> Status {
     }
 }
 
-/// Starts an explicit permission request and opens the matching privacy pane.
+/// Starts an explicit permission request and optionally opens the matching privacy pane.
 /// It must be called on the application thread.
-pub fn request(permission: Permission) -> bool {
+pub fn request(permission: Permission, open_settings: bool) -> bool {
     // SAFETY: the bridge validates the discriminator and checks the thread before touching AppKit.
-    unsafe { splice_permission_request(permission as u32) }
+    unsafe { splice_permission_request(permission as u32, open_settings) }
 }
