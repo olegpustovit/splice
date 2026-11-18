@@ -144,6 +144,10 @@ Depends on T1.3, T4.1, T7.
   - Partial (eed54ae): optional default camera via AVCaptureSession writes `camera.mov` using the
     native host clock and the take's pause offsets. Generated frames retained the camera's leading
     offset and resumed without a timestamp gap. Hardware and input event acceptance remain open.
+  - Partial (f78af91): a listen-only input tap feeds the take clock and a bounded ring. The fixture
+    verified normalized positions, secure-input filtering, keyboard destination and pause cutoff.
+    Rust drained and decoded 1,024 records with zero allocations. Cursor assets, event-file writing
+    and live input acceptance remain open.
   - Sources: `SCShareableContent` lists displays, windows and apps, excluding Splice's own windows.
     `SCContentFilter` covers a display, a window, or a display area (`sourceRect`).
   - `SCStreamConfiguration` per Recorder SPEC §4.8: `showsCursor=false`, 60 fps, 420v for
@@ -230,3 +234,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T8.3 · partial · 958c27a · `make check` 3.51 s (78 tests, slowest: seeded history replay 1.730 s); `make mac-check` 27.16 s (23 tests and bundle checks, slowest: offscreen viewer snapshots 1.454 s). The installed preflight changed from no sources to one display with a valid main selector and no window or application disclosure without the grant. The native screenshot bridge rejects invalid geometry before querying permissions. Real screenshots, streams, camera, and input capture are pending.
 - 2026-11-18 · T8.3 · partial · a3585f9 · `cargo t -p apple_sys native_recording_` 6.58 s (case 0.265 s); `make check` 3.37 s (78 tests, slowest: seeded history replay 1.628 s); `make mac-check` 21.92 s (24 tests and bundle checks, slowest: offscreen viewer snapshots 1.491 s). Generated 420v frames produced a 96 × 64 HEVC movie with a one-second duration after removing a one-second pause. Both optional audio writers produced stereo AAC. Live capture, camera, input events and agent job wiring remain open.
 - 2026-11-18 · T8.3 · partial · eed54ae · `make check` 3.29 s (78 tests, slowest: seeded history replay 1.648 s); `make mac-check` 21.09 s (24 tests and bundle checks, slowest: offscreen viewer snapshots 1.439 s). The 0.309 s native recording fixture verified that HEVC `camera.mov` retained a two-frame offset in its QuickTime edit list, resumed at the correct sample time after a one-second pause, and ended on the screen timeline. The camera hardware was not opened during testing.
+- 2026-11-18 · T8.3 · partial · f78af91 · `cargo t -p apple_sys input_events_` 10.73 s (case 0.031 s); `make check` 3.39 s (78 tests, slowest: seeded history replay 1.646 s); `make mac-check` 24.78 s (25 tests and bundle checks, slowest: offscreen viewer snapshots 1.496 s). A synthetic Quartz event verified normalization and scope without posting input or opening a live tap.
