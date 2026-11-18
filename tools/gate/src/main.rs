@@ -127,7 +127,7 @@ fn source_issues(source: &str, sys: bool) -> Vec<(usize, &'static str)> {
 // Use Cargo metadata when dependency aliases or multiline dependency tables are needed.
 fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
     let allowed: &[&str] = match name {
-        "splice_cli" => &["splice_core", "splice_mcp"],
+        "splice_cli" => &["splice_core", "splice_json", "splice_mcp"],
         "splice_core" => &["splice_model", "splice_json"],
         "splice_eval" => &["splice_model"],
         "splice_mcp" => &["splice_core", "splice_eval", "splice_json", "splice_model"],

@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 splice_core = { path = "../splice_core" }
+splice_json = { path = "../splice_json" }
 splice_mcp = { path = "../splice_mcp" }
 [lints]
 workspace = true

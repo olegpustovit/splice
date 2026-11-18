@@ -89,6 +89,39 @@ impl Store {
         self.journal.problem()
     }
 
+    /// Verifies that the on-disk checkpoint matches its replayed revision.
+    ///
+    /// Returns the current content hash once the checkpoint and retained journal are verified.
+    pub fn verify(&self) -> Result<u64, StoreError> {
+        self.writable()?;
+        let mut checkpoint = self.journal.load_checkpoint()?;
+        let retained = self.at(checkpoint.rev)?;
+        // Package files load in media-table order, while the journal retains model order.
+        checkpoint.transcripts.sort_by_key(|transcript| {
+            retained
+                .transcripts
+                .iter()
+                .position(|entry| entry.media == transcript.media)
+                .unwrap_or(usize::MAX)
+        });
+        let verified = state_hash(retained)?;
+        if checkpoint.hash != retained.hash || state_hash(&checkpoint)? != verified {
+            return Err(StoreError::new(
+                "JOURNAL_CORRUPT",
+                &format!(
+                    "Checkpoint r{} differs from its verified journal revision.",
+                    checkpoint.rev
+                ),
+                "Inspect the package and restore its checkpoint from a verified backup.",
+            ));
+        }
+        if checkpoint.rev == self.project().rev {
+            Ok(verified)
+        } else {
+            Ok(state_hash(self.project())?)
+        }
+    }
+
     /// Saves the current revision as a checkpoint.
     pub fn checkpoint(&mut self) -> Result<(), StoreError> {
         self.journal

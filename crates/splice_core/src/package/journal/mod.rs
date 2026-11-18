@@ -170,6 +170,10 @@ impl Journal {
         self.problem.as_ref()
     }
 
+    pub(crate) fn load_checkpoint(&self) -> Result<Project, PackageError> {
+        self.package.load()
+    }
+
     /// Appends and fsyncs a fully validated batch, then updates the candidate's stamp.
     ///
     /// The candidate must be based on the journal's current revision and hash. If the

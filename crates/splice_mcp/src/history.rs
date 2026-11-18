@@ -2,7 +2,7 @@ use super::{Json, object, project::access, text, wire::*};
 use splice_core::{
     commands::Target,
     edit::{self, SideEffect, Span},
-    history::{Scope, Store, StoreError},
+    history::{EditResult, Scope, Store, StoreError},
     package::{
         self,
         journal::{Change, Source},
@@ -35,7 +35,11 @@ pub(super) fn apply(store: &mut Store, args: &Json) -> Result<Json, StoreError> 
                 "a nonempty array of operations from commands.describe",
             )
         })?;
-    let result = store.apply(ops, &options)?;
+    Ok(edit_result_json(store.apply(ops, &options)?))
+}
+
+/// Serializes a committed edit, replay receipt, or preview for a command client.
+pub fn edit_result_json(result: EditResult) -> Json {
     let report = result.report;
     let mut fields = vec![
         ("revision", rev(result.revision)),
@@ -90,7 +94,7 @@ pub(super) fn apply(store: &mut Store, args: &Json) -> Result<Json, StoreError> 
     if let Some(error) = result.warning {
         fields.push(("warning", error_payload(error.into())));
     }
-    Ok(object(fields))
+    object(fields)
 }
 
 pub(super) fn list(store: &Store, args: &Json) -> Result<Json, StoreError> {

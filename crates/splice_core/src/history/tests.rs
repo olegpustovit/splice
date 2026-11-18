@@ -260,3 +260,47 @@ fn history_session_undo_keeps_other_sessions_and_rejects_access_changes() {
     assert_eq!(denied.code, "PERMISSION_DENIED");
     assert_eq!(store.project().rev, 7);
 }
+
+#[test]
+fn history_verify_accepts_transcripts_stored_in_media_order() {
+    use splice_model::{Media, MediaId, MediaKind, Probe, Transcript};
+
+    let dir = Temp::new("verify");
+    let ids = [MediaId::from_serial(1), MediaId::from_serial(2)];
+    let project = Project {
+        media: ids
+            .iter()
+            .map(|&id| Media {
+                id,
+                kind: MediaKind::Audio,
+                path: format!("{id}.m4a"),
+                bookmark: None,
+                size: 0,
+                mtime: 0,
+                probe: Probe {
+                    fps: 30.0,
+                    frames: 30,
+                    width: 0,
+                    height: 0,
+                    audio: Vec::new(),
+                    codec: None,
+                },
+                take: None,
+            })
+            .collect(),
+        transcripts: ids
+            .iter()
+            .rev()
+            .map(|&media| Transcript {
+                media,
+                hash: media.serial(),
+                language: "en".into(),
+                words: Vec::new(),
+            })
+            .collect(),
+        ..Project::default()
+    };
+    Store::create(&dir.0, &project).unwrap().close().unwrap();
+    let reopened = Store::open(&dir.0).unwrap();
+    assert_eq!(reopened.verify().unwrap(), state_hash(&project).unwrap());
+}

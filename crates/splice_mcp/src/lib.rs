@@ -14,7 +14,9 @@ mod timeline;
 mod tools;
 mod wire;
 
+pub use history::edit_result_json;
 pub use rpc::serve;
+pub use wire::error_payload;
 
 #[cfg(test)]
 mod tests;

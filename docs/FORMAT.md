@@ -43,6 +43,23 @@ Name.splice/
   the record with the lock held. An owner record left behind after the kernel releases the lock
   is logged before takeover.
 
+## Headless CLI
+
+- `splice new Name.splice` creates a package. It reports the canonical path and initial revision.
+- `splice apply ops.json Name.splice` applies one batch as a local human edit. The file contains a
+  JSON array of operations or an object with only an `ops` array. Use `-` as the operations
+  filename to read stdin. `--dry-run` previews the batch, `--if-revision r12` guards a known
+  revision, and `--idempotency-key` makes a retry return the original receipt.
+- `splice snapshot Name.splice` checkpoints the journal tip and prints the canonical timeline
+  snapshot. `splice check Name.splice` verifies the journal and checkpoint and reports the tip's
+  content hash. A valid checkpoint may lag the journal tip.
+- `splice describe item.trim` shows one command. Use `splice describe --query trim` to search.
+
+`apply`, `snapshot`, and `check` can infer the project from the enclosing `.splice` directory,
+or take a path with `--project`. Structured successes go to stdout. Errors carry a code, message,
+and fix on stderr and exit nonzero. On Linux, `open`, `export`, and `frame` report
+`UNSUPPORTED_PLATFORM`.
+
 ## `project.json`
 
 ```json

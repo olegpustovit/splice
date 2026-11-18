@@ -135,7 +135,8 @@ pub struct StoreError {
 }
 
 impl StoreError {
-    pub(super) fn new(code: &'static str, message: &str, fix: &str) -> Self {
+    /// Creates a typed failure with recovery guidance and no operation context.
+    pub fn new(code: &'static str, message: &str, fix: &str) -> Self {
         CommandError::new(code, message.into(), fix.into()).into()
     }
 }

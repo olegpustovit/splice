@@ -1,20 +1,11 @@
 use super::{Json, object, text};
-use splice_core::{
-    commands::CommandError,
-    history::{Source, StoreError, WriteOptions},
-};
+use splice_core::history::{Source, StoreError, WriteOptions};
 use splice_model::{Frame, SessionId};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) fn failure(code: &'static str, message: &str, fix: &str) -> StoreError {
-    CommandError {
-        code,
-        message: message.into(),
-        fix: fix.into(),
-        valid: Vec::new(),
-    }
-    .into()
+    StoreError::new(code, message, fix)
 }
 
 pub(super) fn bad(field: &str, expected: &str) -> StoreError {
@@ -188,7 +179,8 @@ pub(super) fn extend(value: Json, extra: Vec<(&str, Json)>) -> Json {
     Json::Object(fields)
 }
 
-pub(super) fn error_payload(error: StoreError) -> Json {
+/// Serializes the code, recovery hint, and optional operation or stale-revision context.
+pub fn error_payload(error: StoreError) -> Json {
     let mut fields = vec![
         ("code", text(error.code)),
         ("message", Json::String(error.message)),
