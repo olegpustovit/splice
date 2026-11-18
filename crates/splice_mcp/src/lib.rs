@@ -12,6 +12,9 @@ mod frames;
 /// Persistent MCP friction records and their CLI commands.
 pub mod friction;
 mod history;
+#[cfg(target_os = "macos")]
+/// The private command channel between a project viewer and same-user clients.
+pub mod live;
 mod media;
 mod platform;
 mod project;
@@ -24,7 +27,7 @@ mod wire;
 pub use export::export_project;
 #[cfg(target_os = "macos")]
 pub use frames::{grab_frame, write_png};
-pub use history::{apply_batch, edit_result_json};
+pub use history::{apply_batch, checkpoint_edit, edit_result_json};
 pub use rpc::serve;
 pub use wire::error_payload;
 

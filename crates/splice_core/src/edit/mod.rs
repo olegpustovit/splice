@@ -14,7 +14,7 @@ mod settle;
 mod spine;
 mod time;
 
-pub use time::span;
+pub use time::{resolve_view_frame, span};
 
 #[cfg(test)]
 mod tests;

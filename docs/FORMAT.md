@@ -39,8 +39,9 @@ Name.splice/
   A final record without its newline is truncated with a warning. A corrupt complete line opens
   read-only with `JOURNAL_CORRUPT` and the last verified revision. If corruption precedes the
   checkpoint, replay starts at `journal.base.json`.
-- **Lock**: one writer per project. A viewer that has the project open is the writer and serves
-  MCP over its socket; `splice mcp` and the CLI forward to it. With no viewer, the first process takes
+- **Lock**: one writer per project. A viewer that has the project open is the writer. Its
+  same-user Unix socket lives in the `live` subdirectory of the Splice state directory.
+  `splice mcp` and project CLI commands forward to that writer. With no viewer, the first process takes
   the lock. The owner record stores the PID, hostname and Unix time in seconds. Clean close clears
   the record with the lock held. An owner record left behind after the kernel releases the lock
   is logged before takeover.
@@ -55,9 +56,9 @@ Name.splice/
   hours, minutes, seconds, and frames. Command-Z and Command-Shift-Z undo and redo the latest batch
   through the project journal, including batches committed by an agent.
 - `splice open Name.splice --snapshot out.png [--at N]` saves the viewer content at frame `N`.
-  The default is frame zero. The PNG uses the viewer's default 960 × 640 size at 1×. Pass a new
-  filename. The command renders offscreen and prints the frame,
-  project revision, and output path.
+  The default is the live viewer's playhead, or frame zero when the project is closed. The PNG
+  uses the viewer's default 960 × 640 size at 1×. Pass a new filename. The command renders
+  offscreen and prints the frame, project revision, and output path.
 - `splice new Name.splice` creates a package. It reports the canonical path and initial revision.
 - `splice apply ops.json Name.splice` applies one batch as a local human edit. The file contains a
   JSON array of operations or an object with only an `ops` array. Use `-` as the operations

@@ -19,7 +19,7 @@ use std::{
 const INLINE_EDGE: u32 = 640;
 
 /// Renders one frame of the current revision to a new PNG and returns its metadata.
-pub fn grab_frame(store: Store, at: Frame, file: &Path) -> Result<Json, StoreError> {
+pub fn grab_frame(store: &Store, at: Frame, file: &Path) -> Result<Json, StoreError> {
     check_png_path(file)?;
     FrameSelection::Explicit(vec![at]).resolve(timeline::duration(store.project())?)?;
     let output = Output::prepare(file.to_path_buf(), false)?;

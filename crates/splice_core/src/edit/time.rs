@@ -55,6 +55,22 @@ pub(super) fn anchor_start(project: &Project, anchor: Anchor) -> Result<Frame, C
     timing::anchor_start(project, anchor).map_err(timing_error)
 }
 
+/// Resolves a timeline frame or anchor from a viewer request.
+pub fn resolve_view_frame(project: &Project, value: &Json) -> Result<Frame, CommandError> {
+    let input = commands::frame_arg(value, "at")?;
+    let anchor = relative_anchor(project, &input, &|target| match target {
+        Target::Timeline(id) => Ok(*id),
+        _ => Err(CommandError::bad(
+            "at",
+            "a timeline ID or frame outside an edit batch",
+        )),
+    })?;
+    match anchor {
+        Anchor::Pinned(frame) => Ok(frame),
+        _ => anchor_start(project, anchor),
+    }
+}
+
 fn timing_error(error_kind: TimingError) -> CommandError {
     match error_kind {
         TimingError::Clip(id) => not_found(&id, "Call timeline.snapshot for current clip IDs."),
@@ -93,34 +109,7 @@ impl Editor {
     }
 
     fn relative_anchor(&self, input: &FrameArg) -> Result<Anchor, CommandError> {
-        Ok(match input {
-            FrameArg::Frame(frame) => Anchor::Pinned(*frame),
-            FrameArg::Item { item, edge, offset } => Anchor::Item {
-                item: self.timeline(item)?,
-                edge: *edge,
-                offset: *offset,
-            },
-            FrameArg::Marker { marker, offset } => {
-                let TimelineId::Marker(marker) = self.timeline(marker)? else {
-                    return Err(wrong_kind("Use a marker ID in a marker anchor."));
-                };
-                Anchor::Marker {
-                    marker,
-                    offset: *offset,
-                }
-            }
-            FrameArg::Word {
-                word,
-                transcript_hash,
-                edge,
-                offset,
-            } => Anchor::Word {
-                word: *word,
-                transcript_hash: need_word(&self.project, *word, *transcript_hash)?.hash,
-                edge: *edge,
-                offset: *offset,
-            },
-        })
+        relative_anchor(&self.project, input, &|target| self.timeline(target))
     }
 
     pub(super) fn explicit_anchor(
@@ -156,6 +145,41 @@ impl Editor {
         anchor_start(&self.project, anchor)?;
         Ok(anchor)
     }
+}
+
+fn relative_anchor(
+    project: &Project,
+    input: &FrameArg,
+    timeline: &dyn Fn(&Target) -> Result<TimelineId, CommandError>,
+) -> Result<Anchor, CommandError> {
+    Ok(match input {
+        FrameArg::Frame(frame) => Anchor::Pinned(*frame),
+        FrameArg::Item { item, edge, offset } => Anchor::Item {
+            item: timeline(item)?,
+            edge: *edge,
+            offset: *offset,
+        },
+        FrameArg::Marker { marker, offset } => {
+            let TimelineId::Marker(marker) = timeline(marker)? else {
+                return Err(wrong_kind("Use a marker ID in a marker anchor."));
+            };
+            Anchor::Marker {
+                marker,
+                offset: *offset,
+            }
+        }
+        FrameArg::Word {
+            word,
+            transcript_hash,
+            edge,
+            offset,
+        } => Anchor::Word {
+            word: *word,
+            transcript_hash: need_word(project, *word, *transcript_hash)?.hash,
+            edge: *edge,
+            offset: *offset,
+        },
+    })
 }
 
 pub(super) fn anchor_at(project: &Project, at: Frame) -> Result<Anchor, CommandError> {

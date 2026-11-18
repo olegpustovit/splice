@@ -14,6 +14,8 @@ pxui = { path = "../../pxui/crates/public/pxui" }
 pxui_host = { path = "../../pxui/crates/host/pxui_host" }
 pxui_sdl = { path = "../../pxui/crates/open/pxui_sdl" }
 splice_core = { path = "../splice_core" }
+splice_json = { path = "../splice_json" }
+splice_mcp = { path = "../splice_mcp" }
 splice_av = { path = "../splice_av" }
 splice_kit = { path = "../splice_kit" }
 

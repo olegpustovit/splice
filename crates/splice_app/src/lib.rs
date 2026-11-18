@@ -7,7 +7,9 @@ use pxui::{FrameIn, Image, Label, Node, Ui, UiDesc, ui::Size};
 use pxui_host::{Accessibility, Events, Platform, Window};
 use pxui_sdl::{DialogFilter, DialogKind};
 use splice_core::history::{Store, StoreError};
+use splice_json::Value as Json;
 use splice_kit::Invoked;
+use splice_mcp::live::{Server, ViewCommand, Viewer};
 use std::{
     borrow::Cow,
     ffi::OsString,
@@ -71,19 +73,28 @@ fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<Option<
         eprintln!("splice: could not remember the last project: {error}");
     }
     let keymap = state.map(|dir| dir.join("keymap"));
+    let mut viewer = project.map(|store| Viewer::new(store, state.map(Path::to_path_buf)));
+    let server = if !smoke && let (Some(viewer), Some(state)) = (&viewer, state) {
+        Some(
+            Server::start(viewer.store(), state, pxui_sdl::wake)
+                .map_err(|error| viewer_error(&error))?,
+        )
+    } else {
+        None
+    };
     let result = run_surface(
         &mut window,
         &mut events,
-        project.as_mut(),
+        viewer.as_mut(),
+        server.as_ref(),
         keymap.as_deref(),
         smoke,
     );
+    drop(server);
     window.destroy().map_err(|error| viewer_error(&error))?;
     let shown = result?;
-    if let Some(store) = project
-        && store.problem().is_none()
-    {
-        store.close()?;
+    if let Some(viewer) = viewer {
+        viewer.close().map_err(|error| viewer_error(&error))?;
     }
     Ok(shown)
 }
@@ -130,10 +141,12 @@ fn choose_project(
 fn run_surface(
     window: &mut Window,
     events: &mut Vec<Event>,
-    mut store: Option<&mut Store>,
+    mut viewer: Option<&mut Viewer>,
+    server: Option<&Server>,
     keymap: Option<&Path>,
     smoke: bool,
 ) -> Result<Option<i32>, StoreError> {
+    let store = viewer.as_deref().map(Viewer::store);
     let name = store
         .as_deref()
         .map(|store| project_name(store).into_owned());
@@ -164,6 +177,22 @@ fn run_surface(
         if !open {
             break;
         }
+        if let Some(request) = server.and_then(Server::next_request)
+            && let Some(viewer) = viewer.as_deref_mut()
+        {
+            let at = program.as_ref().map_or(0, program::Program::at);
+            let response = viewer.handle(&request.body, at, &mut |store, command| match command {
+                ViewCommand::Seek(at) => {
+                    if let Some(program) = &mut program {
+                        program.seek(at)?;
+                    }
+                    Ok(Json::Null)
+                }
+                ViewCommand::Snapshot { at, output } => snapshot_output(store, at, &output),
+            });
+            request.reply(response);
+        }
+        let mut store = viewer.as_deref_mut().map(Viewer::store_mut);
         events.retain(|event| {
             !keys.route(event, &mut |action| {
                 if let Err(error) = dispatch(
@@ -185,7 +214,13 @@ fn run_surface(
             }
             let at = program.as_ref().map_or(0, program::Program::at);
             let playing = program.as_ref().is_some_and(program::Program::playing);
-            let mut next = program::Program::prepare(store)?;
+            let mut next = match program::Program::prepare(store) {
+                Ok(program) => program,
+                Err(error) => {
+                    eprintln!("splice: {error}");
+                    None
+                }
+            };
             if let Some(next) = &mut next {
                 next.seek(at)?;
                 if playing && next.at() < next.end() - 1 {
@@ -287,6 +322,19 @@ fn run_surface(
     drop(accessibility);
     surface.close()?;
     Ok(presented)
+}
+
+/// Writes one offscreen viewer frame and returns the output path and revision.
+pub fn snapshot_output(store: &Store, at: i32, output: &Path) -> Result<Json, StoreError> {
+    let file = splice_mcp::write_png(output, &mut || snapshot(store, at))?;
+    Ok(Json::Object(vec![
+        ("output".into(), Json::String(file.to_string_lossy().into())),
+        (
+            "revision".into(),
+            Json::String(format!("r{}", store.project().rev)),
+        ),
+        ("frame".into(), Json::Signed(i64::from(at))),
+    ]))
 }
 
 fn dispatch(

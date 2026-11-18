@@ -520,6 +520,13 @@ pub(super) fn call(
 ) -> Result<Json, splice_json::NonFiniteNumber> {
     let mut content = Vec::new();
     let result = execute(projects, name, args, &mut content);
+    reply(result, content)
+}
+
+pub(super) fn reply(
+    result: Result<Json, StoreError>,
+    mut content: Vec<Json>,
+) -> Result<Json, splice_json::NonFiniteNumber> {
     let is_error = result.is_err();
     let (payload, mirror) = match result {
         Ok(payload) => {

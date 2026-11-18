@@ -19,5 +19,8 @@ pub mod image;
 /// AVFoundation media metadata.
 pub mod media;
 
+/// Peer credentials for local macOS sockets.
+pub mod ipc;
+
 #[cfg(test)]
 mod tests;

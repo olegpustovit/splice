@@ -44,10 +44,18 @@ fn main() {
         })
         .collect::<Result<Vec<_>, _>>();
     if let Err(error) = args.and_then(|args| run(&args, &mut stdout)) {
-        let status = if error.code == "BAD_ARGS" { 2 } else { 1 };
-        let _ = write_json(&splice_mcp::error_payload(error), &mut io::stderr().lock());
-        std::process::exit(status);
+        exit_error(&splice_mcp::error_payload(error));
     }
+}
+
+fn exit_error(error: &Json) -> ! {
+    let status = if error.field("code").and_then(Json::as_str) == Some("BAD_ARGS") {
+        2
+    } else {
+        1
+    };
+    let _ = write_json(error, &mut io::stderr().lock());
+    std::process::exit(status);
 }
 
 fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
@@ -71,13 +79,23 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
         ("new", [path]) => project_summary(&Store::create(Path::new(path), &Default::default())?),
         ("apply", args) => apply(args)?,
         ("snapshot", args) => {
-            let store = Store::open(&project_arg(args)?)?;
+            let path = project_arg(args)?;
+            #[cfg(target_os = "macos")]
+            if let Some((result, _)) = forward(&path, "timeline", Vec::new())? {
+                return write_json(&result, output);
+            }
+            let store = Store::open(&path)?;
             let snapshot = package::snapshot(store.project());
             store.close()?;
             snapshot
         }
         ("check", args) => {
-            let store = Store::open(&project_arg(args)?)?;
+            let path = project_arg(args)?;
+            #[cfg(target_os = "macos")]
+            if let Some((result, _)) = forward(&path, "check", Vec::new())? {
+                return write_json(&result, output);
+            }
+            let store = Store::open(&path)?;
             let state = store.verify()?;
             let Json::Object(mut fields) = project_summary(&store) else {
                 unreachable!("project summary")
@@ -137,8 +155,8 @@ fn open(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
             return Err(error());
         }
         let at = match trailing {
-            [] => 0,
-            [flag, at] if flag == "--at" => frame_number(at)?,
+            [] => None,
+            [flag, at] if flag == "--at" => Some(frame_number(at)?),
             _ => return Err(error()),
         };
         return write_json(
@@ -150,23 +168,21 @@ fn open(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn viewer_snapshot(_: &Path, _: &Path, _: i32) -> Result<Json, StoreError> {
+fn viewer_snapshot(_: &Path, _: &Path, _: Option<i32>) -> Result<Json, StoreError> {
     Err(unavailable("Viewer snapshots"))
 }
 
 #[cfg(target_os = "macos")]
-fn viewer_snapshot(project: &Path, file: &Path, at: i32) -> Result<Json, StoreError> {
+fn viewer_snapshot(project: &Path, file: &Path, at: Option<i32>) -> Result<Json, StoreError> {
+    let mut fields = vec![("output".into(), absolute_path(file)?)];
+    if let Some(at) = at {
+        fields.push(("at".into(), Json::Signed(i64::from(at))));
+    }
+    if let Some((result, _)) = forward(project, "snapshot", fields)? {
+        return Ok(result);
+    }
     let store = Store::open(project)?;
-    let revision = store.project().rev;
-    let output = splice_mcp::write_png(file, &mut || splice_app::snapshot(&store, at))?;
-    Ok(Json::Object(vec![
-        (
-            "output".into(),
-            Json::String(output.to_string_lossy().into()),
-        ),
-        ("revision".into(), Json::String(format!("r{revision}"))),
-        ("frame".into(), Json::Signed(i64::from(at))),
-    ]))
+    splice_app::snapshot_output(&store, at.unwrap_or(0), file)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -229,22 +245,25 @@ fn apply(args: &[String]) -> Result<Json, StoreError> {
             "Pass an array or an object with only the ops array.",
         )
     })?;
+    #[cfg(target_os = "macos")]
+    {
+        let mut fields = vec![
+            ("ops".into(), Json::Array(ops.to_vec())),
+            ("dryRun".into(), Json::Bool(options.dry_run)),
+        ];
+        if let Some(revision) = options.if_revision {
+            fields.push(("ifRevision".into(), Json::Unsigned(revision)));
+        }
+        if let Some(key) = &options.key {
+            fields.push(("idempotencyKey".into(), Json::String(key.clone())));
+        }
+        if let Some((result, _)) = forward(&project, "apply", fields)? {
+            return Ok(result);
+        }
+    }
     let mut store = Store::open(&project)?;
     let result = splice_mcp::apply_batch(&mut store, ops, &options)?;
-    // An append already synced by Store::apply remains committed if the closing checkpoint fails.
-    let checkpoint = if result.dry_run || result.replayed {
-        None
-    } else {
-        store.close().err()
-    };
-    let mut reply = splice_mcp::edit_result_json(result);
-    if let Some(warning) = checkpoint
-        && reply.field("warning").is_none()
-        && let Json::Object(fields) = &mut reply
-    {
-        fields.push(("warning".into(), splice_mcp::error_payload(warning)));
-    }
-    Ok(reply)
+    Ok(splice_mcp::checkpoint_edit(&mut store, result))
 }
 
 fn apply_args(args: &[String]) -> Result<(PathBuf, PathBuf, WriteOptions), StoreError> {
@@ -358,6 +377,34 @@ fn export(args: &[String]) -> Result<Json, StoreError> {
         }
     }
     let project = project.map_or_else(current_project, Ok)?;
+    let mut fields = vec![("overwrite".into(), Json::Bool(overwrite))];
+    if let Some(preset) = preset {
+        fields.push(("preset".into(), Json::String(preset.into())));
+    }
+    if let Some(path) = output {
+        fields.push(("output".into(), Json::String(path.into())));
+    }
+    if let Some((receipt, owner)) = forward(&project, "export", fields)? {
+        let job = receipt
+            .field("jobId")
+            .cloned()
+            .ok_or_else(invalid_viewer_reply)?;
+        loop {
+            let fields = vec![
+                ("jobId".into(), job.clone()),
+                ("owner".into(), Json::String(owner.clone())),
+            ];
+            let (result, _) =
+                forward(&project, "export-status", fields)?.ok_or_else(invalid_viewer_reply)?;
+            if !matches!(
+                result.field("state").and_then(Json::as_str),
+                Some("running" | "cancelling")
+            ) {
+                return Ok(result);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
     splice_mcp::export_project(Store::open(&project)?, preset, output, overwrite)
 }
 
@@ -381,7 +428,73 @@ fn frame(args: &[String]) -> Result<Json, StoreError> {
         ));
     }
     let at = frame_number(at)?;
-    splice_mcp::grab_frame(Store::open(&project_arg(project)?)?, at, Path::new(file))
+    let project = project_arg(project)?;
+    let file = Path::new(file);
+    if let Some((result, _)) = forward(
+        &project,
+        "frame",
+        vec![
+            ("at".into(), Json::Signed(i64::from(at))),
+            ("output".into(), absolute_path(file)?),
+        ],
+    )? {
+        return Ok(result);
+    }
+    splice_mcp::grab_frame(&Store::open(&project)?, at, file)
+}
+
+#[cfg(target_os = "macos")]
+fn absolute_path(path: &Path) -> Result<Json, StoreError> {
+    let path = std::path::absolute(path).map_err(io_error)?;
+    let value = path.to_str().ok_or_else(|| {
+        bad_args(
+            "An output path is not valid UTF-8.",
+            "Use an explicit UTF-8 output path.",
+        )
+    })?;
+    Ok(Json::String(value.into()))
+}
+
+#[cfg(target_os = "macos")]
+fn forward(
+    project: &Path,
+    command: &str,
+    mut fields: Vec<(String, Json)>,
+) -> Result<Option<(Json, String)>, StoreError> {
+    fields.push(("command".into(), Json::String(command.into())));
+    let Some(reply) =
+        splice_mcp::live::request(project, &Json::Object(fields)).map_err(|error| {
+            StoreError::new(
+                "VIEWER_DISCONNECTED",
+                &error.to_string(),
+                "Read the project revision before retrying.",
+            )
+        })?
+    else {
+        return Ok(None);
+    };
+    if let Some(error) = reply.field("error") {
+        exit_error(error);
+    }
+    let result = reply
+        .field("result")
+        .cloned()
+        .ok_or_else(invalid_viewer_reply)?;
+    let owner = reply
+        .field("owner")
+        .and_then(Json::as_str)
+        .ok_or_else(invalid_viewer_reply)?
+        .to_owned();
+    Ok(Some((result, owner)))
+}
+
+#[cfg(target_os = "macos")]
+fn invalid_viewer_reply() -> StoreError {
+    StoreError::new(
+        "VIEWER_DISCONNECTED",
+        "The viewer did not return its result.",
+        "Read the project revision before retrying.",
+    )
 }
 
 fn frame_number(at: &str) -> Result<i32, StoreError> {

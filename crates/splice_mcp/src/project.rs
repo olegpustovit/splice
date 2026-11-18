@@ -11,18 +11,108 @@ use std::{
 
 #[derive(Default)]
 pub(super) struct Projects {
-    open: Vec<Store>,
+    open: Vec<OpenProject>,
+    viewer_only: bool,
     #[cfg(target_os = "macos")]
     pub(super) exports: Vec<super::export::Job>,
 }
 
+enum OpenProject {
+    Local(Store),
+    #[cfg(target_os = "macos")]
+    Remote(PathBuf, String),
+}
+
+impl OpenProject {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Local(store) => store.path(),
+            #[cfg(target_os = "macos")]
+            Self::Remote(path, _) => path,
+        }
+    }
+
+    fn local(&self) -> Option<&Store> {
+        match self {
+            Self::Local(store) => Some(store),
+            #[cfg(target_os = "macos")]
+            Self::Remote(..) => None,
+        }
+    }
+
+    fn local_mut(&mut self) -> Option<&mut Store> {
+        match self {
+            Self::Local(store) => Some(store),
+            #[cfg(target_os = "macos")]
+            Self::Remote(..) => None,
+        }
+    }
+
+    fn into_local(self) -> Option<Store> {
+        match self {
+            Self::Local(store) => Some(store),
+            #[cfg(target_os = "macos")]
+            Self::Remote(..) => None,
+        }
+    }
+}
+
 impl Projects {
+    #[cfg(any(target_os = "macos", test))]
+    pub(super) fn viewer(store: Store) -> Self {
+        Self {
+            open: vec![OpenProject::Local(store)],
+            viewer_only: true,
+            #[cfg(target_os = "macos")]
+            exports: Vec::new(),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn viewer_store(&mut self) -> &mut Store {
+        let OpenProject::Local(store) = &mut self.open[0] else {
+            unreachable!("viewer owns its store")
+        };
+        store
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn viewer_store_ref(&self) -> &Store {
+        self.open[0].local().expect("viewer owns its store")
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn remote(&self, id: &str) -> Option<(&Path, &str)> {
+        let OpenProject::Remote(path, owner) = self.open.get(project_index(id)?)? else {
+            return None;
+        };
+        Some((path, owner))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn remember_remote(&mut self, path: PathBuf, owner: String) -> String {
+        if let Some(index) = self.open.iter().position(|entry| entry.path() == path) {
+            self.open[index] = OpenProject::Remote(path, owner);
+            return project_id(index);
+        }
+        let id = project_id(self.open.len());
+        self.open.push(OpenProject::Remote(path, owner));
+        id
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn is_local(&self, path: &Path) -> bool {
+        self.open
+            .iter()
+            .any(|entry| entry.path() == path && entry.local().is_some())
+    }
+
     pub(super) fn lookup(&mut self, args: &Json) -> Result<&mut Store, StoreError> {
         self.lookup_id(args.string("projectId")?)
     }
 
     pub(super) fn lookup_id(&mut self, id: &str) -> Result<&mut Store, StoreError> {
-        let store = project_index(id)
+        let entry = project_index(id)
             .and_then(|index| self.open.get_mut(index))
             .ok_or_else(|| {
                 failure(
@@ -31,6 +121,13 @@ impl Projects {
                     "Call project.info with the package path.",
                 )
             })?;
+        let store = entry.local_mut().ok_or_else(|| {
+            failure(
+                "VIEWER_DISCONNECTED",
+                "The viewer owns this project.",
+                "Reopen the project with project.info.",
+            )
+        })?;
         read_access(store)?;
         Ok(store)
     }
@@ -44,11 +141,22 @@ impl Projects {
             }
             let path = package_path(path)?;
             let canonical = fs::canonicalize(&path);
-            let index = if let Ok(existing) = &canonical
-                && let Some(index) = self.open.iter().position(|store| store.path() == existing)
+            let existing = canonical
+                .as_ref()
+                .ok()
+                .and_then(|path| self.open.iter().position(|entry| entry.path() == path));
+            let index = if let Some(index) = existing
+                && self.open[index].local().is_some()
             {
                 index
             } else {
+                if self.viewer_only {
+                    return Err(failure(
+                        "NOT_FOUND",
+                        "This viewer does not own the requested package.",
+                        "Open that package in a separate viewer or headless session.",
+                    ));
+                }
                 let store = match canonical {
                     Ok(path) => Store::open(&path)?,
                     Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
@@ -57,10 +165,16 @@ impl Projects {
                     Err(error) => return Err(path_error(&path, &error)),
                 };
                 read_access(&store)?;
-                self.open.push(store);
-                self.open.len() - 1
+                if let Some(index) = existing {
+                    self.open[index] = OpenProject::Local(store);
+                    index
+                } else {
+                    self.open.push(OpenProject::Local(store));
+                    self.open.len() - 1
+                }
             };
-            return info(&self.open[index], &project_id(index));
+            let store = self.lookup_id(&project_id(index))?;
+            return info(store, &project_id(index));
         }
         if create {
             return Err(bad(
@@ -77,14 +191,14 @@ impl Projects {
             .field("projectId")
             .or_else(|| args.field("projectId"))
         {
-            return project_index(id.as_str()?).and_then(|index| self.open.get(index));
+            return self.open.get(project_index(id.as_str()?)?)?.local();
         }
         if let Some(path) = args.field("path") {
             let path = fs::canonicalize(package_path(path.as_str()?).ok()?).ok()?;
-            return self.open.iter().find(|store| store.path() == path);
+            return self.open.iter().find(|store| store.path() == path)?.local();
         }
         match self.open.as_slice() {
-            [store] => Some(store),
+            [store] => store.local(),
             _ => None,
         }
     }
@@ -94,8 +208,10 @@ impl Projects {
         for mut job in self.exports {
             job.wait();
         }
-        for store in self.open {
-            if store.problem().is_none() {
+        for entry in self.open {
+            if let Some(store) = entry.into_local()
+                && store.problem().is_none()
+            {
                 store.close().map_err(io::Error::other)?;
             }
         }

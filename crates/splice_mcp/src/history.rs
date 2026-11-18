@@ -63,6 +63,24 @@ pub fn apply_batch(
     store.apply(ops, options)
 }
 
+/// Checkpoints a CLI edit and includes any checkpoint failure in the durable receipt.
+pub fn checkpoint_edit(store: &mut Store, result: EditResult) -> Json {
+    // An append already synced by Store::apply remains committed if the checkpoint fails.
+    let checkpoint = if result.dry_run || result.replayed {
+        None
+    } else {
+        store.checkpoint().err()
+    };
+    let mut reply = edit_result_json(result);
+    if let Some(warning) = checkpoint
+        && reply.field("warning").is_none()
+        && let Json::Object(fields) = &mut reply
+    {
+        fields.push(("warning".into(), error_payload(warning)));
+    }
+    reply
+}
+
 /// Serializes a committed edit, replay receipt, or preview for a command client.
 pub fn edit_result_json(result: EditResult) -> Json {
     let report = result.report;

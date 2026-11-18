@@ -19,6 +19,8 @@ struct Connection {
     initialized: bool,
     projects: Projects,
     friction: Recorder,
+    #[cfg(target_os = "macos")]
+    routes: super::live::proxy::Routes,
 }
 
 /// Serves one MCP connection, flushing each reply and returning on end of input.
@@ -42,6 +44,8 @@ pub(super) fn serve_with_log(
         initialized: false,
         projects: Projects::default(),
         friction: Recorder::new(global),
+        #[cfg(target_os = "macos")]
+        routes: Default::default(),
     };
     let mut line = Vec::new();
     let mut wire = String::new();
@@ -216,17 +220,8 @@ fn dispatch(id: &Json, method: &str, params: &Json, connection: &mut Connection)
             if !tools::known(name) {
                 return rpc_error(id, -32602, &format!("Unknown tool: {name}"));
             }
-            match tools::call(&mut connection.projects, name, args) {
-                Ok(result) => {
-                    connection.friction.call(
-                        &connection.projects,
-                        name,
-                        args,
-                        &result,
-                        modern.then_some(meta),
-                    );
-                    result
-                }
+            match connection.call(name, args, modern.then_some(meta)) {
+                Ok(result) => result,
                 Err(_) => return rpc_error(id, -32603, "Tool returned invalid JSON"),
             }
         }
@@ -240,6 +235,40 @@ fn dispatch(id: &Json, method: &str, params: &Json, connection: &mut Connection)
         fields.push(("_meta".into(), object(vec![(SERVER_INFO, server_info())])));
     }
     message(id, "result", result)
+}
+
+impl Connection {
+    fn call(
+        &mut self,
+        name: &str,
+        args: &Json,
+        meta: Option<&Json>,
+    ) -> Result<Json, splice_json::NonFiniteNumber> {
+        #[cfg(target_os = "macos")]
+        let result = match self.routes.tool_args(name, args) {
+            Ok(routed) => match self.routes.forward(
+                &mut self.projects,
+                name,
+                args,
+                &routed,
+                self.friction.client(meta),
+            ) {
+                Ok(Some(result)) => return Ok(result),
+                Ok(None) => {
+                    let mut result = tools::call(&mut self.projects, name, &routed)?;
+                    self.routes.remap_job(name, args, &mut result, None);
+                    result
+                }
+                Err(error) => tools::reply(Err(error), Vec::new())?,
+            },
+            Err(error) => tools::reply(Err(error), Vec::new())?,
+        };
+        #[cfg(not(target_os = "macos"))]
+        let result = tools::call(&mut self.projects, name, args)?;
+        self.friction
+            .call(&self.projects, name, args, &result, meta);
+        Ok(result)
+    }
 }
 
 fn capabilities() -> Json {

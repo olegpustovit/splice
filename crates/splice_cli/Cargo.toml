@@ -19,5 +19,10 @@ splice_app = { path = "../splice_app" }
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 splice_testkit = { path = "../splice_testkit" }
 
+[[test]]
+name = "live_viewer"
+path = "tests/live_viewer.rs"
+harness = false
+
 [lints]
 workspace = true

@@ -77,6 +77,21 @@ impl Recorder {
         self.client = client_name(info).unwrap_or_else(|| "mcp".into());
     }
 
+    #[cfg(target_os = "macos")]
+    pub(super) fn set_client(&mut self, client: &str) {
+        self.client = client.into();
+    }
+
+    pub(super) fn client(&self, modern: Option<&Json>) -> String {
+        match modern {
+            Some(meta) => meta
+                .field("io.modelcontextprotocol/clientInfo")
+                .and_then(client_name)
+                .unwrap_or_else(|| "mcp".into()),
+            None => self.client.clone(),
+        }
+    }
+
     pub(super) fn call(
         &mut self,
         projects: &Projects,
@@ -100,13 +115,7 @@ impl Recorder {
         }
         let store = projects.context(args, payload);
         let scope = Scope {
-            client: match modern {
-                Some(meta) => meta
-                    .field("io.modelcontextprotocol/clientInfo")
-                    .and_then(client_name)
-                    .unwrap_or_else(|| "mcp".into()),
-                None => self.client.clone(),
-            },
+            client: self.client(modern),
             project: store.map(|store| store.path().to_owned()),
         };
         let revision = store.map_or(Json::Null, |store| Json::Unsigned(store.project().rev));

@@ -209,7 +209,7 @@ pub(super) fn targets_into(value: &Json, key: &str, result: &mut Vec<Target>) ->
     Ok(())
 }
 
-fn frame_arg(value: &Json, key: &str) -> Result<FrameArg, Error> {
+pub(crate) fn frame_arg(value: &Json, key: &str) -> Result<FrameArg, Error> {
     if value.as_f64().is_some() {
         return integer(value, key).map(FrameArg::Frame);
     }

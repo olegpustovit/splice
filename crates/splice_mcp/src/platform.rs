@@ -176,7 +176,7 @@ pub(super) fn job(projects: &mut Projects, name: &str, args: &Json) -> Result<Js
         let (owner, session) = projects.exports[index]
             .owner
             .clone()
-            .expect("MCP export owner");
+            .ok_or_else(|| missing_job(id))?;
         if project.is_some_and(|project| project != owner) {
             return Err(missing_job(id));
         }

@@ -6,6 +6,11 @@ the unix socket in the state dir, so the viewer stays the single writer and the 
 live. The main spec's "MCP surface" section is the design; `docs/reference/agent.js` is the behavioral
 reference implementation.
 
+One stdio connection can open projects in different viewers and projects that run headless.
+If a viewer closes during a call, read the current revision with `project.info {path}` before
+retrying the edit. The client returns `VIEWER_DISCONNECTED` when the outcome of a sent request
+is uncertain. Use `idempotencyKey` on edits that a client may retry.
+
 ## Stdio lifecycle
 
 Clients on `2025-11-25` send `initialize` and then `notifications/initialized`. The compatibility
@@ -109,6 +114,9 @@ PNG with a longest edge of up to 640 pixels. Out-of-range frame numbers return `
 
 On Linux, rendering, export and capture return `UNSUPPORTED_PLATFORM`. A job ID with no retained
 job returns `NOT_FOUND`. Headless `ui.show` returns `{"applied":false,"reason":"headless"}`.
+In the 0.1 viewer, `ui.show` moves the playhead using a frame or an item, marker, or word anchor.
+`range.from` seeks to the start of a range. The view tool reports the live playhead and leaves the
+project revision unchanged.
 
 ## Export jobs
 

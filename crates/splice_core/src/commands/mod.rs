@@ -2,6 +2,7 @@ use splice_json::Value as Json;
 use std::fmt;
 
 mod args;
+pub(crate) use args::frame_arg;
 mod decode;
 mod op;
 mod table;

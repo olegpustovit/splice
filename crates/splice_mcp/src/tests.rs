@@ -1,4 +1,31 @@
 use super::*;
+
+#[test]
+fn viewer_projects_pin_the_single_open_store() {
+    let dir = std::env::temp_dir().join(format!("splice-viewer-pin-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("Selected.splice");
+    let store = splice_core::history::Store::create(&path, &Default::default()).unwrap();
+    let mut projects = project::Projects::viewer(store);
+    let opened = projects
+        .info(&object(vec![("path", text(path.to_str().unwrap()))]))
+        .unwrap();
+    assert_eq!(
+        opened.field("projectId").and_then(Json::as_str),
+        Some("prj_1")
+    );
+    let other = dir.join("Other.splice");
+    let error = projects
+        .info(&object(vec![
+            ("path", text(other.to_str().unwrap())),
+            ("create", Json::Bool(true)),
+        ]))
+        .unwrap_err();
+    assert_eq!(error.code, "NOT_FOUND");
+    assert!(!other.exists());
+    projects.close().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
 use splice_testkit::transcript;
 use std::fs;
 use std::io::{self, BufRead, Cursor, Write};
