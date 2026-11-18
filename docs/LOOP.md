@@ -116,7 +116,13 @@ recoveries, undos. A drop from the baseline is a red check for the loop.
   `make mac-run CMD='splice frame --at 30 /tmp/f.png fixtures/projects/sample.splice'` runs one command.
   `make mac-pull F=/tmp/f.png` copies a result back into `target/mac/` to look at.
 - GUI checks use `--snapshot` (offscreen). Never take over the Mini's screen.
-- Signing over ssh: unlock the passwordless `splice-signing` keychain (T7.2) and never print keychain contents.
+- `make bundle PROFILE=debug` stages a signed `target/bundle/Splice.app`. `make bundle` uses the
+  release profile. Both unlock `~/Library/Keychains/splice-signing.keychain-db` and use its
+  Developer ID Application identity for team `7ZH3FYV964`. Provision that identity in the
+  passwordless keychain before building. `SPLICE_SIGNING_KEYCHAIN` can point to a different
+  passwordless keychain holding the same team identity. Keep signing credentials out of logs.
+  The Mac build uses CMake to build the SDL pinned by PXUI for macOS 15. Splice embeds SDL and
+  PXUI in `Contents/Frameworks` and validates the bundle's native load paths before signing.
 - Recording checks are 3 s captures. Never record for longer, and never leave a capture agent running.
 - Privacy grants are a **HUMAN** step (`splice permissions --request` on the Mini, then a person
   clicks). The loop marks such a task `- [~] … HUMAN: <what to click>` and moves on; it never tries

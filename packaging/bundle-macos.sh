@@ -1,0 +1,131 @@
+#!/bin/sh
+# Assemble and verify a signed bundle before replacing the staged build.
+set -eu
+products=${1:?usage: bundle-macos.sh PRODUCTS SIGNING_KEYCHAIN SDL_PREFIX}
+keychain=${2:?usage: bundle-macos.sh PRODUCTS SIGNING_KEYCHAIN SDL_PREFIX}
+sdl_prefix=${3:?usage: bundle-macos.sh PRODUCTS SIGNING_KEYCHAIN SDL_PREFIX}
+cd "$(dirname "$0")/.."
+
+fail() {
+    printf 'splice: %s\n' "$1" >&2
+    exit 1
+}
+
+team=7ZH3FYV964
+identity=$(/usr/bin/security find-identity -v -p codesigning "$keychain" 2>/dev/null | /usr/bin/awk -v team="$team" '
+    length($2) == 40 && $2 ~ /^[A-F0-9]+$/ && index($0, "\"Developer ID Application: ") &&
+    $0 ~ " \\(" team "\\)\"$" { print $2; exit }
+')
+[ -n "$identity" ] || fail "Import a valid Developer ID Application identity for team $team into $keychain and run make bundle again."
+
+[ -x "$products/splice" ] || fail "Build the splice executable in $products first."
+[ -f "$products/libpxui.1.dylib" ] || fail "Build libpxui.1.dylib in $products first."
+[ -f "$sdl_prefix/lib/libSDL3.0.dylib" ] || fail 'Build the pinned macOS SDL with make sdl first.'
+
+root=target/bundle
+output=$root/Splice.app
+lock=$root/.publish-lock
+/bin/mkdir -p "$root"
+stage=$(/usr/bin/mktemp -d "$root/.stage.XXXXXXXX")
+locked=no
+cleanup() {
+    if [ "$locked" = yes ]; then
+        if [ -d "$stage/previous.app" ] && [ ! -e "$output" ] && [ ! -L "$output" ]; then
+            /bin/mv "$stage/previous.app" "$output" || {
+                printf 'splice: previous bundle is at %s/previous.app\n' "$stage" >&2
+                /bin/rmdir "$lock"
+                return
+            }
+        fi
+        /bin/rmdir "$lock"
+    fi
+    /bin/rm -rf "$stage"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+app=$stage/Splice.app
+binary=$app/Contents/MacOS/splice
+library=$app/Contents/Frameworks/libpxui.1.dylib
+sdl=$app/Contents/Frameworks/libSDL3.0.dylib
+pxui_name=@rpath/libpxui.1.dylib
+sdl_name=@rpath/libSDL3.0.dylib
+/bin/mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
+/bin/cp packaging/Info.plist "$app/Contents/Info.plist"
+/bin/cp "$products/splice" "$binary"
+/bin/cp -L "$products/libpxui.1.dylib" "$library"
+/bin/cp -L "$sdl_prefix/lib/libSDL3.0.dylib" "$sdl"
+/bin/cp "$sdl_prefix/share/licenses/SDL3/LICENSE.txt" "$app/Contents/Resources/SDL3-LICENSE.txt"
+
+check_links() {
+    file=$1
+    shift
+    linked=$(/usr/bin/otool -L "$file")
+    deps=$(printf '%s\n' "$linked" | /usr/bin/awk '
+        /^[[:space:]].* \(compatibility version / {
+            sub(/^[[:space:]]+/, ""); sub(/ \(compatibility version .*$/, ""); print
+        }
+    ')
+    while IFS= read -r dep; do
+        case "$dep" in
+            "$pxui_name"|"$sdl_name"|/usr/lib/*|/System/Library/*) ;;
+            *) fail "Unbundled dependency $dep in $file." ;;
+        esac
+    done <<DEPS
+$deps
+DEPS
+    for required in "$@"; do
+        printf '%s\n' "$deps" | /usr/bin/grep -Fxq "$required" || fail "Expected $required in $file."
+    done
+}
+
+clear_rpaths() {
+    loads=$(/usr/bin/otool -l "$1")
+    printf '%s\n' "$loads" | /usr/bin/awk '
+        /cmd LC_BUILD_VERSION/ { field = "minos"; next }
+        /cmd LC_VERSION_MIN_MACOSX/ { field = "version"; next }
+        field && $1 == field {
+            n = split($2, version, "."); found++
+            if (version[1] > 15 || (version[1] == 15 && (version[2] > 0 || (n > 2 && version[3] > 0)))) bad = 1
+            field = ""
+        }
+        END { exit (!found || bad) }
+    ' || fail "The minimum macOS version of $1 must be 15.0 or earlier."
+    paths=$(printf '%s\n' "$loads" | /usr/bin/awk '
+        /cmd LC_RPATH/ { path = 1; next }
+        path && $1 == "path" {
+            sub(/^[[:space:]]*path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print; path = 0
+        }
+    ')
+    while IFS= read -r path; do
+        [ -z "$path" ] || /usr/bin/install_name_tool -delete_rpath "$path" "$1"
+    done <<PATHS
+$paths
+PATHS
+}
+
+check_links "$binary" "$pxui_name" "$sdl_name"
+check_links "$library" "$pxui_name"
+check_links "$sdl" "$sdl_name"
+for file in "$binary" "$library" "$sdl"; do
+    /usr/bin/codesign --remove-signature "$file" 2>/dev/null || true
+    clear_rpaths "$file"
+done
+/usr/bin/install_name_tool -add_rpath '@executable_path/../Frameworks' "$binary"
+
+requirement="anchor apple generic and certificate leaf[subject.OU] = \"$team\" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
+for file in "$library" "$sdl"; do
+    /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" --timestamp --options runtime "$file"
+    /usr/bin/codesign --verify --strict --test-requirement "=$requirement" "$file"
+done
+/usr/bin/codesign --force --keychain "$keychain" --sign "$identity" --timestamp --options runtime \
+    --entitlements packaging/splice.entitlements "$app"
+/usr/bin/codesign --verify --deep --strict --test-requirement "=$requirement" "$app"
+
+/bin/mkdir "$lock" 2>/dev/null || fail "Another bundle is being published in $root."
+locked=yes
+if [ -e "$output" ] || [ -L "$output" ]; then
+    /bin/mv "$output" "$stage/previous.app"
+fi
+/bin/mv "$app" "$output"
+printf 'Signed %s for team %s\n' "$output" "$team"

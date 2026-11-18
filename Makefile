@@ -28,22 +28,34 @@ check:
 	cargo clippy -q --workspace --all-targets -- -D warnings
 	cargo t --workspace
 
+ifeq ($(OS),Darwin)
+export SDL3_DIR := $(abspath target/sdl-macos)
+.PHONY: sdl
+lib: sdl
+sdl:
+	packaging/build-sdl-macos.sh '$(SDL3_DIR)'
+endif
+
 lib:
 	@test -e pxui/Cargo.toml || git submodule update --init pxui
 ifeq ($(OS),Darwin)
 	cargo build $(CARGOFLAGS) --manifest-path pxui/Cargo.toml -p pxui_dylib --target-dir target
 	ln -sfn libpxui.dylib $(PRODUCTS)/libpxui.1.dylib
+	ln -sfn '$(SDL3_DIR)/lib/libSDL3.0.dylib' $(PRODUCTS)/libSDL3.0.dylib
 endif
 
 build: lib
 	cargo build $(CARGOFLAGS) -p splice_cli
 
 ifeq ($(OS),Darwin)
-bundle: build
-	packaging/bundle-macos.sh '$(PRODUCTS)'
+SPLICE_SIGNING_KEYCHAIN ?= $(HOME)/Library/Keychains/splice-signing.keychain-db
 
-sign: build
-	tools/sign-macos.sh '$(PRODUCTS)'
+bundle: build
+	@/usr/bin/security unlock-keychain -p '' '$(SPLICE_SIGNING_KEYCHAIN)' >/dev/null 2>&1 || \
+		{ printf '%s\n' 'Set up the passwordless splice-signing keychain with the Developer ID Application identity for team 7ZH3FYV964.' >&2; exit 1; }
+	packaging/bundle-macos.sh '$(PRODUCTS)' '$(SPLICE_SIGNING_KEYCHAIN)' '$(SDL3_DIR)'
+
+sign: bundle
 
 install: bundle
 	mkdir -p '$(APPDIR)' '$(PREFIX)/bin'
@@ -80,7 +92,8 @@ endif
 ifneq ($(filter splice_app,$(MAC_CRATES)),)
 	cargo t -p splice_cli native_viewer_
 endif
-	@if [ -x packaging/bundle-macos.sh ]; then $(MAKE) dev && tools/check-macos-bundle.sh $(APPDIR)/Splice.app; else echo 'mac-check: bundle not built yet (T7)'; fi
+	$(MAKE) bundle PROFILE=debug
+	target/bundle/Splice.app/Contents/MacOS/splice --smoke-test
 
 mac-run: mac-sync
 	ssh $(MAC) '$(MAC_ENV) $(MAC_NICE) $(CMD)'
