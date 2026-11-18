@@ -45,9 +45,9 @@ Name.splice/
   "format": "splice/1",
   "rev": 41, "hash": "9f2c51e07a3b6d18", "serial": 212,
   "fps": 30, "size": [1080, 1920], "aspect": "9:16", "access": "live",
-  "effects": [{"id": "fx_proj_win", "type": "window", "params": {"padding": 0.07, "corner": 0.03}}],
+  "effects": [{"id": "fx_projwin", "type": "window", "params": {"padding": 0.07, "corner": 0.03}}],
   "spine": {"id": "lan_spine", "name": "Video", "effects": []},
-  "lanes": [{"id": "lan_cap", "name": "Captions", "kind": "captions", "effects": []}],
+  "lanes": [{"id": "lan_gfx", "name": "Graphics", "kind": "graphics", "effects": []}],
   "clips": [{"id": "clp_take", "media": "med_take", "start": 0, "length": 420, "source": 120,
              "speed": 1, "fadeIn": 0, "fadeOut": 0, "volume": {"mic": 1, "system": 0.8},
              "enabled": {"mic": true, "cursor": true}, "crop": null, "fit": "fit", "effects": []}],
@@ -60,14 +60,15 @@ Name.splice/
 
 Rules:
 - Times are integer frames at `fps`. Clip `source` is in source frames. Anchors are the forms of the
-  main spec (`{item, edge, offset}`, `{marker, offset}`, `{word, transcriptHash}`); resolved frames are
-  never stored, they are derived on load.
+  main spec (`{item, edge, offset}`, `{marker, offset}`, `{word, transcriptHash}`), plus fixed frames
+  (`{pinned:true, frame}`) and clip-source frames (`{clip, sourceFrame}`). Resolved frames are derived
+  on load. A gap has `media:null`.
 - IDs are `<prefix>_<base36 serial>`; `serial` is the next value. Deterministic minting means a
   replay of the journal mints the same IDs.
 - Arrays are in model order (spine order, lane stack order, creation order). Unknown keys are an error
   (`FORMAT_UNKNOWN_KEY`) within a major version: strict files keep agents and humans honest.
 - Effects carry `{id, type, params}`; params are the effect type's schema, and unset params inherit
-  through project › lane › item.
+  through project › lane › item. Parameter keys are written in lexical order.
 
 ## `journal.ops`
 
@@ -95,6 +96,9 @@ One JSON object per line:
   "probe":{"fps":30,"frames":5400,"width":2880,"height":1800,"audio":["mic","system"],"codec":"hevc"}}]}
 ```
 
+Audio entries are track names or `{name, channels}` when the probe has a channel count. Take
+descriptors can include a `components` object with paths relative to the take directory.
+
 A missing file is `MEDIA_OFFLINE` with the last known path; `project.info` lists offline media, and
 relinking is a command (`media.relink`, 0.3). The core never touches media bytes; it only reads descriptors.
 
@@ -103,6 +107,9 @@ relinking is a command (`media.relink`, 0.3). The core never touches media bytes
 `transcripts/<med>.json`: `{"hash","language","words":[{"id":"w12","text":"so","from":131,"to":139,"conf":0.93}]}`
 in source frames. Caption cues and word anchors refer to word IDs plus the transcript hash, so a
 re-transcription that changes words is detected rather than silently mis-anchored.
+
+The headless sample under `fixtures/projects/sample.splice` uses the prototype's timeline and
+transcript with descriptor-only media. The native media acceptance tests in T4 need playable assets.
 
 ## Versioning
 
