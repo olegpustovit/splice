@@ -33,6 +33,7 @@ unsafe extern "C" {
         directory: *const c_char,
         microphone: *const c_char,
         system_audio: bool,
+        camera: bool,
         denied: *mut bool,
         error: *mut *mut c_char,
     ) -> *mut c_void;
@@ -55,11 +56,13 @@ unsafe extern "C" {
 impl Recording {
     /// Starts an authorized recording in an existing staging directory.
     /// Pass an empty microphone ID for the system default, or `None` to omit it.
+    /// When camera is enabled, records the default video device into `camera.mov`.
     pub fn start(
         directory: &Path,
         target: Target,
         microphone: Option<&str>,
         system_audio: bool,
+        camera: bool,
     ) -> Result<Self, CaptureError> {
         let raw = target.native()?;
         let directory = c_string(directory.as_os_str().as_bytes())?;
@@ -78,6 +81,7 @@ impl Recording {
                     .as_ref()
                     .map_or(ptr::null(), |device| device.as_ptr()),
                 system_audio,
+                camera,
                 &mut denied,
                 &mut diagnostic,
             )
@@ -198,6 +202,11 @@ mod tests {
             (screen.duration_seconds - 1.0).abs() <= 1.0 / 60.0,
             "{screen:?}"
         );
+        let camera = media::probe(&directory.join("camera.mov")).unwrap();
+        let camera_track = camera.video.unwrap();
+        assert_eq!((camera_track.width, camera_track.height), (96, 64));
+        assert_eq!(camera_track.codec, Some(*b"hvc1"));
+        assert!((camera.duration_seconds - screen.duration_seconds).abs() <= 1.0 / 60.0);
         for name in ["mic.m4a", "system.m4a"] {
             let audio = media::probe(&directory.join(name)).unwrap();
             assert_eq!(audio.audio[0].channels, Some(2));

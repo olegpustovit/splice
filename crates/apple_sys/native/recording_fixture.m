@@ -2,6 +2,7 @@
 
 #import <CoreVideo/CoreVideo.h>
 
+#include <math.h>
 #include <string.h>
 
 static CMSampleBufferRef fixture_video(CVPixelBufferRef pixels, CMVideoFormatDescriptionRef format,
@@ -34,12 +35,60 @@ static CMSampleBufferRef fixture_audio(CMAudioFormatDescriptionRef format, CMTim
     return sample;
 }
 
+// The fixture reads the actual QuickTime timestamps with the macOS 15 reader API.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+static bool camera_clock_matches(NSURL *directory, char **error) {
+    AVAsset *asset = [AVURLAsset URLAssetWithURL:[directory URLByAppendingPathComponent:@"camera.mov"] options:nil];
+    AVAssetTrack *track = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+    NSArray<AVAssetTrackSegment *> *segments = track.segments;
+    if (segments.count != 2 || !segments[0].empty || segments[1].empty ||
+        fabs(CMTimeGetSeconds(segments[1].timeMapping.target.start) - 2.0 / 60.0) > 0.0001) {
+        splice_set_error(error, "Camera fixture lost its two-frame edit-list offset.");
+        return false;
+    }
+    NSError *reason = nil;
+    AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&reason];
+    if (reader == nil || track == nil) {
+        splice_set_error(error, reason.localizedDescription.UTF8String ?: "Camera fixture has no video track.");
+        return false;
+    }
+    AVAssetReaderTrackOutput *output = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:track outputSettings:nil];
+    if (![reader canAddOutput:output]) {
+        splice_set_error(error, "Cannot read the camera fixture's video track.");
+        return false;
+    }
+    [reader addOutput:output];
+    if (![reader startReading]) {
+        splice_set_error(error, reader.error.localizedDescription.UTF8String ?: "Could not read camera fixture.");
+        return false;
+    }
+    // A passthrough reader returns track media time. The edit list above supplies movie time.
+    // The third frame follows a simulated one-second pause.
+    int frames = 0;
+    double first_pts = 0.0;
+    CMSampleBufferRef sample;
+    while (frames < 3 && (sample = [output copyNextSampleBuffer]) != NULL) {
+        double pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample));
+        double duration = CMTimeGetSeconds(CMSampleBufferGetDuration(sample));
+        CFRelease(sample);
+        if (!isfinite(pts) || !(duration > 0.0)) continue;
+        if (frames == 0) first_pts = pts;
+        if (fabs(pts - first_pts - frames / 60.0) > 0.0001) break;
+        frames++;
+    }
+    if (frames == 3) return true;
+    splice_set_error(error, "Camera fixture contains a timestamp gap after resume.");
+    return false;
+}
+#pragma clang diagnostic pop
+
 bool splice_recording_fixture(const char *directory, SpliceRecordingStats *stats, char **error) {
     @autoreleasepool {
         NSError *failure = nil;
         NSURL *url = [NSURL fileURLWithFileSystemRepresentation:directory isDirectory:YES relativeToURL:nil];
         SpliceRecording *recording = [[SpliceRecording alloc] initWithDirectory:url width:96 height:64
-                                                                  microphone:YES audio:YES error:&failure];
+                                                                  microphone:YES audio:YES camera:YES error:&failure];
         if (recording == nil) {
             splice_set_error(error, failure.localizedDescription.UTF8String);
             return false;
@@ -73,6 +122,7 @@ bool splice_recording_fixture(const char *directory, SpliceRecordingStats *stats
                     return;
                 }
                 [recording append:idle type:SCStreamOutputTypeScreen];
+                [recording appendCamera:idle atHostTime:CMTimeMake(599, 60)];
                 CFRelease(idle);
                 for (int32_t frame = 0; frame < 8; frame++) {
                     if (frame == 4) {
@@ -83,21 +133,28 @@ bool splice_recording_fixture(const char *directory, SpliceRecordingStats *stats
                             return;
                         }
                         [recording append:paused type:SCStreamOutputTypeScreen];
+                        [recording appendCamera:paused atHostTime:CMTimeMake(630, 60)];
                         [recording setPaused:NO at:CMTimeMake(664, 60)];
                         [recording append:paused type:SCStreamOutputTypeScreen];
+                        [recording appendCamera:paused atHostTime:CMTimeMake(630, 60)];
                         CFRelease(paused);
                     }
                     CMTime pts = CMTimeMake(600 + frame + (frame >= 4 ? 60 : 0), 60);
                     CMSampleBufferRef screen = fixture_video(pixels, video, pts, SCFrameStatusComplete);
+                    // Camera timestamps start on a different clock and begin two frames later.
+                    CMSampleBufferRef camera = frame < 2 ? NULL : fixture_video(
+                        pixels, video, CMTimeAdd(pts, CMTimeMake(10000, 60)), SCFrameStatusComplete);
                     CMSampleBufferRef sound = fixture_audio(audio, pts);
-                    samples_ok = screen != NULL && sound != NULL;
+                    samples_ok = screen != NULL && sound != NULL && (frame < 2 || camera != NULL);
                     if (samples_ok) {
                         [recording append:screen type:SCStreamOutputTypeScreen];
                         [recording append:sound type:SCStreamOutputTypeMicrophone];
                         [recording append:sound type:SCStreamOutputTypeAudio];
+                        if (camera != NULL) [recording appendCamera:camera atHostTime:pts];
                     }
                     if (screen != NULL) CFRelease(screen);
                     if (sound != NULL) CFRelease(sound);
+                    if (camera != NULL) CFRelease(camera);
                     if (!samples_ok) return;
                     [NSThread sleepForTimeInterval:0.005];
                 }
@@ -119,6 +176,6 @@ bool splice_recording_fixture(const char *directory, SpliceRecordingStats *stats
             return false;
         }
         dispatch_sync(recording.queue, ^{ *stats = [recording statsAt:end]; });
-        return true;
+        return camera_clock_matches(url, error);
     }
 }

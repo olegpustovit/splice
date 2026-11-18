@@ -79,7 +79,7 @@ typedef struct {
 _Static_assert(sizeof(SpliceRecordingStats) == 24, "recording stats ABI");
 
 void *splice_recording_start(const SpliceCaptureTarget *target, const char *directory, const char *microphone,
-                             bool system_audio, bool *denied, char **error);
+                             bool system_audio, bool camera, bool *denied, char **error);
 bool splice_recording_status(void *recording, SpliceRecordingStats *out, bool *denied, char **error);
 void splice_recording_pause(void *recording, bool pause);
 bool splice_recording_finish(void *recording, SpliceRecordingStats *out, bool *denied, char **error);
