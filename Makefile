@@ -12,6 +12,7 @@ CARGOFLAGS = $(if $(filter release,$(PROFILE)),--release)
 PRODUCTS   = target/$(if $(filter release,$(PROFILE)),release,debug)
 OS := $(shell uname -s)
 SPLICE_PACKAGES := $(notdir $(patsubst %/Cargo.toml,%,$(wildcard crates/*/Cargo.toml))) gate
+MAC_CRATES ?= $(filter apple_sys splice_media splice_av splice_capture splice_app,$(SPLICE_PACKAGES))
 
 MAC      ?= snowbear@olegs-mac-mini
 MAC_DIR  ?= projects/editor
@@ -69,7 +70,9 @@ mac-check: mac-sync
 
 # Runs on the Mini only (invoked by mac-check).
 mac-local-check:
-	cargo t $(if $(MAC_CRATES),$(foreach c,$(MAC_CRATES),-p $(c)),--workspace)
+ifneq ($(strip $(MAC_CRATES)),)
+	cargo t $(foreach crate,$(MAC_CRATES),-p $(crate))
+endif
 	@if [ -x packaging/bundle-macos.sh ]; then $(MAKE) dev && tools/check-macos-bundle.sh $(APPDIR)/Splice.app; else echo 'mac-check: bundle not built yet (T7)'; fi
 
 mac-run: mac-sync
