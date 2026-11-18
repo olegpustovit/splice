@@ -135,7 +135,7 @@ Depends on T1.3, T4.1, T7.
   loop marks the task `HUMAN:` instead of retrying.
 - [~] T8.3 `apple_sys::capture`, `events`, `screenshot`: modern ScreenCaptureKit, bound the T4.1 way.
   Native code and fixtures are in place (a3673ed). HUMAN: the three-second acceptance run needs the
-  T8.2 Mini grants and the T8.4 recording job.
+  T8.2 Mini grants.
   - Partial (958c27a): installed preflight lists active displays without prompting. The
     ScreenCaptureKit bridge can list shareable windows and apps after the grant and defines the
     same display, window and area targets for PNG screenshots and the stream writer.
@@ -167,13 +167,13 @@ Depends on T1.3, T4.1, T7.
   - The Rust side drains the event ring with no allocations in steady state.
   - Accept: 3 s display capture on the Mini: the files probe correctly, `events.json` parses, and the
     take duration matches wall time within 2 frames.
-- [ ] T8.4 MCP and CLI.
+- [x] T8.4 MCP and CLI (063d7e0).
   - Partial (f239a6d): the signed capture agent schedules and seals takes in a private staging
     directory. The agent validates source selection, maintains countdown and elapsed time, and can
     cancel and discard staged output.
   - Partial (7219a41): MCP starts, checks, cancels and stops recording jobs. The project writer
     publishes the take descriptor and optional clip together, including when the viewer owns the
-    project. The `splice record` workflow and live acceptance remain open.
+    project.
   - `record.start {projectId | path, create, source: {display:"main"|id} | {window:{app, title}|id} | {area:{display, rect}}, mic, systemAudio, camera, events:true, duration?, countdown:0, insert:true, dryRun}`
     returns a `jobId`. `dryRun` returns the available sources and the permission states without recording.
   - `record.stop {jobId}` finalizes. `jobs.status` shows elapsed time, bytes and dropped frames;
@@ -247,3 +247,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T8.3 · HUMAN · a3673ed · `cargo t -p apple_sys -p splice_capture` 9.46 s (10 tests, slowest: native HEVC and AAC writer 0.296 s); `make check` 3.91 s (78 tests, slowest: seeded history replay 1.707 s); `make mac-check` 17.60 s (28 tests and bundle checks, slowest: offscreen viewer snapshots 1.476 s). Generated cursor and input fixtures verified the saved event format, pixel hotspots, stable digests, asset reuse, and zero allocations during input serialization. The three-second live check requires the Mini grants and the recording job.
 - 2026-11-18 · T8.4 · partial · f239a6d · `make check` 3.32 s (79 tests, slowest: seeded history replay 1.748 s); `make mac-check` 18.84 s (30 tests and bundle checks, slowest: offscreen viewer snapshots 1.543 s). Fixtures verified selector validation, ambiguous window rejection, countdown, exclusive capture and staged output cleanup on cancellation. Publication by the project writer, public MCP and CLI wiring, and the live take remain open.
 - 2026-11-18 · T8.4 · partial · 7219a41 · `make check` 18.10 s (80 tests, slowest: seeded history replay 3.016 s); `make mac-check` 24.79 s (31 tests and bundle checks, slowest: offscreen viewer snapshots 1.693 s). Fixture captures verified one-batch import, media-only import, stale-write preservation, undo and journal replay. Native publication probed a movie and a generated PNG in 0.173 s. The CLI and live Mini acceptance remain open.
+- 2026-11-18 · T8.4 · done · 063d7e0 · `make check` 3.97 s (83 tests, slowest: seeded history replay 1.968 s); `make mac-check` 21.77 s (32 tests and bundle checks, slowest: live MCP viewer 1.335 s). The CLI uses the same project and job routes as MCP. Fixture jobs verified timed publication and manual cancellation. The native receiver discards unfinished takes on writer disconnect (0.031 s). Live Mini acceptance remains in T8.5.
