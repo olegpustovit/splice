@@ -42,6 +42,50 @@ char *splice_media_bookmark(const char *path, char **error);
 void splice_media_dispose(SpliceMediaProbe *probe);
 
 typedef struct {
+    const char *path;
+    double source_start, source_limit, speed, source_frame_duration;
+    int32_t timeline[2];
+    uint32_t kind, index, colors[2];
+} SpliceAVSource;
+
+typedef struct {
+    double crop[4], destination[4], scale[2], opacity[2];
+    int32_t track;
+    uint32_t center_crop;
+} SpliceAVLayer;
+
+typedef struct {
+    int32_t track;
+    float gain[2];
+} SpliceAVGain;
+
+typedef struct {
+    const char *text;
+    double bounds[4], font;
+    float opacity[2];
+    uint32_t color;
+} SpliceAVText;
+
+_Static_assert(sizeof(SpliceAVSource) == 64 && offsetof(SpliceAVSource, timeline) == 40, "source ABI");
+_Static_assert(sizeof(SpliceAVLayer) == 104 && offsetof(SpliceAVLayer, center_crop) == 100, "layer ABI");
+_Static_assert(sizeof(SpliceAVGain) == 12 && offsetof(SpliceAVGain, gain) == 4, "gain ABI");
+_Static_assert(sizeof(SpliceAVText) == 64 && offsetof(SpliceAVText, color) == 56, "text ABI");
+
+void *splice_av_create(uint32_t width, uint32_t height, uint32_t fps, int32_t end, char **error);
+void splice_av_release(void *composition);
+int32_t splice_av_source(void *composition, const SpliceAVSource *source, char **error);
+bool splice_av_range(void *composition, int32_t from, int32_t to,
+                     const SpliceAVLayer *layers, size_t layer_count,
+                     const SpliceAVGain *gains, size_t gain_count, char **error);
+bool splice_av_text(void *composition, int32_t from, int32_t to, const SpliceAVText *text, char **error);
+bool splice_av_finish(void *composition, char **error);
+bool splice_av_read_frame(void *composition, int32_t frame, uint8_t *rgba, size_t length, char **error);
+void *splice_av_export(void *composition, const char *file, bool hevc, char **error);
+int32_t splice_av_export_status(void *job, float *progress, char **error);
+void splice_av_export_cancel(void *job);
+void splice_av_export_release(void *job);
+
+typedef struct {
     uint64_t time_ns;
     uint32_t kind;
     uint32_t flags;

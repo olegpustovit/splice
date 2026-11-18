@@ -162,6 +162,12 @@ and from project to captions lane and cue. Source geometry uses the media probe 
 The frame plan carries ordered visual layers, audio gains, and caption word timing. Cursor,
 keystroke and click-zoom layers also carry the source clock for the capture event renderer.
 
+On macOS, `splice_av` divides that plan at cuts and at changes in the linear ramps. It maps
+source intervals to composition tracks, scales those intervals for speed changes, and applies
+the planned layer order, crop, transform, opacity and audio gain. Frame reads and MP4 encoding
+share those tracks and instructions. Export places title and caption text with Core Animation.
+The prepared evaluator supplies text and timing for the PXUI viewer.
+
 ## Versioning
 
 `format` is `splice/<major>`. Within a major, changes are additive and gated by a fixture. A new major

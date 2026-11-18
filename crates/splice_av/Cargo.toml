@@ -1,0 +1,13 @@
+[package]
+name = "splice_av"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+apple_sys = { path = "../apple_sys" }
+splice_eval = { path = "../splice_eval" }
+splice_model = { path = "../splice_model" }
+
+[lints]
+workspace = true

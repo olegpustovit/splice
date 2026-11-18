@@ -255,3 +255,25 @@ fn take_fade_applies_to_audio_and_behind_presenter_layers() {
     assert_eq!(output.audio[0].track, Track::System);
     assert_eq!(output.audio[0].gain, 0.4);
 }
+
+#[test]
+fn composition_breakpoints_partition_the_sample_render_plan() {
+    let evaluator = Evaluator::prepare(&sample()).unwrap();
+    let cuts = evaluator.breakpoints();
+    assert_eq!(cuts[0], 0);
+    assert_eq!(cuts.last(), Some(&660));
+    assert!(cuts.len() < 100);
+    assert!(cuts.windows(2).all(|pair| pair[0] < pair[1]));
+    let mut first = evaluator.buffer();
+    let mut last = evaluator.buffer();
+    for range in cuts.windows(2) {
+        evaluator.frame(range[0], &mut first);
+        evaluator.frame(range[1] - 1, &mut last);
+        assert_eq!(first.clip, last.clip);
+        assert_eq!(first.layers.len(), last.layers.len(), "range {range:?}");
+        assert_eq!(first.audio.len(), last.audio.len(), "range {range:?}");
+        for (a, b) in first.layers.iter().zip(&last.layers) {
+            assert_eq!(std::mem::discriminant(a), std::mem::discriminant(b));
+        }
+    }
+}

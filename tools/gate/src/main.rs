@@ -128,6 +128,7 @@ fn source_issues(source: &str, sys: bool) -> Vec<(usize, &'static str)> {
 fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
     let allowed: &[&str] = match name {
         "splice_cli" => &["splice_core", "splice_json", "splice_mcp"],
+        "splice_av" => &["apple_sys", "splice_eval", "splice_model"],
         "splice_core" => &["splice_model", "splice_json"],
         "splice_eval" => &["splice_model"],
         "splice_mcp" => &[

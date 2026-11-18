@@ -4,12 +4,26 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=native");
     cc::Build::new()
-        .files(["native/error.m", "native/events.m", "native/media.m"])
+        .files([
+            "native/error.m",
+            "native/events.m",
+            "native/media.m",
+            "native/composition.m",
+        ])
         .flag("-fobjc-arc")
         .flag("-fblocks")
         .warnings_into_errors(true)
         .compile("splice_apple");
-    for framework in ["AVFoundation", "CoreGraphics", "CoreMedia", "Foundation"] {
+    for framework in [
+        "AVFoundation",
+        "CoreGraphics",
+        "CoreMedia",
+        "CoreText",
+        "CoreVideo",
+        "Foundation",
+        "ImageIO",
+        "QuartzCore",
+    ] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
     println!("cargo:rustc-link-lib=dylib=objc");

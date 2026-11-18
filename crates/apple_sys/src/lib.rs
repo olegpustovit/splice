@@ -7,6 +7,9 @@ mod error;
 
 pub use error::Error;
 
+/// AVFoundation composition, video instructions and audio mix.
+pub mod composition;
+
 /// The bounded native event queue.
 pub mod events;
 

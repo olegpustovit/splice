@@ -40,11 +40,25 @@ impl From<TimingError> for EvalError {
 /// Prepared playback state for one immutable project snapshot.
 pub struct Evaluator {
     size: [u32; 2],
+    end: Frame,
     clips: Vec<PreparedClip>,
     overlays: Vec<PreparedOverlay>,
     titles: Vec<PreparedTitle>,
     captions: Vec<PreparedCaption>,
     motions: Vec<PreparedMotion>,
+}
+
+/// An item's timeline interval and linear mapping to its source clock.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SourceSpan {
+    /// First timeline frame.
+    pub start: Frame,
+    /// Exclusive timeline end.
+    pub end: Frame,
+    /// Source frame at the start of the item.
+    pub source: f64,
+    /// Source frames consumed per timeline frame.
+    pub step: f64,
 }
 
 struct PreparedClip {
@@ -181,6 +195,31 @@ impl Interval {
         }
         alpha.clamp(0.0, 1.0)
     }
+
+    fn add_breakpoints(self, cuts: &mut Vec<Frame>) {
+        cuts.extend([self.start, self.end]);
+        let start = i64::from(self.start);
+        let end = i64::from(self.end);
+        let fade_in = i64::from(self.fade_in.max(0));
+        let fade_out = i64::from(self.fade_out.max(0));
+        let mut pivot = |at: i64| {
+            cuts.extend(
+                [at, at + 1]
+                    .into_iter()
+                    .filter(|&at| at > start && at < end)
+                    .map(|at| at as Frame),
+            );
+        };
+        if fade_in > 0 {
+            pivot(start + fade_in - 1);
+        }
+        if fade_out > 0 {
+            pivot(end - fade_out);
+        }
+        if fade_in > 0 && fade_out > 0 && fade_in + fade_out > end - start + 1 {
+            pivot((fade_in * end + fade_out * (start - 1)) / (fade_in + fade_out));
+        }
+    }
 }
 
 impl Evaluator {
@@ -192,6 +231,7 @@ impl Evaluator {
         let size = project.size.map(f64::from);
         let mut result = Self {
             size: project.size,
+            end: 0,
             clips: Vec::with_capacity(project.clips.order().len()),
             overlays: Vec::new(),
             titles: Vec::new(),
@@ -207,6 +247,7 @@ impl Evaluator {
             end = clip.interval.end;
             result.clips.push(clip);
         }
+        result.end = end;
         let mut ordered = Vec::with_capacity(project.items.order().len());
         for &slot in project.items.order() {
             let item = project.items.data(slot).ok_or(EvalError::Range)?;
@@ -224,6 +265,80 @@ impl Evaluator {
         // Prefer motion from the highest active lane.
         result.motions.reverse();
         Ok(result)
+    }
+
+    /// Returns the ordered boundaries where the visible stack or its linear ramps can change.
+    pub fn breakpoints(&self) -> Vec<Frame> {
+        let mut cuts = vec![0, self.end];
+        for clip in &self.clips {
+            clip.interval.add_breakpoints(&mut cuts);
+        }
+        for overlay in &self.overlays {
+            overlay.interval.add_breakpoints(&mut cuts);
+            let input = &overlay.input;
+            let audio_end = f64::from(overlay.interval.start)
+                + ((input.frames - input.source) / input.step).ceil();
+            if audio_end < f64::from(overlay.interval.end) {
+                cuts.push(audio_end as Frame);
+            }
+        }
+        for title in &self.titles {
+            title.interval.add_breakpoints(&mut cuts);
+        }
+        for caption in &self.captions {
+            caption.interval.add_breakpoints(&mut cuts);
+            cuts.extend(
+                caption
+                    .words
+                    .iter()
+                    .map(|word| word.start)
+                    .filter(|&at| caption.interval.contains(at)),
+            );
+        }
+        for motion in &self.motions {
+            motion.interval.add_breakpoints(&mut cuts);
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        cuts
+    }
+
+    /// Returns the prepared source clock for a clip or a media overlay.
+    pub fn source_span(&self, item: TimelineId) -> Option<SourceSpan> {
+        let (interval, input) = self.source(item)?;
+        Some(SourceSpan {
+            start: interval.start,
+            end: interval.end,
+            source: input.source,
+            step: input.step,
+        })
+    }
+
+    /// Returns the track gain before applying the item's fade.
+    pub fn audio_gain(&self, item: TimelineId, track: Track) -> Option<f64> {
+        self.source(item)?
+            .1
+            .tracks
+            .iter()
+            .find_map(|&(id, gain)| (id == track).then_some(gain))
+    }
+
+    fn source(&self, item: TimelineId) -> Option<(Interval, &Input)> {
+        let (interval, input) = match item {
+            TimelineId::Clip(id) => {
+                let clip = self.clips.iter().find(|clip| clip.id == id)?;
+                (clip.interval, clip.input.as_ref()?)
+            }
+            TimelineId::Item(_) => {
+                let overlay = self
+                    .overlays
+                    .iter()
+                    .find(|overlay| overlay.visual.picture.item == item)?;
+                (overlay.interval, &overlay.input)
+            }
+            TimelineId::Marker(_) => return None,
+        };
+        Some((interval, input))
     }
 
     /// Reserves enough space to evaluate any frame of this snapshot.
@@ -398,6 +513,7 @@ impl Evaluator {
         let timing = p.items.timing(slot).ok_or(EvalError::Range)?;
         let start = timing::anchor_start(p, timing.anchor)?;
         let interval = Interval::new(start, timing.length, &data.appearance)?;
+        self.end = self.end.max(interval.end);
         let lane = &p.lanes[rank].effects;
         let local = &data.appearance.effects;
         match &data.kind {
