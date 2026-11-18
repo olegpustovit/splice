@@ -408,6 +408,17 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
     return (SpliceRecordingStats){CMTimeGetSeconds([self elapsedAt:now]), _frames, _dropped};
 }
 
+- (BOOL)inputStateAt:(CMTime)now out:(SpliceCaptureInputState *)out {
+    if (_inputMonitor == nil || !CMTIME_IS_NUMERIC(_first)) return NO;
+    SpliceCaptureGeometry geometry = [_inputMonitor geometry];
+    *out = (SpliceCaptureInputState){
+        .rect = geometry.rect, .scale = geometry.scale, .kind = geometry.kind,
+        .origin_ns = nanoseconds(_first), .elapsed_ns = nanoseconds([self elapsedAt:now]),
+        .active = !_stopping && !CMTIME_IS_NUMERIC(_pauseStart),
+    };
+    return YES;
+}
+
 - (NSError *)failure {
     if (_failure == nil && [_inputMonitor wasDisabled]) {
         return recording_error(@"The input monitor was disabled during the recording.");
@@ -620,4 +631,11 @@ size_t splice_recording_read_input(void *handle, SpliceEvent *out, size_t capaci
 uint64_t splice_recording_dropped_input(void *handle) {
     SpliceRecording *recording = (__bridge SpliceRecording *)handle;
     return [recording droppedInput];
+}
+
+bool splice_recording_input_state(void *handle, SpliceCaptureInputState *out) {
+    SpliceRecording *recording = (__bridge SpliceRecording *)handle;
+    __block BOOL available;
+    dispatch_sync(recording.queue, ^{ available = [recording inputStateAt:host_time() out:out]; });
+    return available;
 }

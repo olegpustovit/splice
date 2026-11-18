@@ -230,6 +230,10 @@ static CGEventRef input_callback(CGEventTapProxy proxy, CGEventType type, CGEven
 - (uint64_t)dropped {
     return splice_events_dropped(_ring);
 }
+
+- (SpliceCaptureGeometry)geometry {
+    return _geometry;
+}
 @end
 
 // The fixture constructs synthetic input. It never posts it or starts a tap.

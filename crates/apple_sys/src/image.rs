@@ -16,6 +16,66 @@ unsafe extern "C" {
         error: *mut *mut c_char,
     ) -> *mut c_void;
     fn splice_image_release(data: *mut c_void);
+    fn splice_cursor_current(
+        previous: *const u8,
+        info: *mut CursorInfo,
+        bytes: *mut *const u8,
+        size: *mut usize,
+        error: *mut *mut c_char,
+    ) -> *mut c_void;
+}
+
+/// Geometry and content hash for a recorded cursor image.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct CursorInfo {
+    /// Hotspot relative to the PNG's top-left corner, in pixels.
+    pub hot_x: f64,
+    /// Vertical hotspot in pixels.
+    pub hot_y: f64,
+    /// PNG pixels per cursor point.
+    pub scale: f64,
+    /// SHA-256 of the PNG and its hotspot metadata.
+    pub hash: [u8; 32],
+}
+
+const _: () = assert!(std::mem::size_of::<CursorInfo>() == 56);
+
+/// A changed cursor image and the metadata needed to place its hotspot.
+pub struct CursorImage {
+    /// Placement and identity.
+    pub info: CursorInfo,
+    /// Encoded PNG.
+    pub png: Vec<u8>,
+}
+
+/// Samples the system cursor on the application thread. Unchanged or unavailable
+/// cursors return `None` without allocating a Rust buffer.
+pub fn system_cursor(previous: Option<&[u8; 32]>) -> Result<Option<CursorImage>, Error> {
+    let mut info = CursorInfo::default();
+    let mut bytes = ptr::null();
+    let mut length = 0;
+    let mut error = ptr::null_mut();
+    // SAFETY: all output parameters are writable. The previous hash stays live during the call.
+    let owner = unsafe {
+        splice_cursor_current(
+            previous.map_or(ptr::null(), |hash| hash.as_ptr()),
+            &mut info,
+            &mut bytes,
+            &mut length,
+            &mut error,
+        )
+    };
+    if !owner.is_null() {
+        // SAFETY: the retained native object owns the nonempty byte range.
+        let png = unsafe { take_bytes(owner, bytes, length) };
+        return Ok(Some(CursorImage { info, png }));
+    }
+    if error.is_null() {
+        return Ok(None);
+    }
+    // SAFETY: a failed native capture transfers its diagnostic.
+    Err(unsafe { Error::from_native(error, "System cursor capture failed.") })
 }
 
 /// Encodes premultiplied sRGB RGBA8. A nonzero limit bounds the longest edge.

@@ -189,7 +189,7 @@ static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShar
     configuration.showsCursor = NO;
     if (geometry != NULL) {
         *geometry = (SpliceCaptureGeometry){
-            .rect = capture_rect(frame),
+            .rect = capture_rect(frame), .scale = filter.pointPixelScale, .kind = target->kind,
             .window_id = target->kind == SPLICE_CAPTURE_WINDOW ? target->id : 0,
             .owner_pid = owner,
         };

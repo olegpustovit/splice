@@ -33,6 +33,7 @@ _Static_assert(sizeof(SpliceInputPayload) == sizeof(((SpliceEvent *)0)->payload)
 - (BOOL)stop;
 - (void)updateClock:(SpliceInputClock)clock;
 - (BOOL)wasDisabled;
+- (SpliceCaptureGeometry)geometry;
 - (size_t)read:(SpliceEvent *)out capacity:(size_t)capacity;
 - (uint64_t)dropped;
 @end

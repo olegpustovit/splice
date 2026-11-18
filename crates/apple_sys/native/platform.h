@@ -40,6 +40,25 @@ typedef struct {
     double x, y, width, height;
 } SpliceCaptureRect;
 
+typedef struct {
+    SpliceCaptureRect rect;
+    double scale;
+    uint64_t origin_ns, elapsed_ns;
+    uint32_t kind;
+    bool active;
+} SpliceCaptureInputState;
+
+typedef struct {
+    double hot_x, hot_y, scale;
+    uint8_t hash[32];
+} SpliceCursorInfo;
+
+_Static_assert(sizeof(SpliceCaptureInputState) == 64, "capture input state ABI");
+_Static_assert(sizeof(SpliceCursorInfo) == 56, "cursor info ABI");
+
+void *splice_cursor_current(const uint8_t *previous_hash, SpliceCursorInfo *out,
+                            const uint8_t **data, size_t *length, char **error);
+
 typedef enum {
     SPLICE_CAPTURE_DISPLAY,
     SPLICE_CAPTURE_WINDOW,
@@ -84,6 +103,7 @@ bool splice_recording_status(void *recording, SpliceRecordingStats *out, bool *d
 void splice_recording_pause(void *recording, bool pause);
 bool splice_recording_finish(void *recording, SpliceRecordingStats *out, bool *denied, char **error);
 void splice_recording_release(void *recording);
+bool splice_recording_input_state(void *recording, SpliceCaptureInputState *out);
 
 typedef struct {
     int32_t track_id;

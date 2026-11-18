@@ -1,4 +1,4 @@
-use super::{CaptureError, RawTarget, Target};
+use super::{CaptureError, RawTarget, Rect, Target};
 use crate::{Error, events::Event};
 use std::{
     ffi::{CString, c_char, c_void},
@@ -21,6 +21,47 @@ pub struct RecordingStats {
 }
 
 const _: () = assert!(size_of::<RecordingStats>() == 24);
+
+/// The geometry and media clock of an input event stream.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InputState {
+    /// Capture shape.
+    pub kind: InputSourceKind,
+    /// Initial capture bounds in global screen points.
+    pub rect: Rect,
+    /// Source pixels per point.
+    pub scale: f64,
+    /// Absolute host timestamp of the first complete screen frame.
+    pub origin_ns: u64,
+    /// Take-relative nanoseconds after removing paused intervals.
+    pub elapsed_ns: u64,
+    /// Whether new events and cursor changes may be written.
+    pub active: bool,
+}
+
+/// The capture source underlying an input log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputSourceKind {
+    /// A full display.
+    Display,
+    /// A single window.
+    Window,
+    /// A subregion of a display.
+    Area,
+}
+
+#[derive(Default)]
+#[repr(C)]
+struct NativeInputState {
+    rect: Rect,
+    scale: f64,
+    origin_ns: u64,
+    elapsed_ns: u64,
+    kind: u32,
+    active: bool,
+}
+
+const _: () = assert!(size_of::<NativeInputState>() == 64);
 
 /// Owns ScreenCaptureKit outputs and their real-time writers.
 pub struct Recording {
@@ -55,6 +96,7 @@ unsafe extern "C" {
     fn splice_recording_release(handle: *mut c_void);
     fn splice_recording_read_input(handle: *mut c_void, out: *mut Event, capacity: usize) -> usize;
     fn splice_recording_dropped_input(handle: *mut c_void) -> u64;
+    fn splice_recording_input_state(handle: *mut c_void, out: *mut NativeInputState) -> bool;
 }
 
 impl Recording {
@@ -139,6 +181,29 @@ impl Recording {
     pub fn dropped_input(&self) -> u64 {
         // SAFETY: the bridge reference remains alive and the native counter is synchronized.
         unsafe { splice_recording_dropped_input(self.handle.as_ptr()) }
+    }
+
+    /// Reports the input clock after capture has reached its first screen frame.
+    pub fn input_state(&self) -> Option<InputState> {
+        let mut state = NativeInputState::default();
+        // SAFETY: out points to a writable record and the native call is synchronous.
+        if !unsafe { splice_recording_input_state(self.handle.as_ptr(), &mut state) } {
+            return None;
+        }
+        let kind = match state.kind {
+            0 => InputSourceKind::Display,
+            1 => InputSourceKind::Window,
+            2 => InputSourceKind::Area,
+            _ => return None,
+        };
+        Some(InputState {
+            kind,
+            rect: state.rect,
+            scale: state.scale,
+            origin_ns: state.origin_ns,
+            elapsed_ns: state.elapsed_ns,
+            active: state.active,
+        })
     }
 
     fn stats(

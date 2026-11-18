@@ -19,13 +19,19 @@ Name.splice/
   takes/<med>/          a recorded take, in Recorder's layout (recordings live in the package; imports stay where they are):
     screen.mov          HEVC, cursor-less, variable frame rate
     mic.m4a  system.m4a camera.mov   optional, one file per source, AAC 48 kHz / HEVC
-    events.json         {"t0","source":{kind,rect,scale},"events":[{t,k:move|down|up|drag|scroll|key|flags|cursor,…}]}, t in seconds since t0, positions normalized 0…1
+    events.json         {"t0","source":{kind,rect,scale},"events":[{t,k:move|down|up|drag|scroll|key|flags|cursor,…}],"dropped"?:count}
     cursors/<hash>.png  + <hash>.json {hotX, hotY, scale}
   exports/              rendered output; never overwritten unless asked
   friction.jsonl        MCP friction log for this project (docs/LOOP.md)
   cache/                disposable: thumbnails, peaks, proxies. Never in git, never required
   lock                  single-writer lock: flock + {"pid","host","since"}
 ```
+
+For a recorded take, `t0` is the host-clock time of the first complete screen frame in seconds.
+Event `t` values are seconds from that frame with pauses removed. Positions are normalized to
+0…1 within the source rectangle. `dropped` counts input events lost if the native queue fills.
+A cursor event references a SHA-256 digest of the PNG, hotspot and scale. The hotspot is in
+PNG pixels, and `scale` is pixels per point.
 
 ## Durability
 

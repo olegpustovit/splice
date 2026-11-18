@@ -1,0 +1,16 @@
+[package]
+name = "splice_capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple_sys = { path = "../apple_sys" }
+
+[dev-dependencies]
+splice_json = { path = "../splice_json" }
+mem_sys = { path = "../../pxui/crates/open/mem_sys", features = ["counting"] }
+splice_testkit = { path = "../splice_testkit" }
+
+[lints]
+workspace = true

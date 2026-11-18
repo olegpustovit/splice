@@ -6,7 +6,8 @@
 
 typedef struct {
     SpliceCaptureRect rect;
-    uint32_t window_id, owner_pid;
+    double scale;
+    uint32_t kind, window_id, owner_pid;
 } SpliceCaptureGeometry;
 
 SCContentFilter *splice_capture_prepare(const SpliceCaptureTarget *target, SCStreamConfiguration *configuration,

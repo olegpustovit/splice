@@ -14,6 +14,15 @@ fn fixture(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn cursor_images_keep_native_hotspots_and_stable_content_hashes() {
+    unsafe extern "C" {
+        fn splice_cursor_fixture() -> bool;
+    }
+    // SAFETY: the fixture creates and encodes its own bitmap cursor without accessing system input.
+    assert!(unsafe { splice_cursor_fixture() });
+}
+
+#[test]
 fn input_events_respect_capture_scope_and_drain_without_allocations() {
     unsafe extern "C" {
         fn splice_input_fixture(out: *mut Event) -> bool;

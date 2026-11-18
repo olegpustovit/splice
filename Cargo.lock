@@ -166,6 +166,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "splice_capture"
+version = "0.1.0"
+dependencies = [
+ "apple_sys",
+ "mem_sys",
+ "splice_json",
+ "splice_testkit",
+]
+
+[[package]]
 name = "splice_cli"
 version = "0.1.0"
 dependencies = [

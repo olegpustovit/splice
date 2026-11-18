@@ -7,7 +7,7 @@ use std::{
 };
 
 mod recording;
-pub use recording::{Recording, RecordingStats};
+pub use recording::{InputSourceKind, InputState, Recording, RecordingStats};
 
 /// Bounds in points. Area origins are local to their display.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

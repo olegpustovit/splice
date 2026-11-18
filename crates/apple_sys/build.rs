@@ -7,6 +7,7 @@ fn main() {
         .files([
             "native/app.m",
             "native/capture.m",
+            "native/cursor.m",
             "native/error.m",
             "native/events.m",
             "native/input_events.m",
