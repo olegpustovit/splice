@@ -1,0 +1,570 @@
+use super::{Json, object, text};
+use splice_core::commands::{self, CommandError};
+
+const REVISION: &str =
+    r#"{"anyOf":[{"type":"integer","minimum":0},{"type":"string","pattern":"^r[0-9]+$"}]}"#;
+const IDS: &str = r#"{"type":"array","items":{"type":"string"}}"#;
+const FRAME: &str = r#"{"type":"integer","minimum":0}"#;
+const FRAMES: &str = r#"{"type":"array","items":{"type":"integer","minimum":0},"minItems":1}"#;
+const LIMIT: &str = r#"{"type":"integer","minimum":1}"#;
+const RANGE: &str = r#"{"type":"object","properties":{"from":{"type":"integer","minimum":0},"to":{"type":"integer","minimum":0}},"required":["from","to"]}"#;
+const ERROR_SCHEMA: &str = r#"{"type":"object","properties":{"code":{"type":"string"},"message":{"type":"string"},"fix":{"type":"string"},"valid":{"type":"array"},"current":{},"changedSince":{"type":"array"},"op":{"type":"integer","minimum":0}},"required":["code","message","fix"]}"#;
+
+struct Tool {
+    name: &'static str,
+    description: &'static str,
+    read_only: bool,
+    input: &'static [(&'static str, &'static str)],
+    required: &'static [&'static str],
+    output: &'static [(&'static str, &'static str)],
+    success: &'static [&'static [&'static str]],
+}
+
+const TOOLS: &[Tool] = &[
+    Tool {
+        name: "project.info",
+        description: "Open a .splice project by path or inspect an open project by ID. Use create:true to make a new project.",
+        read_only: false,
+        input: &[
+            ("projectId", "string"),
+            ("path", "string"),
+            ("create", "boolean"),
+        ],
+        required: &[],
+        output: &[
+            ("projectId", "string"),
+            ("revision", REVISION),
+            ("fps", "integer"),
+            ("size", "array"),
+            ("aspect", "string"),
+            ("durationFrames", FRAME),
+            ("access", "string"),
+            ("lanes", "array"),
+            ("media", "array"),
+            ("transcript", "object"),
+            ("effects", "object"),
+            ("openSession", r#"{"type":["string","null"]}"#),
+        ],
+        success: &[&[
+            "projectId",
+            "revision",
+            "fps",
+            "durationFrames",
+            "access",
+            "lanes",
+            "media",
+        ]],
+    },
+    Tool {
+        name: "timeline.snapshot",
+        description: "List the spine, drawing lanes and markers with resolved frame ranges. Use detail:full for all item fields.",
+        read_only: true,
+        input: &[
+            ("projectId", "string"),
+            ("from", FRAME),
+            ("to", FRAME),
+            ("detail", r#"{"enum":["concise","full"]}"#),
+            ("limit", LIMIT),
+            ("cursor", "string"),
+        ],
+        required: &["projectId"],
+        output: &[
+            ("revision", REVISION),
+            ("fps", "integer"),
+            ("range", RANGE),
+            ("lanes", "array"),
+            ("spine", "array"),
+            ("markers", "array"),
+            ("total", "integer"),
+            ("nextCursor", r#"{"type":["string","null"]}"#),
+        ],
+        success: &[&["revision", "lanes", "spine", "markers"]],
+    },
+    Tool {
+        name: "items.inspect",
+        description: "Inspect up to 50 objects by ID, including anchors, resolved frames, children and inherited effects.",
+        read_only: true,
+        input: &[
+            ("projectId", "string"),
+            (
+                "ids",
+                r#"{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":50}"#,
+            ),
+        ],
+        required: &["projectId", "ids"],
+        output: &[("revision", REVISION), ("items", "array")],
+        success: &[&["revision", "items"]],
+    },
+    Tool {
+        name: "timeline.find",
+        description: "Find items, markers, words and edit points by text, kind, lane, color or frame range.",
+        read_only: true,
+        input: &[
+            ("projectId", "string"),
+            ("text", "string"),
+            ("kind", "string"),
+            ("lane", "string"),
+            ("color", "string"),
+            ("from", FRAME),
+            ("to", FRAME),
+            ("limit", LIMIT),
+        ],
+        required: &["projectId"],
+        output: &[
+            ("revision", REVISION),
+            ("matches", "array"),
+            ("total", "integer"),
+        ],
+        success: &[&["revision", "matches", "total"]],
+    },
+    Tool {
+        name: "takes.events",
+        description: "Read the take's cursor, clicks and keys in timeline frames, with keystrokes redacted by project policy.",
+        read_only: true,
+        input: &[
+            ("projectId", "string"),
+            ("clip", "string"),
+            ("from", FRAME),
+            ("to", FRAME),
+        ],
+        required: &["projectId", "clip"],
+        output: &[
+            ("revision", REVISION),
+            ("clip", "string"),
+            ("cursor", "array"),
+            ("clicks", "array"),
+            ("keys", "array"),
+        ],
+        success: &[&["revision", "clip", "clicks", "keys"]],
+    },
+    Tool {
+        name: "transcript.get",
+        description: "Page through words by ID or get caption cues as JSON, SRT or WebVTT. Use the returned hash with word anchors.",
+        read_only: true,
+        input: &[
+            ("projectId", "string"),
+            ("clip", "string"),
+            ("cursor", "string"),
+            ("limit", LIMIT),
+            ("captions", r#"{"enum":["json","srt","vtt"]}"#),
+            ("lane", "string"),
+        ],
+        required: &["projectId"],
+        output: &[
+            ("revision", REVISION),
+            ("hash", "string"),
+            ("clip", "string"),
+            ("words", "array"),
+            ("fillers", IDS),
+            ("nextCursor", r#"{"type":["string","null"]}"#),
+            ("lanes", "array"),
+            ("cues", r#"{"type":["array","integer"]}"#),
+            ("format", r#"{"enum":["srt","vtt"]}"#),
+            ("text", "string"),
+        ],
+        success: &[
+            &["revision", "hash", "words"],
+            &["revision", "hash", "cues"],
+            &["revision", "format", "text"],
+        ],
+    },
+    Tool {
+        name: "audio.summary",
+        description: "Read loudness, peaks and silence or pause ranges for a clip's audio components.",
+        read_only: true,
+        input: &[("projectId", "string"), ("clip", "string")],
+        required: &["projectId", "clip"],
+        output: &[
+            ("revision", REVISION),
+            ("clip", "string"),
+            ("components", "array"),
+            ("silences", "array"),
+        ],
+        success: &[&["revision", "clip", "components", "silences"]],
+    },
+    Tool {
+        name: "view.frames",
+        description: "Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count.",
+        read_only: true,
+        input: &[("projectId", "string"), ("at", FRAMES), ("count", LIMIT)],
+        required: &["projectId"],
+        output: &[("revision", REVISION), ("frames", "array")],
+        success: &[&["revision", "frames"]],
+    },
+    Tool {
+        name: "commands.describe",
+        description: "Search the command registry. Pass an exact ID to see parameters, release tier and an example.",
+        read_only: true,
+        input: &[
+            ("projectId", "string"),
+            ("id", "string"),
+            ("query", "string"),
+        ],
+        required: &[],
+        output: &[
+            ("commands", "array"),
+            ("id", "string"),
+            ("title", "string"),
+            ("group", "string"),
+            ("risk", "string"),
+            ("cut", "string"),
+            ("planned", "boolean"),
+            ("params", "object"),
+            ("shortcut", r#"{"type":["string","null"]}"#),
+            ("ui", "array"),
+            ("example", "object"),
+            ("captionModel", "string"),
+            ("presets", IDS),
+            ("effectTypes", "object"),
+            ("resolution", "string"),
+        ],
+        success: &[&["commands"], &["id", "params", "example"]],
+    },
+    Tool {
+        name: "session.start",
+        description: "Start an agent editing session and get its checkpoint revision and session ID.",
+        read_only: false,
+        input: &[("projectId", "string"), ("agent", "string")],
+        required: &["projectId"],
+        output: &[
+            ("sessionId", "string"),
+            ("checkpoint", REVISION),
+            ("revision", REVISION),
+            ("access", "string"),
+            ("resumed", "boolean"),
+        ],
+        success: &[&["sessionId", "checkpoint", "revision"]],
+    },
+    Tool {
+        name: "edit.apply",
+        description: "Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry.",
+        read_only: false,
+        input: &[
+            ("projectId", "string"),
+            ("sessionId", "string"),
+            ("ifRevision", REVISION),
+            (
+                "ops",
+                r#"{"type":"array","items":{"type":"object","properties":{"cmd":{"type":"string"},"ref":{"type":"string"}},"required":["cmd"]},"minItems":1}"#,
+            ),
+            ("summary", "string"),
+            ("dryRun", "boolean"),
+            ("idempotencyKey", "string"),
+        ],
+        required: &["projectId", "sessionId", "ifRevision", "ops"],
+        output: &[
+            ("revision", REVISION),
+            ("dryRun", "boolean"),
+            ("replayed", "boolean"),
+            ("changes", "array"),
+            ("sideEffects", "array"),
+            ("diff", "array"),
+        ],
+        success: &[&["revision", "changes", "sideEffects", "diff"]],
+    },
+    Tool {
+        name: "history.list",
+        description: "List revision labels, sources and affected IDs. Filter by session to inspect its batch history.",
+        read_only: true,
+        input: &[
+            ("projectId", "string"),
+            ("sessionId", "string"),
+            ("limit", LIMIT),
+            ("cursor", "string"),
+        ],
+        required: &["projectId"],
+        output: &[
+            ("sessionId", "string"),
+            ("revision", REVISION),
+            ("batches", "array"),
+            ("open", "boolean"),
+            ("checkpoint", REVISION),
+            ("humanEditsSince", "integer"),
+            ("nextCursor", r#"{"type":["string","null"]}"#),
+        ],
+        success: &[&["revision", "batches"]],
+    },
+    Tool {
+        name: "history.undo",
+        description: "Create an undo revision for the session's last edit, the whole session, or an exact earlier revision.",
+        read_only: false,
+        input: &[
+            ("projectId", "string"),
+            ("sessionId", "string"),
+            ("ifRevision", REVISION),
+            ("scope", r#"{"enum":["last","session","to"]}"#),
+            ("revision", REVISION),
+            ("idempotencyKey", "string"),
+        ],
+        required: &["projectId", "sessionId", "ifRevision", "scope"],
+        output: &[
+            ("revision", REVISION),
+            ("skipped", "array"),
+            ("replayed", "boolean"),
+        ],
+        success: &[&["revision"]],
+    },
+    Tool {
+        name: "ui.show",
+        description: "Set playhead, selection, range or zoom in an open viewer. Headless calls return applied:false.",
+        read_only: true,
+        input: &[
+            ("projectId", "string"),
+            ("at", r#"{"type":["integer","object"]}"#),
+            ("select", IDS),
+            ("range", RANGE),
+            ("expand", "string"),
+            ("view", "string"),
+            ("viewer", "object"),
+        ],
+        required: &["projectId"],
+        output: &[
+            ("applied", "boolean"),
+            ("reason", "string"),
+            ("revision", REVISION),
+            ("playhead", FRAME),
+            ("selection", IDS),
+        ],
+        success: &[&["applied"]],
+    },
+    Tool {
+        name: "export.start",
+        description: "Start an MP4 export job. Use overwrite:true to replace an existing output file.",
+        read_only: false,
+        input: &[
+            ("projectId", "string"),
+            ("sessionId", "string"),
+            ("ifRevision", REVISION),
+            ("preset", "string"),
+            ("path", "string"),
+            ("overwrite", "boolean"),
+        ],
+        required: &["projectId", "sessionId", "ifRevision"],
+        output: &[
+            ("jobId", "string"),
+            ("state", "string"),
+            ("settings", "object"),
+        ],
+        success: &[&["jobId", "state"]],
+    },
+    Tool {
+        name: "jobs.status",
+        description: "Check the progress and result of an export, transcription or recording job.",
+        read_only: true,
+        input: &[("projectId", "string"), ("jobId", "string")],
+        required: &["projectId", "jobId"],
+        output: &[
+            ("jobId", "string"),
+            ("id", "string"),
+            ("kind", "string"),
+            ("state", "string"),
+            ("progress", "number"),
+            ("settings", "object"),
+            ("output", "string"),
+            ("revision", REVISION),
+        ],
+        success: &[&["state", "jobId"], &["state", "id"]],
+    },
+    Tool {
+        name: "jobs.cancel",
+        description: "Cancel a running or pending job.",
+        read_only: false,
+        input: &[
+            ("projectId", "string"),
+            ("jobId", "string"),
+            ("sessionId", "string"),
+            ("ifRevision", REVISION),
+        ],
+        required: &["projectId", "jobId", "sessionId", "ifRevision"],
+        output: &[("jobId", "string"), ("id", "string"), ("state", "string")],
+        success: &[&["state", "jobId"], &["state", "id"]],
+    },
+    Tool {
+        name: "record.start",
+        description: "Start headless capture of a display, window or area. Use dryRun to list capture sources and permissions.",
+        read_only: false,
+        input: &[
+            ("projectId", "string"),
+            ("path", "string"),
+            ("create", "boolean"),
+            ("sessionId", "string"),
+            ("ifRevision", REVISION),
+            ("display", "string"),
+            ("window", "string"),
+            ("area", "object"),
+            ("mic", "boolean"),
+            ("systemAudio", "boolean"),
+            ("camera", "boolean"),
+            ("events", "boolean"),
+            ("dryRun", "boolean"),
+            ("duration", r#"{"type":"number","exclusiveMinimum":0}"#),
+        ],
+        required: &[],
+        output: &[
+            ("jobId", "string"),
+            ("state", "string"),
+            ("settings", "object"),
+            ("sources", "object"),
+            ("permissions", "object"),
+            ("identity", "object"),
+        ],
+        success: &[&["jobId", "state"], &["sources", "permissions"]],
+    },
+    Tool {
+        name: "record.stop",
+        description: "Finish a recording and insert the take as one undoable edit. Use insert:false to keep it in media only.",
+        read_only: false,
+        input: &[
+            ("projectId", "string"),
+            ("jobId", "string"),
+            ("sessionId", "string"),
+            ("ifRevision", REVISION),
+            ("insert", "boolean"),
+        ],
+        required: &["projectId", "jobId", "sessionId", "ifRevision"],
+        output: &[
+            ("jobId", "string"),
+            ("id", "string"),
+            ("state", "string"),
+            ("revision", REVISION),
+            ("mediaId", "string"),
+            ("clipId", r#"{"type":["string","null"]}"#),
+        ],
+        success: &[&["state", "jobId"], &["state", "id"]],
+    },
+];
+
+pub(super) fn known(name: &str) -> bool {
+    TOOLS.iter().any(|tool| tool.name == name)
+}
+
+pub(super) fn list() -> Json {
+    Json::Array(TOOLS.iter().map(Tool::description).collect())
+}
+
+impl Tool {
+    fn description(&self) -> Json {
+        let mut input = properties(self.input);
+        input.push(("friction".into(), schema("string")));
+        let mut output = properties(self.output);
+        output.push(("error".into(), schema(ERROR_SCHEMA)));
+        let mut alternatives = vec![object(vec![("required", strings(&["error"]))])];
+        alternatives.extend(
+            self.success
+                .iter()
+                .map(|fields| object(vec![("required", strings(fields))])),
+        );
+        object(vec![
+            ("name", text(self.name)),
+            ("description", text(self.description)),
+            (
+                "inputSchema",
+                object(vec![
+                    ("type", text("object")),
+                    ("properties", Json::Object(input)),
+                    ("required", strings(self.required)),
+                ]),
+            ),
+            (
+                "outputSchema",
+                object(vec![
+                    ("type", text("object")),
+                    ("properties", Json::Object(output)),
+                    ("anyOf", Json::Array(alternatives)),
+                ]),
+            ),
+            (
+                "annotations",
+                object(vec![("readOnlyHint", Json::Bool(self.read_only))]),
+            ),
+        ])
+    }
+}
+
+fn properties(fields: &[(&str, &str)]) -> Vec<(String, Json)> {
+    fields
+        .iter()
+        .map(|(key, spec)| ((*key).into(), schema(spec)))
+        .collect()
+}
+
+fn schema(spec: &str) -> Json {
+    if spec.starts_with('{') {
+        splice_json::parse(spec).expect("checked tool schema")
+    } else {
+        object(vec![("type", text(spec))])
+    }
+}
+
+fn strings(values: &[&str]) -> Json {
+    Json::Array(values.iter().map(|value| text(value)).collect())
+}
+
+pub(super) fn call(name: &str, args: &Json) -> Result<Json, splice_json::NonFiniteNumber> {
+    let result = execute(name, args);
+    let is_error = result.is_err();
+    let (payload, mirror) = match result {
+        Ok(payload) => {
+            let mut mirror = String::new();
+            splice_json::write(&payload, &mut mirror)?;
+            (payload, mirror)
+        }
+        Err(error) => {
+            let mirror = format!("{}: {} {}", error.code, error.message, error.fix);
+            let mut fields = vec![
+                ("code".into(), text(error.code)),
+                ("message".into(), Json::String(error.message)),
+                ("fix".into(), Json::String(error.fix)),
+            ];
+            if !error.valid.is_empty() {
+                fields.push(("valid".into(), strings(&error.valid)));
+            }
+            (object(vec![("error", Json::Object(fields))]), mirror)
+        }
+    };
+    Ok(object(vec![
+        (
+            "content",
+            Json::Array(vec![object(vec![
+                ("type", text("text")),
+                ("text", Json::String(mirror)),
+            ])]),
+        ),
+        ("structuredContent", payload),
+        ("isError", Json::Bool(is_error)),
+    ]))
+}
+
+fn execute(name: &str, args: &Json) -> Result<Json, CommandError> {
+    args.optional_string("friction")?;
+    if name == "commands.describe" {
+        args.optional_string("projectId")?;
+        return commands::describe(args.optional_string("id")?, args.optional_string("query")?);
+    }
+    // ponytail: use the live command registry until T3.2 wires the project tools.
+    Err(CommandError {
+        code: "PLANNED",
+        message: format!("{name} has no tool handler yet."),
+        fix: "Call commands.describe to inspect the edit command registry.".into(),
+        valid: Vec::new(),
+    })
+}
+
+trait Args {
+    fn optional_string(&self, field: &str) -> Result<Option<&str>, CommandError>;
+}
+
+impl Args for Json {
+    fn optional_string(&self, field: &str) -> Result<Option<&str>, CommandError> {
+        self.field(field)
+            .map(|value| {
+                value.as_str().ok_or_else(|| CommandError {
+                    code: "BAD_ARGS",
+                    message: format!("Invalid {field}."),
+                    fix: format!("Pass {field} as a string."),
+                    valid: Vec::new(),
+                })
+            })
+            .transpose()
+    }
+}

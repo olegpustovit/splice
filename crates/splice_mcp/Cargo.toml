@@ -9,3 +9,6 @@ splice_core = { path = "../splice_core" }
 splice_json = { path = "../splice_json" }
 [lints]
 workspace = true
+
+[dev-dependencies]
+splice_testkit = { path = "../splice_testkit" }

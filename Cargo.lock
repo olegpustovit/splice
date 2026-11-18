@@ -81,6 +81,7 @@ version = "0.1.0"
 dependencies = [
  "splice_core",
  "splice_json",
+ "splice_testkit",
 ]
 
 [[package]]

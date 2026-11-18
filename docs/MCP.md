@@ -6,6 +6,18 @@ the unix socket in the state dir, so the viewer stays the single writer and the 
 live. The main spec's "MCP surface" section is the design; `docs/reference/agent.js` is the behavioral
 reference implementation.
 
+## Stdio lifecycle
+
+Clients on `2025-11-25` send `initialize` and then `notifications/initialized`. The compatibility
+handshake accepts `2026-07-28` explicitly too. Modern clients can call `server/discover` or send their
+first tool request directly with the protocol version and client capabilities in `params._meta`.
+See the [MCP stdio specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio)
+and [versioning rules](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning).
+
+Send one UTF-8 JSON-RPC message per newline, up to 16 MiB. The server flushes each response, ignores
+one-way notifications, and exits at EOF. Unknown methods and malformed RPC requests use JSON-RPC
+errors. Invalid tool arguments and editor failures return `isError:true`.
+
 ## Tools (19, fixed order)
 
 | # | Tool | Hint | Purpose |
@@ -40,10 +52,13 @@ Stay under 20 tools: new capabilities become `edit.apply` commands or parameters
 
 ## Every call
 
-- `projectId` (or `path` on `project.info`); writes also need `sessionId` and `ifRevision`.
+- Project tools use `projectId`. Use `path` with `project.info` to open a package, or with
+  `record.start` when creating one. Writes to an existing project also need `sessionId` and
+  `ifRevision`. `commands.describe` works before a project is opened.
 - Any tool accepts an optional `friction` string: a note from the agent about what was hard. It is
   logged and has no effect (docs/LOOP.md).
-- Results: `structuredContent` matching the tool's `outputSchema`, plus a short text mirror.
+- Results carry `structuredContent` matching the tool's `outputSchema` and a text block. The text
+  mirrors success as compact JSON and summarizes a business error with its fix.
 - Business errors are results with `isError:true`: `{code, message, fix, current?, valid?, changedSince?}`.
   The `fix` says exactly what to call or change. If an agent had to guess, the fix hint was wrong;
   that is a friction entry and a bug.
