@@ -122,13 +122,14 @@ Depends on T1.3, T4.1, T7.
   effective user. It removes `capture/agent.sock` and exits after 60 s idle. Both clients shared one
   agent from SSH on the Mini. `ponytail:` use an on-demand LaunchAgent if `open` needs a GUI session
   the caller lacks. Permission handling and the native recorder follow in T8.2–T8.4.
-- [ ] T8.2 Permissions. `splice permissions` and `record.start {dryRun:true}` report Screen Recording
-  (`CGPreflightScreenCaptureAccess`), Microphone and Camera (`AVCaptureDevice authorizationStatus`),
-  Input Monitoring (`CGPreflightListenEventAccess`), plus the identity (team, path, designated
-  requirement match). `splice permissions --request` asks *from the agent process*
-  (`CGRequestScreenCaptureAccess`, `requestAccessForMediaType`, `CGRequestListenEventAccess`) and opens
-  the matching System Settings pane. **HUMAN, once on the Mini:** grant those four to Splice. A missing
-  grant is `TCC_DENIED`, with a `fix` that names the pane and `splice permissions --request`.
+- [~] T8.2 Permissions (d8cc54f). The signed agent reports four read-only authorization states and
+  its verified team, path and designated requirement match. `splice permissions --request` requests
+  the first missing grant or the selected service and opens its privacy pane. Capture fails with
+  `TCC_DENIED` and `needsHuman:true` when a requested input lacks a grant.
+  **HUMAN on the Mini:** Run `splice permissions --request screen`, then repeat with `microphone`,
+  `camera` and `inputMonitoring`, one at a time. In System Settings → Privacy & Security, enable
+  Splice under Screen & System Audio Recording, Microphone, Camera and Input Monitoring. Accept
+  Quit & Reopen if macOS offers it, then run `splice permissions` to confirm all four are granted.
   Risk: macOS 15+ can periodically ask the user to re-confirm screen-recording access for apps that
   capture without the system picker. The agent then gets `TCC_DENIED` with `needsHuman:true`, and the
   loop marks the task `HUMAN:` instead of retrying.
@@ -215,3 +216,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T7.5 · done · 9792f32 · `make check` 3.22 s (76 tests, slowest: seeded history replay 1.646 s); `make mac-check` 9.98 s (18 tests, smoke, corrupt metadata regression and Finder launch, slowest: live MCP viewer 1.237 s). A 2.09 s Mini run also rejected missing metadata, a 15.0.1 deployment target, an extra rpath, an external dylib, a mismatched dylib ID and an extra entitlement. The installed release passed the full verifier.
 - 2026-11-18 · T8.0 · done · 76ceb0d · `make check` 4.15 s (76 tests, slowest: seeded history replay 2.330 s); `make mac-check` 10.77 s (18 tests and bundle checks, slowest: live MCP viewer 1.188 s). Consecutive debug installs took 3.44 s and 2.81 s and matched the installed release's requirement. A hidden AppKit fixture took the normal quit path, a live installed MCP subprocess vetoed replacement, and a mocked migration issued exactly four bundle-specific resets and kept the previous app after a simulated failure. The real grants were untouched. The matching release was reinstalled in 2.98 s.
 - 2026-11-18 · T8.1 · done · 3a73473 · `make check` 3.55 s (77 tests, slowest: seeded history replay 1.690 s); `make mac-check` 14.30 s (20 tests and bundle checks, slowest: offscreen viewer snapshots 1.293 s). The installed release took 21.49 s to build and install. The 83.15 s SSH check rejected staged and direct launches, verified the shared installed process's accessory policy and absence of windows, and observed socket cleanup and process exit after 60.19 s idle.
+- 2026-11-18 · T8.2 · HUMAN · d8cc54f · `make check` 4.24 s (78 tests, slowest: seeded history replay 1.787 s); `make mac-check` 24.68 s (21 tests and bundle checks, slowest: live MCP viewer 1.322 s). The 25.70 s SSH check verified all three read-only entry points, the installed identity, `TCC_DENIED` with the matching pane and no project writes, and normal agent shutdown. The Mini returned `notGranted` for screen and input monitoring and `notDetermined` for microphone and camera. Interactive grant requests await the human step.
