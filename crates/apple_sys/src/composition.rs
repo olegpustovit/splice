@@ -139,6 +139,7 @@ unsafe extern "C" {
         frame: i32,
         rgba: *mut u8,
         length: usize,
+        draw_text: bool,
         error: *mut *mut c_char,
     ) -> bool;
     fn splice_av_player(composition: *mut c_void, error: *mut *mut c_char) -> *mut c_void;
@@ -325,6 +326,15 @@ impl Composition {
     }
     /// Reads an offscreen program frame into an exact-size RGBA8 buffer.
     pub fn read_frame(&self, frame: i32, rgba: &mut [u8]) -> Result<(), Error> {
+        self.read(frame, rgba, true)
+    }
+
+    /// Reads the program picture for a caller that draws its own text.
+    pub fn read_picture(&self, frame: i32, rgba: &mut [u8]) -> Result<(), Error> {
+        self.read(frame, rgba, false)
+    }
+
+    fn read(&self, frame: i32, rgba: &mut [u8], draw_text: bool) -> Result<(), Error> {
         let mut error = ptr::null_mut();
         // SAFETY: the C bridge checks the buffer length and writes only during this call.
         let ok = unsafe {
@@ -333,6 +343,7 @@ impl Composition {
                 frame,
                 rgba.as_mut_ptr(),
                 rgba.len(),
+                draw_text,
                 &mut error,
             )
         };

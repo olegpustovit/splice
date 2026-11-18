@@ -3,11 +3,12 @@
 #![deny(missing_docs)]
 
 use input::Event;
-use pxui::{FrameIn, Label, Node, Ui, UiDesc, ui::Size};
+use pxui::{FrameIn, Image, Label, Node, Ui, UiDesc, ui::Size};
 use pxui_host::{Accessibility, Events, Platform, Window};
 use pxui_sdl::{DialogFilter, DialogKind};
 use splice_core::history::{Store, StoreError};
 use std::{
+    borrow::Cow,
     ffi::OsString,
     fmt::Display,
     fs::{self, OpenOptions},
@@ -17,11 +18,17 @@ use std::{
         fs::OpenOptionsExt,
     },
     path::{Path, PathBuf},
+    rc::Rc,
     time::{Duration, Instant},
 };
 
 mod program;
+mod snapshot;
 mod surface;
+
+pub use snapshot::render as snapshot;
+
+const VIEWER_SIZE: [u32; 2] = [960, 640];
 
 /// Opens a viewer on the application thread. With no project, presents the native open panel.
 pub fn open(path: Option<&Path>, state: Option<&Path>) -> Result<(), StoreError> {
@@ -35,7 +42,8 @@ pub fn smoke_test(path: Option<&Path>, state: Option<&Path>) -> Result<Option<i3
 
 fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<Option<i32>, StoreError> {
     let mut project = path.map(Store::open).transpose()?;
-    let mut window = Window::open_with("Splice", 960, 640, !smoke, smoke, !smoke)
+    let [width, height] = VIEWER_SIZE.map(i64::from);
+    let mut window = Window::open_with("Splice", width, height, !smoke, smoke, !smoke)
         .map_err(|error| viewer_error(&error))?;
     window
         .set_resizable(true)
@@ -59,13 +67,7 @@ fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<Option<
     {
         eprintln!("splice: could not remember the last project: {error}");
     }
-    let name = project.as_ref().map(|store| {
-        store
-            .path()
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-    });
+    let name = project.as_ref().map(project_name);
     let mut program = project
         .as_ref()
         .map(program::Program::prepare)
@@ -168,18 +170,11 @@ fn run_surface(
             input.wire.event_count = packets.len();
             accessibility.frame(&mut ui);
             ui.frame(&input, &mut |ui| {
-                ui.column(
-                    Node {
-                        w: Size::Grow,
-                        h: Size::Grow,
-                        ..Node::DEFAULT
-                    },
-                    |ui| {
-                        if let Some(name) = name {
-                            ui.label(name, Label::DEFAULT);
-                        }
-                        program::paint(ui, program.as_deref(), surface.image());
-                    },
+                paint_viewer(
+                    ui,
+                    name,
+                    program.as_deref().and_then(program::Program::contents),
+                    surface.image(),
                 );
             })
             .map_err(|error| viewer_error(&error))?;
@@ -204,6 +199,35 @@ fn run_surface(
     drop(accessibility);
     surface.close()?;
     Ok(presented)
+}
+
+fn project_name(store: &Store) -> Cow<'_, str> {
+    store
+        .path()
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+}
+
+fn paint_viewer(
+    ui: &mut Ui,
+    name: Option<&str>,
+    contents: Option<(i32, &Rc<splice_av::Composition>)>,
+    image: Option<Image>,
+) {
+    ui.column(
+        Node {
+            w: Size::Grow,
+            h: Size::Grow,
+            ..Node::DEFAULT
+        },
+        |ui| {
+            if let Some(name) = name {
+                ui.label(name, Label::DEFAULT);
+            }
+            program::paint(ui, contents, image);
+        },
+    );
 }
 
 fn recall(file: &Path) -> Option<PathBuf> {

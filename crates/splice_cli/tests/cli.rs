@@ -253,6 +253,7 @@ fn cli_dispatches_mcp_friction_and_native_commands() {
     if cfg!(target_os = "linux") {
         for args in [
             vec!["open", "sample.splice"],
+            vec!["open", "sample.splice", "--snapshot", "out.png"],
             vec!["sample.splice"],
             vec!["export", "sample.splice"],
             vec!["frame", "--at", "30", "out.png", "sample.splice"],
@@ -693,4 +694,74 @@ fn native_viewer_smoke_presents_media() {
     let output = success(scratch.run(&["--smoke-test", project.to_str().unwrap()]));
     assert_eq!(output.field("ok").and_then(Json::as_bool), Some(true));
     assert_eq!(output.field("programFrame").and_then(Json::as_u64), Some(0));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_viewer_snapshot_renders_requested_frames_and_preserves_existing_files() {
+    let scratch = Scratch::new("viewer-snapshot");
+    let project = export_sample(&scratch);
+    let package = project.to_str().unwrap();
+    fs::write(
+        scratch.0.join("title.json"),
+        r#"[{"cmd":"title.add","at":12,"length":12,"text":"Snapshot title"}]"#,
+    )
+    .unwrap();
+    success(scratch.run(&["apply", "title.json", package]));
+    let first = success(scratch.run(&["open", package, "--snapshot", "first.png"]));
+    assert_eq!(first.field("frame").and_then(Json::as_u64), Some(0));
+    let later = success(scratch.run(&["open", package, "--snapshot", "later.png", "--at", "15"]));
+    assert_eq!(later.field("frame").and_then(Json::as_u64), Some(15));
+    assert_eq!(later.field("revision").and_then(Json::as_str), Some("r2"));
+    let first = fs::read(scratch.0.join("first.png")).unwrap();
+    let later = fs::read(scratch.0.join("later.png")).unwrap();
+    for png in [&first, &later] {
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&png[16..20], &960u32.to_be_bytes());
+        assert_eq!(&png[20..24], &640u32.to_be_bytes());
+    }
+    assert_ne!(first, later);
+    error(
+        scratch.run(&["open", package, "--snapshot", "later.png"]),
+        "EXISTS",
+    );
+    assert_eq!(fs::read(scratch.0.join("later.png")).unwrap(), later);
+    error(
+        scratch.run(&["open", package, "--snapshot", "outside.png", "--at", "30"]),
+        "OUT_OF_RANGE",
+    );
+    assert!(!scratch.0.join("outside.png").exists());
+    assert!(
+        !scratch
+            .0
+            .join("Library/Application Support/Splice/last-project")
+            .exists()
+    );
+}
+
+#[test]
+fn viewer_snapshot_rejects_malformed_options() {
+    let scratch = Scratch::new("viewer-snapshot-args");
+    for args in [
+        vec!["open", "project.splice", "--snapshot"],
+        vec![
+            "open",
+            "project.splice",
+            "--snapshot",
+            "out.png",
+            "--at",
+            "-1",
+        ],
+        vec![
+            "open",
+            "project.splice",
+            "--snapshot",
+            "out.png",
+            "--at",
+            "2147483648",
+        ],
+        vec!["open", "project.splice", "--at", "0"],
+    ] {
+        error(scratch.run(&args), "BAD_ARGS");
+    }
 }

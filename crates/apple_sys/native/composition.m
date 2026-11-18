@@ -618,7 +618,8 @@ bool splice_av_finish(void *raw, char **error) {
     }
 }
 
-bool splice_av_read_frame(void *raw, int32_t frame, uint8_t *rgba, size_t length, char **error) {
+bool splice_av_read_frame(void *raw, int32_t frame, uint8_t *rgba, size_t length,
+                         bool draw_text, char **error) {
     @autoreleasepool {
         SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
         size_t width = (size_t)assembly.size.width, height = (size_t)assembly.size.height;
@@ -652,7 +653,7 @@ bool splice_av_read_frame(void *raw, int32_t frame, uint8_t *rgba, size_t length
         // ImageGenerator renders the video instructions. Reuse the offline text bitmaps
         // and their sampled opacity so grabs include the titles and captions in the MP4.
         CGContextSetBlendMode(context, kCGBlendModeNormal);
-        for (SpliceAVTextLayer *layer in assembly.text.sublayers) {
+        for (SpliceAVTextLayer *layer in draw_text ? assembly.text.sublayers : nil) {
             if (frame >= layer.firstFrame && frame < layer.endFrame) {
                 double progress = (double)(frame - layer.firstFrame) / (layer.endFrame - layer.firstFrame);
                 CGContextSetAlpha(context, layer.fromOpacity + (layer.toOpacity - layer.fromOpacity) * progress);

@@ -50,6 +50,10 @@ Name.splice/
 - On macOS, `splice open Name.splice` opens the viewer. Run `splice` or `splice open`
   to choose a project in the native open panel. The panel starts in the last project's directory
   when that project is available.
+- `splice open Name.splice --snapshot out.png [--at N]` saves the viewer content at frame `N`.
+  The default is frame zero. The PNG uses the viewer's default 960 × 640 size at 1×. Pass a new
+  filename. The command renders offscreen and prints the frame,
+  project revision, and output path.
 - `splice new Name.splice` creates a package. It reports the canonical path and initial revision.
 - `splice apply ops.json Name.splice` applies one batch as a local human edit. The file contains a
   JSON array of operations or an object with only an `ops` array. Use `-` as the operations

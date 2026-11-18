@@ -15,6 +15,7 @@ use std::{
 
 const HELP: &str = "Usage: splice [<project.splice>]
        splice open [<project.splice>]
+       splice open <project.splice> --snapshot <out.png> [--at <frame>]
        splice new <project.splice>
        splice mcp
        splice apply <ops.json|-> [<project.splice>] [--project <project.splice>]
@@ -92,7 +93,7 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
         ("describe", []) => commands::describe(None, None)?,
         ("describe", [id]) if !id.starts_with('-') => commands::describe(Some(id), None)?,
         ("describe", [flag, query]) if flag == "--query" => commands::describe(None, Some(query))?,
-        ("open", args) => return viewer(args, false, output),
+        ("open", args) => return open(args, output),
         ("--smoke-test", args) => return viewer(args, true, output),
         ("export", args) => export(args)?,
         ("frame", args) => frame(args)?,
@@ -111,6 +112,61 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
         }
     };
     write_json(&value, output)
+}
+
+fn open(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--snapshot" | "--at"))
+    {
+        let error = || {
+            bad_args(
+                "Expected a project and PNG filename for the viewer snapshot.",
+                "Run splice open project.splice --snapshot out.png [--at N].",
+            )
+        };
+        let [project, snapshot, file, trailing @ ..] = args else {
+            return Err(error());
+        };
+        if snapshot != "--snapshot"
+            || project.is_empty()
+            || project.starts_with('-')
+            || file.is_empty()
+            || file.starts_with("--")
+        {
+            return Err(error());
+        }
+        let at = match trailing {
+            [] => 0,
+            [flag, at] if flag == "--at" => frame_number(at)?,
+            _ => return Err(error()),
+        };
+        return write_json(
+            &viewer_snapshot(Path::new(project), Path::new(file), at)?,
+            output,
+        );
+    }
+    viewer(args, false, output)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn viewer_snapshot(_: &Path, _: &Path, _: i32) -> Result<Json, StoreError> {
+    Err(unavailable("Viewer snapshots"))
+}
+
+#[cfg(target_os = "macos")]
+fn viewer_snapshot(project: &Path, file: &Path, at: i32) -> Result<Json, StoreError> {
+    let store = Store::open(project)?;
+    let revision = store.project().rev;
+    let output = splice_mcp::write_png(file, &mut || splice_app::snapshot(&store, at))?;
+    Ok(Json::Object(vec![
+        (
+            "output".into(),
+            Json::String(output.to_string_lossy().into()),
+        ),
+        ("revision".into(), Json::String(format!("r{revision}"))),
+        ("frame".into(), Json::Signed(i64::from(at))),
+    ]))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -318,18 +374,26 @@ fn frame(args: &[String]) -> Result<Json, StoreError> {
             "Run splice frame --at N out.png [project.splice].",
         ));
     };
-    let at = if flag == "--at" && at.bytes().all(|byte| byte.is_ascii_digit()) {
-        at.parse::<i32>().ok()
-    } else {
-        None
-    }
-    .ok_or_else(|| {
-        bad_args(
+    if flag != "--at" {
+        return Err(bad_args(
             "Invalid frame number.",
             "Pass --at followed by a nonnegative integer frame.",
-        )
-    })?;
+        ));
+    }
+    let at = frame_number(at)?;
     splice_mcp::grab_frame(Store::open(&project_arg(project)?)?, at, Path::new(file))
+}
+
+fn frame_number(at: &str) -> Result<i32, StoreError> {
+    if at.bytes().all(|byte| byte.is_ascii_digit())
+        && let Ok(frame) = at.parse::<i32>()
+    {
+        return Ok(frame);
+    }
+    Err(bad_args(
+        "Invalid frame number.",
+        "Pass --at followed by a nonnegative integer frame.",
+    ))
 }
 
 fn current_project() -> Result<PathBuf, StoreError> {

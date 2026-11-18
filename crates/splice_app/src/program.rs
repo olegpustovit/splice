@@ -14,15 +14,12 @@ pub(super) struct Program {
 
 impl Program {
     pub(super) fn prepare(store: &Store) -> Result<Option<Self>, StoreError> {
-        let project = store.project();
-        if project.clips.order().is_empty() && project.items.order().is_empty() {
+        let Some(composition) = composition(store)? else {
             return Ok(None);
-        }
-        let composition =
-            Composition::prepare(project, store.path()).map_err(|error| viewer_error(&error))?;
+        };
         let player = composition.player().map_err(|error| viewer_error(&error))?;
         Ok(Some(Self {
-            composition: Rc::new(composition),
+            composition,
             player,
             shown: None,
         }))
@@ -42,9 +39,23 @@ impl Program {
     pub(super) fn shown(&self) -> Option<i32> {
         self.shown
     }
+
+    pub(super) fn contents(&self) -> Option<(i32, &Rc<Composition>)> {
+        self.shown.map(|at| (at, &self.composition))
+    }
 }
 
-pub(super) fn paint(ui: &mut Ui, program: Option<&Program>, image: Option<Image>) {
+pub(super) fn composition(store: &Store) -> Result<Option<Rc<Composition>>, StoreError> {
+    let project = store.project();
+    if project.clips.order().is_empty() && project.items.order().is_empty() {
+        return Ok(None);
+    }
+    Composition::prepare(project, store.path())
+        .map(|composition| Some(Rc::new(composition)))
+        .map_err(|error| viewer_error(&error))
+}
+
+pub(super) fn paint(ui: &mut Ui, contents: Option<(i32, &Rc<Composition>)>, image: Option<Image>) {
     let viewport = ui.node(
         "program",
         Node {
@@ -53,7 +64,7 @@ pub(super) fn paint(ui: &mut Ui, program: Option<&Program>, image: Option<Image>
             ..Node::DEFAULT
         },
     );
-    let contents = program.and_then(|p| p.shown.map(|at| (at, p.composition.clone())));
+    let contents = contents.map(|(at, composition)| (at, Rc::clone(composition)));
     ui.canvas(&viewport, move |paint, rect| {
         paint.fill(rect, Fill::new(Rgba::BLACK));
         if let (Some((at, clip)), Some(image)) = (&contents, image) {

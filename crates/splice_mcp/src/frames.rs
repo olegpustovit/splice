@@ -20,12 +20,7 @@ const INLINE_EDGE: u32 = 640;
 
 /// Renders one frame of the current revision to a new PNG and returns its metadata.
 pub fn grab_frame(store: Store, at: Frame, file: &Path) -> Result<Json, StoreError> {
-    if !file
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-    {
-        return Err(bad("output", "a filename ending in .png"));
-    }
+    check_png_path(file)?;
     FrameSelection::Explicit(vec![at]).resolve(timeline::duration(store.project())?)?;
     let output = Output::prepare(file.to_path_buf(), false)?;
     let revision = store.project().rev;
@@ -44,6 +39,28 @@ pub fn grab_frame(store: Store, at: Frame, file: &Path) -> Result<Json, StoreErr
             ("output", display(&output.file().display())),
         ],
     ))
+}
+
+/// Renders and atomically publishes a PNG to a new filename on the destination volume.
+pub fn write_png(
+    file: &Path,
+    render: &mut dyn FnMut() -> Result<Vec<u8>, StoreError>,
+) -> Result<std::path::PathBuf, StoreError> {
+    check_png_path(file)?;
+    let output = Output::prepare(file.to_path_buf(), false)?;
+    save(&output, &render()?)?;
+    Ok(output.file().to_path_buf())
+}
+
+fn check_png_path(file: &Path) -> Result<(), StoreError> {
+    if file
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+    {
+        Ok(())
+    } else {
+        Err(bad("output", "a filename ending in .png"))
+    }
 }
 
 pub(super) fn render_tool(

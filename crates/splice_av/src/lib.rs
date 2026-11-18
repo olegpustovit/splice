@@ -114,6 +114,11 @@ impl Composition {
         self.native.read_frame(at, rgba).map_err(Into::into)
     }
 
+    /// Reads the program picture so the viewer can draw text in its own layout.
+    pub fn read_picture(&self, at: Frame, rgba: &mut [u8]) -> Result<(), Error> {
+        self.native.read_picture(at, rgba).map_err(Into::into)
+    }
+
     /// Starts encoding the prepared composition and audio mix into a new MP4.
     pub fn start_export(&self, file: &Path, hevc: bool) -> Result<Export, Error> {
         self.native.start_export(file, hevc).map_err(Into::into)

@@ -31,11 +31,8 @@ impl Surface {
         ui: &Ui,
         size: Option<[u32; 2]>,
     ) -> Result<Self, StoreError> {
-        ogpu_core::impl_::select(ogpu_metal::impl_::implementation());
-        let driver = ogpu_core::impl_::create_driver().map_err(gpu_error)?;
-        let device = be::create_device(driver).map_err(gpu_error)?;
         let mut surface = Self {
-            device,
+            device: open_device()?,
             frames: None,
             renderer: None,
             slots: Vec::with_capacity(3),
@@ -47,29 +44,13 @@ impl Surface {
         surface.frames =
             Some(Frames::new(&surface.device, token).map_err(|error| viewer_error(&error))?);
         let native = be::native_leased(&surface.device).map_err(gpu_error)?;
-        surface.renderer = Some(
-            Renderer::new(
-                ui,
-                Gpu {
-                    backend: native.backend,
-                    mtl_device: native.mtl_device,
-                    queue: native.queue,
-                    owner_token: native.owner_token,
-                    release_owner: native.release_owner,
-                    ..Gpu::default()
-                },
-                TargetDesc {
-                    format: 2,
-                    samples: 1,
-                },
-            )
-            .map_err(|error| viewer_error(&error))?,
-        );
+        let device_ptr = native.mtl_device;
+        surface.renderer = Some(open_renderer(ui, native, 2)?);
         if let Some([width, height]) = size {
             for id in 1..=3 {
                 let texture =
                     ProgramTexture::new([width, height]).map_err(|error| viewer_error(&error))?;
-                let image = texture.image_for_device(native.mtl_device).ok_or_else(|| {
+                let image = texture.image_for_device(device_ptr).ok_or_else(|| {
                     viewer_error(&"The program texture is on another Metal device.")
                 })?;
                 surface.images.store(
@@ -189,6 +170,32 @@ impl Drop for Surface {
     }
 }
 
-fn gpu_error(error: ogpu_core::error::Error) -> StoreError {
+pub(super) fn open_device() -> Result<be::Device, StoreError> {
+    ogpu_core::impl_::select(ogpu_metal::impl_::implementation());
+    let driver = ogpu_core::impl_::create_driver().map_err(gpu_error)?;
+    be::create_device(driver).map_err(gpu_error)
+}
+
+pub(super) fn open_renderer(
+    ui: &Ui,
+    native: be::NativeDevice,
+    format: u32,
+) -> Result<Renderer, StoreError> {
+    Renderer::new(
+        ui,
+        Gpu {
+            backend: native.backend,
+            mtl_device: native.mtl_device,
+            queue: native.queue,
+            owner_token: native.owner_token,
+            release_owner: native.release_owner,
+            ..Gpu::default()
+        },
+        TargetDesc { format, samples: 1 },
+    )
+    .map_err(|error| viewer_error(&error))
+}
+
+pub(super) fn gpu_error(error: ogpu_core::error::Error) -> StoreError {
     viewer_error(&ogpu_core::error::to_string(&error))
 }

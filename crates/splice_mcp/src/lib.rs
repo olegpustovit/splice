@@ -23,7 +23,7 @@ mod wire;
 #[cfg(target_os = "macos")]
 pub use export::export_project;
 #[cfg(target_os = "macos")]
-pub use frames::grab_frame;
+pub use frames::{grab_frame, write_png};
 pub use history::{apply_batch, edit_result_json};
 pub use rpc::serve;
 pub use wire::error_payload;

@@ -79,7 +79,8 @@ bool splice_av_range(void *composition, int32_t from, int32_t to,
                      const SpliceAVGain *gains, size_t gain_count, char **error);
 bool splice_av_text(void *composition, int32_t from, int32_t to, const SpliceAVText *text, char **error);
 bool splice_av_finish(void *composition, char **error);
-bool splice_av_read_frame(void *composition, int32_t frame, uint8_t *rgba, size_t length, char **error);
+bool splice_av_read_frame(void *composition, int32_t frame, uint8_t *rgba, size_t length,
+                         bool draw_text, char **error);
 void *splice_av_player(void *composition, char **error);
 void splice_av_player_play(void *player, bool playing);
 bool splice_av_player_seek(void *player, int32_t frame);
