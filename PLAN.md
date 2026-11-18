@@ -109,20 +109,18 @@ Recorder's capture, exposed as MCP and CLI. The key requirement: a **stable sign
 location and permissions granted once**, so an agent can record from ssh or a terminal without a prompt.
 Depends on T1.3, T4.1, T7.
 
-- [ ] T8.0 Stable identity. One install location (`~/Applications/Splice.app`, symlinked from
-  `~/.local/bin/splice`); capture only ever runs from that bundle, never from `target/`. One signer
-  (T7.2). `packaging/designated-requirement.txt` pins `identifier "com.olegpustovit.splice" and anchor
-  apple generic and certificate leaf[subject.OU] = "7ZH3FYV964"` (as `codesign -d -r-` prints it), and
-  `tools/check-macos-bundle.sh` refuses a bundle whose requirement differs, because privacy grants are
-  keyed on bundle ID + designated requirement. Install replaces the bundle in place after quitting
-  running Splice processes normally. If the signer ever changes, it runs a targeted
-  `tccutil reset {ScreenCapture,Microphone,Camera,ListenEvent} com.olegpustovit.splice` and says so;
-  it never runs `tccutil reset All`. Accept: two consecutive `make dev` builds have an identical
-  designated requirement, and the check refuses a re-signed copy.
+- [x] T8.0 Stable identity (76ceb0d). `packaging/designated-requirement.txt` pins the exact Developer ID
+  requirement for `com.olegpustovit.splice` and team `7ZH3FYV964`. The verifier compares and evaluates
+  the requirement. Installation requests normal termination at the target path and waits. A live
+  CLI/MCP process leaves installation pending until its host disconnects it. At the default path a
+  signer migration reports and resets the four Splice grants individually with `tccutil`. Two
+  consecutive debug installs matched the pinned requirement, and the verifier rejected a re-signed
+  copy.
 - [ ] T8.1 Capture agent. macOS attributes capture to the *responsible* process, so a `splice mcp` that
   Codex or Claude spawns in a terminal would make the terminal ask for permission. Capture therefore
   runs inside Splice.app, launched by LaunchServices: `open -g -j -a ~/Applications/Splice.app --args
   --capture-agent` starts it with the accessory activation policy (no Dock icon, no window). It
+  accepts capture only from the signed `~/Applications/Splice.app` and rejects staged builds. It
   listens on the state-dir unix socket (getpeereid, same user only) and exits after 60 s idle.
   `splice mcp` and `splice record` are its clients. `ponytail:` an on-demand LaunchAgent
   plist instead, if `open` ever needs a GUI session the agent lacks. Accept: a socket round trip; an
@@ -218,3 +216,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T7.3 · done · f05d175 · `make check` 3.25 s (74 tests, slowest: seeded history replay 1.566 s), `make mac-check` 14.20 s (18 tests and hidden Finder launch, slowest: offscreen viewer snapshots 1.508 s). On the Mini `make dev` took 2.29 s and `make install` took 20.38 s. The executable UUIDs matched their build profiles, both designated requirements matched, and `which splice` resolved to the installed release. Launch Services chose the installed bundle and opened a temporary project by document event.
 - 2026-11-18 · T7.4 · done · 35a3859 · `cargo t -p splice_mcp paths` 0.82 s Linux, 2.55 s Mac (two cases); `make check` 3.69 s (76 tests, slowest: seeded history replay 1.687 s); `make mac-check` 14.63 s (18 tests plus symlink and Finder smoke, slowest: offscreen viewer snapshots 1.435 s). The live viewer test found its socket in a state path longer than Darwin permits in a socket address. The installed release smoke persisted the opened project to macOS state, and an ad hoc signed test copy without the license returned `BUNDLE_RESOURCES`.
 - 2026-11-18 · T7.5 · done · 9792f32 · `make check` 3.22 s (76 tests, slowest: seeded history replay 1.646 s); `make mac-check` 9.98 s (18 tests, smoke, corrupt metadata regression and Finder launch, slowest: live MCP viewer 1.237 s). A 2.09 s Mini run also rejected missing metadata, a 15.0.1 deployment target, an extra rpath, an external dylib, a mismatched dylib ID and an extra entitlement. The installed release passed the full verifier.
+- 2026-11-18 · T8.0 · done · 76ceb0d · `make check` 4.15 s (76 tests, slowest: seeded history replay 2.330 s); `make mac-check` 10.77 s (18 tests and bundle checks, slowest: live MCP viewer 1.188 s). Consecutive debug installs took 3.44 s and 2.81 s and matched the installed release's requirement. A hidden AppKit fixture took the normal quit path, a live installed MCP subprocess vetoed replacement, and a mocked migration issued exactly four bundle-specific resets and kept the previous app after a simulated failure. The real grants were untouched. The matching release was reinstalled in 2.98 s.
