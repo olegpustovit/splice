@@ -1,4 +1,5 @@
 mod codec;
+pub mod journal;
 mod media;
 mod project;
 mod timeline;
@@ -181,14 +182,14 @@ impl Package {
         let lock = match options().create_new(true).open(&lock_path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                check_lock_file(&lock_path, None)?;
+                check_single_link_file(&lock_path, None)?;
                 options()
                     .open(&lock_path)
                     .map_err(|error| PackageError::io(&lock_path, error))?
             }
             Err(error) => return Err(PackageError::io(&lock_path, error)),
         };
-        check_lock_file(&lock_path, Some(&lock))?;
+        check_single_link_file(&lock_path, Some(&lock))?;
         match lock.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => {
@@ -270,17 +271,17 @@ fn check_extension(path: &Path) -> Result<(), PackageError> {
     }
 }
 
-fn check_lock_file(path: &Path, open: Option<&File>) -> Result<(), PackageError> {
+fn check_single_link_file(path: &Path, open: Option<&File>) -> Result<(), PackageError> {
     let known = fs::symlink_metadata(path).map_err(|error| PackageError::io(path, error))?;
     if !known.is_file() || known.nlink() != 1 {
-        return Err(PackageError::invalid(&"lock must be a regular file with one link").at(path));
+        return Err(PackageError::invalid(&"expected a regular file with one link").at(path));
     }
     if let Some(open) = open {
         let held = open
             .metadata()
             .map_err(|error| PackageError::io(path, error))?;
         if (held.dev(), held.ino()) != (known.dev(), known.ino()) {
-            return Err(PackageError::invalid(&"lock changed while opening it").at(path));
+            return Err(PackageError::invalid(&"file changed while opening it").at(path));
         }
     }
     Ok(())
@@ -340,3 +341,6 @@ fn sync_dir(path: &Path) -> Result<(), PackageError> {
         .and_then(|dir| dir.sync_all())
         .map_err(|error| PackageError::io(path, error))
 }
+
+#[cfg(test)]
+mod journal_tests;

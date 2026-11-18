@@ -12,6 +12,7 @@ spelling. The decoder reports invalid JSON with a byte offset and path and rejec
 Name.splice/
   project.json          snapshot of the project at revision `rev`
   journal.ops           append-only command log, one batch per line (the source of truth)
+  journal.base.json     original snapshot, media table and transcripts for retained history
   media.json            media table: med_ id → location and probe
   transcripts/<med>.json  words for a media item, with its hash
   takes/<med>/          a recorded take, in Recorder's layout (recordings live in the package; imports stay where they are):
@@ -32,11 +33,14 @@ Name.splice/
 - **Snapshot** = `project.json` written as `project.json.tmp`, `fsync`, `rename`, `fsync(dir)`. Every
   64 batches, on close, and on `splice snapshot`. The snapshot records the `rev` and `hash` it is at.
 - **Open** = read the snapshot, replay journal lines after its `rev`, verify each line's `hash`.
-  A torn last line (crash mid-append) is truncated with a warning. A hash mismatch anywhere else is
-  `JOURNAL_CORRUPT`: open read-only and report which revision is the last good one.
+  A final record without its newline is truncated with a warning. A corrupt complete line opens
+  read-only with `JOURNAL_CORRUPT` and the last verified revision. If corruption precedes the
+  checkpoint, replay starts at `journal.base.json`.
 - **Lock**: one writer per project. A viewer that has the project open is the writer and serves
   MCP over its socket; `splice mcp` and the CLI forward to it. With no viewer, the first process takes
-  the lock. A stale lock (dead pid on the same host) is taken over and logged.
+  the lock. The owner record stores the PID, hostname and Unix time in seconds. Clean close clears
+  the record with the lock held. An owner record left behind after the kernel releases the lock
+  is logged before takeover.
 
 ## `project.json`
 
@@ -79,7 +83,9 @@ One JSON object per line:
 {"rev":43,"parent":"0c11d7e2aa904b35","hash":"…","source":"human","label":"Undo agent batch: Split…","revertOf":[42],"skipped":[]}
 ```
 
-- `parent` is the previous line's `hash`: a hash chain, so corruption and reordering are detectable.
+- `parent` is the previous line's `hash`, or the origin hash on the first line. `hash` is FNV-1a 64 of
+  the canonical record with its `hash` field and trailing newline omitted. Readers verify the
+  revision sequence, links, and record bytes.
 - `ops` are exactly what `edit.apply` received (after `$ref` resolution is recorded in `mints`), so a
   batch replays byte-identically.
 - Undo is a line too (`revertOf`, or `restoreTo` for `history.undo {scope:"to"}`). History is never
