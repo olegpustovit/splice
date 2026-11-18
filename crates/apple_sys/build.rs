@@ -11,6 +11,7 @@ fn main() {
             "native/media.m",
             "native/composition.m",
             "native/image.m",
+            "native/permissions.m",
         ])
         .flag("-fobjc-arc")
         .flag("-fblocks")

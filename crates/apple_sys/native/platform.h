@@ -18,6 +18,24 @@ bool splice_app_start_accessory(void);
 bool splice_app_wait_accessory(double seconds);
 char *splice_app_user_home(void);
 
+typedef enum {
+    SPLICE_PERMISSION_SCREEN,
+    SPLICE_PERMISSION_MICROPHONE,
+    SPLICE_PERMISSION_CAMERA,
+    SPLICE_PERMISSION_INPUT,
+} SplicePermission;
+
+typedef enum {
+    SPLICE_PERMISSION_NOT_GRANTED,
+    SPLICE_PERMISSION_GRANTED,
+    SPLICE_PERMISSION_NOT_DETERMINED,
+    SPLICE_PERMISSION_DENIED,
+    SPLICE_PERMISSION_RESTRICTED,
+} SplicePermissionStatus;
+
+uint32_t splice_permission_status(uint32_t permission);
+bool splice_permission_request(uint32_t permission);
+
 typedef struct {
     int32_t track_id;
     uint32_t codec;

@@ -25,5 +25,8 @@ pub mod media;
 /// Peer credentials for local macOS sockets.
 pub mod ipc;
 
+/// macOS capture authorization and privacy settings.
+pub mod permissions;
+
 #[cfg(test)]
 mod tests;

@@ -270,7 +270,7 @@ fn job_id(args: &Json) -> Result<JobId, StoreError> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn unavailable(feature: &str) -> StoreError {
+pub(super) fn unavailable(feature: &str) -> StoreError {
     failure(
         "UNSUPPORTED_PLATFORM",
         &format!("{feature} requires the native macOS backend."),

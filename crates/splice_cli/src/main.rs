@@ -19,6 +19,7 @@ const HELP: &str = "Usage: splice [<project.splice>]
        splice new <project.splice>
        splice mcp
        splice record --dry-run
+       splice permissions [--request [screen|microphone|camera|inputMonitoring]]
        splice apply <ops.json|-> [<project.splice>] [--project <project.splice>]
                     [--dry-run] [--if-revision <revision>] [--idempotency-key <key>]
        splice snapshot [<project.splice>]
@@ -75,6 +76,13 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
             };
         }
         ("record", [flag]) if flag == "--dry-run" => splice_mcp::record_preflight()?,
+        ("permissions", []) => splice_mcp::capture_permissions(false, None)?,
+        ("permissions", [flag]) if flag == "--request" => {
+            splice_mcp::capture_permissions(true, None)?
+        }
+        ("permissions", [flag, permission]) if flag == "--request" => {
+            splice_mcp::capture_permissions(true, Some(permission))?
+        }
         #[cfg(target_os = "macos")]
         ("--capture-agent", []) => return splice_mcp::capture_agent::run(),
         ("friction", args) => {

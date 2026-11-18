@@ -186,6 +186,9 @@ pub fn error_payload(error: StoreError) -> Json {
         ("message", Json::String(error.message)),
         ("fix", Json::String(error.fix)),
     ];
+    if error.code == "TCC_DENIED" {
+        fields.push(("needsHuman", Json::Bool(true)));
+    }
     if let Some(op) = error.op {
         fields.push(("op", count(op)));
     }

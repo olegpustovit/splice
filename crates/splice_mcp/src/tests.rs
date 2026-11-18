@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn capture_permission_denial_requires_human_action() {
+    let error = splice_core::history::StoreError::new(
+        "TCC_DENIED",
+        "Screen & System Audio Recording is unavailable.",
+        "Run splice permissions --request screen.",
+    );
+    let payload = wire::error_payload(error);
+    assert_eq!(
+        payload.field("needsHuman").and_then(Json::as_bool),
+        Some(true)
+    );
+}
+
+#[test]
 fn viewer_projects_pin_the_single_open_store() {
     let dir = std::env::temp_dir().join(format!("splice-viewer-pin-{}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
@@ -144,7 +158,12 @@ fn tool_transcripts_run_against_live_store() {
             continue;
         }
         // Native media is covered by the macOS CLI and MCP subprocess acceptance tests.
-        if cfg!(target_os = "macos") && matches!(name, "export.start" | "view.frames") {
+        if cfg!(target_os = "macos")
+            && matches!(
+                name,
+                "export.start" | "view.frames" | "record.start" | "record.stop"
+            )
+        {
             continue;
         }
         let directory = test_runs.0.join(name);

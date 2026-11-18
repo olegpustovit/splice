@@ -31,6 +31,15 @@ const IO_TIMEOUT: Duration = Duration::from_secs(1);
 const LIMIT: u64 = 64 * 1024;
 const REQUIREMENT: &str = include_str!("../../../packaging/designated-requirement.txt");
 
+mod permissions;
+
+struct Identity {
+    bundle: PathBuf,
+    team: String,
+}
+
+pub(super) use permissions::ask as permission_report;
+
 /// Hosts capture requests on the application thread of the installed app.
 pub fn run() -> Result<(), StoreError> {
     let bundle = installed_bundle()?;
@@ -44,9 +53,12 @@ pub fn run() -> Result<(), StoreError> {
             &"Capture needs the installed Splice.app launched by Launch Services.",
         ));
     }
-    verify_signature(&bundle)?;
-    serve(&paths::state_dir().map_err(|error| transport(&error))?)
-        .map_err(|error| transport(&error))
+    let team = verify_signature(&bundle)?;
+    serve(
+        &paths::state_dir().map_err(|error| transport(&error))?,
+        &Identity { bundle, team },
+    )
+    .map_err(|error| transport(&error))
 }
 
 fn installed_bundle() -> Result<PathBuf, StoreError> {
@@ -62,20 +74,18 @@ fn installed_bundle() -> Result<PathBuf, StoreError> {
     Ok(bundle)
 }
 
-fn verify_signature(bundle: &Path) -> Result<(), StoreError> {
+fn verify_signature(bundle: &Path) -> Result<String, StoreError> {
     let requirement = REQUIREMENT.trim();
     let display = Command::new("/usr/bin/codesign")
-        .args(["--display", "-r-"])
+        .args(["--display", "--verbose=4", "-r-"])
         .arg(bundle)
         .output()
         .map_err(|error| identity(&error))?;
     let pinned = format!("designated => {requirement}");
-    if !display.status.success()
-        || !String::from_utf8_lossy(&display.stdout)
-            .lines()
-            .chain(String::from_utf8_lossy(&display.stderr).lines())
-            .any(|line| line == pinned)
-    {
+    let stdout = String::from_utf8_lossy(&display.stdout);
+    let stderr = String::from_utf8_lossy(&display.stderr);
+    let lines = || stdout.lines().chain(stderr.lines());
+    if !display.status.success() || !lines().any(|line| line == pinned) {
         return Err(identity(
             &"The installed app has a different designated requirement.",
         ));
@@ -89,7 +99,11 @@ fn verify_signature(bundle: &Path) -> Result<(), StoreError> {
     if !checked.status.success() {
         return Err(identity(&String::from_utf8_lossy(&checked.stderr).trim()));
     }
-    Ok(())
+    lines()
+        .find_map(|line| line.strip_prefix("TeamIdentifier="))
+        .filter(|team| !team.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| identity(&"The installed app did not report a signing team."))
 }
 
 fn connect(directory: &Path) -> io::Result<Option<UnixStream>> {
@@ -167,6 +181,7 @@ pub(super) fn request(method: &str, args: &Json) -> Result<Json, StoreError> {
         let code = match error.string("code")? {
             "CAPTURE_NOT_READY" => "CAPTURE_NOT_READY",
             "BAD_ARGS" => "BAD_ARGS",
+            "TCC_DENIED" => "TCC_DENIED",
             _ => return Err(transport(&"The capture agent returned an unknown error.")),
         };
         return Err(StoreError::new(
@@ -181,7 +196,7 @@ pub(super) fn request(method: &str, args: &Json) -> Result<Json, StoreError> {
         .ok_or_else(|| transport(&"The capture agent returned an invalid reply."))
 }
 
-fn serve(state: &Path) -> io::Result<()> {
+fn serve(state: &Path, identity: &Identity) -> io::Result<()> {
     fs::create_dir_all(state)?;
     let directory = state.join("capture");
     let path = socket_path(&directory, SOCK, true)?;
@@ -212,18 +227,23 @@ fn serve(state: &Path) -> io::Result<()> {
         return Err(io::Error::other("Could not start AppKit as an accessory."));
     }
     let listener = UnixListener::bind(&path)?;
-    let result = listen(&listener, IDLE, app::wait_accessory);
+    let result = listen(&listener, IDLE, app::wait_accessory, identity);
     let removed = fs::remove_file(path);
     result.and(removed)
 }
 
-fn listen(listener: &UnixListener, idle: Duration, wait: fn(Duration) -> bool) -> io::Result<()> {
+fn listen(
+    listener: &UnixListener,
+    idle: Duration,
+    wait: fn(Duration) -> bool,
+    identity: &Identity,
+) -> io::Result<()> {
     listener.set_nonblocking(true)?;
     let mut activity = Instant::now();
     while let Some(remaining) = idle.checked_sub(activity.elapsed()) {
         let delay = match listener.accept() {
             Ok((mut stream, _)) => {
-                if serve_peer(&mut stream).is_ok() {
+                if serve_peer(&mut stream, identity).is_ok() {
                     activity = Instant::now();
                 }
                 Duration::ZERO
@@ -242,38 +262,52 @@ fn listen(listener: &UnixListener, idle: Duration, wait: fn(Duration) -> bool) -
     Ok(())
 }
 
-fn serve_peer(stream: &mut UnixStream) -> io::Result<()> {
+fn serve_peer(stream: &mut UnixStream, identity: &Identity) -> io::Result<()> {
     verify_peer(stream)?;
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     let request = receive(stream, LIMIT)?;
-    let reply = match dispatch(&request) {
+    let reply = match dispatch(&request, identity) {
         Ok(value) => object(vec![("result", value)]),
         Err(error) => object(vec![("error", error_payload(error))]),
     };
     send(stream, &reply)
 }
 
-fn dispatch(request: &Json) -> Result<Json, StoreError> {
-    if !request
+fn dispatch(request: &Json, identity: &Identity) -> Result<Json, StoreError> {
+    let args = request
         .field("args")
-        .is_some_and(|args| args.as_object().is_some())
-    {
-        return Err(bad("args", "an object"));
-    }
+        .filter(|args| args.as_object().is_some())
+        .ok_or_else(|| bad("args", "an object"))?;
     match request.string("method")? {
         "ping" => Ok(object(vec![(
             "pid",
             Json::Unsigned(u64::from(process::id())),
         )])),
-        "record.start" | "record.stop" => Err(StoreError::new(
-            "CAPTURE_NOT_READY",
-            "The signed capture agent is reachable. Recording is under development.",
-            "Use a build with the native recorder.",
-        )),
-        _ => Err(bad("method", "record.start or record.stop")),
+        "permissions" => permissions::command(args, identity),
+        "record.start" => {
+            let snapshot = permissions::snapshot();
+            if args.flag("dryRun")? {
+                let mut result = permissions::report(identity, &snapshot);
+                // The native capture engine supplies source enumeration in T8.3.
+                result.push(("sources", object(Vec::new())));
+                return Ok(object(result));
+            }
+            permissions::required(args, &snapshot)?;
+            Err(capture_not_ready())
+        }
+        "record.stop" => Err(capture_not_ready()),
+        _ => Err(bad("method", "permissions, record.start or record.stop")),
     }
+}
+
+fn capture_not_ready() -> StoreError {
+    StoreError::new(
+        "CAPTURE_NOT_READY",
+        "The signed capture agent is reachable. Recording is under development.",
+        "Use a build with the native recorder.",
+    )
 }
 
 fn identity(reason: &dyn std::fmt::Display) -> StoreError {
@@ -309,10 +343,18 @@ mod tests {
         .unwrap();
         let timeout = Duration::from_millis(25);
         let started = Instant::now();
-        listen(&listener, timeout, |delay| {
-            thread::sleep(delay);
-            true
-        })
+        listen(
+            &listener,
+            timeout,
+            |delay| {
+                thread::sleep(delay);
+                true
+            },
+            &Identity {
+                bundle: path.clone(),
+                team: "test".to_owned(),
+            },
+        )
         .unwrap();
         assert!(started.elapsed() >= timeout);
         let reply = receive(&peer, LIMIT).unwrap();

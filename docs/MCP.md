@@ -11,11 +11,18 @@ If a viewer closes during a call, read the current revision with `project.info {
 retrying the edit. The client returns `VIEWER_DISCONNECTED` when the outcome of a sent request
 is uncertain. Use `idempotencyKey` on edits that a client may retry.
 
-On macOS, recording calls and `splice record --dry-run` connect to the installed Splice.app over
-the same-user socket at `capture/agent.sock` in the state directory. The client starts the app
-through Launch Services when needed. The accessory process runs without a window and exits after
-60 seconds of inactivity. Until the native recorder is available, it replies with
-`CAPTURE_NOT_READY` after accepting the request.
+On macOS, recording calls and `splice permissions` connect to the installed Splice.app over the
+same-user socket at `capture/agent.sock` in the state directory. The client starts the app through
+Launch Services when needed. The accessory process runs without a window and exits after 60 seconds
+of inactivity.
+
+`splice permissions`, `splice record --dry-run` and `record.start {dryRun:true}` report authorization
+for `screen`, `microphone`, `camera` and `inputMonitoring` with the signed agent's path, team and
+designated requirement match. Only `splice permissions --request [screen|microphone|camera|inputMonitoring]`
+opens System Settings and requests a grant. Omit the selector to open the first missing grant.
+A capture blocked by a missing grant returns `TCC_DENIED` with `needsHuman:true` and the matching
+privacy pane. Request only the inputs the recording uses. Source enumeration and capture follow
+with the native recorder.
 
 ## Stdio lifecycle
 

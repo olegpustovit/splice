@@ -335,6 +335,7 @@ fn recording_preflight_requires_the_macos_agent() {
         scratch.run(&["record", "--dry-run"]),
         "UNSUPPORTED_PLATFORM",
     );
+    error(scratch.run(&["permissions"]), "UNSUPPORTED_PLATFORM");
 }
 
 #[cfg(target_os = "macos")]

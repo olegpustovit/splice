@@ -46,6 +46,22 @@ pub fn record_preflight() -> Result<Json, splice_core::history::StoreError> {
     )
 }
 
+/// Reports capture authorization or explicitly requests one missing macOS grant.
+pub fn capture_permissions(
+    request: bool,
+    permission: Option<&str>,
+) -> Result<Json, splice_core::history::StoreError> {
+    #[cfg(target_os = "macos")]
+    {
+        capture_agent::permission_report(request, permission)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (request, permission);
+        Err(platform::unavailable("Capture permissions"))
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
