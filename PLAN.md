@@ -50,7 +50,7 @@ SHA.
 ### T0 · Foundations
 - [x] T0.1 [L] Workspace scaffold, toolchain 1.99.1, PXUI submodule (`rust-port` @ 0baa83c), `cargo t` alias.
 - [x] T0.2 [L] Makefile (e85a6d2): `check`, `dev`, `install`, `bundle`, `sign`, `mac-sync`, `mac-check`, `mac-run`, `mac-pull`, `eval`, `loop`. Accept: `make check` green on Linux; `make mac-check` green on the Mini (empty mac crates).
-- [ ] T0.3 [L] `tools/gate`: shape rules (see AGENTS.md), per-crate dependency allowlist, `splice_kit` std-only, mac crates cfg-gated, no `#[ignore]`, no HashMap iteration in output. Accept: `cargo run -p gate -- all` green; gate's own tests plant one violation per rule and see it refused.
+- [x] T0.3 [L] `tools/gate` (0e16998): shape rules (see AGENTS.md), per-crate dependency allowlist, `splice_kit` std-only, mac crates cfg-gated, no `#[ignore]`, no HashMap iteration in output. Accept: `cargo run -p gate -- all` green; gate's own tests plant one violation per rule and see it refused.
 - [ ] T0.4 [L] `splice_testkit`: `alloc::warm(|| …)` asserting zero allocations (mem_sys `counting` as a dev-dependency only; add `[profile.dev.package.mem_sys] opt-level = 3` with it), goldens (`SPLICE_BLESS=1` refreshes), seeded xorshift, MCP transcript runner stub. Accept: self-tests, including one that must detect an allocation.
 
 ### T1 · Model and file format (docs/FORMAT.md)
@@ -184,3 +184,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T0.1 · done · scaffold builds with 1.99.1; `cargo t` 23 s cold, 0 tests
 
 - 2026-11-18 · T0.2 · done · e85a6d2 · `make check` 0.75 s, `make mac-check` 5.54 s (scaffold, 0 tests)
+- 2026-11-18 · T0.3 · done · 0e16998 · `make check` 0.96 s (slowest: source shape rules 0.024 s)
