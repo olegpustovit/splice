@@ -11,6 +11,7 @@ splice_model = { path = "../splice_model" }
 splice_json = { path = "../splice_json" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+splice_av = { path = "../splice_av" }
 splice_media = { path = "../splice_media" }
 
 [lints]

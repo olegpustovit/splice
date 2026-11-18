@@ -12,11 +12,16 @@ use std::{
 #[derive(Default)]
 pub(super) struct Projects {
     open: Vec<Store>,
+    #[cfg(target_os = "macos")]
+    pub(super) exports: Vec<super::export::Job>,
 }
 
 impl Projects {
     pub(super) fn lookup(&mut self, args: &Json) -> Result<&mut Store, StoreError> {
-        let id = args.string("projectId")?;
+        self.lookup_id(args.string("projectId")?)
+    }
+
+    pub(super) fn lookup_id(&mut self, id: &str) -> Result<&mut Store, StoreError> {
         let store = project_index(id)
             .and_then(|index| self.open.get_mut(index))
             .ok_or_else(|| {
@@ -85,6 +90,10 @@ impl Projects {
     }
 
     pub(super) fn close(self) -> io::Result<()> {
+        #[cfg(target_os = "macos")]
+        for mut job in self.exports {
+            job.wait();
+        }
         for store in self.open {
             if store.problem().is_none() {
                 store.close().map_err(io::Error::other)?;

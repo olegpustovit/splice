@@ -572,7 +572,7 @@ fn execute(projects: &mut Projects, name: &str, args: &Json) -> Result<Json, Sto
             projects.lookup(args)?;
             platform::frames(args)
         }
-        "export.start" => platform::export(projects.lookup(args)?, args),
+        "export.start" => platform::export(projects, args),
         "jobs.status" | "jobs.cancel" => platform::job(projects, name, args),
         "record.start" => platform::record_start(projects, args),
         "record.stop" => platform::record_stop(projects, args),

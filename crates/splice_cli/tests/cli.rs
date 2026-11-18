@@ -351,3 +351,212 @@ fn cli_imports_media_and_persists_the_descriptor() {
         Some("r1")
     );
 }
+
+#[cfg(target_os = "macos")]
+fn export_sample(scratch: &Scratch) -> PathBuf {
+    let project = scratch.0.join("native.splice");
+    let package = project.to_str().unwrap();
+    success(scratch.run(&["new", package]));
+    // Keep this subprocess acceptance small. The complete sample has a separate media check.
+    let snapshot = project.join("project.json");
+    let json = fs::read_to_string(&snapshot)
+        .unwrap()
+        .replace("[1080,1920]", "[96,64]");
+    fs::write(&snapshot, json).unwrap();
+    fs::remove_file(project.join("journal.base.json")).unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/media");
+    fs::copy(fixtures.join("probe.mov"), project.join("probe.mov")).unwrap();
+    success(scratch.run(&[
+        "apply",
+        fixtures.join("import.ops.json").to_str().unwrap(),
+        package,
+    ]));
+    project
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_export_cli_uses_revision_names_and_exclusive_publication() {
+    let scratch = Scratch::new("native-cli-export");
+    let project = export_sample(&scratch);
+    let package = project.to_str().unwrap();
+    assert!(!project.join("exports/native-r1.mp4").exists());
+    error(
+        scratch.run(&["export", package, "--output", "project.json", "--overwrite"]),
+        "BAD_ARGS",
+    );
+    let output = success(scratch.run(&["export", package, "--preset", "social-h264"]));
+    let file = project.join("exports/native-r1.mp4");
+    assert_eq!(
+        output.field("output").and_then(Json::as_str),
+        file.canonicalize().unwrap().to_str()
+    );
+    assert_eq!(output.field("revision").and_then(Json::as_str), Some("r1"));
+    assert_eq!(output.field("state").and_then(Json::as_str), Some("done"));
+    let bytes = fs::read(&file).unwrap();
+    assert_eq!(&bytes[4..8], b"ftyp");
+    error(scratch.run(&["export", package]), "EXISTS");
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+    fs::write(&file, b"old movie").unwrap();
+    success(scratch.run(&["export", package, "--preset", "social-h264", "--overwrite"]));
+    assert_eq!(&fs::read(&file).unwrap()[4..8], b"ftyp");
+    assert_eq!(fs::read_dir(file.parent().unwrap()).unwrap().count(), 1);
+    let project = success(scratch.run(&["check", package]));
+    assert_eq!(project.field("revision").and_then(Json::as_str), Some("r1"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_export_mcp_publishes_without_status_calls_and_cancels_safely() {
+    use std::{
+        io::{BufRead, BufReader},
+        time::{Duration, Instant},
+    };
+
+    let scratch = Scratch::new("native-mcp-export");
+    let project = export_sample(&scratch);
+    let mut child = scratch
+        .command()
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let mut next_id = 0;
+    let mut send = |input: &mut std::process::ChildStdin, name: &str, args: &str| {
+        next_id += 1;
+        writeln!(input, r#"{{"jsonrpc":"2.0","id":{next_id},"method":"tools/call","params":{{"name":"{name}","arguments":{args}}}}}"#).unwrap();
+        input.flush().unwrap();
+    };
+    writeln!(input, r#"{{"jsonrpc":"2.0","id":"init","method":"initialize","params":{{"protocolVersion":"2025-11-25","capabilities":{{}},"clientInfo":{{"name":"export-test","version":"1"}}}}}}"#).unwrap();
+    input.flush().unwrap();
+    let mut line = String::new();
+    assert!(output.read_line(&mut line).unwrap() > 0);
+    let mut receive = || {
+        let mut line = String::new();
+        assert_ne!(output.read_line(&mut line).unwrap(), 0);
+        let response = parse(&line).unwrap();
+        response
+            .field("result")
+            .unwrap()
+            .field("structuredContent")
+            .unwrap()
+            .clone()
+    };
+    send(&mut input, "project.info", r#"{"path":"native.splice"}"#);
+    assert_eq!(
+        receive().field("projectId").and_then(Json::as_str),
+        Some("prj_1")
+    );
+    send(
+        &mut input,
+        "session.start",
+        r#"{"projectId":"prj_1","agent":"export-test"}"#,
+    );
+    assert_eq!(
+        receive().field("sessionId").and_then(Json::as_str),
+        Some("ses_1")
+    );
+    send(
+        &mut input,
+        "export.start",
+        r#"{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r0"}"#,
+    );
+    assert_eq!(
+        receive()
+            .field("error")
+            .unwrap()
+            .field("code")
+            .and_then(Json::as_str),
+        Some("STALE_REVISION")
+    );
+    send(
+        &mut input,
+        "export.start",
+        r#"{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r1","path":"finished.mp4"}"#,
+    );
+    let started = receive();
+    assert_eq!(
+        started.field("jobId").and_then(Json::as_str),
+        Some("job_1"),
+        "{started:?}"
+    );
+    assert_eq!(
+        started.field("state").and_then(Json::as_str),
+        Some("running")
+    );
+    assert_eq!(
+        started
+            .field("settings")
+            .unwrap()
+            .field("codec")
+            .and_then(Json::as_str),
+        Some("HEVC")
+    );
+
+    let finished = project.join("finished.mp4");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !finished.is_file() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    send(&mut input, "jobs.status", r#"{"jobId":"job_1"}"#);
+    let status = receive();
+    assert_eq!(
+        status.field("progress").and_then(Json::as_u64),
+        Some(1),
+        "{status:?}"
+    );
+    assert_eq!(
+        status.field("output").and_then(Json::as_str),
+        finished.canonicalize().unwrap().to_str(),
+        "{status:?}"
+    );
+
+    let preserved = project.join("preserved.mp4");
+    fs::write(&preserved, b"previous movie").unwrap();
+    send(
+        &mut input,
+        "export.start",
+        r#"{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r1","path":"preserved.mp4","overwrite":true}"#,
+    );
+    send(&mut input, "jobs.cancel", r#"{"jobId":"job_2"}"#);
+    let started = receive();
+    assert_eq!(
+        started.field("jobId").and_then(Json::as_str),
+        Some("job_2"),
+        "{started:?}"
+    );
+    let cancelled = receive();
+    assert!(
+        matches!(
+            cancelled.field("state").and_then(Json::as_str),
+            Some("cancelling" | "cancelled")
+        ),
+        "{cancelled:?}"
+    );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        send(&mut input, "jobs.status", r#"{"jobId":"job_2"}"#);
+        let status = receive();
+        match status.field("state").and_then(Json::as_str) {
+            Some("cancelled") => break,
+            Some("cancelling") if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(15))
+            }
+            _ => panic!("Cancellation did not finish: {status:?}"),
+        }
+    }
+    assert_eq!(fs::read(preserved).unwrap(), b"previous movie");
+    assert!(fs::read_dir(&project).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".splice-export-")
+    }));
+    drop(input);
+    assert!(child.wait_with_output().unwrap().status.success());
+}

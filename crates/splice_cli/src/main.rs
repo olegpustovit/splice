@@ -22,7 +22,8 @@ const HELP: &str = "Usage: splice [<project.splice>]
        splice snapshot [<project.splice>]
        splice check [<project.splice>]
        splice describe [<command>|--query <text>]
-       splice export [<project.splice>]
+       splice export [<project.splice>] [--preset <social-h264|social-hevc>]
+                     [--output <path.mp4>] [--overwrite]
        splice frame --at <frame> <out.png> [<project.splice>]
        splice friction [list [--open]|show <id>|repro <id>|resolve <id> <sha>]
        splice version
@@ -92,7 +93,7 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
         ("describe", [id]) if !id.starts_with('-') => commands::describe(Some(id), None)?,
         ("describe", [flag, query]) if flag == "--query" => commands::describe(None, Some(query))?,
         ("open", [] | [_]) => return Err(unavailable("The project viewer")),
-        ("export", _) => return Err(unavailable("Export")),
+        ("export", args) => export(args)?,
         ("frame", _) => return Err(unavailable("Frame rendering")),
         (path, [])
             if Path::new(path)
@@ -233,6 +234,49 @@ fn project_arg(args: &[String]) -> Result<PathBuf, StoreError> {
             "Pass a .splice path or run inside the project package.",
         )),
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn export(_: &[String]) -> Result<Json, StoreError> {
+    Err(unavailable("Export"))
+}
+
+#[cfg(target_os = "macos")]
+fn export(args: &[String]) -> Result<Json, StoreError> {
+    let mut project = None;
+    let mut preset = None;
+    let mut output = None;
+    let mut overwrite = false;
+    let mut args = args.iter().map(String::as_str);
+    while let Some(arg) = args.next() {
+        let mut value = || {
+            args.next()
+                .filter(|value| !value.starts_with("--"))
+                .ok_or_else(|| {
+                    bad_args(
+                        &format!("Missing value for {arg}."),
+                        "Run splice --help for export usage.",
+                    )
+                })
+        };
+        match arg {
+            "--project" if project.is_none() => project = Some(PathBuf::from(value()?)),
+            "--preset" if preset.is_none() => preset = Some(value()?),
+            "--output" if output.is_none() => output = Some(value()?),
+            "--overwrite" if !overwrite => overwrite = true,
+            path if !path.starts_with('-') && project.is_none() => {
+                project = Some(PathBuf::from(path))
+            }
+            _ => {
+                return Err(bad_args(
+                    &format!("Unexpected export argument {arg:?}."),
+                    "Pass one project and each export option at most once.",
+                ));
+            }
+        }
+    }
+    let project = project.map_or_else(current_project, Ok)?;
+    splice_mcp::export_project(Store::open(&project)?, preset, output, overwrite)
 }
 
 fn current_project() -> Result<PathBuf, StoreError> {

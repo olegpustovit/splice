@@ -116,6 +116,10 @@ fn tool_transcripts_run_against_live_store() {
         if matches!(name, "rpc-conformance" | "friction-recovery") {
             continue;
         }
+        // macOS export is covered by the live CLI and MCP subprocess acceptance tests.
+        if cfg!(target_os = "macos") && name == "export.start" {
+            continue;
+        }
         let directory = test_runs.0.join(name);
         let sample = directory.join("sample.splice");
         let new = directory.join("new.splice");
@@ -332,4 +336,24 @@ fn friction_transcript_tracks_session_recovery_and_writes_repro() {
     )
     .unwrap();
     assert!(!std::str::from_utf8(&cli).unwrap().contains(&id));
+}
+
+#[test]
+fn export_commit_keeps_a_concurrent_destination_and_removes_staging() {
+    let temp = TestDirectory::new("export-commit");
+    let file = temp.0.join("movie.mp4");
+    let staged = super::export_file::Output::prepare(file.clone(), false).unwrap();
+    fs::write(staged.staged(), b"finished export").unwrap();
+    fs::write(&file, b"another writer").unwrap();
+    assert_eq!(staged.publish().unwrap_err().code, "EXISTS");
+    drop(staged);
+    assert_eq!(fs::read(&file).unwrap(), b"another writer");
+    assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1);
+
+    let staged = super::export_file::Output::prepare(file.clone(), true).unwrap();
+    fs::write(staged.staged(), b"replacement").unwrap();
+    staged.publish().unwrap();
+    drop(staged);
+    assert_eq!(fs::read(&file).unwrap(), b"replacement");
+    assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1);
 }

@@ -3,6 +3,10 @@
 
 use splice_json::Value as Json;
 
+#[cfg(target_os = "macos")]
+mod export;
+#[cfg(any(target_os = "macos", test))]
+mod export_file;
 /// Persistent MCP friction records and their CLI commands.
 pub mod friction;
 mod history;
@@ -14,6 +18,8 @@ mod timeline;
 mod tools;
 mod wire;
 
+#[cfg(target_os = "macos")]
+pub use export::export_project;
 pub use history::{apply_batch, edit_result_json};
 pub use rpc::serve;
 pub use wire::error_payload;

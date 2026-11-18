@@ -132,6 +132,7 @@ fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
         "splice_core" => &["splice_model", "splice_json"],
         "splice_eval" => &["splice_model"],
         "splice_mcp" => &[
+            "splice_av",
             "splice_core",
             "splice_eval",
             "splice_json",

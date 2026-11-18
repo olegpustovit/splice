@@ -3,8 +3,9 @@ use super::{
     project::{Projects, package_path},
     wire::*,
 };
-use splice_core::history::{Store, StoreError};
+use splice_core::history::StoreError;
 use splice_model::{Frame, JobId};
+use std::path::Path;
 
 pub(super) fn frames(args: &Json) -> Result<Json, StoreError> {
     let filmstrip = args.field("count");
@@ -28,38 +29,118 @@ pub(super) fn frames(args: &Json) -> Result<Json, StoreError> {
     Err(unavailable("Frame rendering"))
 }
 
-pub(super) fn export(store: &Store, args: &Json) -> Result<Json, StoreError> {
-    if args
-        .optional_string("preset")?
-        .is_some_and(|preset| !matches!(preset, "social-h264" | "social-hevc"))
-    {
-        return Err(bad("preset", "social-h264 or social-hevc"));
+pub(super) fn export_options(preset: Option<&str>, path: Option<&str>) -> Result<bool, StoreError> {
+    let hevc = match preset {
+        None | Some("social-hevc") => true,
+        Some("social-h264") => false,
+        _ => return Err(bad("preset", "social-h264 or social-hevc")),
+    };
+    if path.is_some_and(|path| {
+        path.contains('\0')
+            || !Path::new(path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
+    }) {
+        return Err(bad("path", "an output path ending in .mp4"));
     }
-    if args
-        .optional_string("path")?
-        .is_some_and(|path| path.is_empty() || path.contains('\0'))
-    {
-        return Err(bad("path", "a nonempty output path"));
+    Ok(hevc)
+}
+
+pub(super) fn export(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
+    let owner = args.string("projectId")?;
+    let store = projects.lookup_id(owner)?;
+    let path = args.optional_string("path")?;
+    let hevc = export_options(args.optional_string("preset")?, path)?;
+    let overwrite = args.flag("overwrite")?;
+    let options = write_options(args)?;
+    if options.dry_run {
+        return Err(bad("dryRun", "false or omitted for export.start"));
     }
-    args.flag("overwrite")?;
-    store.check_write(&write_options(args)?)?;
-    Err(unavailable("Export"))
+    store.check_write(&options)?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (hevc, overwrite);
+        Err(unavailable("Export"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if projects.exports.iter().any(super::export::Job::active) {
+            return Err(failure(
+                "BUSY",
+                "An export is already running.",
+                "Check jobs.status or cancel the active export.",
+            ));
+        }
+        let id = JobId::from_serial(projects.exports.len() as u64 + 1);
+        let store = projects.lookup_id(owner)?;
+        let job = super::export::Job::start(
+            store,
+            id,
+            Some((owner.to_owned(), options.session.expect("agent session"))),
+            hevc,
+            path,
+            overwrite,
+        )?;
+        let receipt = job.started();
+        projects.exports.push(job);
+        Ok(receipt)
+    }
 }
 
 pub(super) fn job(projects: &mut Projects, name: &str, args: &Json) -> Result<Json, StoreError> {
     let id = job_id(args)?;
-    if args.field("projectId").is_some() {
-        let store = projects.lookup(args)?;
-        if name == "jobs.cancel" {
+    let project = args.optional_string("projectId")?;
+    let cancel = name == "jobs.cancel";
+    if cancel && args.flag("dryRun")? {
+        return Err(bad("dryRun", "false or omitted for jobs.cancel"));
+    }
+    if let Some(project) = project {
+        let store = projects.lookup_id(project)?;
+        if cancel {
             store.check_write(&write_options(args)?)?;
         }
     }
-    // ponytail: the headless build has no native jobs until export (T4.4) or recording (T8.4) starts one.
-    Err(failure(
+    #[cfg(target_os = "macos")]
+    if let Some(index) = projects.exports.iter().position(|job| job.id == id) {
+        let (owner, session) = projects.exports[index]
+            .owner
+            .clone()
+            .expect("MCP export owner");
+        if project.is_some_and(|project| project != owner) {
+            return Err(missing_job(id));
+        }
+        if project.is_none() {
+            let store = projects.lookup_id(&owner)?;
+            if cancel {
+                let options =
+                    if args.field("sessionId").is_some() || args.field("ifRevision").is_some() {
+                        write_options(args)?
+                    } else {
+                        splice_core::history::WriteOptions {
+                            source: splice_core::history::Source::Agent,
+                            session: Some(session),
+                            if_revision: Some(store.project().rev),
+                            ..Default::default()
+                        }
+                    };
+                store.check_write(&options)?;
+            }
+        }
+        let job = &projects.exports[index];
+        if cancel {
+            job.cancel();
+        }
+        return job.status();
+    }
+    Err(missing_job(id))
+}
+
+fn missing_job(id: JobId) -> StoreError {
+    failure(
         "NOT_FOUND",
         &format!("No job {id} is running or retained."),
         "Pass a jobId returned by export.start or record.start in this server.",
-    ))
+    )
 }
 
 pub(super) fn record_start(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
