@@ -123,6 +123,9 @@ recoveries, undos. A drop from the baseline is a red check for the loop.
   passwordless keychain holding the same team identity. Keep signing credentials out of logs.
   The Mac build uses CMake to build the SDL pinned by PXUI for macOS 15. Splice embeds SDL and
   PXUI in `Contents/Frameworks` and validates the bundle's native load paths before signing.
+- `make dev` installs debug and `make install` installs release at the same
+  `~/Applications/Splice.app` path. Both update `~/.local/bin/splice` and register the installed
+  application with Launch Services so Finder can open `.splice` packages.
 - Recording checks are 3 s captures. Never record for longer, and never leave a capture agent running.
 - Privacy grants are a **HUMAN** step (`splice permissions --request` on the Mini, then a person
   clicks). The loop marks such a task `- [~] … HUMAN: <what to click>` and moves on; it never tries

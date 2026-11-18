@@ -4,6 +4,7 @@ set -eu
 products=${1:?usage: bundle-macos.sh PRODUCTS SIGNING_KEYCHAIN SDL_PREFIX}
 keychain=${2:?usage: bundle-macos.sh PRODUCTS SIGNING_KEYCHAIN SDL_PREFIX}
 sdl_prefix=${3:?usage: bundle-macos.sh PRODUCTS SIGNING_KEYCHAIN SDL_PREFIX}
+root=${4:-target/bundle}
 cd "$(dirname "$0")/.."
 
 fail() {
@@ -22,9 +23,8 @@ identity=$(/usr/bin/security find-identity -v -p codesigning "$keychain" 2>/dev/
 [ -f "$products/libpxui.1.dylib" ] || fail "Build libpxui.1.dylib in $products first."
 [ -f "$sdl_prefix/lib/libSDL3.0.dylib" ] || fail 'Build the pinned macOS SDL with make sdl first.'
 
-root=target/bundle
 output=$root/Splice.app
-lock=$root/.publish-lock
+lock=$root/.splice-publish-lock
 /bin/mkdir -p "$root"
 stage=$(/usr/bin/mktemp -d "$root/.stage.XXXXXXXX")
 locked=no
@@ -124,7 +124,11 @@ done
 
 /bin/mkdir "$lock" 2>/dev/null || fail "Another bundle is being published in $root."
 locked=yes
-if [ -e "$output" ] || [ -L "$output" ]; then
+[ ! -L "$output" ] || fail "Move the existing link at $output before bundling."
+if [ -e "$output" ]; then
+    bundle_id=$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$output/Contents/Info.plist" 2>/dev/null) ||
+        fail "Move the existing item at $output before bundling."
+    [ "$bundle_id" = com.olegpustovit.splice ] || fail "Move the existing app at $output before bundling."
     /bin/mv "$output" "$stage/previous.app"
 fi
 /bin/mv "$app" "$output"

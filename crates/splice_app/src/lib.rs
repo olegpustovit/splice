@@ -55,6 +55,17 @@ fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<Option<
         .map_err(|error| viewer_error(&error))?;
     let mut events = Vec::with_capacity(input::EVENT_RESERVE);
     let last = state.map(|dir| dir.join("last-project"));
+    if project.is_none() {
+        let open = window.pump(&mut events);
+        if let Some(error) = window.take_failure() {
+            return Err(viewer_error(&error));
+        }
+        if !open {
+            window.destroy().map_err(|error| viewer_error(&error))?;
+            return Ok(None);
+        }
+        project = project_drop(&events).map(Store::open).transpose()?;
+    }
     if project.is_none() && !smoke {
         let recent = last.as_deref().and_then(recall);
         let folder = recent
@@ -67,36 +78,56 @@ fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<Option<
         };
         project = Some(Store::open(&selected)?);
     }
-    if let (Some(file), Some(store)) = (&last, &project)
-        && let Err(error) = remember(file, store.path())
-    {
-        eprintln!("splice: could not remember the last project: {error}");
-    }
     let keymap = state.map(|dir| dir.join("keymap"));
-    let mut viewer = project.map(|store| Viewer::new(store, state.map(Path::to_path_buf)));
-    let server = if !smoke && let (Some(viewer), Some(state)) = (&viewer, state) {
-        Some(
-            Server::start(viewer.store(), state, pxui_sdl::wake)
-                .map_err(|error| viewer_error(&error))?,
-        )
-    } else {
-        None
+    let result = loop {
+        if let (Some(file), Some(store)) = (&last, &project)
+            && let Err(error) = remember(file, store.path())
+        {
+            eprintln!("splice: could not remember the last project: {error}");
+        }
+        let mut viewer = project.map(|store| Viewer::new(store, state.map(Path::to_path_buf)));
+        let server = if !smoke && let (Some(viewer), Some(state)) = (&viewer, state) {
+            Some(
+                Server::start(viewer.store(), state, pxui_sdl::wake)
+                    .map_err(|error| viewer_error(&error))?,
+            )
+        } else {
+            None
+        };
+        let result = run_surface(
+            &mut window,
+            &mut events,
+            viewer.as_mut(),
+            server.as_ref(),
+            keymap.as_deref(),
+            smoke,
+        );
+        drop(server);
+        let closed = viewer.map_or(Ok(()), Viewer::close);
+        let (shown, next) = result?;
+        closed.map_err(|error| viewer_error(&error))?;
+        let Some(next) = next else { break shown };
+        project = Some(next);
     };
-    let result = run_surface(
-        &mut window,
-        &mut events,
-        viewer.as_mut(),
-        server.as_ref(),
-        keymap.as_deref(),
-        smoke,
-    );
-    drop(server);
     window.destroy().map_err(|error| viewer_error(&error))?;
-    let shown = result?;
-    if let Some(viewer) = viewer {
-        viewer.close().map_err(|error| viewer_error(&error))?;
-    }
-    Ok(shown)
+    Ok(result)
+}
+
+fn project_drop(events: &[Event]) -> Option<&Path> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::FilesDropped {
+                paths: Ok(paths), ..
+            } => Some(paths.as_slice()),
+            _ => None,
+        })
+        .flatten()
+        .map(Path::new)
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("splice"))
+        })
 }
 
 fn choose_project(
@@ -119,6 +150,10 @@ fn choose_project(
         }
         if !open {
             return Ok(None);
+        }
+        if let Some(path) = project_drop(events) {
+            apple_sys::app::cancel_open_panel();
+            return Ok(Some(path.to_path_buf()));
         }
         for event in events.iter() {
             if let Event::FileDialog { id, result } = event
@@ -145,7 +180,7 @@ fn run_surface(
     server: Option<&Server>,
     keymap: Option<&Path>,
     smoke: bool,
-) -> Result<Option<i32>, StoreError> {
+) -> Result<(Option<i32>, Option<Store>), StoreError> {
     let store = viewer.as_deref().map(Viewer::store);
     let name = store
         .as_deref()
@@ -166,7 +201,7 @@ fn run_surface(
     let mut encoded = Events::default();
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut presented = None;
-    loop {
+    let next_project = loop {
         events.clear();
         let open = platform
             .pump(window, events)
@@ -175,7 +210,20 @@ fn run_surface(
             return Err(viewer_error(&error));
         }
         if !open {
-            break;
+            break None;
+        }
+        if let Some(path) = project_drop(events) {
+            match path.canonicalize() {
+                Ok(path)
+                    if viewer
+                        .as_deref()
+                        .is_some_and(|viewer| viewer.store().path() == path) => {}
+                Ok(path) => match Store::open(&path) {
+                    Ok(project) => break Some(project),
+                    Err(error) => eprintln!("splice: {error}"),
+                },
+                Err(error) => eprintln!("splice: could not open {}: {error}", path.display()),
+            }
         }
         if let Some(request) = server.and_then(Server::next_request)
             && let Some(viewer) = viewer.as_deref_mut()
@@ -287,7 +335,7 @@ fn run_surface(
             if surface.draw(window, &ui)? {
                 presented = program.as_ref().and_then(program::Program::shown);
                 if smoke && (program.is_none() || presented.is_some()) {
-                    break;
+                    break None;
                 }
             }
             if let Some((phase, at)) = intents.scrub
@@ -318,10 +366,10 @@ fn run_surface(
             ui.repaint_at()
         };
         window.wait(next);
-    }
+    };
     drop(accessibility);
     surface.close()?;
-    Ok(presented)
+    Ok((presented, next_project))
 }
 
 /// Writes one offscreen viewer frame and returns the output path and revision.

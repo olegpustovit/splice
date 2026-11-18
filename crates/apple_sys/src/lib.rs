@@ -7,6 +7,9 @@ mod error;
 
 pub use error::Error;
 
+/// AppKit integration for the viewer.
+pub mod app;
+
 /// AVFoundation composition, video instructions and audio mix.
 pub mod composition;
 

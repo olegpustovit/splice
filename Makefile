@@ -49,18 +49,21 @@ build: lib
 
 ifeq ($(OS),Darwin)
 SPLICE_SIGNING_KEYCHAIN ?= $(HOME)/Library/Keychains/splice-signing.keychain-db
+BUNDLE_DIR ?= target/bundle
 
 bundle: build
 	@/usr/bin/security unlock-keychain -p '' '$(SPLICE_SIGNING_KEYCHAIN)' >/dev/null 2>&1 || \
 		{ printf '%s\n' 'Set up the passwordless splice-signing keychain with the Developer ID Application identity for team 7ZH3FYV964.' >&2; exit 1; }
-	packaging/bundle-macos.sh '$(PRODUCTS)' '$(SPLICE_SIGNING_KEYCHAIN)' '$(SDL3_DIR)'
+	packaging/bundle-macos.sh '$(PRODUCTS)' '$(SPLICE_SIGNING_KEYCHAIN)' '$(SDL3_DIR)' '$(BUNDLE_DIR)'
 
 sign: bundle
 
-install: bundle
-	mkdir -p '$(APPDIR)' '$(PREFIX)/bin'
-	rm -rf '$(APPDIR)/Splice.app' && ditto target/bundle/Splice.app '$(APPDIR)/Splice.app'
-	ln -sfn '$(APPDIR)/Splice.app/Contents/MacOS/splice' '$(PREFIX)/bin/splice'
+install:
+	@mkdir -p '$(APPDIR)' '$(PREFIX)/bin'
+	@test ! -e '$(PREFIX)/bin/splice' || test -L '$(PREFIX)/bin/splice' || \
+		{ printf '%s\n' 'Move the existing $(PREFIX)/bin/splice before installing.' >&2; exit 1; }
+	$(MAKE) bundle BUNDLE_DIR='$(APPDIR)'
+	appdir=$$(cd '$(APPDIR)' && pwd -P) && ln -sfn "$$appdir/Splice.app/Contents/MacOS/splice" '$(PREFIX)/bin/splice'
 	/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f '$(APPDIR)/Splice.app'
 	'$(PREFIX)/bin/splice' version
 else
@@ -94,6 +97,7 @@ ifneq ($(filter splice_app,$(MAC_CRATES)),)
 endif
 	$(MAKE) bundle PROFILE=debug
 	target/bundle/Splice.app/Contents/MacOS/splice --smoke-test
+	sh tools/check-macos-open.sh target/bundle/Splice.app
 
 mac-run: mac-sync
 	ssh $(MAC) '$(MAC_ENV) $(MAC_NICE) $(CMD)'

@@ -5,6 +5,7 @@ fn main() {
     println!("cargo:rerun-if-changed=native");
     cc::Build::new()
         .files([
+            "native/app.m",
             "native/error.m",
             "native/events.m",
             "native/media.m",
@@ -17,6 +18,7 @@ fn main() {
         .compile("splice_apple");
     for framework in [
         "Accelerate",
+        "AppKit",
         "AVFoundation",
         "CoreGraphics",
         "CoreMedia",

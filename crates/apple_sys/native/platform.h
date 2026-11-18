@@ -12,6 +12,9 @@ void splice_string_free(char *value);
 // Internal helper for the shims. Accepts a null error output.
 void splice_set_error(char **error, const char *message);
 
+// Cancels the attached project picker on the application thread.
+void splice_app_cancel_open_panel(void);
+
 typedef struct {
     int32_t track_id;
     uint32_t codec;
