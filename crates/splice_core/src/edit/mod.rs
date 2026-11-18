@@ -6,7 +6,9 @@ use std::fmt;
 
 mod edits;
 mod mints;
+mod properties;
 mod settle;
+mod spine;
 mod time;
 
 pub use time::span;
@@ -155,6 +157,7 @@ pub(crate) fn stage(
     // ponytail: stage in a clone until T2.6 provides reusable edit storage for warm apply.
     let mut edit = Editor {
         project: base.clone(),
+        source,
         replay: replay.map(<[String]>::to_vec),
         report: ApplyReport::default(),
         bindings: Vec::new(),
@@ -187,6 +190,7 @@ pub(crate) fn stage(
 
 struct Editor {
     project: Project,
+    source: Source,
     replay: Option<Vec<String>>,
     report: ApplyReport,
     bindings: Vec<Binding>,
@@ -206,6 +210,14 @@ struct Outcome {
 }
 
 impl Outcome {
+    fn edit(summary: String, primary: Target) -> Self {
+        Self {
+            summary,
+            primary: Some(primary),
+            created: Vec::new(),
+        }
+    }
+
     fn create(summary: String, target: Target) -> Self {
         Self {
             summary,
@@ -280,8 +292,16 @@ impl Editor {
         }
     }
 
-    fn check_timeline(&self, id: TimelineId) -> Result<(), CommandError> {
-        time::span(&self.project, id).map(|_| ())
+    fn selection(&self, selection: &[Target]) -> Result<Vec<TimelineId>, CommandError> {
+        let mut ids = Vec::with_capacity(selection.len());
+        for target in selection {
+            let id = self.timeline(target)?;
+            time::span(&self.project, id)?;
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
     }
 }
 

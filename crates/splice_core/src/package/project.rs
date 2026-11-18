@@ -2,7 +2,7 @@ use super::{PackageError, codec::*, timeline};
 use splice_json::Value as Json;
 use splice_model::*;
 
-pub(super) fn encode(p: &Project) -> Json {
+pub(crate) fn encode(p: &Project) -> Json {
     object(vec![
         ("format", text(FORMAT)),
         ("rev", Json::Unsigned(p.rev)),
@@ -208,15 +208,17 @@ fn decode_lane(value: &Json) -> Result<Lane, PackageError> {
 }
 
 fn encode_marker(marker: &Marker) -> Json {
-    object(vec![
+    let mut fields = vec![
         ("id", display(&marker.id)),
         ("at", frame_json(marker.at)),
         ("name", text(&marker.name)),
-    ])
+    ];
+    push_text(&mut fields, "color", &marker.color);
+    object(fields)
 }
 
 fn decode_marker(value: &Json) -> Result<Marker, PackageError> {
-    shape(value, &["id", "at", "name"])?;
+    shape(value, &["id", "at", "name", "color"])?;
     Ok(Marker {
         id: value
             .string("id")?
@@ -224,5 +226,6 @@ fn decode_marker(value: &Json) -> Result<Marker, PackageError> {
             .map_err(|_| bad_id("marker.id"))?,
         at: frame(value, "at")?,
         name: value.string("name")?.into(),
+        color: optional_string(value, "color")?,
     })
 }

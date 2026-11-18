@@ -1,4 +1,4 @@
-use super::time::{anchor_at, clip_slot, item_slot, media, rounded, source_frame, source_rate};
+use super::time::{anchor_at, clip_slot, item_slot, media, rounded, source_rate};
 use super::*;
 use crate::commands::{AnchorArg, FrameArg, OverlayContent};
 
@@ -45,6 +45,45 @@ impl Editor {
                 let at = self.frame(&at)?;
                 self.add_marker(at, name)
             }
+            Op::ItemTrim {
+                item,
+                edge,
+                position,
+                ripple,
+            } => self.trim(&item, edge, &position, ripple),
+            Op::ItemMove {
+                items,
+                position,
+                carry_overlays,
+                ripple,
+            } => self.move_items(&items, &position, carry_overlays, ripple),
+            Op::ItemSet {
+                items,
+                name,
+                color,
+                fade_in,
+                fade_out,
+            } => self.set_items(&items, name, color, fade_in, fade_out),
+            Op::ItemDuplicate { items, at } => self.duplicate(&items, at.as_ref()),
+            Op::ClipSpeed {
+                items,
+                speed,
+                ripple,
+            } => self.speed(&items, speed, ripple),
+            Op::ClipInsert { source, at, ripple } => self.insert_clip(source, at.as_ref(), ripple),
+            Op::LaneDelete { lane } => self.delete_lane(&lane),
+            Op::LaneRename { lane, name } => self.rename_lane(&lane, name),
+            Op::ItemLane { items, destination } => self.move_to_lane(&items, &destination),
+            Op::ItemAnchor { item, mode } => self.set_anchor(&item, &mode),
+            Op::OverlaySet {
+                item,
+                placement,
+                behind_presenter,
+                muted,
+            } => self.set_overlay(&item, placement, behind_presenter, muted),
+            Op::TitleSet { item, text } => self.set_title(&item, text),
+            Op::MarkerSet { marker, name, at } => self.set_marker(&marker, name, at.as_ref()),
+            Op::ProjectSet { aspect, access } => self.set_project(aspect, access),
             _ => Err(error(
                 "PLANNED",
                 &format!("{cmd} does not have an apply handler yet."),
@@ -81,15 +120,8 @@ impl Editor {
         let slot = clip_slot(&self.project, id)?;
         let old = self.project.clips.timing(slot).expect("live clip");
         let mut data = self.project.clips.data(slot).expect("live clip").clone();
-        let mut source = source_frame(&self.project, slot, at)?;
         let length = old.length - cut;
-        if let Some(id) = data.media {
-            let frames = media(&self.project, id)?.probe.frames;
-            let limit = f64::from(frames) - f64::from(length) * source_rate(&self.project, slot)?;
-            if f64::from(source) > limit + 0.000_001 {
-                source = rounded((limit + 0.000_001).floor())?.max(old.source);
-            }
-        }
+        let source = super::spine::source_for_interval(&self.project, slot, at, length)?;
         let right = ClipId::from_serial(self.mint("clp")?);
         data.appearance.fade_in = 0;
         clamp_fades(&mut data.appearance, length);
@@ -320,7 +352,12 @@ impl Editor {
         let name = name
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| format!("Marker {}", self.project.markers.len() + 1));
-        self.project.markers.push(Marker { id, at, name });
+        self.project.markers.push(Marker {
+            id,
+            at,
+            name,
+            color: None,
+        });
         self.project.markers.sort_by_key(|marker| marker.at);
         Ok(Outcome::create(
             format!("Added marker {id} at frame {at}"),
@@ -334,14 +371,7 @@ impl Editor {
         ripple: bool,
         keep: bool,
     ) -> Result<Outcome, CommandError> {
-        let mut ids = Vec::new();
-        for target in selection {
-            let id = self.timeline(target)?;
-            self.check_timeline(id)?;
-            if !ids.contains(&id) {
-                ids.push(id);
-            }
-        }
+        let ids = self.selection(selection)?;
         let mut clips: Vec<_> = ids
             .iter()
             .filter_map(|id| match id {
@@ -487,7 +517,7 @@ impl Editor {
     }
 }
 
-fn anchor_parent(anchor: Anchor) -> Option<TimelineId> {
+pub(super) fn anchor_parent(anchor: Anchor) -> Option<TimelineId> {
     match anchor {
         Anchor::ClipSource { clip, .. } => Some(TimelineId::Clip(clip)),
         Anchor::Item { item, .. } => Some(item),
@@ -501,7 +531,7 @@ pub(super) fn clamp_fades(appearance: &mut Appearance, length: Frame) {
     appearance.fade_out = appearance.fade_out.clamp(0, length - appearance.fade_in);
 }
 
-fn arena_full() -> CommandError {
+pub(super) fn arena_full() -> CommandError {
     error(
         "OUT_OF_RANGE",
         "The timeline has exhausted its arena slots.",

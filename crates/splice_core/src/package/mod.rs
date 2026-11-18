@@ -1,7 +1,7 @@
 mod codec;
 pub mod journal;
 mod media;
-mod project;
+pub(crate) mod project;
 mod timeline;
 pub(crate) mod validate;
 

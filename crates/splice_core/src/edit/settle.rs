@@ -7,7 +7,7 @@ impl Editor {
         self.sync_captions()?;
         self.fix_source_anchors()?;
         self.settle_lanes(base)?;
-        self.rekey_effects()?;
+        self.rekey_effects(base)?;
         Ok(())
     }
 
@@ -216,11 +216,28 @@ impl Editor {
         Ok(())
     }
 
-    fn rekey_effects(&mut self) -> Result<(), CommandError> {
+    fn rekey_effects(&mut self, base: &Project) -> Result<(), CommandError> {
         let mut owners = vec![Owner::Project, Owner::Spine];
         owners.extend((0..self.project.lanes.len()).map(Owner::Lane));
         owners.extend(self.project.clips.order().iter().copied().map(Owner::Clip));
         owners.extend(self.project.items.order().iter().copied().map(Owner::Item));
+        // Keep the original ID with its existing owner, even when a copy sorts
+        // before it in the timeline.
+        owners.sort_by_key(|&owner| match owner {
+            Owner::Project | Owner::Spine => false,
+            Owner::Lane(index) => !base
+                .lanes
+                .iter()
+                .any(|lane| lane.id == self.project.lanes[index].id),
+            Owner::Clip(slot) => base
+                .clips
+                .find(self.project.clips.id(slot).expect("live clip"))
+                .is_none(),
+            Owner::Item(slot) => base
+                .items
+                .find(self.project.items.id(slot).expect("live item"))
+                .is_none(),
+        });
         let mut seen = BTreeSet::new();
         for owner in owners {
             for index in 0..effects(&self.project, owner).len() {

@@ -73,6 +73,8 @@ Rules:
   (`FORMAT_UNKNOWN_KEY`) within a major version: strict files keep agents and humans honest.
 - Effects carry `{id, type, params}`; params are the effect type's schema, and unset params inherit
   through project › lane › item. Parameter keys are written in lexical order.
+- Markers may carry an optional `color` swatch. `project.set` keeps the canvas's shorter edge
+  when it changes the aspect.
 
 ## `journal.ops`
 

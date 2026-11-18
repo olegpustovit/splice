@@ -74,7 +74,7 @@ Passing an explicit lane turns an overlap into `LANE_CONFLICT`.
 
 `BAD_ARGS`, `UNKNOWN_COMMAND`, `NOT_FOUND`, `STALE_REVISION`, `CONFLICT`, `OUT_OF_RANGE`, `INVARIANT`, `PLANNED`,
 `WRONG_KIND`, `OUT_OF_SOURCE`, `TOO_SHORT`, `LANE_CONFLICT`, `TRANSCRIPT_CHANGED`,
-`REPLAY_MINTS`, `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
+`LANE_NOT_EMPTY`, `OVERLAP`, `REPLAY_MINTS`, `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
 `MEDIA_OFFLINE`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`,
 `UNSUPPORTED_PLATFORM` (Linux: export, frames, recording), `TCC_DENIED` (recording without a grant;
 the fix names the System Settings pane and `splice permissions --request`; `needsHuman:true` when only

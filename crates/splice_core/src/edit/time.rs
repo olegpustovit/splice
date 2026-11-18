@@ -256,7 +256,7 @@ pub(super) fn media(project: &Project, id: MediaId) -> Result<&Media, CommandErr
         .ok_or_else(|| not_found(&id, "Call project.info for current media IDs."))
 }
 
-fn source_value(project: &Project, slot: Slot, at: Frame) -> Result<f64, CommandError> {
+pub(super) fn source_value(project: &Project, slot: Slot, at: Frame) -> Result<f64, CommandError> {
     let timing = project.clips.timing(slot).expect("live clip");
     Ok(f64::from(timing.source)
         + (f64::from(at) - f64::from(timing.start)) * source_rate(project, slot)?)

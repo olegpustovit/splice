@@ -256,3 +256,266 @@ fn apply_refuses_explicit_lane_conflict_and_stale_transcript_atomically() {
         assert_eq!(format!("{project:?}"), before);
     }
 }
+
+#[test]
+fn tier_a_described_examples_match_prototype_snapshots() {
+    let cases = splice_json::parse(include_str!("../../../../fixtures/json/tier-a.json")).unwrap();
+    let cases = cases.as_array().unwrap();
+    let base = sample();
+    let mut expected = String::new();
+    let mut actual = String::new();
+    for command in commands::COMMANDS
+        .iter()
+        .filter(|row| row.tier == commands::Tier::First)
+    {
+        let case = cases
+            .iter()
+            .find(|case| {
+                case.field("op").unwrap().field("cmd").unwrap().as_str() == Some(command.id)
+            })
+            .unwrap_or_else(|| panic!("missing golden for {}", command.id));
+        let described = commands::describe(Some(command.id), None).unwrap();
+        let op = described.field("example").unwrap();
+        assert_eq!(Some(op), case.field("op"), "{}", command.id);
+        assert!(commands::decode(op).is_ok(), "{}", command.id);
+        let mut project = base.clone();
+        let report = apply(&mut project, std::slice::from_ref(op), Source::Agent, false)
+            .unwrap_or_else(|error| panic!("{}: {error}", command.id));
+        assert_eq!(report.changes[0].cmd, command.id);
+        let snapshot = tier_a_snapshot(&project, report.mints);
+        splice_json::write(case.field("snapshot").unwrap(), &mut expected).unwrap();
+        splice_json::write(&snapshot, &mut actual).unwrap();
+        assert_eq!(actual, expected, "{}", command.id);
+    }
+    assert_eq!(cases.len(), 20);
+}
+
+fn tier_a_snapshot(project: &Project, mints: Vec<String>) -> Json {
+    let encoded = crate::package::project::encode(project);
+    let array = |key| encoded.field(key).unwrap().as_array().unwrap();
+    let lanes = array("lanes")
+        .iter()
+        .map(|lane| Json::Array(columns(lane, &["id", "kind", "name"])))
+        .collect();
+    let clips = array("clips")
+        .iter()
+        .map(|clip| {
+            let mut cells = columns(
+                clip,
+                &[
+                    "id", "media", "start", "length", "source", "speed", "fadeIn", "fadeOut",
+                    "name", "color",
+                ],
+            );
+            let mut enabled: Vec<_> = clip
+                .field("enabled")
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(name, _)| name)
+                .collect();
+            enabled.sort_unstable();
+            cells.push(Json::Array(
+                enabled.into_iter().cloned().map(Json::String).collect(),
+            ));
+            Json::Array(cells)
+        })
+        .collect();
+    let items = array("items")
+        .iter()
+        .map(|item| {
+            let mut cells = columns(item, &["id", "kind", "lane"]);
+            let id = item.field("id").unwrap().as_str().unwrap().parse().unwrap();
+            cells.push(frame(span(project, TimelineId::Item(id)).unwrap().start));
+            cells.push(item.field("length").unwrap().clone());
+            for fade in ["fadeIn", "fadeOut"] {
+                cells.push(item.field(fade).cloned().unwrap_or(frame(0)));
+            }
+            cells.extend(columns(item, &["name", "color"]));
+            let anchor = item.field("anchor").unwrap();
+            let anchor = if anchor.field("pinned").is_some() {
+                vec![str_json(&"pinned"), anchor.field("frame").unwrap().clone()]
+            } else {
+                vec![
+                    str_json(&"source"),
+                    anchor.field("clip").unwrap().clone(),
+                    anchor.field("sourceFrame").unwrap().clone(),
+                ]
+            };
+            cells.push(Json::Array(anchor));
+            let keys: &[&str] = match item.field("kind").unwrap().as_str().unwrap() {
+                "title" => &["text"],
+                "media" => &["media", "source", "placement", "behindPresenter", "muted"],
+                "motion" => &["from", "to"],
+                "caption" => &["words"],
+                kind => panic!("unexpected item kind {kind}"),
+            };
+            cells.push(Json::Array(columns(item.field("params").unwrap(), keys)));
+            Json::Array(cells)
+        })
+        .collect();
+    let markers = array("markers")
+        .iter()
+        .map(|marker| Json::Array(columns(marker, &["id", "at", "name"])))
+        .collect();
+    object(vec![
+        ("aspect", encoded.field("aspect").unwrap().clone()),
+        ("access", encoded.field("access").unwrap().clone()),
+        (
+            "mints",
+            Json::Array(mints.into_iter().map(Json::String).collect()),
+        ),
+        ("lanes", Json::Array(lanes)),
+        ("clips", Json::Array(clips)),
+        ("items", Json::Array(items)),
+        ("markers", Json::Array(markers)),
+    ])
+}
+
+fn columns(value: &Json, keys: &[&str]) -> Vec<Json> {
+    keys.iter()
+        .map(|key| value.field(key).cloned().unwrap_or(Json::Null))
+        .collect()
+}
+
+#[test]
+fn tier_a_failed_edits_leave_the_project_unchanged() {
+    let mut project = sample();
+    for (raw, code) in [
+        (
+            r#"{"cmd":"item.move","items":"clp_end","to":300,"ripple":false}"#,
+            "OVERLAP",
+        ),
+        (
+            r#"{"cmd":"item.trim","item":"clp_take","edge":"out","delta":121}"#,
+            "OUT_OF_SOURCE",
+        ),
+        (
+            r#"{"cmd":"lane.delete","lane":"lan_gfx"}"#,
+            "LANE_NOT_EMPTY",
+        ),
+        (
+            r#"{"cmd":"project.set","aspect":"4:5","access":"off"}"#,
+            "PERMISSION_DENIED",
+        ),
+        (
+            r#"{"cmd":"item.anchor","item":"ovl_broll","anchor":{"item":"ovl_broll"}}"#,
+            "BAD_ARGS",
+        ),
+    ] {
+        let op = splice_json::parse(raw).unwrap();
+        let before = format!("{project:?}");
+        let error = apply(&mut project, &[op], Source::Agent, false).unwrap_err();
+        assert_eq!(error.error.code, code, "{raw}: {error}");
+        assert_eq!(format!("{project:?}"), before);
+    }
+}
+
+#[test]
+fn tier_a_duplicate_preserves_original_effect_ids() {
+    let mut project = sample();
+    let op = splice_json::parse(r#"{"cmd":"item.duplicate","items":"clp_open","at":0}"#).unwrap();
+    let original: ClipId = "clp_open".parse().unwrap();
+    let data = |project: &Project, id| {
+        project
+            .clips
+            .data(project.clips.find(id).unwrap())
+            .unwrap()
+            .appearance
+            .effects[0]
+            .id
+    };
+    let original_effect = data(&project, original);
+    let report = apply(&mut project, &[op], Source::Agent, false).unwrap();
+    let Target::Timeline(TimelineId::Clip(copied)) = report.changes[0].created[0] else {
+        panic!("expected a copied clip");
+    };
+    assert_eq!(span(&project, TimelineId::Clip(copied)).unwrap().start, 0);
+    assert_eq!(
+        span(&project, TimelineId::Clip(original)).unwrap().start,
+        120
+    );
+    assert_eq!(data(&project, original), original_effect);
+    assert_ne!(data(&project, copied), original_effect);
+}
+
+#[test]
+fn tier_a_magnetic_move_and_ripple_trim_keep_spine_contiguous() {
+    let mut project = sample();
+    let ops = splice_json::parse(
+        r#"[
+        {"cmd":"item.move","items":"clp_end","to":100},
+        {"cmd":"item.trim","item":"clp_take","edge":"in","delta":20},
+        {"cmd":"clip.speed","items":"clp_end","speed":16}
+    ]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let clips: Vec<_> = project
+        .clips
+        .order()
+        .iter()
+        .map(|&slot| {
+            let timing = project.clips.timing(slot).unwrap();
+            (
+                project.clips.id(slot).unwrap().to_string(),
+                timing.start,
+                timing.length,
+                timing.source,
+            )
+        })
+        .collect();
+    assert_eq!(
+        clips,
+        [
+            ("clp_open".into(), 0, 120, 0),
+            ("clp_end".into(), 120, 7, 0),
+            ("clp_take".into(), 127, 400, 20)
+        ]
+    );
+    let label = "ovl_label".parse().unwrap();
+    assert_eq!(span(&project, TimelineId::Item(label)).unwrap().start, 127);
+}
+
+#[test]
+fn tier_a_project_aspect_and_marker_swatch_persist_in_snapshot() {
+    let mut project = sample();
+    let ops = splice_json::parse(
+        r#"[
+      {"cmd":"project.set","aspect":"4:5","access":"read"},
+      {"cmd":"item.set","items":"mrk_2","color":"green"}
+    ]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Human, false).unwrap();
+    assert_eq!(project.size, [1080, 1350]);
+    assert_eq!(project.access, Access::Read);
+    let snapshot = crate::package::project::encode(&project);
+    let markers = snapshot.field("markers").unwrap().as_array().unwrap();
+    assert_eq!(markers[1].field("color").unwrap().as_str(), Some("green"));
+    let next =
+        splice_json::parse(r#"{"cmd":"marker.set","marker":"mrk_2","name":"Save beat"}"#).unwrap();
+    assert_eq!(
+        apply(&mut project, &[next], Source::Agent, false)
+            .unwrap_err()
+            .error
+            .code,
+        "PERMISSION_DENIED"
+    );
+}
+
+#[test]
+fn tier_a_fractional_trim_keeps_the_clip_inside_its_media() {
+    let mut project = sample();
+    let id = "clp_end".parse().unwrap();
+    let slot = project.clips.find(id).unwrap();
+    let timing = project.clips.timing_mut(slot).unwrap();
+    timing.speed = 1.5;
+    timing.length = 80;
+    let op = splice_json::parse(r#"{"cmd":"item.trim","item":"clp_end","edge":"in","delta":1}"#)
+        .unwrap();
+    apply(&mut project, &[op], Source::Human, false).unwrap();
+    let timing = project.clips.timing(slot).unwrap();
+    assert_eq!((timing.length, timing.source), (79, 1));
+}

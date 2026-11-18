@@ -373,6 +373,8 @@ pub struct Marker {
     pub at: Frame,
     /// Display name.
     pub name: String,
+    /// Optional timeline swatch.
+    pub color: Option<String>,
 }
 
 /// Effect attached to a project, lane, clip, or item.
