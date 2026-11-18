@@ -11,6 +11,12 @@ target/debug/splice export "$project" --preset social-h264
 "$check_dir/sample" verify "$project/exports/sample-r0.mp4" avc1
 target/debug/splice export "$project" --preset social-hevc --output hevc.mp4
 "$check_dir/sample" verify "$project/hevc.mp4" hvc1
+for frame in 4 180 448 649; do
+    png="$check_dir/frame-$frame.png"
+    target/debug/splice frame --at "$frame" "$png" "$project"
+    "$check_dir/sample" compare "$project/exports/sample-r0.mp4" "$png" "$frame"
+    "$check_dir/sample" compare "$project/hevc.mp4" "$png" "$frame"
+done
 # Cancel only after the encoder has produced an intermediate progress update.
 python3 - "$project" <<'PY'
 import json

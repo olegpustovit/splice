@@ -22,6 +22,16 @@ enum { SourceVideo, SourceAudio, SourceStill, SourceColor };
 @implementation SpliceAVTrack
 @end
 
+@interface SpliceAVTextLayer : CALayer
+@property(nonatomic) int32_t firstFrame;
+@property(nonatomic) int32_t endFrame;
+@property(nonatomic) float fromOpacity;
+@property(nonatomic) float toOpacity;
+@end
+
+@implementation SpliceAVTextLayer
+@end
+
 @interface SpliceAVAssembly : NSObject
 @property(nonatomic) CGSize size;
 @property(nonatomic) int32_t fps;
@@ -501,7 +511,11 @@ bool splice_av_text(void *raw, int32_t from, int32_t to, const SpliceAVText *spe
             assembly.text = [CALayer layer];
             assembly.text.frame = CGRectMake(0, 0, assembly.size.width, assembly.size.height);
         }
-        CALayer *layer = [CALayer layer];
+        SpliceAVTextLayer *layer = [SpliceAVTextLayer layer];
+        layer.firstFrame = from;
+        layer.endFrame = to;
+        layer.fromOpacity = spec->opacity[0];
+        layer.toOpacity = spec->opacity[1];
         CGRect bounds = rect(spec->bounds);
         bounds.origin.y = assembly.size.height - bounds.origin.y - bounds.size.height;
         layer.frame = bounds;
@@ -611,6 +625,16 @@ bool splice_av_read_frame(void *raw, int32_t frame, uint8_t *rgba, size_t length
         }
         CGContextSetBlendMode(context, kCGBlendModeCopy);
         CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+        // ImageGenerator renders the video instructions. Reuse the offline text bitmaps
+        // and their sampled opacity so grabs include the titles and captions in the MP4.
+        CGContextSetBlendMode(context, kCGBlendModeNormal);
+        for (SpliceAVTextLayer *layer in assembly.text.sublayers) {
+            if (frame >= layer.firstFrame && frame < layer.endFrame) {
+                double progress = (double)(frame - layer.firstFrame) / (layer.endFrame - layer.firstFrame);
+                CGContextSetAlpha(context, layer.fromOpacity + (layer.toOpacity - layer.fromOpacity) * progress);
+                CGContextDrawImage(context, layer.frame, (__bridge CGImageRef)layer.contents);
+            }
+        }
         CGContextRelease(context);
         CGImageRelease(image);
         return true;

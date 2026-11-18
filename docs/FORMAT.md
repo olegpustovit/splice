@@ -56,6 +56,8 @@ Name.splice/
   snapshot. `splice check Name.splice` verifies the journal and checkpoint and reports the tip's
   content hash. A valid checkpoint may lag the journal tip.
 - `splice describe item.trim` shows one command. Use `splice describe --query trim` to search.
+- `splice frame --at 30 out.png Name.splice` writes a full-size PNG of an exact timeline frame.
+  Choose an unused output filename.
 
 `apply`, `snapshot`, and `check` can infer the project from the enclosing `.splice` directory,
 or take a path with `--project`. Structured successes go to stdout. Errors carry a code, message,
@@ -165,8 +167,8 @@ keystroke and click-zoom layers also carry the source clock for the capture even
 On macOS, `splice_av` divides that plan at cuts and at changes in the linear ramps. It maps
 source intervals to composition tracks, scales those intervals for speed changes, and applies
 the planned layer order, crop, transform, opacity and audio gain. Frame reads and MP4 encoding
-share those tracks and instructions. Export places title and caption text with Core Animation.
-The prepared evaluator supplies text and timing for the PXUI viewer.
+share those tracks and instructions. Export and frame grabs use the same title and caption
+bitmaps and opacity ramps. The prepared evaluator supplies text and timing for the PXUI viewer.
 
 ## Versioning
 

@@ -13,6 +13,9 @@ pub mod composition;
 /// The bounded native event queue.
 pub mod events;
 
+/// Encoding for rendered RGBA frames.
+pub mod image;
+
 /// AVFoundation media metadata.
 pub mod media;
 

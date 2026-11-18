@@ -116,8 +116,8 @@ fn tool_transcripts_run_against_live_store() {
         if matches!(name, "rpc-conformance" | "friction-recovery") {
             continue;
         }
-        // macOS export is covered by the live CLI and MCP subprocess acceptance tests.
-        if cfg!(target_os = "macos") && name == "export.start" {
+        // Native media is covered by the macOS CLI and MCP subprocess acceptance tests.
+        if cfg!(target_os = "macos") && matches!(name, "export.start" | "view.frames") {
             continue;
         }
         let directory = test_runs.0.join(name);
@@ -356,4 +356,35 @@ fn export_commit_keeps_a_concurrent_destination_and_removes_staging() {
     drop(staged);
     assert_eq!(fs::read(&file).unwrap(), b"replacement");
     assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1);
+}
+
+#[test]
+fn frame_selection_checks_bounds_and_rounds_filmstrip_samples() {
+    use super::platform::FrameSelection;
+    let args = splice_json::parse(r#"{"count":4}"#).unwrap();
+    let frames = FrameSelection::parse(&args).unwrap().resolve(11).unwrap();
+    assert_eq!(frames, [0, 3, 7, 10]);
+    let args = splice_json::parse(r#"{"at":[4,0,4,2]}"#).unwrap();
+    assert_eq!(
+        FrameSelection::parse(&args).unwrap().resolve(5).unwrap(),
+        [4, 0, 4, 2]
+    );
+    assert_eq!(
+        FrameSelection::parse(&args)
+            .unwrap()
+            .resolve(4)
+            .unwrap_err()
+            .code,
+        "OUT_OF_RANGE"
+    );
+    for invalid in [
+        r#"{"at":[-1]}"#,
+        r#"{"at":[]}"#,
+        r#"{"count":0}"#,
+        r#"{"count":17}"#,
+        r#"{"count":1,"at":[0]}"#,
+    ] {
+        let args = splice_json::parse(invalid).unwrap();
+        assert!(FrameSelection::parse(&args).is_err(), "{invalid}");
+    }
 }

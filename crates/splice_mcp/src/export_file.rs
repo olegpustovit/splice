@@ -27,7 +27,10 @@ impl Output {
                 "Pass an MP4 file path.",
             )
         })?;
-        let parent = file.parent().unwrap_or(Path::new("."));
+        let parent = file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
         let directory = parent
             .canonicalize()
             .map_err(|error| path_error(parent, &error))?;
@@ -40,7 +43,7 @@ impl Output {
             let stage = directory.join(format!(".splice-export-{}-{token}", std::process::id()));
             match builder.create(&stage) {
                 Ok(()) => {
-                    let staged = stage.join("output.mp4");
+                    let staged = stage.join(name);
                     return Ok(Self {
                         file,
                         directory: stage,

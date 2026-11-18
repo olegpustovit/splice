@@ -125,6 +125,44 @@ func verify(_ url: URL, fourCC: String) throws {
     print("\(label) \(count) frames, \(track.timeRange.duration.seconds) s, \(track.naturalSize)")
 }
 
+func rgba(_ image: CGImage) -> [UInt8] {
+    let width = image.width
+    let height = image.height
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    pixels.withUnsafeMutableBytes { storage in
+        let context = CGContext(data: storage.baseAddress, width: width, height: height,
+                                bitsPerComponent: 8, bytesPerRow: width * 4,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue |
+                                            CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setBlendMode(.copy)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    }
+    return pixels
+}
+
+func compare(_ movie: URL, png: URL, frame: Int64) throws {
+    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: movie))
+    generator.requestedTimeToleranceBefore = .zero
+    generator.requestedTimeToleranceAfter = .zero
+    let requested = CMTime(value: frame, timescale: 30)
+    var actual = CMTime.invalid
+    let exported = try generator.copyCGImage(at: requested, actualTime: &actual)
+    precondition(CMTimeCompare(requested, actual) == 0, "Decoder returned a different frame")
+    let source = CGImageSourceCreateWithURL(png as CFURL, nil)!
+    let grabbed = CGImageSourceCreateImageAtIndex(source, 0, nil)!
+    precondition(grabbed.width == exported.width && grabbed.height == exported.height)
+    let a = rgba(grabbed)
+    let b = rgba(exported)
+    var total = 0
+    for i in stride(from: 0, to: a.count, by: 4) {
+        for channel in 0..<3 { total += abs(Int(a[i + channel]) - Int(b[i + channel])) }
+    }
+    let difference = Double(total) / Double(grabbed.width * grabbed.height * 3)
+    print("\(movie.lastPathComponent) frame \(frame) mean RGB delta \(difference)/255")
+    precondition(difference <= 2.0, "Frame \(frame) exceeds 2/255")
+}
+
 let args = CommandLine.arguments
 let path = URL(fileURLWithPath: args[2])
 switch args[1] {
@@ -132,6 +170,8 @@ case "make":
     try fixture(at: path)
 case "verify":
     try verify(path, fourCC: args[3])
+case "compare":
+    try compare(path, png: URL(fileURLWithPath: args[3]), frame: Int64(args[4])!)
 default:
-    fatalError("Expected make or verify")
+    fatalError("Expected make, verify, or compare")
 }

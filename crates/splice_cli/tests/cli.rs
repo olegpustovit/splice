@@ -560,3 +560,98 @@ fn native_export_mcp_publishes_without_status_calls_and_cancels_safely() {
     drop(input);
     assert!(child.wait_with_output().unwrap().status.success());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_frames_cli_and_mcp_render_pngs_from_the_same_revision() {
+    let scratch = Scratch::new("native-frames");
+    let project = scratch.0.join("Frame Sample #1.splice");
+    fs::rename(export_sample(&scratch), &project).unwrap();
+    let package = project.to_str().unwrap();
+    let signature = b"\x89PNG\r\n\x1a\n";
+    let output = success(scratch.run(&["frame", "--at", "15", "grab.png", package]));
+    assert_eq!(output.field("revision").and_then(Json::as_str), Some("r1"));
+    assert_eq!(output.field("frame").and_then(Json::as_u64), Some(15));
+    let png = fs::read(scratch.0.join("grab.png")).unwrap();
+    assert_eq!(&png[..8], signature);
+    error(
+        scratch.run(&["frame", "--at", "30", "late.png", package]),
+        "OUT_OF_RANGE",
+    );
+    assert!(!scratch.0.join("late.png").exists());
+    error(
+        scratch.run(&["frame", "--at", "15", "grab.png", package]),
+        "EXISTS",
+    );
+    assert_eq!(fs::read(scratch.0.join("grab.png")).unwrap(), png);
+
+    let mut server = scratch
+        .command()
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    server.stdin.take().unwrap().write_all(concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"frame-test","version":"1"}}}"#, "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"Frame Sample #1.splice"}}}"#, "\n",
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"view.frames","arguments":{"projectId":"prj_1","count":3}}}"#, "\n"
+    ).as_bytes()).unwrap();
+    let output = server.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let response = parse(
+        std::str::from_utf8(&output.stdout)
+            .unwrap()
+            .lines()
+            .nth(2)
+            .unwrap(),
+    )
+    .unwrap();
+    let result = response.field("result").unwrap();
+    assert_eq!(
+        result.field("isError").and_then(Json::as_bool),
+        Some(false),
+        "{result:?}"
+    );
+    let data = result.field("structuredContent").unwrap();
+    assert_eq!(data.field("revision").and_then(Json::as_str), Some("r1"));
+    let frames = data.field("frames").and_then(Json::as_array).unwrap();
+    let content = result.field("content").and_then(Json::as_array).unwrap();
+    assert_eq!(content.len(), 7);
+    assert_eq!(frames.len(), 3);
+    for ((frame, attachments), at) in frames
+        .iter()
+        .zip(content[1..].chunks_exact(2))
+        .zip([0, 15, 29])
+    {
+        assert_eq!(frame.field("frame").and_then(Json::as_u64), Some(at));
+        assert_eq!(frame.field("width").and_then(Json::as_u64), Some(96));
+        let [image, link] = attachments else {
+            unreachable!()
+        };
+        assert_eq!(image.field("type").and_then(Json::as_str), Some("image"));
+        assert!(
+            image
+                .field("data")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .starts_with("iVBORw0KGgo")
+        );
+        assert_eq!(
+            link.field("type").and_then(Json::as_str),
+            Some("resource_link")
+        );
+        let uri = link.field("uri").and_then(Json::as_str).unwrap();
+        assert_eq!(frame.field("uri").and_then(Json::as_str), Some(uri));
+        assert!(
+            uri.starts_with("file://")
+                && uri.contains("/Frame%20Sample%20%231.splice/cache/frames/")
+        );
+        let cached = project
+            .join("cache/frames")
+            .join(uri.rsplit('/').next().unwrap());
+        assert_eq!(&fs::read(cached).unwrap()[..8], signature);
+    }
+}

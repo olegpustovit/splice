@@ -85,6 +85,10 @@ int32_t splice_av_export_status(void *job, float *progress, char **error);
 void splice_av_export_cancel(void *job);
 void splice_av_export_release(void *job);
 
+void *splice_image_png(const uint8_t *pixels, size_t length, uint32_t width, uint32_t height,
+                       uint32_t max_edge, const uint8_t **data, size_t *size, char **error);
+void splice_image_release(void *data);
+
 typedef struct {
     uint64_t time_ns;
     uint32_t kind;

@@ -9,6 +9,7 @@ fn main() {
             "native/events.m",
             "native/media.m",
             "native/composition.m",
+            "native/image.m",
         ])
         .flag("-fobjc-arc")
         .flag("-fblocks")

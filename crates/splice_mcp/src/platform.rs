@@ -3,30 +3,101 @@ use super::{
     project::{Projects, package_path},
     wire::*,
 };
-use splice_core::history::StoreError;
+use splice_core::history::{Store, StoreError};
 use splice_model::{Frame, JobId};
 use std::path::Path;
 
-pub(super) fn frames(args: &Json) -> Result<Json, StoreError> {
-    let filmstrip = args.field("count");
-    let explicit = args.field("at");
-    match (filmstrip, explicit) {
-        (Some(count), None) if count.as_u64().is_some_and(|n| n > 0) => {}
-        (None, Some(frames))
-            if frames.as_array().is_some_and(|items| {
-                !items.is_empty()
-                    && items
-                        .iter()
-                        .all(|at| at.as_u64().and_then(|n| Frame::try_from(n).ok()).is_some())
-            }) => {}
-        _ => {
-            return Err(bad(
+pub(super) enum FrameSelection {
+    Explicit(Vec<Frame>),
+    Filmstrip(u32),
+}
+
+impl FrameSelection {
+    pub(super) fn parse(args: &Json) -> Result<Self, StoreError> {
+        match (args.field("count"), args.field("at")) {
+            (Some(count), None)
+                if let Some(count) = count.as_u64().filter(|n| (1..=16).contains(n)) =>
+            {
+                Ok(Self::Filmstrip(count as u32))
+            }
+            (None, Some(frames))
+                if let Some(frames) = frames
+                    .as_array()
+                    .filter(|items| (1..=16).contains(&items.len())) =>
+            {
+                let frames = frames
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_u64()
+                            .and_then(|n| Frame::try_from(n).ok())
+                            .ok_or_else(|| bad("at", "an array of nonnegative frame numbers"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Self::Explicit(frames))
+            }
+            _ => Err(bad(
                 "at or count",
-                "an array of nonnegative frames or a positive filmstrip count",
-            ));
+                "up to 16 explicit frames or a filmstrip count from 1 to 16",
+            )),
         }
     }
-    Err(unavailable("Frame rendering"))
+
+    #[cfg(any(target_os = "macos", test))]
+    pub(super) fn resolve(self, end: Frame) -> Result<Vec<Frame>, StoreError> {
+        if end <= 0 {
+            return Err(failure(
+                "OUT_OF_RANGE",
+                "The timeline has no frames.",
+                "Add a clip or overlay before rendering.",
+            ));
+        }
+        match self {
+            Self::Explicit(frames) => {
+                if let Some(at) = frames.iter().find(|&&at| at < 0 || at >= end) {
+                    return Err(failure(
+                        "OUT_OF_RANGE",
+                        &format!("Frame {at} is outside the timeline."),
+                        &format!("Choose a frame from 0 through {}.", end - 1),
+                    ));
+                }
+                Ok(frames)
+            }
+            Self::Filmstrip(count) => {
+                let divisor = u64::from(count.saturating_sub(1).max(1));
+                let last = u64::from((end - 1) as u32);
+                Ok((0..count)
+                    .map(|i| ((u64::from(i) * last + divisor / 2) / divisor) as Frame)
+                    .collect())
+            }
+        }
+    }
+}
+
+pub(super) fn frames(
+    store: &Store,
+    args: &Json,
+    content: &mut Vec<Json>,
+) -> Result<Json, StoreError> {
+    let selection = FrameSelection::parse(args)?;
+    #[cfg(target_os = "macos")]
+    {
+        super::frames::render_tool(store, selection, content)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (store, content);
+        // Keep argument validation common and leave timeline and media handling to the native renderer.
+        match selection {
+            FrameSelection::Explicit(values) => {
+                let _ = values;
+            }
+            FrameSelection::Filmstrip(count) => {
+                let _ = count;
+            }
+        }
+        Err(unavailable("Frame rendering"))
+    }
 }
 
 pub(super) fn export_options(preset: Option<&str>, path: Option<&str>) -> Result<bool, StoreError> {

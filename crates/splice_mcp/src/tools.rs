@@ -5,7 +5,9 @@ const REVISION: &str =
     r#"{"anyOf":[{"type":"integer","minimum":0},{"type":"string","pattern":"^r[0-9]+$"}]}"#;
 const IDS: &str = r#"{"type":"array","items":{"type":"string"}}"#;
 const FRAME: &str = r#"{"type":"integer","minimum":0}"#;
-const FRAMES: &str = r#"{"type":"array","items":{"type":"integer","minimum":0},"minItems":1}"#;
+const FRAMES: &str =
+    r#"{"type":"array","items":{"type":"integer","minimum":0},"minItems":1,"maxItems":16}"#;
+const FILMSTRIP: &str = r#"{"type":"integer","minimum":1,"maximum":16}"#;
 const LIMIT: &str = r#"{"type":"integer","minimum":1}"#;
 const RANGE: &str = r#"{"type":"object","properties":{"from":{"type":"integer","minimum":0},"to":{"type":"integer","minimum":0}},"required":["from","to"]}"#;
 const ERROR_SCHEMA: &str = r#"{"type":"object","properties":{"code":{"type":"string"},"message":{"type":"string"},"fix":{"type":"string"},"valid":{"type":"array"},"current":{},"changedSince":{"type":"array"},"op":{"type":"integer","minimum":0}},"required":["code","message","fix"]}"#;
@@ -187,7 +189,11 @@ const TOOLS: &[Tool] = &[
         name: "view.frames",
         description: "Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count.",
         read_only: true,
-        input: &[("projectId", "string"), ("at", FRAMES), ("count", LIMIT)],
+        input: &[
+            ("projectId", "string"),
+            ("at", FRAMES),
+            ("count", FILMSTRIP),
+        ],
         required: &["projectId"],
         output: &[("revision", REVISION), ("frames", "array")],
         success: &[&["revision", "frames"]],
@@ -512,7 +518,8 @@ pub(super) fn call(
     name: &str,
     args: &Json,
 ) -> Result<Json, splice_json::NonFiniteNumber> {
-    let result = execute(projects, name, args);
+    let mut content = Vec::new();
+    let result = execute(projects, name, args, &mut content);
     let is_error = result.is_err();
     let (payload, mirror) = match result {
         Ok(payload) => {
@@ -521,24 +528,28 @@ pub(super) fn call(
             (payload, mirror)
         }
         Err(error) => {
+            content.clear();
             let mirror = error.to_string();
             (object(vec![("error", error_payload(error))]), mirror)
         }
     };
+    content.insert(
+        0,
+        object(vec![("type", text("text")), ("text", Json::String(mirror))]),
+    );
     Ok(object(vec![
-        (
-            "content",
-            Json::Array(vec![object(vec![
-                ("type", text("text")),
-                ("text", Json::String(mirror)),
-            ])]),
-        ),
+        ("content", Json::Array(content)),
         ("structuredContent", payload),
         ("isError", Json::Bool(is_error)),
     ]))
 }
 
-fn execute(projects: &mut Projects, name: &str, args: &Json) -> Result<Json, StoreError> {
+fn execute(
+    projects: &mut Projects,
+    name: &str,
+    args: &Json,
+    content: &mut Vec<Json>,
+) -> Result<Json, StoreError> {
     args.optional_string("friction")?;
     match name {
         "commands.describe" => {
@@ -568,10 +579,7 @@ fn execute(projects: &mut Projects, name: &str, args: &Json) -> Result<Json, Sto
         "edit.apply" => history::apply(projects.lookup(args)?, args),
         "history.list" => history::list(projects.lookup(args)?, args),
         "history.undo" => history::undo(projects.lookup(args)?, args),
-        "view.frames" => {
-            projects.lookup(args)?;
-            platform::frames(args)
-        }
+        "view.frames" => platform::frames(projects.lookup(args)?, args, content),
         "export.start" => platform::export(projects, args),
         "jobs.status" | "jobs.cancel" => platform::job(projects, name, args),
         "record.start" => platform::record_start(projects, args),

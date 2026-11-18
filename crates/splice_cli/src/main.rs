@@ -94,7 +94,7 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
         ("describe", [flag, query]) if flag == "--query" => commands::describe(None, Some(query))?,
         ("open", [] | [_]) => return Err(unavailable("The project viewer")),
         ("export", args) => export(args)?,
-        ("frame", _) => return Err(unavailable("Frame rendering")),
+        ("frame", args) => frame(args)?,
         (path, [])
             if Path::new(path)
                 .extension()
@@ -277,6 +277,33 @@ fn export(args: &[String]) -> Result<Json, StoreError> {
     }
     let project = project.map_or_else(current_project, Ok)?;
     splice_mcp::export_project(Store::open(&project)?, preset, output, overwrite)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn frame(_: &[String]) -> Result<Json, StoreError> {
+    Err(unavailable("Frame rendering"))
+}
+
+#[cfg(target_os = "macos")]
+fn frame(args: &[String]) -> Result<Json, StoreError> {
+    let [flag, at, file, project @ ..] = args else {
+        return Err(bad_args(
+            "Expected an exact frame and PNG filename.",
+            "Run splice frame --at N out.png [project.splice].",
+        ));
+    };
+    let at = if flag == "--at" && at.bytes().all(|byte| byte.is_ascii_digit()) {
+        at.parse::<i32>().ok()
+    } else {
+        None
+    }
+    .ok_or_else(|| {
+        bad_args(
+            "Invalid frame number.",
+            "Pass --at followed by a nonnegative integer frame.",
+        )
+    })?;
+    splice_mcp::grab_frame(Store::open(&project_arg(project)?)?, at, Path::new(file))
 }
 
 fn current_project() -> Result<PathBuf, StoreError> {

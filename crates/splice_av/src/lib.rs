@@ -9,6 +9,7 @@ use splice_eval::{EvalError, Evaluator};
 use splice_model::{Frame, Project};
 use std::{fmt, path::Path};
 
+pub use apple_sys::image::png as encode_png;
 pub use composition::{Export, ExportState};
 
 /// A prepared timeline and its native composition for playback and delivery.

@@ -102,6 +102,11 @@ indexes, visibility and categories. Captured characters and raw key codes stay i
 `audio.summary` returns track settings and labels transcript-derived pauses. Loudness and peaks
 are null when the current build cannot measure the audio.
 
+`view.frames` accepts 1–16 exact frame numbers in `at` or a `count` from 1–16 for a filmstrip.
+A filmstrip of two or more samples spans the first through last timeline frames. Each result
+includes the full-size PNG as a local `file:` resource under the package cache, plus an inline
+PNG with a longest edge of up to 640 pixels. Out-of-range frame numbers return `OUT_OF_RANGE`.
+
 On Linux, rendering, export and capture return `UNSUPPORTED_PLATFORM`. A job ID with no retained
 job returns `NOT_FOUND`. Headless `ui.show` returns `{"applied":false,"reason":"headless"}`.
 
@@ -123,7 +128,7 @@ that started them. A clean end to MCP input lets active exports finish.
 `BAD_ARGS`, `UNKNOWN_COMMAND`, `NOT_FOUND`, `STALE_REVISION`, `CONFLICT`, `OUT_OF_RANGE`, `INVARIANT`, `PLANNED`,
 `WRONG_KIND`, `OUT_OF_SOURCE`, `TOO_SHORT`, `LANE_CONFLICT`, `TRANSCRIPT_CHANGED`,
 `LANE_NOT_EMPTY`, `OVERLAP`, `REPLAY_MINTS`, `REPLAY_MEDIA`, `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
-`MEDIA_OFFLINE`, `BAD_MEDIA`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`, `EXPORT_FAILED`,
+`MEDIA_OFFLINE`, `BAD_MEDIA`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`, `EXPORT_FAILED`, `FRAME_FAILED`,
 `UNSUPPORTED_PLATFORM` (Linux: export, frames, recording), `TCC_DENIED` (recording without a grant;
 the fix names the System Settings pane and `splice permissions --request`; `needsHuman:true` when only
 a person can click), `IDENTITY_MISMATCH` (the running bundle is not the installed, Developer ID–signed
