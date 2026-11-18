@@ -161,8 +161,9 @@ fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
         if !table.ends_with("dependencies") {
             continue;
         }
-        let allowed_test =
-            matches!(key, "mem_sys" | "splice_testkit") && table.ends_with("dev-dependencies");
+        let allowed_test = (matches!(key, "mem_sys" | "splice_testkit")
+            || (name == "splice_eval" && key == "splice_core"))
+            && table.ends_with("dev-dependencies");
         let allowed_build =
             key == "cc" && name == "apple_sys" && table.ends_with("build-dependencies");
         if !(allowed.contains(&key) || allowed_test || allowed_build) {

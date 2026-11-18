@@ -8,3 +8,8 @@ license.workspace = true
 splice_model = { path = "../splice_model" }
 [lints]
 workspace = true
+
+[dev-dependencies]
+splice_core = { path = "../splice_core" }
+splice_testkit = { path = "../splice_testkit" }
+mem_sys = { path = "../../pxui/crates/open/mem_sys", features = ["counting"] }

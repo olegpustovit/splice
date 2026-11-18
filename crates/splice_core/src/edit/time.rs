@@ -1,5 +1,7 @@
 use super::*;
 use crate::commands::{AnchorArg, FrameArg};
+pub(super) use splice_model::timing::WordSpan;
+use splice_model::timing::{self, TimingError};
 
 /// Resolves the current frame range of a clip, overlay, or marker.
 pub fn span(project: &Project, id: TimelineId) -> Result<Span, CommandError> {
@@ -53,67 +55,37 @@ pub(super) fn item_slot(project: &Project, id: ItemId) -> Result<Slot, CommandEr
         .ok_or_else(|| not_found(&id, "Call timeline.snapshot for current item IDs."))
 }
 
-pub(super) fn anchor_start(project: &Project, mut anchor: Anchor) -> Result<Frame, CommandError> {
-    let mut extra = 0i64;
-    for _ in 0..=project.items.order().len() {
-        let base = match anchor {
-            Anchor::Pinned(frame) => frame,
-            Anchor::ClipSource { clip, source } => {
-                let slot = clip_slot(project, clip)?;
-                let timing = project.clips.timing(slot).expect("live clip");
-                timeline_frame(timing, source_rate(project, slot)?, f64::from(source))?
-            }
-            Anchor::Item {
-                item: TimelineId::Item(id),
-                edge,
-                offset,
-            } => {
-                let timing = project
-                    .items
-                    .timing(item_slot(project, id)?)
-                    .expect("live item");
-                extra += i64::from(offset);
-                if edge == Edge::End {
-                    extra += i64::from(timing.length);
-                }
-                anchor = timing.anchor;
-                continue;
-            }
-            Anchor::Item { item, edge, offset } => {
-                let span = span(project, item)?;
-                extra += i64::from(offset);
-                if edge == Edge::End {
-                    span.end
-                } else {
-                    span.start
-                }
-            }
-            Anchor::Marker { marker, offset } => {
-                extra += i64::from(offset);
-                span(project, TimelineId::Marker(marker))?.start
-            }
-            Anchor::Word {
-                word,
-                transcript_hash,
-                edge,
-                offset,
-            } => {
-                extra += i64::from(offset);
-                let word = need_word(project, word, Some(transcript_hash))?;
-                if edge == Edge::End {
-                    word.end
-                } else {
-                    word.start
-                }
-            }
-        };
-        return Frame::try_from(i64::from(base) + extra).map_err(|_| frame_range());
+pub(super) fn anchor_start(project: &Project, anchor: Anchor) -> Result<Frame, CommandError> {
+    timing::anchor_start(project, anchor).map_err(timing_error)
+}
+
+fn timing_error(error_kind: TimingError) -> CommandError {
+    match error_kind {
+        TimingError::Clip(id) => not_found(&id, "Call timeline.snapshot for current clip IDs."),
+        TimingError::Item(id) => not_found(&id, "Call timeline.snapshot for current item IDs."),
+        TimingError::Marker(id) => not_found(&id, "Call timeline.find for markers."),
+        TimingError::Media(id) => not_found(&id, "Call project.info for current media IDs."),
+        TimingError::Word(id) => not_found(
+            &id,
+            "Call transcript.get and choose a word still in the timeline.",
+        ),
+        TimingError::Range => frame_range(),
+        TimingError::Cycle => error(
+            "BAD_ARGS",
+            "The item anchors form a cycle.",
+            "Anchor one of the items to a clip or a fixed frame.",
+        ),
+        TimingError::Transcript => error(
+            "TRANSCRIPT_CHANGED",
+            "The transcript hash has changed.",
+            "Call transcript.get and use the current hash.",
+        ),
+        TimingError::Rate | TimingError::Slot => error(
+            "INVARIANT",
+            "A clip has an invalid source rate or slot.",
+            "Check the project and media frame rates.",
+        ),
     }
-    Err(error(
-        "BAD_ARGS",
-        "The item anchors form a cycle.",
-        "Anchor one of the items to a clip or a fixed frame.",
-    ))
 }
 
 impl Editor {
@@ -229,23 +201,7 @@ pub(super) fn anchor_at(project: &Project, at: Frame) -> Result<Anchor, CommandE
 }
 
 pub(super) fn source_rate(project: &Project, slot: Slot) -> Result<f64, CommandError> {
-    let timing = project.clips.timing(slot).expect("live clip");
-    let data = project.clips.data(slot).expect("live clip");
-    let rate = match data.media {
-        Some(id) => {
-            let media = media(project, id)?;
-            media.probe.fps / f64::from(project.fps) * timing.speed
-        }
-        None => timing.speed,
-    };
-    if !rate.is_finite() || rate <= 0.0 {
-        return Err(error(
-            "INVARIANT",
-            "A clip has an invalid source rate.",
-            "Check the project and media frame rates.",
-        ));
-    }
-    Ok(rate)
+    timing::source_rate(project, slot).map_err(timing_error)
 }
 
 pub(super) fn media(project: &Project, id: MediaId) -> Result<&Media, CommandError> {
@@ -288,58 +244,12 @@ fn checked_frame(integer: f64) -> Result<Frame, CommandError> {
     }
 }
 
-fn timeline_frame(timing: ClipTiming, source_rate: f64, frame: f64) -> Result<Frame, CommandError> {
-    rounded(f64::from(timing.start) + (frame - f64::from(timing.source)) / source_rate)
-}
-
-pub(super) struct WordSpan {
-    pub clip: ClipId,
-    pub source: Frame,
-    pub hash: u64,
-    pub start: Frame,
-    pub end: Frame,
-}
-
 pub(super) fn word_span(
     project: &Project,
     id: WordId,
     hash: Option<u64>,
 ) -> Result<Option<WordSpan>, CommandError> {
-    let mut first: Option<WordSpan> = None;
-    for &slot in project.clips.order() {
-        let Some(media) = project.clips.data(slot).expect("live clip").media else {
-            continue;
-        };
-        let Some(transcript) = project
-            .transcripts
-            .iter()
-            .find(|t| t.media == media && hash.is_none_or(|hash| hash == t.hash))
-        else {
-            continue;
-        };
-        let Some(word) = transcript.words.iter().find(|word| word.id == id) else {
-            continue;
-        };
-        let timing = project.clips.timing(slot).expect("live clip");
-        let rate = source_rate(project, slot)?;
-        let source_end = f64::from(timing.source) + f64::from(timing.length) * rate;
-        if word.from < timing.source || f64::from(word.from) >= source_end {
-            continue;
-        }
-        let start = timeline_frame(timing, rate, f64::from(word.from))?;
-        let end = timeline_frame(timing, rate, f64::from(word.to).min(source_end))?
-            .max(frame_add(start, 1)?);
-        if first.as_ref().is_none_or(|first| start < first.start) {
-            first = Some(WordSpan {
-                clip: project.clips.id(slot).expect("live clip"),
-                source: word.from,
-                hash: transcript.hash,
-                start,
-                end,
-            });
-        }
-    }
-    Ok(first)
+    timing::word_span(project, id, hash).map_err(timing_error)
 }
 
 fn need_word(project: &Project, id: WordId, hash: Option<u64>) -> Result<WordSpan, CommandError> {

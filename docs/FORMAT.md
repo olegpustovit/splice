@@ -128,6 +128,14 @@ closing a session writes that metadata atomically. It does not advance the revis
 The headless sample under `fixtures/projects/sample.splice` uses the prototype's timeline and
 transcript with descriptor-only media. The native media acceptance tests in T4 need playable assets.
 
+## Playback planning
+
+The evaluator prepares one immutable project snapshot and reuses a frame buffer during playback.
+It resolves effects per parameter from project to spine and clip, from overlay lane to overlay,
+and from project to captions lane and cue. Source geometry uses the media probe dimensions.
+The frame plan carries ordered visual layers, audio gains, and caption word timing. Cursor,
+keystroke and click-zoom layers also carry the source clock for the capture event renderer.
+
 ## Versioning
 
 `format` is `splice/<major>`. Within a major, changes are additive and gated by a fixture. A new major

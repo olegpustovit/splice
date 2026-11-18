@@ -5,6 +5,7 @@ mod arena;
 mod ids;
 mod media;
 mod timeline;
+pub mod timing;
 
 pub use arena::{Clips, Items, Slot};
 pub use ids::*;

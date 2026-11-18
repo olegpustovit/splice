@@ -1,0 +1,63 @@
+frame 0 clp_open
+picture clp_open med_opener 0.000 0.000,0.000,1.000,1.000 0.000,656.250,1080.000,607.500 1.000 1.000 - -
+fade 0.933
+picture ovl_logo med_logo 0.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
+title ovl_hook 64.800,134.400,950.400,108.000 0.125 Make it move.
+frame 7 clp_open
+picture clp_open med_opener 7.000 0.000,0.000,1.000,1.000 0.000,656.250,1080.000,607.500 1.000 1.000 - -
+fade 0.467
+picture ovl_logo med_logo 7.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
+title ovl_hook 64.800,134.400,950.400,108.000 1.000 Make it move.
+frame 16 clp_open
+picture clp_open med_opener 16.000 0.000,0.000,1.000,1.000 0.000,656.250,1080.000,607.500 1.000 1.000 - -
+picture ovl_logo med_logo 16.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
+title ovl_hook 64.800,134.400,950.400,108.000 1.000 Make it move.
+frame 119 clp_open
+picture clp_open med_opener 119.000 0.000,0.000,1.000,1.000 0.000,656.250,1080.000,607.500 1.000 1.000 - -
+picture ovl_logo med_logo 119.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
+title ovl_hook 64.800,134.400,950.400,108.000 0.125 Make it move.
+frame 120 clp_take
+background 0.000,0.000,1080.000,1920.000 6b5a7d/1e1a26 1.000
+picture clp_take med_screen 0.000 0.360,0.100,0.460,0.800 54.000,431.739,972.000,1056.522 1.000 1.000 0.050/0.030 1.500/true
+camera clp_take 0.000 766.800,1491.600,259.200,259.200 25.920 0.500
+keys clp_take 0.000 1.000 BottomLeft
+picture ovl_logo med_logo 120.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
+audio clp_take Mic 0.000 1.000
+audio clp_take System 0.000 0.800
+frame 150 clp_take
+background 0.000,0.000,1080.000,1920.000 6b5a7d/1e1a26 1.000
+picture clp_take med_screen 30.000 0.360,0.100,0.460,0.800 54.000,431.739,972.000,1056.522 1.000 1.000 0.050/0.030 1.500/true
+camera clp_take 30.000 766.800,1491.600,259.200,259.200 25.920 0.500
+keys clp_take 30.000 1.000 BottomLeft
+picture ovl_logo med_logo 150.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
+title ovl_label 64.800,134.400,950.400,108.000 1.000 01 / Build the frame
+caption ovl_cap1 2 1.000 Bold w1:126-137:TODAY w2:140-145:WE w3:148-159:BUILD
+audio clp_take Mic 30.000 1.000
+audio clp_take System 30.000 0.800
+frame 240 clp_take
+background 0.000,0.000,1080.000,1920.000 6b5a7d/1e1a26 1.000
+picture clp_take med_screen 120.000 0.360,0.100,0.460,0.800 54.000,431.739,972.000,1056.522 1.064 1.000 0.050/0.030 1.500/true
+camera clp_take 120.000 766.800,1491.600,259.200,259.200 25.920 0.500
+keys clp_take 120.000 1.000 BottomLeft
+picture ovl_logo med_logo 240.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
+title ovl_label 64.800,134.400,950.400,108.000 0.500 01 / Build the frame
+caption ovl_cap3 0 1.000 Bold w8:231-242:FIRST w9:245-254:OPEN w10:257-264:THE
+audio clp_take Mic 120.000 1.000
+audio clp_take System 120.000 0.800
+frame 422 clp_take
+background 0.000,0.000,1080.000,1920.000 6b5a7d/1e1a26 1.000
+picture clp_take med_screen 302.000 0.360,0.100,0.460,0.800 54.000,431.739,972.000,1056.522 1.000 1.000 0.050/0.030 1.500/true
+camera clp_take 302.000 766.800,1491.600,259.200,259.200 25.920 0.500
+keys clp_take 302.000 1.000 BottomLeft
+picture ovl_logo med_logo 422.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
+picture ovl_broll med_broll 2.000 0.046,0.000,0.907,1.000 108.000,692.160,864.000,535.680 1.000 1.000 0.000/0.060 -
+caption ovl_cap7 0 1.000 Bold w19:415-424:THEN w20:427-436:OPEN w21:439-446:THE
+audio clp_take Mic 302.000 1.000
+audio clp_take System 302.000 0.800
+frame 550 clp_end
+picture clp_end med_endcard 10.000 0.000,0.000,1.000,1.000 0.000,656.250,1080.000,607.500 1.000 1.000 - -
+picture ovl_logo med_logo 550.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
+frame 659 clp_end
+picture clp_end med_endcard 119.000 0.000,0.000,1.000,1.000 0.000,656.250,1080.000,607.500 1.000 1.000 - -
+fade 0.958
+picture ovl_logo med_logo 659.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
