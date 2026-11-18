@@ -8,3 +8,6 @@ mod package_tests;
 
 /// The command registry and argument decoders shared by editor clients.
 pub mod commands;
+
+/// Atomic editing, frame resolution and timeline changes.
+pub mod edit;

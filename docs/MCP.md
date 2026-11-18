@@ -59,10 +59,22 @@ The `cut` field gives the command's release tier. The 20 registry-only commands 
 cut to execute. In `edit.apply`, an operation can bind a result with `ref:"$cut"`. Later operations
 can use `"$cut"` for its primary item and `"$cut.right"` or `"$cut.new"` for its first created item.
 
+## Batch results
+
+An edit batch reports direct `changes`, implicit `sideEffects`, and a `diff` with before and
+after timeline ranges. An operation error includes its zero-based index when the operation can
+be identified. A dry run uses the same validation, resolves references, and previews the IDs that
+would be minted. It leaves the project and its next ID serial untouched.
+
+Use `at` for a placement calculated from a frame or anchor. Use `anchor` to retain an explicit
+item, marker, or transcript relation. Overlapping items can move to a free lane during settle.
+Passing an explicit lane turns an overlap into `LANE_CONFLICT`.
+
 ## Error codes
 
 `BAD_ARGS`, `UNKNOWN_COMMAND`, `NOT_FOUND`, `STALE_REVISION`, `CONFLICT`, `OUT_OF_RANGE`, `INVARIANT`, `PLANNED`,
-`BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
+`WRONG_KIND`, `OUT_OF_SOURCE`, `TOO_SHORT`, `LANE_CONFLICT`, `TRANSCRIPT_CHANGED`,
+`REPLAY_MINTS`, `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
 `MEDIA_OFFLINE`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`,
 `UNSUPPORTED_PLATFORM` (Linux: export, frames, recording), `TCC_DENIED` (recording without a grant;
 the fix names the System Settings pane and `splice permissions --request`; `needsHuman:true` when only

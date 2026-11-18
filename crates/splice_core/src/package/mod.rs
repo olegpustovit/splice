@@ -3,7 +3,7 @@ pub mod journal;
 mod media;
 mod project;
 mod timeline;
-mod validate;
+pub(crate) mod validate;
 
 use codec::{object, text};
 use splice_json::Value as Json;

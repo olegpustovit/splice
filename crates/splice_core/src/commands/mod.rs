@@ -109,7 +109,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(code: &'static str, message: String, fix: String) -> Self {
+    pub(crate) fn new(code: &'static str, message: String, fix: String) -> Self {
         Self {
             code,
             message,
@@ -118,7 +118,7 @@ impl CommandError {
         }
     }
 
-    fn bad(name: &str, expected: &str) -> Self {
+    pub(crate) fn bad(name: &str, expected: &str) -> Self {
         Self::new(
             "BAD_ARGS",
             format!("Invalid or missing {name}."),

@@ -3,7 +3,7 @@ use splice_model::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
-pub(super) fn project(project: &Project) -> Result<(), PackageError> {
+pub(crate) fn project(project: &Project) -> Result<(), PackageError> {
     if project.fps == 0 || project.size.contains(&0) {
         return Err(bad("fps and canvas dimensions", "positive integers"));
     }

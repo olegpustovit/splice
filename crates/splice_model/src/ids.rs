@@ -326,3 +326,13 @@ pub enum TimelineId {
     /// A marker.
     Marker(MarkerId),
 }
+
+impl fmt::Display for TimelineId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Clip(id) => fmt::Display::fmt(id, f),
+            Self::Item(id) => fmt::Display::fmt(id, f),
+            Self::Marker(id) => fmt::Display::fmt(id, f),
+        }
+    }
+}
