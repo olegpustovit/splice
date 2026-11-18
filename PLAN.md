@@ -1,7 +1,8 @@
 # M1 · Splice 0.1: the headless core
 
-**Hard milestone.** Cut 0.1 lands **today, 2026-11-18**. The loop keeps going after the cut until the
-M1 exit (0.3). Scope is fixed. When a task does not fit, ship it as a `ponytail:` with an upgrade
+**Cut 0.1 landed on 2026-11-18.** The signed release is installed on the Mini and the live recording
+checks passed across debug and release installs. The loop keeps going until the M1 exit (0.3).
+Scope is fixed. When a task does not fit, ship it as a `ponytail:` with an upgrade
 trigger instead of cutting the task; when that is not possible, move the task to a later cut and
 say so in the log. Never weaken a test to make a cut.
 
@@ -122,30 +123,28 @@ Depends on T1.3, T4.1, T7.
   effective user. It removes `capture/agent.sock` and exits after 60 s idle. Both clients shared one
   agent from SSH on the Mini. `ponytail:` use an on-demand LaunchAgent if `open` needs a GUI session
   the caller lacks. Permission handling and the native recorder follow in T8.2–T8.4.
-- [~] T8.2 Permissions (d8cc54f). The signed agent reports four read-only authorization states and
+- [x] T8.2 Permissions (d8cc54f, 8fe23f0). The signed agent reports four read-only authorization states and
   its verified team, path and designated requirement match. `splice permissions --request` requests
   the first missing grant or the selected service and opens its privacy pane. `--request all`
   starts every missing request and opens the first missing pane. Capture fails with
   `TCC_DENIED` and `needsHuman:true` when a requested input lacks a grant.
-  **HUMAN on the Mini:** Run `splice permissions --request all`. In System Settings → Privacy & Security, enable
-  Splice under Screen & System Audio Recording, Microphone, Camera and Input Monitoring. Accept
-  Quit & Reopen if macOS offers it, then run `splice permissions` to confirm all four are granted.
+  **Initial setup:** Run `splice permissions --request all` and approve the requests in macOS.
+  The Mini reported all four grants across both signed install profiles in T8.5.
   Risk: macOS 15+ can periodically ask the user to re-confirm screen-recording access for apps that
   capture without the system picker. The agent then gets `TCC_DENIED` with `needsHuman:true`, and the
   loop marks the task `HUMAN:` instead of retrying.
-- [~] T8.3 `apple_sys::capture`, `events`, `screenshot`: modern ScreenCaptureKit, bound the T4.1 way.
-  Native code and fixtures are in place (a3673ed). HUMAN: the three-second acceptance run needs the
-  T8.2 Mini grants.
+- [x] T8.3 `apple_sys::capture`, `events`, `screenshot`: modern ScreenCaptureKit, bound the T4.1 way
+  (a3673ed). On the Mini the display take produced one 90-frame clip in 3.005 s, with a probeable
+  HEVC screen track, readable microphone audio and a parseable event log.
   - Partial (958c27a): installed preflight lists active displays without prompting. The
     ScreenCaptureKit bridge can list shareable windows and apps after the grant and defines the
     same display, window and area targets for PNG screenshots and the stream writer.
   - Partial (a3585f9): ScreenCaptureKit and AVAssetWriter bridge for `screen.mov`, `mic.m4a`,
     and `system.m4a`. A native fixture verified HEVC and stereo AAC, complete-frame filtering,
     removal of paused time, rejection of samples from a pause after resume, and idle frame hold.
-    Live timing and encoding still require the Mini's grants.
   - Partial (eed54ae): optional default camera via AVCaptureSession writes `camera.mov` using the
     native host clock and the take's pause offsets. Generated frames retained the camera's leading
-    offset and resumed without a timestamp gap. Hardware and input event acceptance remain open.
+    offset and resumed without a timestamp gap.
   - Partial (f78af91): a listen-only input tap feeds the take clock and a bounded ring. The fixture
     verified normalized positions, secure-input filtering, keyboard destination and pause cutoff.
     Rust drained and decoded 1,024 records with zero allocations.
@@ -184,16 +183,12 @@ Depends on T1.3, T4.1, T7.
     inserted on the spine as one agent batch (undoable). With `insert:false` it only lands in media.
   - `splice record` is the same thing in one command and creates the project when the path is new.
   - Linux: transcripts with fixture takes; live capture returns `UNSUPPORTED_PLATFORM`.
-- [~] T8.5 Acceptance on the Mini, after the one-time grant, all from ssh with short runs (the Mini is
-  shared):
-  HUMAN: the current signed release is installed. The read-only preflight reported `notGranted`
-  for screen and input monitoring and `notDetermined` for microphone and camera. Confirm the grants
-  under T8.2 before starting the live runs.
-  1. `splice record /tmp/r.splice --display main --duration 3 --mic` gives a project with one take
-     clip of 90 ± 6 frames and its events.
-  2. `make dev`, then the same again: no prompt (stable signature).
-  3. `make install`, then a `splice mcp` transcript from a Codex-spawned process: no prompt
-     (responsible process = Splice.app).
+- [x] T8.5 Acceptance on the Mini from SSH (8fe23f0). Each three-second capture produced one
+  90-frame take with microphone audio and input events in one checked journal batch.
+  1. Installed release CLI `splice record … --display main --duration 3 --mic` recorded in 3.005 s.
+  2. After `make dev`, the same CLI command recorded in 3.012 s without a prompt.
+  3. After `make install`, a Codex-spawned `splice mcp` transcript recorded in 3.005 s without a
+     prompt. Each profile kept all four grants, the installed path and the designated requirement.
 
 ### T9 · Text and captions (0.2) [M + L]
 - [ ] T9.1 [M] `splice_speech`: SpeechAnalyzer transcription job → words with frame-accurate timing (forced alignment), transcript hash. Linux uses fixture transcripts.
@@ -255,3 +250,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T8.5 · HUMAN · bfd4a08 · Signed release installation and read-only preflight on the Mini took 89.41 s including the idle exit. The CLI showed the new selectors and the bundle matched Team ID 7ZH3FYV964 and the pinned requirement. Screen and input monitoring are `notGranted`; microphone and camera are `notDetermined`. Live capture, debug reinstallation without a prompt, and live MCP capture remain pending.
 - 2026-11-18 · T8.5 · HUMAN · Signed release check from SSH took 63.07 s including the idle exit. Both CLI and MCP returned the same `TCC_DENIED` with `needsHuman:true` for Screen & System Audio Recording and left both requested project paths absent. MCP preflight still listed the main display. `make check` passed in 3.34 s (83 tests, slowest: seeded history replay 1.607 s). The 0.1 release budget check passed in 6.37 s at 236 µs p99 over 300 samples on 2,000 items, with zero warm allocations.
 - 2026-11-18 · T8.2 · `--request all` starts every missing permission request and opens one Settings pane. `make check` passed in 3.69 s (83 tests, slowest: seeded history replay 1.666 s). `make mac-check` passed in 25.90 s (33 tests and bundle checks, slowest: offscreen viewer snapshots 1.533 s). The batch permission fixture verified one Settings launch and skipped granted permissions in 0.031 s.
+- 2026-11-18 · T8.2–T8.5 · done · 8fe23f0 · Live acceptance from SSH took 25.80 s including `make dev` and `make install`. All four grants persisted across the signed installs. The release CLI, debug CLI and release MCP captures each published one 90-frame take in one verified journal batch (3.005 s, 3.012 s and 3.005 s). Each HEVC probe passed, microphone audio opened with `afinfo` and the event logs parsed. The installed release reports 0.1.0 and the capture agent exited. Final `make check` passed in 3.40 s (83 tests, slowest: seeded history replay 1.606 s). Final `make mac-check` passed in 35.12 s (33 tests and bundle checks, slowest: native title and audio composition 4.356 s).
