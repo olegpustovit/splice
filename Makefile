@@ -11,6 +11,7 @@ APPDIR  ?= $(HOME)/Applications
 CARGOFLAGS = $(if $(filter release,$(PROFILE)),--release)
 PRODUCTS   = target/$(if $(filter release,$(PROFILE)),release,debug)
 OS := $(shell uname -s)
+SPLICE_PACKAGES := $(notdir $(patsubst %/Cargo.toml,%,$(wildcard crates/*/Cargo.toml))) gate
 
 MAC      ?= snowbear@olegs-mac-mini
 MAC_DIR  ?= projects/editor
@@ -22,7 +23,7 @@ MAC_NICE  = nice -n 10
 
 check:
 	cargo run -q -p gate -- all
-	cargo fmt --all --check
+	cargo fmt $(foreach crate,$(SPLICE_PACKAGES),-p $(crate)) --check
 	cargo clippy -q --workspace --all-targets -- -D warnings
 	cargo t --workspace
 
