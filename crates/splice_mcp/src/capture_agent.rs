@@ -29,10 +29,12 @@ const IDLE: Duration = Duration::from_secs(60);
 const STARTUP: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(1);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(4);
+const TAKE_REPLY_TIMEOUT: Duration = Duration::from_secs(20);
 const REQUEST_LIMIT: u64 = 64 * 1024;
 const REPLY_LIMIT: u64 = 16 * 1024 * 1024;
 const REQUIREMENT: &str = include_str!("../../../packaging/designated-requirement.txt");
 
+mod jobs;
 mod permissions;
 mod sources;
 
@@ -169,7 +171,11 @@ pub(super) fn request(method: &str, args: &Json) -> Result<Json, StoreError> {
         }
     };
     stream
-        .set_read_timeout(Some(REPLY_TIMEOUT))
+        .set_read_timeout(Some(if method.starts_with("take.") {
+            TAKE_REPLY_TIMEOUT
+        } else {
+            REPLY_TIMEOUT
+        }))
         .map_err(|error| transport(&error))?;
     stream
         .set_write_timeout(Some(IO_TIMEOUT))
@@ -186,6 +192,10 @@ pub(super) fn request(method: &str, args: &Json) -> Result<Json, StoreError> {
             "BAD_ARGS" => "BAD_ARGS",
             "TCC_DENIED" => "TCC_DENIED",
             "CAPTURE_SOURCE" => "CAPTURE_SOURCE",
+            "CAPTURE_FAILED" => "CAPTURE_FAILED",
+            "BUSY" => "BUSY",
+            "NOT_FOUND" => "NOT_FOUND",
+            "IO" => "IO",
             _ => return Err(transport(&"The capture agent returned an unknown error.")),
         };
         return Err(StoreError::new(
@@ -244,17 +254,35 @@ fn listen(
 ) -> io::Result<()> {
     listener.set_nonblocking(true)?;
     let mut activity = Instant::now();
-    while let Some(remaining) = idle.checked_sub(activity.elapsed()) {
+    let mut jobs = jobs::Jobs::default();
+    let mut tick = activity;
+    loop {
+        let now = Instant::now();
+        if now >= tick {
+            let was_active = jobs.active();
+            jobs.tick(now);
+            if was_active {
+                activity = Instant::now();
+            }
+            tick = now + jobs::POLL;
+        }
+        let Some(remaining) = idle.checked_sub(activity.elapsed()) else {
+            break;
+        };
         let delay = match listener.accept() {
             Ok((mut stream, _)) => {
-                if serve_peer(&mut stream, identity).is_ok() {
+                if serve_peer(&mut stream, identity, &mut jobs).is_ok() {
                     activity = Instant::now();
                 }
                 Duration::ZERO
             }
             // ponytail: use a short AppKit wait until measured idle wakeups warrant a run-loop source.
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                remaining.min(Duration::from_millis(50))
+                if jobs.active() {
+                    tick.saturating_duration_since(Instant::now())
+                } else {
+                    remaining.min(Duration::from_millis(50))
+                }
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error),
@@ -266,20 +294,28 @@ fn listen(
     Ok(())
 }
 
-fn serve_peer(stream: &mut UnixStream, identity: &Identity) -> io::Result<()> {
+fn serve_peer(
+    stream: &mut UnixStream,
+    identity: &Identity,
+    jobs: &mut jobs::Jobs,
+) -> io::Result<()> {
     verify_peer(stream)?;
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     let request = receive(stream, REQUEST_LIMIT)?;
-    let reply = match dispatch(&request, identity) {
+    let reply = match dispatch(&request, identity, jobs) {
         Ok(value) => object(vec![("result", value)]),
         Err(error) => object(vec![("error", error_payload(error))]),
     };
     send(stream, &reply)
 }
 
-fn dispatch(request: &Json, identity: &Identity) -> Result<Json, StoreError> {
+fn dispatch(
+    request: &Json,
+    identity: &Identity,
+    jobs: &mut jobs::Jobs,
+) -> Result<Json, StoreError> {
     let args = request
         .field("args")
         .filter(|args| args.as_object().is_some())
@@ -303,6 +339,12 @@ fn dispatch(request: &Json, identity: &Identity) -> Result<Json, StoreError> {
             Err(capture_not_ready())
         }
         "record.stop" => Err(capture_not_ready()),
+        "take.begin" => {
+            let options = crate::record_options::Options::parse(args)?;
+            permissions::require_options(&options, &permissions::snapshot())?;
+            jobs.begin(Path::new(args.string("package")?), options)
+        }
+        method @ ("take.status" | "take.stop" | "take.cancel") => jobs.command(method, args),
         _ => Err(bad("method", "permissions, record.start or record.stop")),
     }
 }

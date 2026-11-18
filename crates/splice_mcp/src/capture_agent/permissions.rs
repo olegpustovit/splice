@@ -124,16 +124,17 @@ pub(super) fn command(args: &Json, identity: &Identity) -> Result<Json, StoreErr
 }
 
 pub(super) fn required(args: &Json, snapshot: &[Status; 4]) -> Result<(), StoreError> {
-    let still = args.flag("still")?;
-    let microphone = args.flag("mic")?;
-    let camera = args.flag("camera")?;
-    let input = args.flag("events")? || args.field("events").is_none();
-    for (grant, required) in GRANTS.iter().zip([
-        true,
-        !still && microphone,
-        !still && camera,
-        !still && input,
-    ]) {
+    require_options(&crate::record_options::Options::parse(args)?, snapshot)
+}
+
+pub(super) fn require_options(
+    options: &crate::record_options::Options,
+    snapshot: &[Status; 4],
+) -> Result<(), StoreError> {
+    for (grant, required) in GRANTS
+        .iter()
+        .zip([true, options.mic, options.camera, options.events])
+    {
         if required && grant.status(snapshot) != Status::Granted {
             return Err(denied(grant));
         }

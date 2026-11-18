@@ -228,6 +228,7 @@ version = "0.1.0"
 dependencies = [
  "apple_sys",
  "splice_av",
+ "splice_capture",
  "splice_core",
  "splice_eval",
  "splice_json",

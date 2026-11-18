@@ -225,10 +225,10 @@ fn copy_fixture(source: &Path, destination: &Path) -> io::Result<()> {
     Ok(())
 }
 
-struct TestDirectory(PathBuf);
+pub(super) struct TestDirectory(pub(super) PathBuf);
 
 impl TestDirectory {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         let path = std::env::temp_dir().join(format!("splice-{name}-{}", std::process::id()));
         fs::create_dir(&path).unwrap();
         Self(path)

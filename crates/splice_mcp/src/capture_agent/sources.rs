@@ -1,5 +1,49 @@
 use crate::{Json, object, text};
-use apple_sys::capture::{Rect, Source};
+use apple_sys::capture::{self, Rect, Source, Target};
+use splice_core::history::StoreError;
+
+pub(super) fn target(source: &crate::record_options::Source) -> Result<Target, StoreError> {
+    use crate::record_options::Source as Selector;
+    Ok(match source {
+        Selector::Display(id) => Target::Display(*id),
+        Selector::Window(id) => Target::Window(*id),
+        Selector::Area(display, [x, y, width, height]) => Target::Area {
+            display: *display,
+            rect: Rect {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+            },
+        },
+        Selector::NamedWindow { app, title } => {
+            let sources = capture::sources(true).map_err(super::capture_source_error)?;
+            Target::Window(window(&sources, app, title)?)
+        }
+    })
+}
+
+fn window(sources: &[Source], app: &str, title: &str) -> Result<u32, StoreError> {
+    let mut matches = sources.iter().filter_map(|source| match source {
+        Source::Window { id, app: owner, title: name, pid, .. }
+            if name == title && (owner == app || sources.iter().any(|source| {
+                matches!(source, Source::Application { pid: owner, name, .. } if owner == pid && name == app)
+            })) => Some(*id),
+        _ => None,
+    });
+    match (matches.next(), matches.next()) {
+        (Some(id), None) => Ok(id),
+        (first, _) => Err(StoreError::new(
+            "CAPTURE_SOURCE",
+            if first.is_none() {
+                "No shareable window matches the app and title."
+            } else {
+                "Multiple shareable windows match the app and title."
+            },
+            "Use a window ID from record.start with dryRun:true.",
+        )),
+    }
+}
 
 pub(super) fn payload(sources: &[Source]) -> Json {
     let mut displays = Vec::new();
@@ -86,6 +130,11 @@ mod tests {
                 app: "com.example.fixture".into(),
                 title: "Test window".into(),
             },
+            Source::Application {
+                pid: 37,
+                bundle: "com.example.fixture".into(),
+                name: "Fixture App".into(),
+            },
         ]);
         let displays = report.field("displays").unwrap().as_array().unwrap();
         assert_eq!(displays[0].field("id").and_then(Json::as_str), Some("4"));
@@ -99,6 +148,47 @@ mod tests {
         assert_eq!(
             windows[0].field("title").and_then(Json::as_str),
             Some("Test window")
+        );
+    }
+
+    #[test]
+    fn capture_agent_window_selection_rejects_ambiguous_titles() {
+        let sources = [
+            Source::Window {
+                id: 37,
+                pid: 4,
+                rect: Rect::default(),
+                app: "com.example.fixture".into(),
+                title: "Test window".into(),
+            },
+            Source::Window {
+                id: 38,
+                pid: 4,
+                rect: Rect::default(),
+                app: "com.example.fixture".into(),
+                title: "Test window".into(),
+            },
+            Source::Application {
+                pid: 4,
+                bundle: "com.example.fixture".into(),
+                name: "Fixture App".into(),
+            },
+        ];
+        assert_eq!(
+            window(&sources[1..], "Fixture App", "Test window").unwrap(),
+            38
+        );
+        assert_eq!(
+            window(&sources, "com.example.fixture", "Test window")
+                .unwrap_err()
+                .code,
+            "CAPTURE_SOURCE"
+        );
+        assert_eq!(
+            window(&sources, "Fixture App", "Other window")
+                .unwrap_err()
+                .code,
+            "CAPTURE_SOURCE"
         );
     }
 }
