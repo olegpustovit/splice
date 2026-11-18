@@ -1,6 +1,6 @@
-use crate::package::{PackageError, codec::*, json_bytes};
+use crate::package::{PackageError, codec::*, json_bytes, media};
 use splice_json::Value as Json;
-use splice_model::SessionId;
+use splice_model::{Media, SessionId};
 
 /// Actor whose batch is committed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9,6 +9,15 @@ pub enum Source {
     Human,
     /// An MCP editing session.
     Agent,
+}
+
+/// A path resolution captured for deterministic replay.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MediaImport {
+    /// Path as supplied in the original operation.
+    pub request: String,
+    /// Descriptor used by the edit, including its assigned media ID.
+    pub descriptor: Media,
 }
 
 /// One committed edit or history action.
@@ -20,6 +29,8 @@ pub enum Change {
         ops: Vec<Json>,
         /// Minted IDs in replay order.
         mints: Vec<String>,
+        /// Media metadata resolved from paths, in first-use order.
+        imports: Vec<MediaImport>,
     },
     /// Rebuild while omitting specified revisions.
     Revert {
@@ -92,12 +103,32 @@ impl Record {
         fields.push(("label", text(&batch.label)));
         push_text(&mut fields, "key", &batch.key);
         match &batch.change {
-            Change::Edit { ops, mints } => {
+            Change::Edit {
+                ops,
+                mints,
+                imports,
+            } => {
                 fields.push(("ops", Json::Array(ops.clone())));
                 fields.push((
                     "mints",
                     Json::Array(mints.iter().map(|mint| text(mint)).collect()),
                 ));
+                if !imports.is_empty() {
+                    fields.push((
+                        "imports",
+                        Json::Array(
+                            imports
+                                .iter()
+                                .map(|import| {
+                                    object(vec![
+                                        ("request", text(&import.request)),
+                                        ("descriptor", media::encode_media(&import.descriptor)),
+                                    ])
+                                })
+                                .collect(),
+                        ),
+                    ));
+                }
             }
             Change::Revert { revisions, skipped } => {
                 fields.push((
@@ -126,7 +157,7 @@ impl Record {
         ];
         let mut fields = shared.to_vec();
         let change = if value.field("ops").is_some() {
-            fields.extend(["ops", "mints"]);
+            fields.extend(["ops", "mints", "imports"]);
             let mut mints = Vec::new();
             for mint in value.array("mints")? {
                 mints.push(
@@ -135,9 +166,20 @@ impl Record {
                         .to_owned(),
                 );
             }
+            let mut imports = Vec::new();
+            if value.field("imports").is_some() {
+                for item in value.array("imports")? {
+                    shape(item, &["request", "descriptor"])?;
+                    imports.push(MediaImport {
+                        request: item.string("request")?.to_owned(),
+                        descriptor: media::decode_media(item.required("descriptor")?)?,
+                    });
+                }
+            }
             Change::Edit {
                 ops: value.array("ops")?.to_vec(),
                 mints,
+                imports,
             }
         } else if value.field("revertOf").is_some() {
             fields.extend(["revertOf", "skipped"]);

@@ -18,7 +18,7 @@ pub(super) fn decode(value: &Json) -> Result<Vec<Media>, PackageError> {
     value.array("media")?.iter().map(decode_media).collect()
 }
 
-fn encode_media(media: &Media) -> Json {
+pub(super) fn encode_media(media: &Media) -> Json {
     let mut fields = vec![
         ("id", display(&media.id)),
         (
@@ -55,7 +55,7 @@ fn encode_media(media: &Media) -> Json {
     object(fields)
 }
 
-fn decode_media(value: &Json) -> Result<Media, PackageError> {
+pub(super) fn decode_media(value: &Json) -> Result<Media, PackageError> {
     shape(
         value,
         &[

@@ -47,6 +47,7 @@ fn change_aspect(aspect: Aspect) -> Batch {
                     .unwrap(),
             ],
             mints: Vec::new(),
+            imports: Vec::new(),
         },
     }
 }

@@ -5,7 +5,7 @@ pub(crate) mod project;
 mod timeline;
 pub(crate) mod validate;
 
-use codec::{object, text};
+use codec::{ReadFields, object, text};
 use splice_json::Value as Json;
 use splice_model::Project;
 use std::fmt;
@@ -14,6 +14,9 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+const MEDIA_TABLE: &str = "media.json";
+const PREVIOUS_MEDIA: &str = "media.previous.json";
 
 /// Encodes timeline data using the package vocabulary.
 pub fn snapshot(project: &Project) -> Json {
@@ -122,9 +125,17 @@ impl Package {
     /// Loads the snapshot, media table, and any transcripts from this locked package.
     pub fn load(&self) -> Result<Project, PackageError> {
         let path = self.path.join("project.json");
-        let mut project = project::decode(&read_json(&path)?).map_err(|error| error.at(&path))?;
-        let path = self.path.join("media.json");
-        project.media = media::decode(&read_json(&path)?).map_err(|error| error.at(&path))?;
+        let snapshot = read_json(&path)?;
+        let mut project = project::decode(&snapshot).map_err(|error| error.at(&path))?;
+        let path = self.path.join(MEDIA_TABLE);
+        let saved = read_optional_json(&self.path.join(PREVIOUS_MEDIA))?;
+        let table = match saved.as_ref() {
+            Some(saved) if saved_for_other_snapshot(saved, &snapshot)? => {
+                saved.required("media")?.clone()
+            }
+            _ => read_json(&path)?,
+        };
+        project.media = media::decode(&table).map_err(|error| error.at(&path))?;
         let transcripts = self.path.join("transcripts");
         match fs::symlink_metadata(&transcripts) {
             Ok(metadata) if metadata.is_dir() => {}
@@ -175,8 +186,44 @@ impl Package {
                 atomic_write(&directory, name, bytes)?;
             }
         }
-        atomic_write(&self.path, "media.json", &media)?;
-        atomic_write(&self.path, "project.json", &snapshot)
+        let path = self.path.join(PREVIOUS_MEDIA);
+        let saved = read_optional_json(&path)?;
+        let previous = match saved.as_ref() {
+            Some(saved)
+                if saved_for_other_snapshot(
+                    saved,
+                    &read_json(&self.path.join("project.json"))?,
+                )? =>
+            {
+                Some(saved.required("media")?.clone())
+            }
+            _ => read_optional_json(&self.path.join(MEDIA_TABLE))?,
+        };
+        // A failure publishing project.json must leave its old table readable.
+        let replace = saved.is_some()
+            || match &previous {
+                Some(previous) => json_bytes(previous)? != media,
+                None => true,
+            };
+        if replace {
+            if let Some(previous) = previous {
+                let backup = json_bytes(&object(vec![
+                    ("snapshot", codec::hash_text(hash_bytes(&snapshot))),
+                    ("media", previous),
+                ]))?;
+                atomic_write(&self.path, PREVIOUS_MEDIA, &backup)?;
+            }
+            atomic_write(&self.path, MEDIA_TABLE, &media)?;
+        }
+        atomic_write(&self.path, "project.json", &snapshot)?;
+        if replace {
+            match fs::remove_file(&path) {
+                Ok(()) => sync_dir(&self.path)?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(PackageError::io(&path, error)),
+            }
+        }
+        Ok(())
     }
 
     fn acquire(path: &Path) -> Result<Self, PackageError> {
@@ -261,6 +308,10 @@ impl Package {
             .and_then(|()| self.lock.sync_all())
             .map_err(|error| PackageError::io(&path, error))
     }
+}
+
+fn saved_for_other_snapshot(saved: &Json, snapshot: &Json) -> Result<bool, PackageError> {
+    Ok(codec::hash(saved, "snapshot")? != hash_bytes(&json_bytes(snapshot)?))
 }
 
 impl Drop for Package {

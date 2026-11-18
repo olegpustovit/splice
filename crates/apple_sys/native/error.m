@@ -9,6 +9,6 @@ void splice_set_error(char **error, const char *message) {
     }
 }
 
-void splice_error_free(char *error) {
-    free(error);
+void splice_string_free(char *value) {
+    free(value);
 }

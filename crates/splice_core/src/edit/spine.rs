@@ -192,6 +192,7 @@ impl Editor {
         source: InsertSource,
         at: Option<&FrameArg>,
         ripple: bool,
+        load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
     ) -> Result<Outcome, CommandError> {
         let media_id = match source {
             InsertSource::Media(target) => {
@@ -200,10 +201,7 @@ impl Editor {
                 };
                 id
             }
-            InsertSource::Path(path) => self.project.media.iter().find(|media| media.path == path)
-                .map(|media| media.id).ok_or_else(|| error(
-                    "MEDIA_OFFLINE", "The path has no registered media descriptor.", "Import the file through the native media backend or pass a media ID from project.info.",
-                ))?,
+            InsertSource::Path(path) => self.import_path(path, load)?,
         };
         let descriptor = media(&self.project, media_id)?;
         let length = rounded(
@@ -258,6 +256,43 @@ impl Editor {
             format!("Inserted {id} at frame {start}"),
             Target::Timeline(TimelineId::Clip(id)),
         ))
+    }
+
+    fn import_path(
+        &mut self,
+        request: String,
+        load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
+    ) -> Result<MediaId, CommandError> {
+        if let Some(media) = self
+            .project
+            .media
+            .iter()
+            .find(|media| media.path == request)
+        {
+            return Ok(media.id);
+        }
+        if let Some(import) = self.imports.iter().find(|import| import.request == request) {
+            return Ok(import.descriptor.id);
+        }
+
+        let mut descriptor = load(&request)?;
+        if let Some(existing) = self
+            .project
+            .media
+            .iter()
+            .find(|media| media.path == descriptor.path)
+        {
+            descriptor = existing.clone();
+        } else {
+            descriptor.id = MediaId::from_serial(self.mint("med")?);
+            self.project.media.push(descriptor.clone());
+        }
+        let id = descriptor.id;
+        self.imports.push(MediaImport {
+            request,
+            descriptor,
+        });
+        Ok(id)
     }
 
     pub(super) fn move_items(

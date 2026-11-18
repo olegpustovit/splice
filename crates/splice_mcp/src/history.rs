@@ -2,7 +2,7 @@ use super::{Json, object, project::access, text, wire::*};
 use splice_core::{
     commands::Target,
     edit::{self, SideEffect, Span},
-    history::{EditResult, Scope, Store, StoreError},
+    history::{EditResult, Scope, Store, StoreError, WriteOptions},
     package::{
         self,
         journal::{Change, Source},
@@ -35,7 +35,32 @@ pub(super) fn apply(store: &mut Store, args: &Json) -> Result<Json, StoreError> 
                 "a nonempty array of operations from commands.describe",
             )
         })?;
-    Ok(edit_result_json(store.apply(ops, &options)?))
+    Ok(edit_result_json(apply_batch(store, ops, &options)?))
+}
+
+/// Applies a client edit, resolving unknown local media paths on macOS.
+pub fn apply_batch(
+    store: &mut Store,
+    ops: &[Json],
+    options: &WriteOptions,
+) -> Result<EditResult, StoreError> {
+    #[cfg(target_os = "macos")]
+    {
+        let package = store.path().to_path_buf();
+        let fps = store.project().fps;
+        store.apply_with_media(ops, options, &mut |path| {
+            splice_media::probe(&package, std::path::Path::new(path), fps).map_err(|failure| {
+                splice_core::commands::CommandError {
+                    code: failure.code,
+                    message: failure.message,
+                    fix: failure.fix.into(),
+                    valid: Vec::new(),
+                }
+            })
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    store.apply(ops, options)
 }
 
 /// Serializes a committed edit, replay receipt, or preview for a command client.

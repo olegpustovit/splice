@@ -32,6 +32,7 @@ impl Editor {
     fn occupied(&self, prefix: &str, serial: u64) -> bool {
         let p = &self.project;
         match prefix {
+            "med" => p.media.iter().any(|media| media.id.serial() == serial),
             "clp" => p.clips.find(ClipId::from_serial(serial)).is_some(),
             "ovl" => p.items.find(ItemId::from_serial(serial)).is_some(),
             "lan" => {
@@ -58,6 +59,7 @@ impl Editor {
 
 fn wire(prefix: &str, serial: u64) -> String {
     match prefix {
+        "med" => MediaId::from_serial(serial).to_string(),
         "clp" => ClipId::from_serial(serial).to_string(),
         "ovl" => ItemId::from_serial(serial).to_string(),
         "lan" => LaneId::from_serial(serial).to_string(),

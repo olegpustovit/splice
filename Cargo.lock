@@ -92,8 +92,17 @@ dependencies = [
  "splice_core",
  "splice_eval",
  "splice_json",
+ "splice_media",
  "splice_model",
  "splice_testkit",
+]
+
+[[package]]
+name = "splice_media"
+version = "0.1.0"
+dependencies = [
+ "apple_sys",
+ "splice_model",
 ]
 
 [[package]]

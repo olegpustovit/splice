@@ -3,7 +3,12 @@ use super::*;
 use crate::commands::{AnchorArg, FrameArg, OverlayContent};
 
 impl Editor {
-    pub(super) fn run(&mut self, op: Op, cmd: &str) -> Result<Outcome, CommandError> {
+    pub(super) fn run(
+        &mut self,
+        op: Op,
+        cmd: &str,
+        load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
+    ) -> Result<Outcome, CommandError> {
         match op {
             Op::ItemSplit { item, at } => {
                 let item = self.timeline(&item)?;
@@ -84,7 +89,9 @@ impl Editor {
                 speed,
                 ripple,
             } => self.speed(&items, speed, ripple),
-            Op::ClipInsert { source, at, ripple } => self.insert_clip(source, at.as_ref(), ripple),
+            Op::ClipInsert { source, at, ripple } => {
+                self.insert_clip(source, at.as_ref(), ripple, load)
+            }
             Op::LaneDelete { lane } => self.delete_lane(&lane),
             Op::LaneRename { lane, name } => self.rename_lane(&lane, name),
             Op::ItemLane { items, destination } => self.move_to_lane(&items, &destination),

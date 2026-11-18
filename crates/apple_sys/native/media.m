@@ -143,6 +143,26 @@ bool splice_media_probe(const char *path, SpliceMediaProbe *out, char **error) {
 
 #pragma clang diagnostic pop
 
+char *splice_media_bookmark(const char *path, char **error) {
+    @autoreleasepool {
+        NSURL *url = [NSURL fileURLWithFileSystemRepresentation:path isDirectory:NO relativeToURL:nil];
+        NSError *failure = nil;
+        NSData *data = [url bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil
+                                      relativeToURL:nil error:&failure];
+        if (data.length == 0) {
+            const char *description = failure.localizedDescription.UTF8String;
+            splice_set_error(error, description != NULL ? description : "Could not create a file bookmark.");
+            return NULL;
+        }
+        const char *text = [data base64EncodedStringWithOptions:0].UTF8String;
+        char *encoded = text != NULL ? strdup(text) : NULL;
+        if (encoded == NULL) {
+            splice_set_error(error, "Could not allocate the file bookmark.");
+        }
+        return encoded;
+    }
+}
+
 void splice_media_dispose(SpliceMediaProbe *probe) {
     free(probe->audio);
     *probe = (SpliceMediaProbe){0};

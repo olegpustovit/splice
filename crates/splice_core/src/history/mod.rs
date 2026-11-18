@@ -1,10 +1,10 @@
-use crate::edit;
 use crate::package::{
     self, PackageError,
     journal::{Batch, Change, Checkpoint, Journal, Record},
 };
+use crate::{commands::CommandError, edit};
 use splice_json::Value as Json;
-use splice_model::{Access, Project, SessionId};
+use splice_model::{Access, Media, Project, SessionId};
 use std::path::Path;
 
 mod result;
@@ -199,6 +199,19 @@ impl Store {
         ops: &[Json],
         options: &WriteOptions,
     ) -> Result<EditResult, StoreError> {
+        self.apply_with_media(ops, options, &mut edit::missing_media)
+    }
+
+    /// Applies a batch with a descriptor provider for paths that lack a media record.
+    ///
+    /// The provider runs only while staging a new edit. The journal captures its results
+    /// so neither replay nor an idempotent retry needs to open a media file.
+    pub fn apply_with_media(
+        &mut self,
+        ops: &[Json],
+        options: &WriteOptions,
+        load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
+    ) -> Result<EditResult, StoreError> {
         self.authorize(options)?;
         if !options.dry_run {
             self.writable()?;
@@ -214,12 +227,13 @@ impl Store {
                 "Pass a nonempty ops array.",
             ));
         }
-        let (candidate, report) = edit::stage_above(
+        let (candidate, report, imports) = edit::stage_above(
             self.project(),
             ops,
             options.source,
             None,
             self.versions.serial_floor,
+            load,
         )?;
         if options.dry_run {
             return Ok(EditResult {
@@ -259,6 +273,7 @@ impl Store {
             Change::Edit {
                 ops: ops.to_vec(),
                 mints: report.mints.clone(),
+                imports,
             },
         )?;
         Ok(EditResult {
@@ -464,6 +479,7 @@ impl Store {
         let Change::Edit {
             ops: original,
             mints,
+            imports,
         } = &record.batch.change
         else {
             return Err(StoreError::new(
@@ -483,7 +499,8 @@ impl Store {
             ));
         }
         let previous = self.at(record.rev - 1)?;
-        let (_, report) = edit::stage(previous, original, record.batch.source, Some(mints))?;
+        let (_, report) =
+            edit::stage_recorded(previous, original, record.batch.source, mints, imports)?;
         Ok(Some(EditResult {
             revision: record.rev,
             hash: record.hash,

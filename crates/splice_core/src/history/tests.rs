@@ -304,3 +304,93 @@ fn history_verify_accepts_transcripts_stored_in_media_order() {
     let reopened = Store::open(&dir.0).unwrap();
     assert_eq!(reopened.verify().unwrap(), state_hash(&project).unwrap());
 }
+
+#[test]
+fn history_media_import_is_atomic_and_replays_without_a_loader() {
+    use splice_model::{Media, MediaId, MediaKind, Probe};
+
+    let temp = Temp::new("import");
+    let mut store = Store::create(&temp.0, &Project::default()).unwrap();
+    let session = store.start_session("test", 1).unwrap().id;
+    let insertion = op(r#"{"cmd":"clip.insert","path":"./probe.mov"}"#);
+    let ops = std::slice::from_ref(&insertion);
+    let mut calls = 0;
+    let mut loader = |path: &str| {
+        assert_eq!(path, "./probe.mov");
+        calls += 1;
+        Ok(Media {
+            id: MediaId::from_serial(0),
+            kind: MediaKind::Video,
+            path: "probe.mov".into(),
+            bookmark: Some("Zml4dHVyZQ==".into()),
+            size: 3014,
+            mtime: 1,
+            probe: Probe {
+                fps: 30.0,
+                frames: 30,
+                width: 96,
+                height: 64,
+                audio: Vec::new(),
+                codec: Some("h264".into()),
+            },
+            take: None,
+        })
+    };
+    let options = WriteOptions {
+        key: Some("once".into()),
+        ..agent(session, 0, 2)
+    };
+    let bad = [
+        insertion.clone(),
+        op(r#"{"cmd":"item.delete","items":"clp_missing"}"#),
+    ];
+    assert_eq!(
+        store
+            .apply_with_media(&bad, &options, &mut loader)
+            .unwrap_err()
+            .op,
+        Some(1)
+    );
+    assert!(store.project().media.is_empty());
+    let preview = store
+        .apply_with_media(
+            ops,
+            &WriteOptions {
+                dry_run: true,
+                ..options.clone()
+            },
+            &mut loader,
+        )
+        .unwrap();
+    assert!(store.project().media.is_empty());
+    assert!(store.records().is_empty());
+    let result = store.apply_with_media(ops, &options, &mut loader).unwrap();
+    assert_eq!(result.report.mints, ["med_1", "clp_2"]);
+    assert_eq!(result.report, preview.report);
+    assert_eq!(store.project().media[0].path, "probe.mov");
+    assert_eq!(calls, 3);
+    let hash = state_hash(store.project()).unwrap();
+
+    let interrupted_checkpoint = temp.0.join("project.json.tmp");
+    fs::create_dir(&interrupted_checkpoint).unwrap();
+    assert_eq!(store.checkpoint().unwrap_err().code, "IO");
+    fs::remove_dir(&interrupted_checkpoint).unwrap();
+    drop(store);
+    let mut reopened = Store::open(&temp.0).unwrap();
+    assert_eq!(reopened.verify().unwrap(), hash);
+    assert!(reopened.apply(ops, &options).unwrap().replayed);
+    assert_eq!(reopened.records().len(), 1);
+    reopened.checkpoint().unwrap();
+    reopened.undo(Scope::Last, &agent(session, 1, 3)).unwrap();
+    assert!(reopened.project().media.is_empty());
+    assert!(reopened.project().clips.order().is_empty());
+    fs::create_dir(&interrupted_checkpoint).unwrap();
+    assert_eq!(reopened.close().unwrap_err().code, "IO");
+    fs::remove_dir(&interrupted_checkpoint).unwrap();
+
+    let reopened = Store::open(&temp.0).unwrap();
+    assert_eq!(reopened.project().rev, 2);
+    reopened.verify().unwrap();
+    reopened.close().unwrap();
+    assert!(Store::open(&temp.0).unwrap().project().media.is_empty());
+}

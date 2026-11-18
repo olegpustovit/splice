@@ -147,7 +147,7 @@ fn apply(args: &[String]) -> Result<Json, StoreError> {
         )
     })?;
     let mut store = Store::open(&project)?;
-    let result = store.apply(ops, &options)?;
+    let result = splice_mcp::apply_batch(&mut store, ops, &options)?;
     // An append already synced by Store::apply remains committed if the closing checkpoint fails.
     let checkpoint = if result.dry_run || result.replayed {
         None

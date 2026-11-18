@@ -1,5 +1,8 @@
 use crate::commands::{self, CommandError, Op, RefPart, Target};
-use crate::package::{journal::Source, validate};
+use crate::package::{
+    journal::{MediaImport, Source},
+    validate,
+};
 use splice_json::Value as Json;
 use splice_model::*;
 use std::fmt::{self, Write};
@@ -154,7 +157,35 @@ pub(crate) fn stage(
     source: Source,
     replay: Option<&[String]>,
 ) -> Result<(Project, ApplyReport), ApplyError> {
-    stage_above(base, ops, source, replay, base.serial)
+    let (project, report, _) =
+        stage_above(base, ops, source, replay, base.serial, &mut missing_media)?;
+    Ok((project, report))
+}
+
+pub(crate) fn stage_recorded(
+    base: &Project,
+    ops: &[Json],
+    source: Source,
+    mints: &[String],
+    imports: &[MediaImport],
+) -> Result<(Project, ApplyReport), ApplyError> {
+    let mut load = |path: &str| {
+        imports
+            .iter()
+            .find(|import| import.request == path)
+            .map(|import| import.descriptor.clone())
+            .map_or_else(|| missing_media(path), Ok)
+    };
+    let (project, report, resolved) =
+        stage_above(base, ops, source, Some(mints), base.serial, &mut load)?;
+    if resolved != imports {
+        return Err(batch_error(error(
+            "REPLAY_MEDIA",
+            "The batch does not match its recorded media descriptors.",
+            "Recover from the verified journal prefix.",
+        )));
+    }
+    Ok((project, report))
 }
 
 pub(crate) fn stage_above(
@@ -163,10 +194,19 @@ pub(crate) fn stage_above(
     source: Source,
     replay: Option<&[String]>,
     serial_floor: u64,
-) -> Result<(Project, ApplyReport), ApplyError> {
+    load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
+) -> Result<(Project, ApplyReport, Vec<MediaImport>), ApplyError> {
     let mut work = ApplyWorkspace::default();
-    work.stage(base, ops, source, replay, serial_floor)?;
-    Ok((work.edit.project, work.edit.report))
+    work.stage(base, ops, source, replay, serial_floor, load)?;
+    Ok((work.edit.project, work.edit.report, work.edit.imports))
+}
+
+pub(crate) fn missing_media(_: &str) -> Result<Media, CommandError> {
+    Err(error(
+        "MEDIA_OFFLINE",
+        "The path has no registered media descriptor.",
+        "Import the file through the native media backend or pass a media ID from project.info.",
+    ))
 }
 
 /// Reusable in-memory storage for repeated batches on a project.
@@ -187,7 +227,14 @@ impl ApplyWorkspace {
         source: Source,
         dry_run: bool,
     ) -> Result<&ApplyReport, ApplyError> {
-        self.stage(project, ops, source, None, project.serial)?;
+        self.stage(
+            project,
+            ops,
+            source,
+            None,
+            project.serial,
+            &mut missing_media,
+        )?;
         if !dry_run {
             std::mem::swap(project, &mut self.edit.project);
         }
@@ -201,6 +248,7 @@ impl ApplyWorkspace {
         source: Source,
         replay: Option<&[String]>,
         serial_floor: u64,
+        load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
     ) -> Result<(), ApplyError> {
         if source == Source::Agent && base.access != Access::Live {
             return Err(batch_error(error(
@@ -217,10 +265,11 @@ impl ApplyWorkspace {
         edit.spare_changes.append(&mut edit.report.changes);
         edit.report.side_effects.clear();
         edit.report.mints.clear();
+        edit.imports.clear();
         edit.bindings.clear();
         edit.explicit_lanes.clear();
         for (index, value) in ops.iter().enumerate() {
-            edit.step(value, index).map_err(|error| ApplyError {
+            edit.step(value, index, load).map_err(|error| ApplyError {
                 op: Some(index),
                 error,
             })?;
@@ -246,6 +295,7 @@ struct Editor {
     serial_floor: u64,
     replay: Option<Vec<String>>,
     report: ApplyReport,
+    imports: Vec<MediaImport>,
     spare_changes: Vec<EditChange>,
     bindings: Vec<Binding>,
     explicit_lanes: Vec<ItemId>,
@@ -264,6 +314,7 @@ impl Default for Editor {
             serial_floor: 0,
             replay: None,
             report: ApplyReport::default(),
+            imports: Vec::new(),
             spare_changes: Vec::new(),
             bindings: Vec::new(),
             explicit_lanes: Vec::new(),
@@ -318,7 +369,12 @@ impl Outcome {
 }
 
 impl Editor {
-    fn step(&mut self, value: &Json, op: usize) -> Result<(), CommandError> {
+    fn step(
+        &mut self,
+        value: &Json,
+        op: usize,
+        load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
+    ) -> Result<(), CommandError> {
         let commands::Decoded { op: decoded, bind } =
             commands::decode_reusing(value, &mut self.decode_scratch)?;
         let id = value
@@ -333,7 +389,7 @@ impl Editor {
         {
             return Err(CommandError::bad("ref", "a unique name within the batch"));
         }
-        let outcome = self.run(decoded, id)?;
+        let outcome = self.run(decoded, id, load)?;
         if let Some(name) = bind {
             self.bindings.push(Binding {
                 name,

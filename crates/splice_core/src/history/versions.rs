@@ -96,9 +96,18 @@ impl Versions {
         let record = records.last().expect("record to replay");
         let action = &record.batch.change;
         let mut next = match action {
-            Change::Edit { ops, mints } => {
-                let (candidate, _) =
-                    edit::stage(&self.tip().project, ops, record.batch.source, Some(mints))?;
+            Change::Edit {
+                ops,
+                mints,
+                imports,
+            } => {
+                let (candidate, _) = edit::stage_recorded(
+                    &self.tip().project,
+                    ops,
+                    record.batch.source,
+                    mints,
+                    imports,
+                )?;
                 self.edit(candidate, record.rev)
             }
             Change::Revert { revisions, skipped } => {
@@ -146,10 +155,15 @@ impl Versions {
                 continue;
             }
             let record = at(records, self.origin().rev, rev).ok_or_else(invalid_revert)?;
-            let Change::Edit { ops, mints } = &record.batch.change else {
+            let Change::Edit {
+                ops,
+                mints,
+                imports,
+            } = &record.batch.change
+            else {
                 return Err(invalid_revert());
             };
-            match edit::stage(&project, ops, record.batch.source, Some(mints)) {
+            match edit::stage_recorded(&project, ops, record.batch.source, mints, imports) {
                 Ok((next, _)) => {
                     project = next;
                     active.push(rev);

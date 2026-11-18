@@ -9,7 +9,7 @@ pub struct Media {
     pub kind: MediaKind,
     /// Stored path, relative to the package when possible.
     pub path: String,
-    /// Base64-encoded security-scoped bookmark when available.
+    /// Base64-encoded macOS file bookmark when available.
     pub bookmark: Option<String>,
     /// File size in bytes.
     pub size: u64,

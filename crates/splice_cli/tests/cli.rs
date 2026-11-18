@@ -296,3 +296,58 @@ fn cli_dispatches_mcp_friction_and_native_commands() {
             .success()
     );
 }
+
+#[test]
+fn cli_imports_media_and_persists_the_descriptor() {
+    let scratch = Scratch::new("import");
+    let project = scratch.0.join("import.splice");
+    let package = project.to_str().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/media");
+    let operations = fixtures.join("import.ops.json");
+    let operations = operations.to_str().unwrap();
+    success(scratch.run(&["new", package]));
+
+    if cfg!(target_os = "macos") {
+        fs::copy(fixtures.join("probe.mov"), project.join("probe.mov")).unwrap();
+    } else {
+        // Portable acceptance uses the same operation with a pre-probed fixture descriptor.
+        fs::remove_file(project.join("journal.base.json")).unwrap();
+        let snapshot = fs::read_to_string(project.join("project.json"))
+            .unwrap()
+            .replace(r#""serial":1"#, r#""serial":2"#);
+        fs::write(project.join("project.json"), snapshot).unwrap();
+        fs::write(project.join("media.json"), r#"{"format":"splice/1","media":[{"id":"med_1","kind":"video","path":"probe.mov","bookmark":"Zml4dHVyZQ==","size":3014,"mtime":1,"probe":{"fps":30,"frames":30,"width":96,"height":64,"audio":[],"codec":"h264"}}]}"#).unwrap();
+    }
+
+    let receipt = success(scratch.run(&["apply", operations, package, "--if-revision", "r0"]));
+    assert_eq!(receipt.field("revision").and_then(Json::as_str), Some("r1"));
+    let snapshot = success(scratch.run(&["snapshot", package]));
+    let clip = &snapshot.field("clips").and_then(Json::as_array).unwrap()[0];
+    assert_eq!(clip.field("media").and_then(Json::as_str), Some("med_1"));
+    assert_eq!(clip.field("length").and_then(Json::as_u64), Some(30));
+    let media = parse(&fs::read_to_string(project.join("media.json")).unwrap()).unwrap();
+    let media = &media.field("media").and_then(Json::as_array).unwrap()[0];
+    assert_eq!(
+        media.field("path").and_then(Json::as_str),
+        Some("probe.mov")
+    );
+    assert!(
+        media
+            .field("bookmark")
+            .and_then(Json::as_str)
+            .is_some_and(|value| !value.is_empty())
+    );
+    let probe = media.field("probe").unwrap();
+    for (field, value) in [("frames", 30), ("width", 96), ("height", 64)] {
+        assert_eq!(probe.field(field).and_then(Json::as_u64), Some(value));
+    }
+    if cfg!(target_os = "macos") {
+        fs::remove_file(project.join("probe.mov")).unwrap();
+    }
+    assert_eq!(
+        success(scratch.run(&["check", package]))
+            .field("revision")
+            .and_then(Json::as_str),
+        Some("r1")
+    );
+}

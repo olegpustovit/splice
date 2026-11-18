@@ -33,6 +33,8 @@ Name.splice/
   never half-applied: `apply` validates the whole batch in memory first.
 - **Snapshot** = `project.json` written as `project.json.tmp`, `fsync`, `rename`, `fsync(dir)`. Every
   64 batches, on close, and on `splice snapshot`. The snapshot records the `rev` and `hash` it is at.
+  When a checkpoint changes the media table, `media.previous.json` preserves the old table
+  until the new snapshot is published.
 - **Open** = read the snapshot, replay journal lines after its `rev`, verify each line's `hash`.
   A final record without its newline is truncated with a warning. A corrupt complete line opens
   read-only with `JOURNAL_CORRUPT` and the last verified revision. If corruption precedes the
@@ -108,6 +110,8 @@ One JSON object per line:
   revision sequence, links, and record bytes.
 - `ops` are exactly what `edit.apply` received (after `$ref` resolution is recorded in `mints`), so a
   batch replays byte-identically.
+- Path imports record an `imports` array of `{request, descriptor}` entries alongside the original
+  operations. The descriptor uses the `media.json` shape and lets the batch replay offline.
 - Undo appends `revertOf` and `skipped`, or records a `restoreTo` revision. Human undo and redo
   also store `history:"undo"` or `history:"redo"` so the stacks survive reopening. Prior revisions
   stay addressable, including the state before any undo.
@@ -129,6 +133,11 @@ One JSON object per line:
 
 Audio entries are track names or `{name, channels}` when the probe has a channel count. Take
 descriptors can include a `components` object with paths relative to the take directory.
+
+On macOS, `clip.insert {path}` accepts an absolute path or one relative to the project package.
+New audio and video descriptors include a base64-encoded Foundation file bookmark. Paths
+inside the package are stored relative to it. A successful checkpoint writes descriptors to
+`media.json`. Portable clients can insert paths already present in that table.
 
 A missing file is `MEDIA_OFFLINE` with the last known path; `project.info` lists offline media, and
 relinking is a command (`media.relink`, 0.3). The core never touches media bytes; it only reads descriptors.

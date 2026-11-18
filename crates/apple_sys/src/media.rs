@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{Error, error::take_native_string};
 use std::{
     ffi::{CString, c_char},
     mem::{align_of, offset_of, size_of},
@@ -77,6 +77,7 @@ const _: () = {
 unsafe extern "C" {
     fn splice_media_probe(path: *const c_char, out: *mut RawProbe, error: *mut *mut c_char)
     -> bool;
+    fn splice_media_bookmark(path: *const c_char, error: *mut *mut c_char) -> *mut c_char;
     fn splice_media_dispose(probe: *mut RawProbe);
 }
 
@@ -90,8 +91,7 @@ impl Drop for RawProbe {
 /// Loads metadata with AVFoundation. Call from a worker when blocking the caller
 /// would interrupt the UI.
 pub fn probe(path: &Path) -> Result<Probe, Error> {
-    let path = CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| Error::message("The media path contains a NUL byte."))?;
+    let path = native_path(path)?;
     let mut raw = RawProbe {
         duration_seconds: 0.0,
         nominal_fps: 0.0,
@@ -141,6 +141,25 @@ pub fn probe(path: &Path) -> Result<Probe, Error> {
         video_tracks: raw.video_tracks,
         audio,
     })
+}
+
+/// Creates a base64-encoded Foundation bookmark for a local file.
+pub fn bookmark(path: &Path) -> Result<String, Error> {
+    let path = native_path(path)?;
+    let mut diagnostic = ptr::null_mut();
+    // SAFETY: the path is a C string and the diagnostic output is writable.
+    let bookmark = unsafe { splice_media_bookmark(path.as_ptr(), &mut diagnostic) };
+    if bookmark.is_null() {
+        // SAFETY: on failure the bridge transfers ownership of the optional diagnostic.
+        return Err(unsafe { Error::from_native(diagnostic, "Could not create a file bookmark.") });
+    }
+    // SAFETY: on success the bridge transfers ownership of the bookmark string.
+    Ok(unsafe { take_native_string(bookmark) })
+}
+
+fn native_path(path: &Path) -> Result<CString, Error> {
+    CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| Error::message("The media path contains a NUL byte."))
 }
 
 fn fourcc(value: u32) -> Option<[u8; 4]> {

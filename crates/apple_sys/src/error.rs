@@ -8,7 +8,16 @@ use std::{
 pub struct Error(String);
 
 unsafe extern "C" {
-    fn splice_error_free(error: *mut c_char);
+    fn splice_string_free(value: *mut c_char);
+}
+
+// The caller transfers a non-null NUL-terminated string owned by the native bridge.
+pub(crate) unsafe fn take_native_string(value: *mut c_char) -> String {
+    // SAFETY: the native bridge allocated and terminated this string.
+    let copy = unsafe { CStr::from_ptr(value).to_string_lossy().into_owned() };
+    // SAFETY: the native string has been copied and is no longer borrowed.
+    unsafe { splice_string_free(value) };
+    copy
 }
 
 impl Error {
@@ -21,11 +30,8 @@ impl Error {
         if error.is_null() {
             return Self::message(fallback);
         }
-        // SAFETY: native diagnostics are NUL-terminated and allocated for this caller.
-        let description = unsafe { CStr::from_ptr(error).to_string_lossy().into_owned() };
-        // SAFETY: the bridge allocator owns the diagnostic and it has been copied.
-        unsafe { splice_error_free(error) };
-        Self(description)
+        // SAFETY: the non-null diagnostic is owned by the caller.
+        Self(unsafe { take_native_string(error) })
     }
 }
 

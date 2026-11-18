@@ -6,8 +6,8 @@
 #include <stdint.h>
 
 // Fallible calls set an owned diagnostic on failure when one can be allocated.
-// Call splice_error_free on any non-null diagnostic.
-void splice_error_free(char *error);
+// Call splice_string_free on any non-null diagnostic or returned bookmark.
+void splice_string_free(char *value);
 
 // Internal helper for the shims. Accepts a null error output.
 void splice_set_error(char **error, const char *message);
@@ -38,6 +38,7 @@ _Static_assert(offsetof(SpliceMediaProbe, audio) == 40, "audio pointer layout");
 
 // Writes one probe result for a local file. Dispose the result after reading it.
 bool splice_media_probe(const char *path, SpliceMediaProbe *out, char **error);
+char *splice_media_bookmark(const char *path, char **error);
 void splice_media_dispose(SpliceMediaProbe *probe);
 
 typedef struct {

@@ -1,7 +1,7 @@
 //! Durable revision log for a writer-locked project.
 
 mod record;
-pub use record::{Batch, Change, Record, Source};
+pub use record::{Batch, Change, MediaImport, Record, Source};
 
 use super::{
     Package, PackageError, atomic_write, codec::*, json_bytes, media, project, read_optional_json,
