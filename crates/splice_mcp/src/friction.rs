@@ -16,7 +16,8 @@ use std::{
 
 const FILE: &str = "friction.jsonl";
 
-pub(super) fn state_dir() -> io::Result<PathBuf> {
+/// Finds the common Splice state directory for this platform.
+pub fn state_dir() -> io::Result<PathBuf> {
     let home = || {
         std::env::var_os("HOME")
             .map(PathBuf::from)

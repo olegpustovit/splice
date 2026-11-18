@@ -2,3 +2,9 @@
 # PXUI's runner: kills a test at 5 s and a run at 60 s, serializes window_ cases, records target/t-times.tsv.
 # Never run raw `cargo test` or test binaries.
 t = "run -q --manifest-path pxui/tools/t/Cargo.toml --target-dir target --"
+
+# The PXUI linker supplies local dylib rpaths for dev binaries and test targets.
+[target.aarch64-apple-darwin]
+linker = "pxui/tools/cc-stack.sh"
+[target.x86_64-apple-darwin]
+linker = "pxui/tools/cc-stack.sh"

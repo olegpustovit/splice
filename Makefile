@@ -70,8 +70,14 @@ mac-check: mac-sync
 
 # Runs on the Mini only (invoked by mac-check).
 mac-local-check:
+ifneq ($(filter splice_app,$(MAC_CRATES)),)
+	$(MAKE) lib PROFILE=debug
+endif
 ifneq ($(strip $(MAC_CRATES)),)
 	cargo t $(foreach crate,$(MAC_CRATES),-p $(crate))
+endif
+ifneq ($(filter splice_app,$(MAC_CRATES)),)
+	cargo t -p splice_cli native_viewer_smoke
 endif
 	@if [ -x packaging/bundle-macos.sh ]; then $(MAKE) dev && tools/check-macos-bundle.sh $(APPDIR)/Splice.app; else echo 'mac-check: bundle not built yet (T7)'; fi
 

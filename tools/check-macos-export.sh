@@ -3,7 +3,7 @@
 set -eu
 check_dir=$(mktemp -d "${TMPDIR:-/tmp}/splice-export-check.XXXXXX")
 trap 'rm -rf "$check_dir"' EXIT
-cargo build -p splice_cli
+make build PROFILE=debug
 swiftc -suppress-warnings fixtures/media/export-sample.swift -o "$check_dir/sample"
 project="$check_dir/sample.splice"
 "$check_dir/sample" make "$project"

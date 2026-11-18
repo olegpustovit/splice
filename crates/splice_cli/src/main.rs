@@ -51,7 +51,7 @@ fn main() {
 
 fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
     let Some((command, tail)) = args.split_first() else {
-        return Err(unavailable("The project viewer"));
+        return viewer(&[], false, output);
     };
     let value = match (command.as_str(), tail) {
         ("--help" | "-h", []) => return output.write_all(HELP.as_bytes()).map_err(io_error),
@@ -92,7 +92,8 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
         ("describe", []) => commands::describe(None, None)?,
         ("describe", [id]) if !id.starts_with('-') => commands::describe(Some(id), None)?,
         ("describe", [flag, query]) if flag == "--query" => commands::describe(None, Some(query))?,
-        ("open", [] | [_]) => return Err(unavailable("The project viewer")),
+        ("open", args) => return viewer(args, false, output),
+        ("--smoke-test", args) => return viewer(args, true, output),
         ("export", args) => export(args)?,
         ("frame", args) => frame(args)?,
         (path, [])
@@ -100,7 +101,7 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
                 .extension()
                 .is_some_and(|ext| ext == "splice") =>
         {
-            return Err(unavailable("The project viewer"));
+            return viewer(args, false, output);
         }
         _ => {
             return Err(bad_args(
@@ -110,6 +111,27 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
         }
     };
     write_json(&value, output)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn viewer(_: &[String], _: bool, _: &mut dyn Write) -> Result<(), StoreError> {
+    Err(unavailable("The project viewer"))
+}
+
+#[cfg(target_os = "macos")]
+fn viewer(args: &[String], smoke: bool, output: &mut dyn Write) -> Result<(), StoreError> {
+    let path = if args.is_empty() {
+        None
+    } else {
+        Some(project_arg(args)?)
+    };
+    let state = splice_mcp::friction::state_dir().ok();
+    if smoke {
+        splice_app::smoke_test(path.as_deref(), state.as_deref())?;
+        write_json(&Json::Object(vec![("ok".into(), Json::Bool(true))]), output)
+    } else {
+        splice_app::open(path.as_deref(), state.as_deref())
+    }
 }
 
 fn apply(args: &[String]) -> Result<Json, StoreError> {
@@ -361,8 +383,8 @@ fn io_error(error: io::Error) -> StoreError {
     )
 }
 
+#[cfg(not(target_os = "macos"))]
 fn unavailable(feature: &str) -> StoreError {
-    // ponytail: connect the CLI to the native render backend in T4 and viewer in T5.
     StoreError::new(
         "UNSUPPORTED_PLATFORM",
         &format!("{feature} requires the native macOS build."),

@@ -22,6 +22,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "file_access_sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -32,6 +39,10 @@ name = "gate"
 version = "0.1.0"
 
 [[package]]
+name = "input"
+version = "0.1.0"
+
+[[package]]
 name = "mem_sys"
 version = "0.1.0"
 dependencies = [
@@ -39,10 +50,100 @@ dependencies = [
 ]
 
 [[package]]
+name = "metal_sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "native_layer_token_sys",
+ "ogpu_core",
+]
+
+[[package]]
+name = "native_layer_token_sys"
+version = "0.1.0"
+
+[[package]]
+name = "ogpu_core"
+version = "0.1.0"
+dependencies = [
+ "native_layer_token_sys",
+]
+
+[[package]]
+name = "ogpu_metal"
+version = "0.1.0"
+dependencies = [
+ "metal_sys",
+ "native_layer_token_sys",
+ "ogpu_core",
+]
+
+[[package]]
+name = "pxui"
+version = "0.1.0"
+dependencies = [
+ "pxui_types",
+]
+
+[[package]]
+name = "pxui_host"
+version = "0.1.0"
+dependencies = [
+ "input",
+ "mem_sys",
+ "metal_sys",
+ "ogpu_core",
+ "ogpu_metal",
+ "pxui",
+ "pxui_sdl",
+]
+
+[[package]]
+name = "pxui_sdl"
+version = "0.1.0"
+dependencies = [
+ "input",
+ "native_layer_token_sys",
+ "sdl3",
+]
+
+[[package]]
+name = "pxui_types"
+version = "0.1.0"
+
+[[package]]
+name = "sdl3"
+version = "0.1.0"
+dependencies = [
+ "native_layer_token_sys",
+ "sdl3_sys",
+]
+
+[[package]]
+name = "sdl3_sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "file_access_sys",
+ "native_layer_token_sys",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "splice_app"
+version = "0.1.0"
+dependencies = [
+ "input",
+ "pxui",
+ "pxui_host",
+ "pxui_sdl",
+ "splice_core",
+]
 
 [[package]]
 name = "splice_av"
@@ -57,6 +158,7 @@ dependencies = [
 name = "splice_cli"
 version = "0.1.0"
 dependencies = [
+ "splice_app",
  "splice_core",
  "splice_json",
  "splice_mcp",

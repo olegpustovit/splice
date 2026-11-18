@@ -1,0 +1,15 @@
+[package]
+name = "splice_app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+input = { path = "../../pxui/crates/open/input" }
+pxui = { path = "../../pxui/crates/public/pxui" }
+pxui_host = { path = "../../pxui/crates/host/pxui_host" }
+pxui_sdl = { path = "../../pxui/crates/open/pxui_sdl" }
+splice_core = { path = "../splice_core" }
+
+[lints]
+workspace = true

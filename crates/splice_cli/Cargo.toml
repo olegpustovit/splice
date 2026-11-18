@@ -12,5 +12,9 @@ path = "src/main.rs"
 splice_core = { path = "../splice_core" }
 splice_json = { path = "../splice_json" }
 splice_mcp = { path = "../splice_mcp" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+splice_app = { path = "../splice_app" }
+
 [lints]
 workspace = true

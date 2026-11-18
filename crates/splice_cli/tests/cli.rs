@@ -256,6 +256,7 @@ fn cli_dispatches_mcp_friction_and_native_commands() {
             vec!["sample.splice"],
             vec!["export", "sample.splice"],
             vec!["frame", "--at", "30", "out.png", "sample.splice"],
+            vec!["--smoke-test"],
             Vec::new(),
         ] {
             error(scratch.run(&args), "UNSUPPORTED_PLATFORM");
@@ -294,6 +295,34 @@ fn cli_dispatches_mcp_friction_and_native_commands() {
             .run(&["friction", "list", "--open"])
             .status
             .success()
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_viewer_smoke_opens_and_closes_a_hidden_window() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let scratch = Scratch::new("viewer");
+    let output = success(scratch.run(&["--smoke-test"]));
+    assert_eq!(output.field("ok").and_then(Json::as_bool), Some(true));
+    let project = scratch.0.join("Viewer Sample.splice");
+    let path = project.to_str().unwrap();
+    success(scratch.run(&["new", path]));
+    let output = success(scratch.run(&["--smoke-test", path]));
+    assert_eq!(output.field("ok").and_then(Json::as_bool), Some(true));
+    let saved = scratch
+        .0
+        .join("Library/Application Support/Splice/last-project");
+    assert_eq!(
+        fs::read(saved).unwrap(),
+        project.canonicalize().unwrap().as_os_str().as_bytes()
+    );
+    assert_eq!(
+        success(scratch.run(&["check", path]))
+            .field("revision")
+            .and_then(Json::as_str),
+        Some("r0")
     );
 }
 
