@@ -15,7 +15,7 @@ impl Editor {
             }
             serial
         } else {
-            let mut serial = self.project.serial;
+            let mut serial = self.project.serial.max(self.serial_floor);
             while self.occupied(prefix, serial) {
                 serial = serial.checked_add(1).ok_or_else(exhausted)?;
             }

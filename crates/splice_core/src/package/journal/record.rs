@@ -30,6 +30,10 @@ pub enum Change {
     },
     /// Copy the state at a revision into a new revision.
     Restore(u64),
+    /// Restore the preceding state on the human undo stack.
+    Undo(u64),
+    /// Restore a state popped by human undo.
+    Redo(u64),
 }
 
 /// Metadata and content submitted for one journal append.
@@ -103,6 +107,15 @@ impl Record {
                 fields.push(("skipped", Json::Array(skipped.clone())));
             }
             Change::Restore(rev) => fields.push(("restoreTo", Json::Unsigned(*rev))),
+            Change::Undo(rev) | Change::Redo(rev) => {
+                fields.push(("restoreTo", Json::Unsigned(*rev)));
+                let action = if matches!(batch.change, Change::Undo(_)) {
+                    "undo"
+                } else {
+                    "redo"
+                };
+                fields.push(("history", text(action)));
+            }
         }
         object(fields)
     }
@@ -141,8 +154,14 @@ impl Record {
                 skipped: value.array("skipped")?.to_vec(),
             }
         } else {
-            fields.push("restoreTo");
-            Change::Restore(u64_field(value, "restoreTo")?)
+            fields.extend(["restoreTo", "history"]);
+            let revision = u64_field(value, "restoreTo")?;
+            match optional_string(value, "history")?.as_deref() {
+                None => Change::Restore(revision),
+                Some("undo") => Change::Undo(revision),
+                Some("redo") => Change::Redo(revision),
+                _ => return Err(bad("history", "undo or redo")),
+            }
         };
         shape(value, &fields)?;
         let record = Self {
@@ -183,7 +202,7 @@ impl Record {
                     return Err(bad("revertOf", "one or more earlier revisions"));
                 }
             }
-            Change::Restore(rev) => {
+            Change::Restore(rev) | Change::Undo(rev) | Change::Redo(rev) => {
                 if *rev >= self.rev {
                     return Err(bad("restoreTo", "an earlier revision"));
                 }
@@ -194,8 +213,6 @@ impl Record {
 
     pub(super) fn compute_hash(&self) -> Result<u64, PackageError> {
         let bytes = json_bytes(&self.encode(false))?;
-        Ok(bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-            (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
-        }))
+        Ok(crate::package::hash_bytes(&bytes))
     }
 }

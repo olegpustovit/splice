@@ -105,7 +105,7 @@ fn journal_crash_at_every_byte_recovers_a_complete_prefix() {
         file.write_all(&bytes[..offset]).unwrap();
         file.set_len(offset as u64).unwrap();
         let prefix = super::journal::read_prefix(&mut file, &journal_path, &base).unwrap();
-        let recovered = super::journal::recover(&base, &base, prefix, &mut replay);
+        let recovered = super::journal::recover(&base, &base, prefix, &mut replay, false);
         let &(boundary, revision, hash, aspect) = checkpoints
             .iter()
             .rev()

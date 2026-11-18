@@ -13,6 +13,7 @@ Name.splice/
   project.json          snapshot of the project at revision `rev`
   journal.ops           append-only command log, one batch per line (the source of truth)
   journal.base.json     original snapshot, media table and transcripts for retained history
+  sessions.json         session IDs, agent names, checkpoints, start times and open status
   media.json            media table: med_ id → location and probe
   transcripts/<med>.json  words for a media item, with its hash
   takes/<med>/          a recorded take, in Recorder's layout (recordings live in the package; imports stay where they are):
@@ -90,9 +91,14 @@ One JSON object per line:
   revision sequence, links, and record bytes.
 - `ops` are exactly what `edit.apply` received (after `$ref` resolution is recorded in `mints`), so a
   batch replays byte-identically.
-- Undo is a line too (`revertOf`, or `restoreTo` for `history.undo {scope:"to"}`). History is never
-  rewritten or truncated: an agent can always get back to any revision, including one before an undo.
-- `key` is the idempotency key; a retried call with the same key returns the original result.
+- Undo appends `revertOf` and `skipped`, or records a `restoreTo` revision. Human undo and redo
+  also store `history:"undo"` or `history:"redo"` so the stacks survive reopening. Prior revisions
+  stay addressable, including the state before any undo.
+- `key` is scoped to the source and session. Repeating the same operations with the same key
+  returns their original result. Different operations with a used key return `CONFLICT`.
+- Restoring a revision reproduces its project content and gives the restore its own journal stamp.
+  The allocator reserves IDs issued anywhere in retained history, including revisions after the
+  restore target.
 - Journal compaction (0.3): after a snapshot older than N days, earlier lines move to
   `journal.<rev>.ops.gz`-free archive files (plain, rotated); open never needs them.
 
@@ -115,6 +121,9 @@ relinking is a command (`media.relink`, 0.3). The core never touches media bytes
 `transcripts/<med>.json`: `{"hash","language","words":[{"id":"w12","text":"so","from":131,"to":139,"conf":0.93}]}`
 in source frames. Caption cues and word anchors refer to word IDs plus the transcript hash, so a
 re-transcription that changes words is detected rather than silently mis-anchored.
+
+Session metadata is versioned independently of the timeline with `format:"splice/1"`. Starting or
+closing a session writes that metadata atomically. It does not advance the revision.
 
 The headless sample under `fixtures/projects/sample.splice` uses the prototype's timeline and
 transcript with descriptor-only media. The native media acceptance tests in T4 need playable assets.

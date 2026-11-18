@@ -1,4 +1,4 @@
-mod codec;
+pub(crate) mod codec;
 pub mod journal;
 mod media;
 pub(crate) mod project;
@@ -39,7 +39,7 @@ impl PackageError {
         Self { code, message, fix }
     }
 
-    fn invalid(message: &dyn fmt::Display) -> Self {
+    pub(crate) fn invalid(message: &dyn fmt::Display) -> Self {
         Self::new(
             "BAD_PACKAGE",
             message.to_string(),
@@ -55,7 +55,7 @@ impl PackageError {
         )
     }
 
-    fn at(mut self, path: &Path) -> Self {
+    pub(crate) fn at(mut self, path: &Path) -> Self {
         self.message = format!("{}: {}", path.display(), self.message);
         self
     }
@@ -292,7 +292,7 @@ fn read_json(path: &Path) -> Result<Json, PackageError> {
         .ok_or_else(|| PackageError::invalid(&"required file is missing").at(path))
 }
 
-fn read_optional_json(path: &Path) -> Result<Option<Json>, PackageError> {
+pub(crate) fn read_optional_json(path: &Path) -> Result<Option<Json>, PackageError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -310,13 +310,13 @@ fn read_optional_json(path: &Path) -> Result<Option<Json>, PackageError> {
         .map_err(|error| PackageError::invalid(&error).at(path))
 }
 
-fn json_bytes(value: &Json) -> Result<Vec<u8>, PackageError> {
+pub(crate) fn json_bytes(value: &Json) -> Result<Vec<u8>, PackageError> {
     let mut bytes = String::new();
     splice_json::write(value, &mut bytes).map_err(|error| PackageError::invalid(&error))?;
     Ok(bytes.into_bytes())
 }
 
-fn atomic_write(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), PackageError> {
+pub(crate) fn atomic_write(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), PackageError> {
     let target = directory.join(name);
     let temp = directory.join(format!("{name}.tmp"));
     match fs::remove_file(&temp) {
@@ -344,3 +344,9 @@ fn sync_dir(path: &Path) -> Result<(), PackageError> {
 
 #[cfg(test)]
 mod journal_tests;
+
+pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}

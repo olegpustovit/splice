@@ -11,3 +11,6 @@ pub mod commands;
 
 /// Atomic editing, frame resolution and timeline changes.
 pub mod edit;
+
+/// Durable project edits, revisions and agent sessions.
+pub mod history;

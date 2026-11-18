@@ -147,6 +147,16 @@ pub(crate) fn stage(
     source: Source,
     replay: Option<&[String]>,
 ) -> Result<(Project, ApplyReport), ApplyError> {
+    stage_above(base, ops, source, replay, base.serial)
+}
+
+pub(crate) fn stage_above(
+    base: &Project,
+    ops: &[Json],
+    source: Source,
+    replay: Option<&[String]>,
+    serial_floor: u64,
+) -> Result<(Project, ApplyReport), ApplyError> {
     if source == Source::Agent && base.access != Access::Live {
         return Err(batch_error(error(
             "PERMISSION_DENIED",
@@ -158,6 +168,7 @@ pub(crate) fn stage(
     let mut edit = Editor {
         project: base.clone(),
         source,
+        serial_floor,
         replay: replay.map(<[String]>::to_vec),
         report: ApplyReport::default(),
         bindings: Vec::new(),
@@ -191,6 +202,7 @@ pub(crate) fn stage(
 struct Editor {
     project: Project,
     source: Source,
+    serial_floor: u64,
     replay: Option<Vec<String>>,
     report: ApplyReport,
     bindings: Vec<Binding>,

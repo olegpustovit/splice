@@ -72,6 +72,21 @@ impl Journal {
         path: &Path,
         replay: &mut dyn FnMut(&Project, &Project, &[Record]) -> ReplayResult,
     ) -> Result<(Self, Project), PackageError> {
+        Self::open_inner(path, replay, false)
+    }
+
+    pub(crate) fn open_history(
+        path: &Path,
+        replay: &mut dyn FnMut(&Project, &Project, &[Record]) -> ReplayResult,
+    ) -> Result<(Self, Project), PackageError> {
+        Self::open_inner(path, replay, true)
+    }
+
+    fn open_inner(
+        path: &Path,
+        replay: &mut dyn FnMut(&Project, &Project, &[Record]) -> ReplayResult,
+        from_origin: bool,
+    ) -> Result<(Self, Project), PackageError> {
         let (package, checkpoint) = Package::open(path)?;
         let journal_path = package.path().join(JOURNAL);
         let mut file = open_file(&journal_path)?;
@@ -115,7 +130,7 @@ impl Journal {
             }
         };
         let prefix = read_prefix(&mut file, &journal_path, &origin)?;
-        let recovered = recover(&origin, &checkpoint, prefix, replay);
+        let recovered = recover(&origin, &checkpoint, prefix, replay, from_origin);
         if recovered.torn_bytes != 0 {
             eprintln!(
                 "splice: truncated {} torn journal bytes in {}",
@@ -133,6 +148,11 @@ impl Journal {
             problem,
         };
         Ok((journal, recovered.project))
+    }
+
+    /// Directory protected by the journal's writer lock.
+    pub fn path(&self) -> &Path {
+        self.package.path()
     }
 
     /// Starting state for the retained revision chain.
@@ -270,7 +290,11 @@ fn open_file(path: &Path) -> Result<File, PackageError> {
 }
 
 fn write_origin(package: &Package, origin: &Project) -> Result<(), PackageError> {
-    let data = object(vec![
+    atomic_write(package.path(), ORIGIN, &json_bytes(&encode_state(origin))?)
+}
+
+pub(crate) fn encode_state(origin: &Project) -> Json {
+    object(vec![
         ("project", project::encode(origin)),
         ("media", media::encode(&origin.media)),
         (
@@ -288,8 +312,7 @@ fn write_origin(package: &Package, origin: &Project) -> Result<(), PackageError>
                     .collect(),
             ),
         ),
-    ]);
-    atomic_write(package.path(), ORIGIN, &json_bytes(&data)?)
+    ])
 }
 
 fn read_origin(package: &Package) -> Result<Option<Project>, PackageError> {
@@ -400,6 +423,7 @@ pub(super) fn recover(
     checkpoint: &Project,
     prefix: Prefix,
     replay: &mut dyn FnMut(&Project, &Project, &[Record]) -> ReplayResult,
+    from_origin: bool,
 ) -> Recovery {
     let position = if (checkpoint.rev, checkpoint.hash) == (origin.rev, origin.hash) {
         Some(0)
@@ -410,14 +434,19 @@ pub(super) fn recover(
             .position(|record| (record.rev, record.hash) == (checkpoint.rev, checkpoint.hash))
             .map(|index| index + 1)
     };
-    let mut project = if position.is_some() {
-        checkpoint.clone()
+    let start = if from_origin {
+        0
     } else {
+        position.unwrap_or(0)
+    };
+    let mut project = if from_origin || position.is_none() {
         origin.clone()
+    } else {
+        checkpoint.clone()
     };
     let mut problem = prefix.problem;
     let mut records = prefix.records;
-    for (index, record) in records.iter().enumerate().skip(position.unwrap_or(0)) {
+    for (index, record) in records.iter().enumerate().skip(start) {
         match replay(&project, origin, &records[..=index]).and_then(|p| {
             validate::project(&p)?;
             Ok(p)

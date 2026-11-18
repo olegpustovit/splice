@@ -70,6 +70,15 @@ Use `at` for a placement calculated from a frame or anchor. Use `anchor` to reta
 item, marker, or transcript relation. Overlapping items can move to a free lane during settle.
 Passing an explicit lane turns an overlap into `LANE_CONFLICT`.
 
+A committed edit advances the revision after the journal is synced. A stale write returns the
+current revision and up to eight intervening changes. A retry of the original operation batch
+with its session's `idempotencyKey` returns the original revision and result with `replayed:true`.
+
+Use `history.undo` with `scope:"last"` or `"session"` to remove edits from that session and replay
+the remaining edits in order. A later edit that depended on a removed object appears in
+`skipped`. Use `scope:"to"` with a retained revision to restore its exact project content.
+Agents cannot restore a revision that would change the project's access level.
+
 ## Error codes
 
 `BAD_ARGS`, `UNKNOWN_COMMAND`, `NOT_FOUND`, `STALE_REVISION`, `CONFLICT`, `OUT_OF_RANGE`, `INVARIANT`, `PLANNED`,

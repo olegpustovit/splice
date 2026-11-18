@@ -3,9 +3,9 @@ use splice_json::Value as Json;
 use splice_model::*;
 use std::fmt::Display;
 
-pub(super) const FORMAT: &str = "splice/1";
+pub(crate) const FORMAT: &str = "splice/1";
 
-pub(super) fn shape(value: &Json, known: &[&str]) -> Result<(), PackageError> {
+pub(crate) fn shape(value: &Json, known: &[&str]) -> Result<(), PackageError> {
     let fields = value
         .as_object()
         .ok_or_else(|| PackageError::invalid(&"expected object"))?;
@@ -21,7 +21,7 @@ pub(super) fn shape(value: &Json, known: &[&str]) -> Result<(), PackageError> {
     Ok(())
 }
 
-pub(super) fn check_version(value: &Json) -> Result<(), PackageError> {
+pub(crate) fn check_version(value: &Json) -> Result<(), PackageError> {
     let text = value.string("format")?;
     if text == FORMAT {
         return Ok(());
@@ -41,7 +41,7 @@ pub(super) fn check_version(value: &Json) -> Result<(), PackageError> {
     Err(PackageError::invalid(&"expected format splice/1"))
 }
 
-pub(super) fn object(fields: Vec<(&str, Json)>) -> Json {
+pub(crate) fn object(fields: Vec<(&str, Json)>) -> Json {
     Json::Object(
         fields
             .into_iter()
@@ -50,15 +50,15 @@ pub(super) fn object(fields: Vec<(&str, Json)>) -> Json {
     )
 }
 
-pub(super) fn text(value: &str) -> Json {
+pub(crate) fn text(value: &str) -> Json {
     Json::String(value.into())
 }
 
-pub(super) fn display(value: &dyn Display) -> Json {
+pub(crate) fn display(value: &dyn Display) -> Json {
     Json::String(value.to_string())
 }
 
-pub(super) trait ReadFields {
+pub(crate) trait ReadFields {
     fn required(&self, name: &'static str) -> Result<&Json, PackageError>;
     fn optional(&self, name: &'static str) -> Option<&Json>;
     fn array(&self, name: &'static str) -> Result<&[Json], PackageError>;
@@ -95,7 +95,7 @@ impl ReadFields for Json {
     }
 }
 
-pub(super) fn optional_string(
+pub(crate) fn optional_string(
     value: &Json,
     name: &'static str,
 ) -> Result<Option<String>, PackageError> {
@@ -110,7 +110,7 @@ pub(super) fn optional_string(
         .transpose()
 }
 
-pub(super) fn optional_bool(
+pub(crate) fn optional_bool(
     value: &Json,
     name: &'static str,
 ) -> Result<Option<bool>, PackageError> {
@@ -120,14 +120,14 @@ pub(super) fn optional_bool(
         .transpose()
 }
 
-pub(super) fn boolean(value: &Json, name: &'static str) -> Result<bool, PackageError> {
+pub(crate) fn boolean(value: &Json, name: &'static str) -> Result<bool, PackageError> {
     value
         .required(name)?
         .as_bool()
         .ok_or_else(|| bad(name, "boolean"))
 }
 
-pub(super) fn hash(value: &Json, name: &'static str) -> Result<u64, PackageError> {
+pub(crate) fn hash(value: &Json, name: &'static str) -> Result<u64, PackageError> {
     let text = value.string(name)?;
     if text.len() != 16 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(bad(name, "16-digit hexadecimal hash"));
@@ -135,22 +135,22 @@ pub(super) fn hash(value: &Json, name: &'static str) -> Result<u64, PackageError
     u64::from_str_radix(text, 16).map_err(|_| bad(name, "16-digit hexadecimal hash"))
 }
 
-pub(super) fn hash_text(value: u64) -> Json {
+pub(crate) fn hash_text(value: u64) -> Json {
     Json::String(format!("{value:016x}"))
 }
 
-pub(super) fn u64_field(value: &Json, name: &'static str) -> Result<u64, PackageError> {
+pub(crate) fn u64_field(value: &Json, name: &'static str) -> Result<u64, PackageError> {
     value
         .required(name)?
         .as_u64()
         .ok_or_else(|| bad(name, "unsigned integer"))
 }
 
-pub(super) fn u32_field(value: &Json, name: &'static str) -> Result<u32, PackageError> {
+pub(crate) fn u32_field(value: &Json, name: &'static str) -> Result<u32, PackageError> {
     u32::try_from(u64_field(value, name)?).map_err(|_| bad(name, "unsigned 32-bit integer"))
 }
 
-pub(super) fn frame(value: &Json, name: &'static str) -> Result<Frame, PackageError> {
+pub(crate) fn frame(value: &Json, name: &'static str) -> Result<Frame, PackageError> {
     value
         .required(name)?
         .as_i64()
@@ -158,11 +158,11 @@ pub(super) fn frame(value: &Json, name: &'static str) -> Result<Frame, PackageEr
         .ok_or_else(|| bad(name, "integer frame"))
 }
 
-pub(super) fn frame_json(value: Frame) -> Json {
+pub(crate) fn frame_json(value: Frame) -> Json {
     Json::Signed(i64::from(value))
 }
 
-pub(super) fn number(value: &Json, name: &'static str) -> Result<f64, PackageError> {
+pub(crate) fn number(value: &Json, name: &'static str) -> Result<f64, PackageError> {
     value
         .required(name)?
         .as_f64()
@@ -170,15 +170,15 @@ pub(super) fn number(value: &Json, name: &'static str) -> Result<f64, PackageErr
         .ok_or_else(|| bad(name, "finite number"))
 }
 
-pub(super) fn bad(name: &str, expected: &str) -> PackageError {
+pub(crate) fn bad(name: &str, expected: &str) -> PackageError {
     PackageError::invalid(&format!("{name} must be {expected}"))
 }
 
-pub(super) fn bad_id(name: &str) -> PackageError {
+pub(crate) fn bad_id(name: &str) -> PackageError {
     bad(name, "an ID with the expected prefix and serial")
 }
 
-pub(super) fn push_text(
+pub(crate) fn push_text(
     fields: &mut Vec<(&'static str, Json)>,
     name: &'static str,
     value: &Option<String>,
@@ -188,7 +188,7 @@ pub(super) fn push_text(
     }
 }
 
-pub(super) fn push_bool(
+pub(crate) fn push_bool(
     fields: &mut Vec<(&'static str, Json)>,
     name: &'static str,
     value: Option<bool>,
