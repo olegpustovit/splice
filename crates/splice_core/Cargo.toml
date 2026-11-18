@@ -1,0 +1,11 @@
+[package]
+name = "splice_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+splice_model = { path = "../splice_model" }
+splice_json = { path = "../splice_json" }
+[lints]
+workspace = true

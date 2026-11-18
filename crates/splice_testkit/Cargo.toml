@@ -1,0 +1,11 @@
+[package]
+name = "splice_testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+splice_core = { path = "../splice_core" }
+splice_json = { path = "../splice_json" }
+[lints]
+workspace = true

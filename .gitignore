@@ -1,0 +1,4 @@
+/target
+*.splice/cache/
+.DS_Store
+/STOP

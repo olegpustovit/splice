@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "tools/gate"]
+exclude = ["pxui"]
+default-members = ["crates/splice_cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.99"
+
+[profile.dev]
+opt-level = 1        # debug runs must be fast too (rays M1 measurement)
+debug = 0
+incremental = true
+codegen-units = 256
+overflow-checks = true
+
+[profile.release]
+codegen-units = 16
+lto = "thin"
+debug = "line-tables-only"
+
+[workspace.lints.rust]
+warnings = "deny"
+unsafe_code = "deny"   # *_sys crates opt out locally

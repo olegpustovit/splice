@@ -1,0 +1,15 @@
+[package]
+name = "splice_cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "splice"
+path = "src/main.rs"
+
+[dependencies]
+splice_core = { path = "../splice_core" }
+splice_mcp = { path = "../splice_mcp" }
+[lints]
+workspace = true

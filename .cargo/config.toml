@@ -1,0 +1,4 @@
+[alias]
+# PXUI's runner: kills a test at 5 s and a run at 60 s, serializes window_ cases, records target/t-times.tsv.
+# Never run raw `cargo test` or test binaries.
+t = "run -q --manifest-path pxui/tools/t/Cargo.toml --target-dir target --"

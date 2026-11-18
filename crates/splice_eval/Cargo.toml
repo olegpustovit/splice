@@ -1,0 +1,10 @@
+[package]
+name = "splice_eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+splice_model = { path = "../splice_model" }
+[lints]
+workspace = true
