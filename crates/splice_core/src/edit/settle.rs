@@ -1,5 +1,47 @@
 use super::*;
-use std::collections::BTreeSet;
+
+#[derive(Default)]
+pub(super) struct Scratch {
+    order: Vec<OrderedItem>,
+    lanes: Vec<LaneIntervals>,
+    owners: Vec<(bool, usize, Owner)>,
+    seen: Vec<u64>,
+    captions: Vec<Slot>,
+}
+
+struct OrderedItem {
+    touched: bool,
+    slot: Slot,
+    id: ItemId,
+    span: Span,
+}
+
+struct LaneIntervals {
+    id: LaneId,
+    spans: Vec<Span>,
+}
+
+impl LaneIntervals {
+    fn insertion(&self, span: Span) -> Option<usize> {
+        if self
+            .spans
+            .last()
+            .is_none_or(|prior| prior.end <= span.start)
+        {
+            return Some(self.spans.len());
+        }
+        let index = self.spans.partition_point(|prior| prior.end <= span.start);
+        if self
+            .spans
+            .get(index)
+            .is_none_or(|prior| prior.start >= span.end)
+        {
+            Some(index)
+        } else {
+            None
+        }
+    }
+}
 
 impl Editor {
     pub(super) fn settle(&mut self, base: &Project) -> Result<(), CommandError> {
@@ -67,7 +109,21 @@ impl Editor {
     }
 
     fn sync_captions(&mut self) -> Result<(), CommandError> {
-        for slot in self.project.items.order().to_vec() {
+        let mut captions = std::mem::take(&mut self.settle_scratch.captions);
+        captions.clear();
+        captions.extend(self.project.items.order().iter().copied().filter(|&slot| {
+            matches!(
+                self.project.items.data(slot).expect("live item").kind,
+                ItemKind::Caption { .. }
+            )
+        }));
+        let result = self.settle_captions(&captions);
+        self.settle_scratch.captions = captions;
+        result
+    }
+
+    fn settle_captions(&mut self, captions: &[Slot]) -> Result<(), CommandError> {
+        for &slot in captions {
             let Some(data) = self.project.items.data(slot) else {
                 continue;
             };
@@ -147,10 +203,36 @@ impl Editor {
     }
 
     fn settle_lanes(&mut self, base: &Project) -> Result<(), CommandError> {
-        let mut order = Vec::with_capacity(self.project.items.order().len());
+        let mut order = std::mem::take(&mut self.settle_scratch.order);
+        let mut lanes = std::mem::take(&mut self.settle_scratch.lanes);
+        let result = self.place_items(base, &mut order, &mut lanes);
+        self.settle_scratch.order = order;
+        self.settle_scratch.lanes = lanes;
+        result
+    }
+
+    fn place_items(
+        &mut self,
+        base: &Project,
+        order: &mut Vec<OrderedItem>,
+        lanes: &mut Vec<LaneIntervals>,
+    ) -> Result<(), CommandError> {
+        order.clear();
+        lanes.truncate(self.project.lanes.len());
+        for (index, lane) in self.project.lanes.iter().enumerate() {
+            if let Some(intervals) = lanes.get_mut(index) {
+                intervals.id = lane.id;
+                intervals.spans.clear();
+            } else {
+                lanes.push(LaneIntervals {
+                    id: lane.id,
+                    spans: Vec::new(),
+                });
+            }
+        }
         for &slot in self.project.items.order() {
             let id = self.project.items.id(slot).expect("live item");
-            let span = time::span(&self.project, TimelineId::Item(id))?;
+            let span = time::item_span(&self.project, slot)?;
             if span.start < 0 || span.start >= span.end {
                 return Err(error(
                     "OUT_OF_RANGE",
@@ -158,13 +240,22 @@ impl Editor {
                     "Move it onto the timeline and give it a positive length.",
                 ));
             }
-            let touched = time::span(base, TimelineId::Item(id)).ok() != Some(span);
-            order.push((touched, span.start, id.to_string(), slot, span));
+            let previous = time::find_item(&base.items, id, slot)
+                .and_then(|slot| time::item_span(base, slot).ok());
+            let touched = previous != Some(span);
+            order.push(OrderedItem {
+                touched,
+                slot,
+                id,
+                span,
+            });
         }
-        order.sort_unstable_by(|a, b| (&a.0, &a.1, &a.2).cmp(&(&b.0, &b.1, &b.2)));
-        let mut placed: Vec<(LaneId, Span)> = Vec::with_capacity(order.len());
-        for (_, _, _, slot, span) in order {
-            let id = self.project.items.id(slot).expect("live item");
+        order.sort_unstable_by(|a, b| {
+            (a.touched, a.span.start)
+                .cmp(&(b.touched, b.span.start))
+                .then_with(|| serial_key(a.id.serial()).cmp(&serial_key(b.id.serial())))
+        });
+        for &OrderedItem { slot, id, span, .. } in order.iter() {
             let data = self.project.items.data(slot).expect("live item");
             let kind = data.kind.lane_kind();
             let mut lane = data.lane;
@@ -177,78 +268,140 @@ impl Editor {
                 lane = self.default_lane(kind)?;
                 self.project.items.data_mut(slot).expect("live item").lane = lane;
             }
-            let occupied = |lane| {
-                placed.iter().any(|&(other, range)| {
-                    other == lane && range.start < span.end && range.end > span.start
-                })
-            };
-            if occupied(lane) {
-                if self.explicit_lanes.contains(&id) {
-                    return Err(error(
-                        "LANE_CONFLICT",
-                        &format!("{lane} is already occupied at frame {}.", span.start),
-                        "Omit lane to choose a free lane or select another lane.",
-                    ));
-                }
-                let index = self
-                    .project
-                    .lanes
-                    .iter()
-                    .position(|candidate| candidate.id == lane)
-                    .expect("current lane");
-                let available = self.project.lanes[..index]
-                    .iter()
-                    .rev()
-                    .find(|candidate| candidate.kind == kind && !occupied(candidate.id))
-                    .map(|candidate| candidate.id);
-                let to = match available {
-                    Some(lane) => lane,
-                    None => self.new_lane(kind, None)?,
-                };
-                self.project.items.data_mut(slot).expect("live item").lane = to;
-                self.report
-                    .side_effects
-                    .push(SideEffect::Bumped { id, from: lane, to });
-                lane = to;
+            let index = interval_index(lanes, lane);
+            if let Some(at) = lanes[index].insertion(span) {
+                lanes[index].spans.insert(at, span);
+                continue;
             }
-            placed.push((lane, span));
+            if self.explicit_lanes.contains(&id) {
+                return Err(error(
+                    "LANE_CONFLICT",
+                    &format!("{lane} is already occupied at frame {}.", span.start),
+                    "Omit lane to choose a free lane or select another lane.",
+                ));
+            }
+            let index = self
+                .project
+                .lanes
+                .iter()
+                .position(|cand| cand.id == lane)
+                .expect("current lane");
+            let available = self.project.lanes[..index]
+                .iter()
+                .rev()
+                .find_map(|candidate| {
+                    if candidate.kind != kind {
+                        return None;
+                    }
+                    let index = lanes.iter().position(|entry| entry.id == candidate.id)?;
+                    lanes[index].insertion(span).map(|at| (index, at))
+                });
+            let (index, at) = match available {
+                Some(pair) => pair,
+                None => {
+                    let to = self.new_lane(kind, None)?;
+                    (interval_index(lanes, to), 0)
+                }
+            };
+            let to = lanes[index].id;
+            lanes[index].spans.insert(at, span);
+            self.project.items.data_mut(slot).expect("live item").lane = to;
+            self.report
+                .side_effects
+                .push(SideEffect::Bumped { id, from: lane, to });
         }
         Ok(())
     }
 
     fn rekey_effects(&mut self, base: &Project) -> Result<(), CommandError> {
-        let mut owners = vec![Owner::Project, Owner::Spine];
-        owners.extend((0..self.project.lanes.len()).map(Owner::Lane));
-        owners.extend(self.project.clips.order().iter().copied().map(Owner::Clip));
-        owners.extend(self.project.items.order().iter().copied().map(Owner::Item));
-        // Keep the original ID with its existing owner, even when a copy sorts
-        // before it in the timeline.
-        owners.sort_by_key(|&owner| match owner {
-            Owner::Project | Owner::Spine => false,
-            Owner::Lane(index) => !base
-                .lanes
-                .iter()
-                .any(|lane| lane.id == self.project.lanes[index].id),
-            Owner::Clip(slot) => base
-                .clips
-                .find(self.project.clips.id(slot).expect("live clip"))
+        let mut owners = std::mem::take(&mut self.settle_scratch.owners);
+        let mut seen = std::mem::take(&mut self.settle_scratch.seen);
+        let result = self.rekey(base, &mut owners, &mut seen);
+        self.settle_scratch.owners = owners;
+        self.settle_scratch.seen = seen;
+        result
+    }
+
+    fn rekey(
+        &mut self,
+        base: &Project,
+        owners: &mut Vec<(bool, usize, Owner)>,
+        seen: &mut Vec<u64>,
+    ) -> Result<(), CommandError> {
+        owners.clear();
+        seen.clear();
+        let all = [Owner::Project, Owner::Spine]
+            .into_iter()
+            .chain((0..self.project.lanes.len()).map(Owner::Lane))
+            .chain(self.project.clips.order().iter().copied().map(Owner::Clip))
+            .chain(self.project.items.order().iter().copied().map(Owner::Item));
+        for (index, owner) in all.enumerate() {
+            if effects(&self.project, owner).is_empty() {
+                continue;
+            }
+            let new = match owner {
+                Owner::Project | Owner::Spine => false,
+                Owner::Lane(index) => !base
+                    .lanes
+                    .iter()
+                    .any(|lane| lane.id == self.project.lanes[index].id),
+                Owner::Clip(slot) => base
+                    .clips
+                    .find(self.project.clips.id(slot).expect("live clip"))
+                    .is_none(),
+                Owner::Item(slot) => time::find_item(
+                    &base.items,
+                    self.project.items.id(slot).expect("live item"),
+                    slot,
+                )
                 .is_none(),
-            Owner::Item(slot) => base
-                .items
-                .find(self.project.items.id(slot).expect("live item"))
-                .is_none(),
-        });
-        let mut seen = BTreeSet::new();
-        for owner in owners {
+            };
+            owners.push((new, index, owner));
+        }
+        // Existing owners keep their IDs ahead of copies. Preserve traversal order within each group.
+        owners.sort_unstable_by_key(|&(new, index, _)| (new, index));
+        for &(_, _, owner) in owners.iter() {
             for index in 0..effects(&self.project, owner).len() {
-                if !seen.insert(effects(&self.project, owner)[index].id.serial()) {
-                    let id = EffectId::from_serial(self.mint("fx")?);
-                    effects_mut(&mut self.project, owner)[index].id = id;
-                    seen.insert(id.serial());
-                }
+                let mut serial = effects(&self.project, owner)[index].id.serial();
+                let at = match seen.binary_search(&serial) {
+                    Err(at) => at,
+                    Ok(_) => {
+                        serial = self.mint("fx")?;
+                        effects_mut(&mut self.project, owner)[index].id =
+                            EffectId::from_serial(serial);
+                        seen.binary_search(&serial).expect_err("fresh effect ID")
+                    }
+                };
+                seen.insert(at, serial);
             }
         }
         Ok(())
+    }
+}
+
+fn interval_index(lanes: &mut Vec<LaneIntervals>, id: LaneId) -> usize {
+    if let Some(index) = lanes.iter().position(|lane| lane.id == id) {
+        return index;
+    }
+    lanes.push(LaneIntervals {
+        id,
+        spans: Vec::new(),
+    });
+    lanes.len() - 1
+}
+
+// Base36 wire IDs sort lexically, including different digit lengths.
+fn serial_key(mut serial: u64) -> [u8; 13] {
+    let mut digits = [0; 13];
+    let mut index = digits.len();
+    loop {
+        index -= 1;
+        digits[index] = (serial % 36) as u8 + 1;
+        serial /= 36;
+        if serial == 0 {
+            digits.rotate_left(index);
+            return digits;
+        }
     }
 }
 

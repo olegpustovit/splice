@@ -56,14 +56,28 @@ impl Editor {
                 position,
                 carry_overlays,
                 ripple,
-            } => self.move_items(&items, &position, carry_overlays, ripple),
+            } => {
+                let result = self.move_items(&items, &position, carry_overlays, ripple);
+                self.decode_scratch.targets = items;
+                result
+            }
             Op::ItemSet {
                 items,
                 name,
                 color,
                 fade_in,
                 fade_out,
-            } => self.set_items(&items, name, color, fade_in, fade_out),
+            } => {
+                let result = self.set_items(&items, &name, &color, fade_in, fade_out);
+                self.decode_scratch.targets = items;
+                if let Some(name) = name.flatten() {
+                    self.decode_scratch.name = name;
+                }
+                if let Some(color) = color.flatten() {
+                    self.decode_scratch.color = color;
+                }
+                result
+            }
             Op::ItemDuplicate { items, at } => self.duplicate(&items, at.as_ref()),
             Op::ClipSpeed {
                 items,
@@ -110,7 +124,7 @@ impl Editor {
             TimelineId::Marker(_) => return Err(wrong_kind("Split a clip or overlay.")),
         };
         Ok(Outcome {
-            summary: format!("Split {id} at frame {at}"),
+            summary: Summary::Text(format!("Split {id} at frame {at}")),
             primary: Some(Target::Timeline(id)),
             created: vec![Target::Timeline(created)],
         })
@@ -406,7 +420,7 @@ impl Editor {
         }
         let primary = ids.first().copied().map(Target::Timeline);
         Ok(Outcome {
-            summary: format!("Deleted {} timeline item(s)", ids.len()),
+            summary: Summary::Text(format!("Deleted {} timeline item(s)", ids.len())),
             primary,
             created: Vec::new(),
         })

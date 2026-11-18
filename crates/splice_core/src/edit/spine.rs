@@ -3,6 +3,15 @@ use super::time::{anchor_at, clip_slot, item_slot, media, rounded, source_rate, 
 use super::*;
 use crate::commands::{FrameArg, InsertSource, Position, TrimEdge};
 
+#[derive(Default)]
+pub(super) struct MoveScratch {
+    clips: Vec<Slot>,
+    kept: Vec<(Slot, Frame)>,
+    ordered: Vec<(Slot, i64)>,
+    gaps: Vec<Frame>,
+    markers: Vec<(Frame, usize)>,
+}
+
 impl Editor {
     pub(super) fn trim(
         &mut self,
@@ -86,8 +95,8 @@ impl Editor {
             }
             TimelineId::Marker(_) => return Err(wrong_kind("Use marker.set to move a marker.")),
         }
-        Ok(Outcome::edit(
-            format!("Trimmed {id} to frame {to}"),
+        Ok(Outcome::with_summary(
+            Summary::Trim(id, to),
             Target::Timeline(id),
         ))
     }
@@ -258,23 +267,45 @@ impl Editor {
         carry_overlays: bool,
         ripple: bool,
     ) -> Result<Outcome, CommandError> {
-        let ids = self.selection(selection)?;
+        let mut ids = std::mem::take(&mut self.selection_scratch);
+        let mut scratch = std::mem::take(&mut self.move_scratch);
+        let result = self.selection_into(selection, &mut ids).and_then(|()| {
+            self.move_selected(&ids, position, carry_overlays, ripple, &mut scratch)
+        });
+        self.selection_scratch = ids;
+        self.move_scratch = scratch;
+        result
+    }
+
+    fn move_selected(
+        &mut self,
+        ids: &[TimelineId],
+        position: &Position,
+        carry_overlays: bool,
+        ripple: bool,
+        scratch: &mut MoveScratch,
+    ) -> Result<Outcome, CommandError> {
         let start = time::span(&self.project, ids[0])?.start;
         let delta = subtract(self.destination(position, start)?, start)?;
-        for id in &ids {
+        for id in ids {
             if let TimelineId::Item(item) = *id {
                 self.editable_item(item)?;
             }
         }
-        let slots: Vec<_> = ids
-            .iter()
-            .filter_map(|id| match id {
-                TimelineId::Clip(id) => self.project.clips.find(*id),
-                _ => None,
-            })
-            .collect();
-        if !slots.is_empty() {
-            let mut kept = Vec::new();
+        let MoveScratch {
+            clips,
+            kept,
+            ordered,
+            gaps,
+            markers,
+        } = scratch;
+        clips.clear();
+        clips.extend(ids.iter().filter_map(|id| match id {
+            TimelineId::Clip(id) => self.project.clips.find(*id),
+            _ => None,
+        }));
+        kept.clear();
+        if !clips.is_empty() {
             if !carry_overlays {
                 for &slot in self.project.items.order() {
                     let timing = self.project.items.timing(slot).expect("live item");
@@ -285,10 +316,10 @@ impl Editor {
                     }
                 }
             }
-            if let ([slot], true) = (slots.as_slice(), ripple) {
-                self.move_magnetic(*slot, delta)?;
+            if let ([slot], true) = (clips.as_slice(), ripple) {
+                self.move_magnetic(*slot, delta, ordered, gaps)?;
             } else {
-                for &slot in &slots {
+                for &slot in clips.iter() {
                     let timing = self.project.clips.timing_mut(slot).expect("live clip");
                     let start = frame_add(timing.start, delta)?;
                     if start < 0 {
@@ -296,7 +327,7 @@ impl Editor {
                     }
                     timing.start = start;
                 }
-                for slot in slots {
+                for &slot in clips.iter() {
                     let timing = self.project.clips.timing(slot).expect("live clip");
                     self.check_overlap(
                         timing.start,
@@ -306,12 +337,12 @@ impl Editor {
                 }
             }
             self.project.clips.sort_by_start();
-            for (slot, frame) in kept {
+            for &(slot, frame) in kept.iter() {
                 let anchor = anchor_at(&self.project, frame)?;
                 self.reanchor_if_parent_changed(slot, anchor);
             }
         }
-        for &id in &ids {
+        for &id in ids {
             match id {
                 TimelineId::Clip(_) => {}
                 TimelineId::Item(id) => {
@@ -332,20 +363,26 @@ impl Editor {
                 }
             }
         }
-        self.project.markers.sort_by_key(|marker| marker.at);
-        Ok(Outcome::edit(
-            format!("Moved {} item(s) by {delta} frames", ids.len()),
+        sort_markers(&mut self.project.markers, markers);
+        Ok(Outcome::with_summary(
+            Summary::Move(ids.len(), delta),
             Target::Timeline(ids[0]),
         ))
     }
 
-    fn move_magnetic(&mut self, slot: Slot, delta: Frame) -> Result<(), CommandError> {
+    fn move_magnetic(
+        &mut self,
+        slot: Slot,
+        delta: Frame,
+        ordered: &mut Vec<(Slot, i64)>,
+        gaps: &mut Vec<Frame>,
+    ) -> Result<(), CommandError> {
         let original = self.project.clips.timing(slot).expect("live clip");
         let start = frame_add(original.start, delta)?.max(0);
         let end = frame_add(start, original.length)?;
         if self.overlaps(start, end, Some(slot)) {
-            let mut ordered = Vec::new();
-            let mut gaps = Vec::new();
+            ordered.clear();
+            gaps.clear();
             let mut last_end = 0;
             for &other in self.project.clips.order() {
                 let timing = self.project.clips.timing(other).expect("live clip");
@@ -365,7 +402,7 @@ impl Editor {
                 .unwrap_or(ordered.len());
             ordered.insert(index, (slot, center));
             let mut at = 0;
-            for ((slot, _), gap) in ordered.into_iter().zip(gaps) {
+            for (&(slot, _), &gap) in ordered.iter().zip(gaps.iter()) {
                 let timing = self.project.clips.timing_mut(slot).expect("live clip");
                 timing.start = frame_add(at, gap)?;
                 at = timing.end().ok_or_else(frame_range)?;
@@ -537,4 +574,31 @@ pub(super) fn source_for_interval(
         }
     }
     Ok(source)
+}
+
+fn sort_markers(markers: &mut [Marker], order: &mut Vec<(Frame, usize)>) {
+    if markers.is_sorted_by_key(|marker| marker.at) {
+        return;
+    }
+    order.clear();
+    order.extend(
+        markers
+            .iter()
+            .enumerate()
+            .map(|(index, marker)| (marker.at, index)),
+    );
+    order.sort_unstable();
+    // Follow each cycle in the permutation. The original index breaks frame ties.
+    for start in 0..order.len() {
+        let mut destination = start;
+        loop {
+            let source = order[destination].1;
+            order[destination].1 = destination;
+            if source == start {
+                break;
+            }
+            markers.swap(destination, source);
+            destination = source;
+        }
+    }
 }

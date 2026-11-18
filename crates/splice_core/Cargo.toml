@@ -12,3 +12,4 @@ workspace = true
 
 [dev-dependencies]
 splice_testkit = { path = "../splice_testkit" }
+mem_sys = { path = "../../pxui/crates/open/mem_sys", features = ["counting"] }

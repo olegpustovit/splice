@@ -4,10 +4,11 @@ use crate::{Clip, ClipData, ClipId, ClipTiming, Item, ItemData, ItemId, ItemTimi
 /// Use a typed ID for references that outlive an edit.
 pub type Slot = u32;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 struct Slots {
     order: Vec<Slot>,
     free: Vec<Slot>,
+    by_id: Vec<(u64, Slot)>,
 }
 
 impl Slots {
@@ -15,30 +16,42 @@ impl Slots {
         Self {
             order: Vec::with_capacity(capacity),
             free: Vec::with_capacity(capacity),
+            by_id: Vec::with_capacity(capacity),
         }
     }
 
-    fn insert(&mut self) -> Option<Slot> {
+    fn index(&self, serial: u64) -> Result<usize, usize> {
+        self.by_id.binary_search_by_key(&serial, |&(id, _)| id)
+    }
+
+    fn find(&self, serial: u64) -> Option<Slot> {
+        self.index(serial).ok().map(|index| self.by_id[index].1)
+    }
+
+    fn insert(&mut self, serial: u64) -> Option<Slot> {
+        let index = self.index(serial).err()?;
         let slot = match self.free.pop() {
             Some(slot) => slot,
             None => Slot::try_from(self.order.len()).ok()?,
         };
         self.order.push(slot);
+        self.by_id.insert(index, (serial, slot));
         Some(slot)
     }
 
-    fn remove(&mut self, slot: Slot) -> bool {
+    fn remove(&mut self, slot: Slot, serial: u64) -> bool {
         let Some(index) = self.order.iter().position(|&current| current == slot) else {
             return false;
         };
         self.order.remove(index);
+        self.by_id.remove(self.index(serial).expect("live slot ID"));
         self.free.push(slot);
         true
     }
 }
 
 /// Column storage for clip IDs, timing and content, with independent spine order.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Clips {
     slots: Slots,
     ids: Vec<ClipId>,
@@ -64,10 +77,7 @@ impl Clips {
 
     /// Adds a row at the end of the order. Returns `None` for a duplicate ID or exhausted slots.
     pub fn insert(&mut self, row: Clip) -> Option<Slot> {
-        if self.find(row.id).is_some() {
-            return None;
-        }
-        let slot = self.slots.insert()?;
+        let slot = self.slots.insert(row.id.serial())?;
         let index = slot as usize;
         if index == self.ids.len() {
             self.ids.push(row.id);
@@ -83,7 +93,10 @@ impl Clips {
 
     /// Deletes a row and releases its slot.
     pub fn remove(&mut self, slot: Slot) -> bool {
-        if !self.slots.remove(slot) {
+        let Some(id) = self.id(slot) else {
+            return false;
+        };
+        if !self.slots.remove(slot, id.serial()) {
             return false;
         }
         self.data[slot as usize] = None;
@@ -92,10 +105,7 @@ impl Clips {
 
     /// Finds a live slot by stable ID.
     pub fn find(&self, id: ClipId) -> Option<Slot> {
-        self.order()
-            .iter()
-            .copied()
-            .find(|&slot| self.ids[slot as usize] == id)
+        self.slots.find(id.serial())
     }
 
     /// Stable ID for a live slot.
@@ -135,7 +145,7 @@ impl Clips {
 }
 
 /// Column storage for item IDs, timing and content, with independent creation order.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Items {
     slots: Slots,
     ids: Vec<ItemId>,
@@ -161,10 +171,7 @@ impl Items {
 
     /// Adds a row at the end of the order. Returns `None` for a duplicate ID or exhausted slots.
     pub fn insert(&mut self, row: Item) -> Option<Slot> {
-        if self.find(row.id).is_some() {
-            return None;
-        }
-        let slot = self.slots.insert()?;
+        let slot = self.slots.insert(row.id.serial())?;
         let index = slot as usize;
         if index == self.ids.len() {
             self.ids.push(row.id);
@@ -180,7 +187,10 @@ impl Items {
 
     /// Deletes a row and releases its slot.
     pub fn remove(&mut self, slot: Slot) -> bool {
-        if !self.slots.remove(slot) {
+        let Some(id) = self.id(slot) else {
+            return false;
+        };
+        if !self.slots.remove(slot, id.serial()) {
             return false;
         }
         self.data[slot as usize] = None;
@@ -189,10 +199,7 @@ impl Items {
 
     /// Finds a live slot by stable ID.
     pub fn find(&self, id: ItemId) -> Option<Slot> {
-        self.order()
-            .iter()
-            .copied()
-            .find(|&slot| self.ids[slot as usize] == id)
+        self.slots.find(id.serial())
     }
 
     /// Stable ID for a live slot.
@@ -221,5 +228,57 @@ impl Items {
     /// Mutable content for a live slot.
     pub fn data_mut(&mut self, slot: Slot) -> Option<&mut ItemData> {
         self.data.get_mut(slot as usize)?.as_mut()
+    }
+}
+
+impl Clone for Slots {
+    fn clone(&self) -> Self {
+        Self {
+            order: self.order.clone(),
+            free: self.free.clone(),
+            by_id: self.by_id.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.order.clone_from(&source.order);
+        self.free.clone_from(&source.free);
+        self.by_id.clone_from(&source.by_id);
+    }
+}
+
+impl Clone for Clips {
+    fn clone(&self) -> Self {
+        Self {
+            slots: self.slots.clone(),
+            ids: self.ids.clone(),
+            timing: self.timing.clone(),
+            data: self.data.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.slots.clone_from(&source.slots);
+        self.ids.clone_from(&source.ids);
+        self.timing.clone_from(&source.timing);
+        self.data.clone_from(&source.data);
+    }
+}
+
+impl Clone for Items {
+    fn clone(&self) -> Self {
+        Self {
+            slots: self.slots.clone(),
+            ids: self.ids.clone(),
+            timing: self.timing.clone(),
+            data: self.data.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.slots.clone_from(&source.slots);
+        self.ids.clone_from(&source.ids);
+        self.timing.clone_from(&source.timing);
+        self.data.clone_from(&source.data);
     }
 }

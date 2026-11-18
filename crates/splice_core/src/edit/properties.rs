@@ -7,13 +7,28 @@ impl Editor {
     pub(super) fn set_items(
         &mut self,
         selection: &[Target],
-        name: Option<Option<String>>,
-        color: Option<Option<String>>,
+        name: &Option<Option<String>>,
+        color: &Option<Option<String>>,
         fade_in: Option<Frame>,
         fade_out: Option<Frame>,
     ) -> Result<Outcome, CommandError> {
-        let ids = self.selection(selection)?;
-        for &id in &ids {
+        let mut ids = std::mem::take(&mut self.selection_scratch);
+        let result = self
+            .selection_into(selection, &mut ids)
+            .and_then(|()| self.set_selected(&ids, name, color, fade_in, fade_out));
+        self.selection_scratch = ids;
+        result
+    }
+
+    fn set_selected(
+        &mut self,
+        ids: &[TimelineId],
+        name: &Option<Option<String>>,
+        color: &Option<Option<String>>,
+        fade_in: Option<Frame>,
+        fade_out: Option<Frame>,
+    ) -> Result<Outcome, CommandError> {
+        for &id in ids {
             match id {
                 TimelineId::Clip(id) => {
                     let slot = time::clip_slot(&self.project, id)?;
@@ -24,7 +39,7 @@ impl Editor {
                         .data_mut(slot)
                         .expect("live clip")
                         .appearance;
-                    set_appearance(appearance, length, &name, &color, fade_in, fade_out);
+                    set_appearance(appearance, length, name, color, fade_in, fade_out);
                 }
                 TimelineId::Item(id) => {
                     let slot = item_slot(&self.project, id)?;
@@ -35,7 +50,7 @@ impl Editor {
                         .data_mut(slot)
                         .expect("live item")
                         .appearance;
-                    set_appearance(appearance, length, &name, &color, fade_in, fade_out);
+                    set_appearance(appearance, length, name, color, fade_in, fade_out);
                 }
                 TimelineId::Marker(id) => {
                     if fade_in.is_some() || fade_out.is_some() {
@@ -49,17 +64,18 @@ impl Editor {
                         .iter_mut()
                         .find(|marker| marker.id == id)
                         .expect("checked marker");
-                    if let Some(name) = &name {
-                        marker.name = name.clone().unwrap_or_default();
+                    if let Some(name) = name {
+                        marker.name.clear();
+                        marker.name.push_str(name.as_deref().unwrap_or_default());
                     }
-                    if let Some(color) = &color {
+                    if let Some(color) = color {
                         marker.color.clone_from(color);
                     }
                 }
             }
         }
-        Ok(Outcome::edit(
-            format!("Updated {} item(s)", ids.len()),
+        Ok(Outcome::with_summary(
+            Summary::Update(ids.len()),
             Target::Timeline(ids[0]),
         ))
     }
@@ -418,7 +434,7 @@ impl Editor {
         }
         self.project.markers.sort_by_key(|marker| marker.at);
         Ok(Outcome {
-            summary: format!("Duplicated {} item(s)", ids.len()),
+            summary: Summary::Text(format!("Duplicated {} item(s)", ids.len())),
             primary: created.first().cloned(),
             created,
         })
@@ -570,7 +586,14 @@ fn set_appearance(
     fade_out: Option<Frame>,
 ) {
     if let Some(name) = name {
-        appearance.name = name.as_ref().filter(|name| !name.is_empty()).cloned();
+        if let Some(name) = name.as_ref().filter(|name| !name.is_empty()) {
+            appearance
+                .name
+                .get_or_insert_with(String::new)
+                .clone_from(name);
+        } else {
+            appearance.name = None;
+        }
     }
     if let Some(color) = color {
         appearance.color.clone_from(color);

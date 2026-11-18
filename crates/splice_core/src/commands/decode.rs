@@ -1,16 +1,16 @@
-use super::{CommandError as Error, Json, args::*, op::*};
+use super::{CommandError as Error, DecodeScratch, Json, args::*, op::*};
 use splice_model::{Fit, Placement};
 
 type DecodedOp = Result<Op, Error>;
 
-pub(super) fn item_split(a: &Json) -> DecodedOp {
+pub(super) fn item_split(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::ItemSplit {
         item: a.target("item")?,
         at: a.frame("at")?,
     })
 }
 
-pub(super) fn item_trim(a: &Json) -> DecodedOp {
+pub(super) fn item_trim(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let edge = match a.string("edge")? {
         "in" => TrimEdge::In,
         "out" => TrimEdge::Out,
@@ -24,16 +24,20 @@ pub(super) fn item_trim(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn item_move(a: &Json) -> DecodedOp {
+pub(super) fn item_move(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
+    targets_into(a.required("items")?, "items", &mut scratch.targets)?;
+    let position = position(a)?;
+    let carry_overlays = a.flag("carryOverlays", true)?;
+    let ripple = a.flag("ripple", true)?;
     Ok(Op::ItemMove {
-        items: a.targets("items")?,
-        position: position(a)?,
-        carry_overlays: a.flag("carryOverlays", true)?,
-        ripple: a.flag("ripple", true)?,
+        items: std::mem::take(&mut scratch.targets),
+        position,
+        carry_overlays,
+        ripple,
     })
 }
 
-pub(super) fn item_delete(a: &Json) -> DecodedOp {
+pub(super) fn item_delete(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let keep_overlays = match a.opt_string("overlays")?.as_deref() {
         None | Some("delete") => false,
         Some("keep") => true,
@@ -46,33 +50,43 @@ pub(super) fn item_delete(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn item_duplicate(a: &Json) -> DecodedOp {
+pub(super) fn item_duplicate(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::ItemDuplicate {
         items: a.targets("items")?,
         at: a.opt_frame("at")?,
     })
 }
 
-pub(super) fn item_set(a: &Json) -> DecodedOp {
-    let color = patch_string(a, "color")?;
-    if let Some(Some(color)) = &color
-        && !["red", "orange", "yellow", "green", "blue", "purple", "gray"].contains(&color.as_str())
+pub(super) fn item_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
+    let color = a.string_patch("color")?;
+    if let Some(Some(color)) = color
+        && !["red", "orange", "yellow", "green", "blue", "purple", "gray"].contains(&color)
     {
         return Err(Error::bad(
             "color",
             "red, orange, yellow, green, blue, purple, gray, or null",
         ));
     }
+    targets_into(a.required("items")?, "items", &mut scratch.targets)?;
+    let name = a.string_patch("name")?;
+    let fade_in = a.opt_int("fadeIn")?;
+    let fade_out = a.opt_int("fadeOut")?;
     Ok(Op::ItemSet {
-        items: a.targets("items")?,
-        name: patch_string(a, "name")?,
-        color,
-        fade_in: a.opt_int("fadeIn")?,
-        fade_out: a.opt_int("fadeOut")?,
+        items: std::mem::take(&mut scratch.targets),
+        name: name.map(|name| name.map(|name| reuse_string(&mut scratch.name, name))),
+        color: color.map(|color| color.map(|color| reuse_string(&mut scratch.color, color))),
+        fade_in,
+        fade_out,
     })
 }
 
-pub(super) fn clip_speed(a: &Json) -> DecodedOp {
+fn reuse_string(scratch: &mut String, value: &str) -> String {
+    scratch.clear();
+    scratch.push_str(value);
+    std::mem::take(scratch)
+}
+
+pub(super) fn clip_speed(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let speed = a.number("speed")?;
     if !(0.25..=16.0).contains(&speed) {
         return Err(Error::bad("speed", "a number from 0.25 to 16"));
@@ -84,7 +98,7 @@ pub(super) fn clip_speed(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn clip_insert(a: &Json) -> DecodedOp {
+pub(super) fn clip_insert(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let source = match (a.opt_target("media")?, a.opt_string("path")?) {
         (Some(id), None) => InsertSource::Media(id),
         (None, Some(path)) if !path.is_empty() && !path.contains('\0') => InsertSource::Path(path),
@@ -102,21 +116,21 @@ pub(super) fn clip_insert(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn clip_lift(a: &Json) -> DecodedOp {
+pub(super) fn clip_lift(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::ClipLift {
         items: a.targets("items")?,
         lane: a.opt_target("lane")?,
     })
 }
 
-pub(super) fn overlay_replace_spine(a: &Json) -> DecodedOp {
+pub(super) fn overlay_replace_spine(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::OverlayReplaceSpine {
         item: a.target("item")?,
         target: a.opt_target("target")?,
     })
 }
 
-pub(super) fn overlay_add(a: &Json) -> DecodedOp {
+pub(super) fn overlay_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let content = match a.string("kind")? {
         "title" => OverlayContent::Title(a.opt_string("text")?),
         "motion" => OverlayContent::Motion {
@@ -153,7 +167,7 @@ pub(super) fn overlay_add(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn title_add(a: &Json) -> DecodedOp {
+pub(super) fn title_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::TitleAdd {
         at: a.frame("at")?,
         length: a.opt_int("length")?.unwrap_or(90),
@@ -162,14 +176,14 @@ pub(super) fn title_add(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn title_set(a: &Json) -> DecodedOp {
+pub(super) fn title_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::TitleSet {
         item: a.target("item")?,
         text: a.string("text")?.into(),
     })
 }
 
-pub(super) fn motion_add(a: &Json) -> DecodedOp {
+pub(super) fn motion_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::MotionAdd {
         at: a.frame("at")?,
         length: a.opt_int("length")?.unwrap_or(120),
@@ -178,7 +192,7 @@ pub(super) fn motion_add(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn motion_set(a: &Json) -> DecodedOp {
+pub(super) fn motion_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::MotionSet {
         item: a.target("item")?,
         from: a.opt_number("from")?,
@@ -186,7 +200,7 @@ pub(super) fn motion_set(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn item_anchor(a: &Json) -> DecodedOp {
+pub(super) fn item_anchor(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let pinned = a.flag("pinned", false)?;
     let mode = a
         .field("anchor")
@@ -199,7 +213,7 @@ pub(super) fn item_anchor(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn item_lane(a: &Json) -> DecodedOp {
+pub(super) fn item_lane(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let destination = if let Some(lane) = a.opt_target("lane")? {
         LaneMove::To(lane)
     } else {
@@ -220,7 +234,7 @@ pub(super) fn item_lane(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn overlay_set(a: &Json) -> DecodedOp {
+pub(super) fn overlay_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::OverlaySet {
         item: a.target("item")?,
         placement: a
@@ -233,27 +247,27 @@ pub(super) fn overlay_set(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn lane_create(a: &Json) -> DecodedOp {
+pub(super) fn lane_create(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::LaneCreate {
         kind: lane_kind(a.string("kind")?)?,
         name: a.opt_string("name")?,
     })
 }
 
-pub(super) fn lane_rename(a: &Json) -> DecodedOp {
+pub(super) fn lane_rename(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::LaneRename {
         lane: a.target("lane")?,
         name: a.string("name")?.into(),
     })
 }
 
-pub(super) fn lane_delete(a: &Json) -> DecodedOp {
+pub(super) fn lane_delete(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::LaneDelete {
         lane: a.target("lane")?,
     })
 }
 
-pub(super) fn component_set(a: &Json) -> DecodedOp {
+pub(super) fn component_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::ComponentSet {
         clip: a.target("clip")?,
         component: component(a.string("component")?)?,
@@ -261,7 +275,7 @@ pub(super) fn component_set(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn audio_set(a: &Json) -> DecodedOp {
+pub(super) fn audio_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let component = component(a.string("component")?)?;
     if !matches!(component, Component::Mic | Component::System) {
         return Err(Error::bad("component", "mic or system"));
@@ -273,7 +287,7 @@ pub(super) fn audio_set(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn cursor_set(a: &Json) -> DecodedOp {
+pub(super) fn cursor_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::CursorSet {
         clip: a.target("clip")?,
         size: a.opt_number("size")?,
@@ -281,14 +295,14 @@ pub(super) fn cursor_set(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn keys_set(a: &Json) -> DecodedOp {
+pub(super) fn keys_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::KeysSet {
         clip: a.target("clip")?,
         size: a.opt_number("size")?,
     })
 }
 
-pub(super) fn keys_hide(a: &Json) -> DecodedOp {
+pub(super) fn keys_hide(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let mut events = Vec::new();
     for value in list(a.required("events")?) {
         let index = value
@@ -304,14 +318,14 @@ pub(super) fn keys_hide(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn marker_add(a: &Json) -> DecodedOp {
+pub(super) fn marker_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::MarkerAdd {
         at: a.frame("at")?,
         name: a.opt_string("name")?,
     })
 }
 
-pub(super) fn marker_set(a: &Json) -> DecodedOp {
+pub(super) fn marker_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::MarkerSet {
         marker: a.target("marker")?,
         name: a.opt_string("name")?,
@@ -319,14 +333,14 @@ pub(super) fn marker_set(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn project_set(a: &Json) -> DecodedOp {
+pub(super) fn project_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::ProjectSet {
         aspect: a.opt_string("aspect")?.as_deref().map(aspect).transpose()?,
         access: a.opt_string("access")?.as_deref().map(access).transpose()?,
     })
 }
 
-pub(super) fn clip_crop(a: &Json) -> DecodedOp {
+pub(super) fn clip_crop(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let rect = crop(a)?;
     let fit = a.opt_string("fit")?.as_deref().map(fit).transpose()?;
     if rect.is_none() && fit.is_none() {
@@ -339,7 +353,7 @@ pub(super) fn clip_crop(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn cut_range(a: &Json) -> DecodedOp {
+pub(super) fn cut_range(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::CutRange {
         from: a.frame("from")?,
         to: a.frame("to")?,
@@ -347,7 +361,7 @@ pub(super) fn cut_range(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn cut_words(a: &Json) -> DecodedOp {
+pub(super) fn cut_words(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::CutWords {
         words: list(a.required("words")?)
             .iter()
@@ -357,7 +371,7 @@ pub(super) fn cut_words(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn effect_add(a: &Json) -> DecodedOp {
+pub(super) fn effect_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::EffectAdd {
         target: a.target("target")?,
         kind: a.string("type")?.into(),
@@ -366,7 +380,7 @@ pub(super) fn effect_add(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn effect_set(a: &Json) -> DecodedOp {
+pub(super) fn effect_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let target = if let Some(effect) = a.opt_target("effect")? {
         EffectSelection::Id(effect)
     } else {
@@ -393,7 +407,7 @@ pub(super) fn effect_set(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn effect_remove(a: &Json) -> DecodedOp {
+pub(super) fn effect_remove(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let effects = a
         .field("effects")
         .map(|value| targets(value, "effects"))
@@ -406,7 +420,7 @@ pub(super) fn effect_remove(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn effect_paste(a: &Json) -> DecodedOp {
+pub(super) fn effect_paste(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let replace = match a.opt_string("mode")?.as_deref() {
         None | Some("merge") => false,
         Some("replace") => true,
@@ -419,7 +433,7 @@ pub(super) fn effect_paste(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn effect_promote(a: &Json) -> DecodedOp {
+pub(super) fn effect_promote(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let to_project = match a.string("to")? {
         "project" => true,
         "lane" => false,
@@ -432,7 +446,7 @@ pub(super) fn effect_promote(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn captions_generate(a: &Json) -> DecodedOp {
+pub(super) fn captions_generate(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let max_words = a.opt_int("maxWords")?.unwrap_or(3);
     if !(1..=8).contains(&max_words) {
         return Err(Error::bad("maxWords", "an integer from 1 to 8"));
@@ -455,7 +469,7 @@ pub(super) fn captions_generate(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn caption_set(a: &Json) -> DecodedOp {
+pub(super) fn caption_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::CaptionSet {
         item: a.target("item")?,
         text: a.opt_string("text")?,
@@ -463,14 +477,14 @@ pub(super) fn caption_set(a: &Json) -> DecodedOp {
     })
 }
 
-pub(super) fn caption_split(a: &Json) -> DecodedOp {
+pub(super) fn caption_split(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::CaptionSplit {
         item: a.target("item")?,
         word: word(a.required("word")?, "word")?,
     })
 }
 
-pub(super) fn caption_merge(a: &Json) -> DecodedOp {
+pub(super) fn caption_merge(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let items = a.targets("items")?;
     if items.len() < 2 {
         return Err(Error::bad("items", "two or more caption IDs"));

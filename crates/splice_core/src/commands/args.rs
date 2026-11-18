@@ -13,6 +13,7 @@ pub(super) trait Args {
     fn required(&self, key: &str) -> Result<&Json, Error>;
     fn string(&self, key: &str) -> Result<&str, Error>;
     fn opt_string(&self, key: &str) -> Result<Option<String>, Error>;
+    fn string_patch(&self, key: &str) -> Result<Option<Option<&str>>, Error>;
     fn flag(&self, key: &str, default: bool) -> Result<bool, Error>;
     fn opt_flag(&self, key: &str) -> Result<Option<bool>, Error>;
     fn number(&self, key: &str) -> Result<f64, Error>;
@@ -39,6 +40,16 @@ impl Args for Json {
     fn opt_string(&self, key: &str) -> Result<Option<String>, Error> {
         self.field(key)
             .map(|_| self.string(key).map(str::to_owned))
+            .transpose()
+    }
+
+    fn string_patch(&self, key: &str) -> Result<Option<Option<&str>>, Error> {
+        self.field(key)
+            .map(|value| match value {
+                Json::Null => Ok(None),
+                Json::String(text) => Ok(Some(text.as_str())),
+                _ => Err(Error::bad(key, "a string or null")),
+            })
             .transpose()
     }
 
@@ -180,11 +191,22 @@ pub(super) fn list(value: &Json) -> &[Json] {
 }
 
 pub(super) fn targets(value: &Json, key: &str) -> Result<Vec<Target>, Error> {
+    let mut result = Vec::new();
+    targets_into(value, key, &mut result)?;
+    Ok(result)
+}
+
+pub(super) fn targets_into(value: &Json, key: &str, result: &mut Vec<Target>) -> Result<(), Error> {
     let values = list(value);
     if values.is_empty() {
         return Err(Error::bad(key, "at least one Splice ID"));
     }
-    values.iter().map(|v| target(v, key)).collect()
+    result.clear();
+    result.reserve(values.len());
+    for value in values {
+        result.push(target(value, key)?);
+    }
+    Ok(())
 }
 
 fn frame_arg(value: &Json, key: &str) -> Result<FrameArg, Error> {
@@ -299,14 +321,9 @@ pub(super) fn hash(value: &Json) -> Result<Option<u64>, Error> {
 }
 
 pub(super) fn patch_string(value: &Json, key: &str) -> Result<Option<Option<String>>, Error> {
-    value
-        .field(key)
-        .map(|v| match v {
-            Json::Null => Ok(None),
-            Json::String(s) => Ok(Some(s.clone())),
-            _ => Err(Error::bad(key, "a string or null")),
-        })
-        .transpose()
+    Ok(value
+        .string_patch(key)?
+        .map(|patch| patch.map(str::to_owned)))
 }
 
 fn patch_flag(value: &Json, key: &str) -> Result<Option<Option<bool>>, Error> {

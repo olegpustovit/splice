@@ -2,7 +2,7 @@ use crate::commands::{self, CommandError, Op, RefPart, Target};
 use crate::package::{journal::Source, validate};
 use splice_json::Value as Json;
 use splice_model::*;
-use std::fmt;
+use std::fmt::{self, Write};
 
 mod edits;
 mod mints;
@@ -157,46 +157,80 @@ pub(crate) fn stage_above(
     replay: Option<&[String]>,
     serial_floor: u64,
 ) -> Result<(Project, ApplyReport), ApplyError> {
-    if source == Source::Agent && base.access != Access::Live {
-        return Err(batch_error(error(
-            "PERMISSION_DENIED",
-            "This project does not allow agent edits.",
-            "Ask the project owner to enable live agent access.",
-        )));
+    let mut work = ApplyWorkspace::default();
+    work.stage(base, ops, source, replay, serial_floor)?;
+    Ok((work.edit.project, work.edit.report))
+}
+
+/// Reusable in-memory storage for repeated batches on a project.
+///
+/// Reuse the same workspace across previews and commits to retain capacity for steady-state edits.
+/// Larger batches and new project content can grow these buffers.
+#[derive(Default)]
+pub struct ApplyWorkspace {
+    edit: Editor,
+}
+
+impl ApplyWorkspace {
+    /// Applies or previews a batch. The report is available until the next use of this workspace.
+    pub fn apply(
+        &mut self,
+        project: &mut Project,
+        ops: &[Json],
+        source: Source,
+        dry_run: bool,
+    ) -> Result<&ApplyReport, ApplyError> {
+        self.stage(project, ops, source, None, project.serial)?;
+        if !dry_run {
+            std::mem::swap(project, &mut self.edit.project);
+        }
+        Ok(&self.edit.report)
     }
-    // ponytail: stage in a clone until T2.6 provides reusable edit storage for warm apply.
-    let mut edit = Editor {
-        project: base.clone(),
-        source,
-        serial_floor,
-        replay: replay.map(<[String]>::to_vec),
-        report: ApplyReport::default(),
-        bindings: Vec::new(),
-        explicit_lanes: Vec::new(),
-    };
-    for (index, value) in ops.iter().enumerate() {
-        edit.step(value, index).map_err(|error| ApplyError {
-            op: Some(index),
-            error,
+
+    fn stage(
+        &mut self,
+        base: &Project,
+        ops: &[Json],
+        source: Source,
+        replay: Option<&[String]>,
+        serial_floor: u64,
+    ) -> Result<(), ApplyError> {
+        if source == Source::Agent && base.access != Access::Live {
+            return Err(batch_error(error(
+                "PERMISSION_DENIED",
+                "This project does not allow agent edits.",
+                "Ask the project owner to enable live agent access.",
+            )));
+        }
+        let edit = &mut self.edit;
+        edit.project.clone_from(base);
+        edit.source = source;
+        edit.serial_floor = serial_floor;
+        edit.replay = replay.map(<[String]>::to_vec);
+        edit.spare_changes.append(&mut edit.report.changes);
+        edit.report.side_effects.clear();
+        edit.report.mints.clear();
+        edit.bindings.clear();
+        edit.explicit_lanes.clear();
+        for (index, value) in ops.iter().enumerate() {
+            edit.step(value, index).map_err(|error| ApplyError {
+                op: Some(index),
+                error,
+            })?;
+        }
+        edit.settle(base).map_err(batch_error)?;
+        if replay.is_some_and(|mints| mints.len() != edit.report.mints.len()) {
+            return Err(batch_error(mints::bad_replay()));
+        }
+        validate::with_scratch(&edit.project, &mut edit.validate_scratch).map_err(|error| {
+            batch_error(CommandError::new(
+                "INVARIANT",
+                error.message,
+                error.fix.into(),
+            ))
         })?;
+        time::diff(base, &edit.project, &mut edit.report.diff).map_err(batch_error)
     }
-    edit.settle(base).map_err(batch_error)?;
-    if edit
-        .replay
-        .as_ref()
-        .is_some_and(|mints| mints.len() != edit.report.mints.len())
-    {
-        return Err(batch_error(mints::bad_replay()));
-    }
-    validate::project(&edit.project).map_err(|error| {
-        batch_error(CommandError::new(
-            "INVARIANT",
-            error.message,
-            error.fix.into(),
-        ))
-    })?;
-    edit.report.diff = time::diff(base, &edit.project).map_err(batch_error)?;
-    Ok((edit.project, edit.report))
 }
 
 struct Editor {
@@ -205,8 +239,34 @@ struct Editor {
     serial_floor: u64,
     replay: Option<Vec<String>>,
     report: ApplyReport,
+    spare_changes: Vec<EditChange>,
     bindings: Vec<Binding>,
     explicit_lanes: Vec<ItemId>,
+    settle_scratch: settle::Scratch,
+    validate_scratch: validate::Scratch,
+    decode_scratch: commands::DecodeScratch,
+    selection_scratch: Vec<TimelineId>,
+    move_scratch: spine::MoveScratch,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Self {
+            project: Project::default(),
+            source: Source::Human,
+            serial_floor: 0,
+            replay: None,
+            report: ApplyReport::default(),
+            spare_changes: Vec::new(),
+            bindings: Vec::new(),
+            explicit_lanes: Vec::new(),
+            settle_scratch: settle::Scratch::default(),
+            validate_scratch: validate::Scratch::default(),
+            decode_scratch: commands::DecodeScratch::default(),
+            selection_scratch: Vec::new(),
+            move_scratch: spine::MoveScratch::default(),
+        }
+    }
 }
 
 struct Binding {
@@ -215,14 +275,25 @@ struct Binding {
     first: Option<Target>,
 }
 
+enum Summary {
+    Text(String),
+    Trim(TimelineId, Frame),
+    Move(usize, Frame),
+    Update(usize),
+}
+
 struct Outcome {
-    summary: String,
+    summary: Summary,
     primary: Option<Target>,
     created: Vec<Target>,
 }
 
 impl Outcome {
     fn edit(summary: String, primary: Target) -> Self {
+        Self::with_summary(Summary::Text(summary), primary)
+    }
+
+    fn with_summary(summary: Summary, primary: Target) -> Self {
         Self {
             summary,
             primary: Some(primary),
@@ -232,7 +303,7 @@ impl Outcome {
 
     fn create(summary: String, target: Target) -> Self {
         Self {
-            summary,
+            summary: Summary::Text(summary),
             primary: Some(target.clone()),
             created: vec![target],
         }
@@ -241,7 +312,8 @@ impl Outcome {
 
 impl Editor {
     fn step(&mut self, value: &Json, op: usize) -> Result<(), CommandError> {
-        let commands::Decoded { op: decoded, bind } = commands::decode(value)?;
+        let commands::Decoded { op: decoded, bind } =
+            commands::decode_reusing(value, &mut self.decode_scratch)?;
         let id = value
             .field("cmd")
             .and_then(Json::as_str)
@@ -262,11 +334,26 @@ impl Editor {
                 first: outcome.created.first().cloned(),
             });
         }
+        let (mut summary, mut created) = self.spare_changes.pop().map_or_else(
+            || (String::new(), Vec::new()),
+            |change| (change.summary, change.created),
+        );
+        summary.clear();
+        match outcome.summary {
+            Summary::Text(text) => summary = text,
+            Summary::Trim(id, to) => write!(summary, "Trimmed {id} to frame {to}").unwrap(),
+            Summary::Move(count, delta) => {
+                write!(summary, "Moved {count} item(s) by {delta} frames").unwrap()
+            }
+            Summary::Update(count) => write!(summary, "Updated {count} item(s)").unwrap(),
+        }
+        created.clear();
+        created.extend(outcome.created);
         self.report.changes.push(EditChange {
             op,
             cmd: id,
-            summary: outcome.summary,
-            created: outcome.created,
+            summary,
+            created,
         });
         Ok(())
     }
@@ -306,6 +393,16 @@ impl Editor {
 
     fn selection(&self, selection: &[Target]) -> Result<Vec<TimelineId>, CommandError> {
         let mut ids = Vec::with_capacity(selection.len());
+        self.selection_into(selection, &mut ids)?;
+        Ok(ids)
+    }
+
+    fn selection_into(
+        &self,
+        selection: &[Target],
+        ids: &mut Vec<TimelineId>,
+    ) -> Result<(), CommandError> {
+        ids.clear();
         for target in selection {
             let id = self.timeline(target)?;
             time::span(&self.project, id)?;
@@ -313,7 +410,7 @@ impl Editor {
                 ids.push(id);
             }
         }
-        Ok(ids)
+        Ok(())
     }
 }
 

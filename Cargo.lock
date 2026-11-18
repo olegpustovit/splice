@@ -47,6 +47,7 @@ dependencies = [
 name = "splice_core"
 version = "0.1.0"
 dependencies = [
+ "mem_sys",
  "splice_json",
  "splice_model",
  "splice_testkit",

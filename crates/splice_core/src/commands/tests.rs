@@ -49,7 +49,7 @@ fn every_command_has_a_documented_decodable_example_and_distinct_variant() {
         assert!(!row.ui.is_empty());
         assert!(described.field("params").unwrap().as_object().is_some());
         let op = row
-            .decode(example)
+            .decode(example, &mut DecodeScratch::default())
             .unwrap_or_else(|error| panic!("{}: {error}", row.id));
         let variant = std::mem::discriminant(&op);
         assert!(!variants.contains(&variant), "{}", row.id);

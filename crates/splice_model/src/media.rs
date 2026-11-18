@@ -1,7 +1,7 @@
 use crate::{Frame, MediaId, WordId};
 
 /// File descriptor and probe results. The model never reads media bytes.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Media {
     /// Stable media ID.
     pub id: MediaId,
@@ -35,7 +35,7 @@ pub enum MediaKind {
 }
 
 /// Properties needed for editing without opening a media file.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Probe {
     /// Source frame rate.
     pub fps: f64,
@@ -52,7 +52,7 @@ pub struct Probe {
 }
 
 /// A named audio track and its channel count.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct AudioTrack {
     /// Track role or name.
     pub name: String,
@@ -61,7 +61,7 @@ pub struct AudioTrack {
 }
 
 /// Individual files present in a captured take.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct TakeComponents {
     /// Screen video file.
     pub screen: Option<String>,
@@ -78,7 +78,7 @@ pub struct TakeComponents {
 }
 
 /// Versioned words on the media source clock.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Transcript {
     /// Media item described by the transcript.
     pub media: MediaId,
@@ -91,7 +91,7 @@ pub struct Transcript {
 }
 
 /// A timed word in a transcript.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Word {
     /// Stable ID within the transcript.
     pub id: WordId,
@@ -103,4 +103,126 @@ pub struct Word {
     pub to: Frame,
     /// Recognition confidence when available.
     pub confidence: Option<f64>,
+}
+
+impl Clone for Media {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            kind: self.kind,
+            path: self.path.clone(),
+            bookmark: self.bookmark.clone(),
+            size: self.size,
+            mtime: self.mtime,
+            probe: self.probe.clone(),
+            take: self.take.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.id = source.id;
+        self.kind = source.kind;
+        self.path.clone_from(&source.path);
+        self.bookmark.clone_from(&source.bookmark);
+        self.size = source.size;
+        self.mtime = source.mtime;
+        self.probe.clone_from(&source.probe);
+        self.take.clone_from(&source.take);
+    }
+}
+
+impl Clone for Probe {
+    fn clone(&self) -> Self {
+        Self {
+            fps: self.fps,
+            frames: self.frames,
+            width: self.width,
+            height: self.height,
+            audio: self.audio.clone(),
+            codec: self.codec.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.fps = source.fps;
+        self.frames = source.frames;
+        self.width = source.width;
+        self.height = source.height;
+        self.audio.clone_from(&source.audio);
+        self.codec.clone_from(&source.codec);
+    }
+}
+
+impl Clone for AudioTrack {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            channels: self.channels,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.name.clone_from(&source.name);
+        self.channels = source.channels;
+    }
+}
+
+impl Clone for TakeComponents {
+    fn clone(&self) -> Self {
+        Self {
+            screen: self.screen.clone(),
+            camera: self.camera.clone(),
+            mic: self.mic.clone(),
+            system: self.system.clone(),
+            events: self.events.clone(),
+            cursors: self.cursors.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.screen.clone_from(&source.screen);
+        self.camera.clone_from(&source.camera);
+        self.mic.clone_from(&source.mic);
+        self.system.clone_from(&source.system);
+        self.events.clone_from(&source.events);
+        self.cursors.clone_from(&source.cursors);
+    }
+}
+
+impl Clone for Transcript {
+    fn clone(&self) -> Self {
+        Self {
+            media: self.media,
+            hash: self.hash,
+            language: self.language.clone(),
+            words: self.words.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.media = source.media;
+        self.hash = source.hash;
+        self.language.clone_from(&source.language);
+        self.words.clone_from(&source.words);
+    }
+}
+
+impl Clone for Word {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            text: self.text.clone(),
+            from: self.from,
+            to: self.to,
+            confidence: self.confidence,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.id = source.id;
+        self.text.clone_from(&source.text);
+        self.from = source.from;
+        self.to = source.to;
+        self.confidence = source.confidence;
+    }
 }

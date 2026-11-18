@@ -16,7 +16,7 @@ pub use timeline::*;
 pub type Frame = i32;
 
 /// Snapshot data. Persistent edits are applied by the core store.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Project {
     /// Current revision number.
     pub rev: u64,
@@ -78,3 +78,52 @@ impl Default for Project {
 
 #[cfg(test)]
 mod tests;
+
+impl Clone for Project {
+    fn clone(&self) -> Self {
+        Self {
+            rev: self.rev,
+            hash: self.hash,
+            serial: self.serial,
+            fps: self.fps,
+            size: self.size,
+            aspect: self.aspect,
+            access: self.access,
+            effects: self.effects.clone(),
+            spine: self.spine.clone(),
+            lanes: self.lanes.clone(),
+            clips: self.clips.clone(),
+            items: self.items.clone(),
+            markers: self.markers.clone(),
+            media: self.media.clone(),
+            transcripts: self.transcripts.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.rev = source.rev;
+        self.hash = source.hash;
+        self.serial = source.serial;
+        self.fps = source.fps;
+        self.size = source.size;
+        self.aspect = source.aspect;
+        self.access = source.access;
+        self.effects.clone_from(&source.effects);
+        self.spine.clone_from(&source.spine);
+        self.lanes.clone_from(&source.lanes);
+        self.clips.clone_from(&source.clips);
+        self.items.clone_from(&source.items);
+        // Moves reorder markers. Keep each marker's text buffer with its ID.
+        for (index, original) in source.markers.iter().enumerate().take(self.markers.len()) {
+            let rest = &mut self.markers[index..];
+            if rest[0].id != original.id
+                && let Some(found) = rest.iter().position(|marker| marker.id == original.id)
+            {
+                rest[..=found].rotate_right(1);
+            }
+        }
+        self.markers.clone_from(&source.markers);
+        self.media.clone_from(&source.media);
+        self.transcripts.clone_from(&source.transcripts);
+    }
+}

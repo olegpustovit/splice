@@ -27,7 +27,7 @@ pub enum Access {
 }
 
 /// The primary lane.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Spine {
     /// Stable lane ID.
     pub id: LaneId,
@@ -38,7 +38,7 @@ pub struct Spine {
 }
 
 /// A secondary lane.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Lane {
     /// Stable lane ID.
     pub id: LaneId,
@@ -100,7 +100,7 @@ impl ClipTiming {
 }
 
 /// Spine clip settings.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct ClipData {
     /// Source media, or `None` for a gap.
     pub media: Option<MediaId>,
@@ -152,7 +152,7 @@ impl Default for AudioGains {
 }
 
 /// Shared clip and item settings.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Appearance {
     /// Fade-in duration.
     pub fade_in: Frame,
@@ -269,7 +269,7 @@ pub enum Edge {
 }
 
 /// Item settings.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct ItemData {
     /// Lane containing the item.
     pub lane: LaneId,
@@ -280,7 +280,7 @@ pub struct ItemData {
 }
 
 /// Content of an overlay item.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum ItemKind {
     /// Title text.
     Title {
@@ -352,7 +352,7 @@ pub enum Placement {
 }
 
 /// Custom display overrides for a caption word.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct CaptionEdit {
     /// Word to override.
     pub word: WordId,
@@ -365,7 +365,7 @@ pub struct CaptionEdit {
 }
 
 /// Named timeline point.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Marker {
     /// Stable marker ID.
     pub id: MarkerId,
@@ -378,7 +378,7 @@ pub struct Marker {
 }
 
 /// Effect attached to a project, lane, clip, or item.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Effect {
     /// Stable effect ID.
     pub id: EffectId,
@@ -391,7 +391,7 @@ pub struct Effect {
 }
 
 /// One override in an effect's parameter set.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct EffectParam {
     /// Parameter name.
     pub name: String,
@@ -400,7 +400,7 @@ pub struct EffectParam {
 }
 
 /// Value types used by effect schemas.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum EffectValue {
     /// Numeric parameter.
     Number(f64),
@@ -408,4 +408,215 @@ pub enum EffectValue {
     Bool(bool),
     /// Text, enum name, or color.
     Text(String),
+}
+
+impl Clone for Spine {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            name: self.name.clone(),
+            effects: self.effects.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.id = source.id;
+        self.name.clone_from(&source.name);
+        self.effects.clone_from(&source.effects);
+    }
+}
+
+impl Clone for Lane {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            name: self.name.clone(),
+            kind: self.kind,
+            effects: self.effects.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.id = source.id;
+        self.name.clone_from(&source.name);
+        self.kind = source.kind;
+        self.effects.clone_from(&source.effects);
+    }
+}
+
+impl Clone for ClipData {
+    fn clone(&self) -> Self {
+        Self {
+            media: self.media,
+            appearance: self.appearance.clone(),
+            framing: self.framing,
+            enabled: self.enabled.clone(),
+            volume: self.volume,
+            hidden_keys: self.hidden_keys.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.media = source.media;
+        self.appearance.clone_from(&source.appearance);
+        self.framing = source.framing;
+        self.enabled.clone_from(&source.enabled);
+        self.volume = source.volume;
+        self.hidden_keys.clone_from(&source.hidden_keys);
+    }
+}
+
+impl Clone for Appearance {
+    fn clone(&self) -> Self {
+        Self {
+            fade_in: self.fade_in,
+            fade_out: self.fade_out,
+            name: self.name.clone(),
+            color: self.color.clone(),
+            effects: self.effects.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.fade_in = source.fade_in;
+        self.fade_out = source.fade_out;
+        self.name.clone_from(&source.name);
+        self.color.clone_from(&source.color);
+        self.effects.clone_from(&source.effects);
+    }
+}
+
+impl Clone for ItemData {
+    fn clone(&self) -> Self {
+        Self {
+            lane: self.lane,
+            kind: self.kind.clone(),
+            appearance: self.appearance.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.lane = source.lane;
+        self.kind.clone_from(&source.kind);
+        self.appearance.clone_from(&source.appearance);
+    }
+}
+
+impl Clone for CaptionEdit {
+    fn clone(&self) -> Self {
+        Self {
+            word: self.word,
+            text: self.text.clone(),
+            emph: self.emph,
+            emoji: self.emoji.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.word = source.word;
+        self.text.clone_from(&source.text);
+        self.emph = source.emph;
+        self.emoji.clone_from(&source.emoji);
+    }
+}
+
+impl Clone for Marker {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            at: self.at,
+            name: self.name.clone(),
+            color: self.color.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.id = source.id;
+        self.at = source.at;
+        self.name.clone_from(&source.name);
+        self.color.clone_from(&source.color);
+    }
+}
+
+impl Clone for Effect {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            kind: self.kind.clone(),
+            enabled: self.enabled,
+            params: self.params.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.id = source.id;
+        self.kind.clone_from(&source.kind);
+        self.enabled = source.enabled;
+        self.params.clone_from(&source.params);
+    }
+}
+
+impl Clone for EffectParam {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            value: self.value.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.name.clone_from(&source.name);
+        self.value.clone_from(&source.value);
+    }
+}
+
+impl Clone for ItemKind {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Title { text } => Self::Title { text: text.clone() },
+            Self::Media(overlay) => Self::Media(*overlay),
+            Self::Motion { from, to } => Self::Motion {
+                from: *from,
+                to: *to,
+            },
+            Self::Caption { words, edits } => Self::Caption {
+                words: words.clone(),
+                edits: edits.clone(),
+            },
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        match (self, source) {
+            (Self::Title { text }, Self::Title { text: other }) => text.clone_from(other),
+            (
+                Self::Caption { words, edits },
+                Self::Caption {
+                    words: source_words,
+                    edits: source_edits,
+                },
+            ) => {
+                words.clone_from(source_words);
+                edits.clone_from(source_edits);
+            }
+            (dest, source) => *dest = source.clone(),
+        }
+    }
+}
+
+impl Clone for EffectValue {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Number(n) => Self::Number(*n),
+            Self::Bool(b) => Self::Bool(*b),
+            Self::Text(s) => Self::Text(s.clone()),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        match (self, source) {
+            (Self::Text(text), Self::Text(other)) => text.clone_from(other),
+            (dst, src) => *dst = src.clone(),
+        }
+    }
 }

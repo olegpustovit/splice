@@ -1,17 +1,31 @@
 use super::{PackageError, codec::bad};
 use splice_model::*;
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
+#[derive(Default)]
+pub(crate) struct Scratch {
+    media: Vec<u64>,
+    lanes: Vec<(u64, LaneKind)>,
+    markers: Vec<u64>,
+    effects: Vec<u64>,
+    marks: Vec<u8>,
+    path: Vec<Slot>,
+    transcripts: Vec<u64>,
+    words: Vec<u32>,
+}
+
 pub(crate) fn project(project: &Project) -> Result<(), PackageError> {
+    with_scratch(project, &mut Scratch::default())
+}
+
+pub(crate) fn with_scratch(project: &Project, scratch: &mut Scratch) -> Result<(), PackageError> {
     if project.fps == 0 || project.size.contains(&0) {
         return Err(bad("fps and canvas dimensions", "positive integers"));
     }
-    let mut media = BTreeMap::new();
+    let media = &mut scratch.media;
+    media.clear();
     for descriptor in &project.media {
-        if media.insert(descriptor.id.serial(), descriptor).is_some() {
-            return Err(bad("media IDs", "unique"));
-        }
+        insert_id(media, descriptor.id.serial(), "media IDs")?;
         if descriptor.path.is_empty() || descriptor.path.contains('\0') {
             return Err(bad("media.path", "a nonempty path without NUL"));
         }
@@ -42,24 +56,33 @@ pub(crate) fn project(project: &Project) -> Result<(), PackageError> {
         }
     }
 
-    let mut lanes = BTreeMap::new();
+    let lanes = &mut scratch.lanes;
+    lanes.clear();
     if project.spine.id != LaneId::SPINE {
         return Err(bad("spine.id", "lan_spine"));
     }
-    let mut effect_ids = BTreeSet::new();
-    effects(&project.effects, &mut effect_ids)?;
-    effects(&project.spine.effects, &mut effect_ids)?;
+    let effect_ids = &mut scratch.effects;
+    effect_ids.clear();
+    effects(&project.effects, effect_ids)?;
+    effects(&project.spine.effects, effect_ids)?;
     for lane in &project.lanes {
-        if lane.id == project.spine.id || lanes.insert(lane.id.serial(), lane.kind).is_some() {
+        if lane.id == project.spine.id {
             return Err(bad("lane IDs", "unique"));
         }
-        effects(&lane.effects, &mut effect_ids)?;
+        lanes.push((lane.id.serial(), lane.kind));
+        effects(&lane.effects, effect_ids)?;
     }
-    let mut markers = BTreeSet::new();
+    lanes.sort_unstable_by_key(|&(id, _)| id);
+    if lanes.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(bad("lane IDs", "unique"));
+    }
+    let markers = &mut scratch.markers;
+    markers.clear();
     for marker in &project.markers {
-        if marker.at < 0 || !markers.insert(marker.id.serial()) {
-            return Err(bad("markers", "unique IDs at nonnegative frames"));
+        if marker.at < 0 {
+            return Err(bad("markers", "nonnegative frames"));
         }
+        insert_id(markers, marker.id.serial(), "marker IDs")?;
     }
 
     let mut end = 0;
@@ -76,8 +99,10 @@ pub(crate) fn project(project: &Project) -> Result<(), PackageError> {
             .end()
             .ok_or_else(|| bad("clip end", "an integer frame in range"))?;
         if let Some(id) = data.media {
-            let descriptor = media
-                .get(&id.serial())
+            let descriptor = project
+                .media
+                .iter()
+                .find(|media| media.id == id)
                 .ok_or_else(|| bad("clip.media", "a media table ID"))?;
             let source_frames = f64::from(timing.length) * timing.speed * descriptor.probe.fps
                 / f64::from(project.fps)
@@ -86,17 +111,22 @@ pub(crate) fn project(project: &Project) -> Result<(), PackageError> {
                 return Err(bad("clip source range", "within its media duration"));
             }
         }
-        appearance(&data.appearance, timing.length, &mut effect_ids)?;
+        appearance(&data.appearance, timing.length, effect_ids)?;
         crop(data.framing.crop)?;
     }
     for &slot in project.items.order() {
         let timing = project.items.timing(slot).expect("live item");
         let data = project.items.data(slot).expect("live item");
-        if timing.length <= 0 || lanes.get(&data.lane.serial()) != Some(&data.kind.lane_kind()) {
+        if timing.length <= 0
+            || lanes
+                .binary_search_by_key(&data.lane.serial(), |&(id, _)| id)
+                .ok()
+                .is_none_or(|index| lanes[index].1 != data.kind.lane_kind())
+        {
             return Err(bad("item", "a positive-length item on a lane of its kind"));
         }
         if let ItemKind::Media(overlay) = data.kind {
-            if overlay.source < 0 || !media.contains_key(&overlay.media.serial()) {
+            if overlay.source < 0 || media.binary_search(&overlay.media.serial()).is_err() {
                 return Err(bad(
                     "overlay",
                     "a media table ID and nonnegative source frame",
@@ -104,22 +134,25 @@ pub(crate) fn project(project: &Project) -> Result<(), PackageError> {
             }
             crop(overlay.framing.crop)?;
         }
-        appearance(&data.appearance, timing.length, &mut effect_ids)?;
+        appearance(&data.appearance, timing.length, effect_ids)?;
     }
-    anchors(project, &markers)?;
-
-    let mut transcripts = BTreeSet::new();
+    anchors(project, markers, &mut scratch.marks, &mut scratch.path)?;
+    let transcripts = &mut scratch.transcripts;
+    transcripts.clear();
     for transcript in &project.transcripts {
-        if !media.contains_key(&transcript.media.serial())
-            || !transcripts.insert(transcript.media.serial())
-        {
-            return Err(bad("transcript", "one transcript per known media ID"));
+        if media.binary_search(&transcript.media.serial()).is_err() {
+            return Err(bad("transcript", "a known media ID"));
         }
-        let mut words = BTreeSet::new();
+        insert_id(
+            transcripts,
+            transcript.media.serial(),
+            "transcript media IDs",
+        )?;
+        let words = &mut scratch.words;
+        words.clear();
         for word in &transcript.words {
             if word.from < 0
                 || word.to <= word.from
-                || !words.insert(word.id.index())
                 || word
                     .confidence
                     .is_some_and(|confidence| !(0.0..=1.0).contains(&confidence))
@@ -129,23 +162,51 @@ pub(crate) fn project(project: &Project) -> Result<(), PackageError> {
                     "a unique ID with a source interval and optional confidence from 0 to 1",
                 ));
             }
+            match words.binary_search(&word.id.index()) {
+                Ok(_) => return Err(bad("word IDs", "unique")),
+                Err(index) => words.insert(index, word.id.index()),
+            }
         }
     }
     Ok(())
 }
 
-fn anchors(project: &Project, markers: &BTreeSet<u64>) -> Result<(), PackageError> {
-    let items: BTreeMap<_, _> = project
-        .items
-        .order()
-        .iter()
-        .map(|&slot| (project.items.id(slot).expect("live item").serial(), slot))
-        .collect();
-    let mut checked = BTreeSet::new();
+fn insert_id(ids: &mut Vec<u64>, id: u64, name: &str) -> Result<(), PackageError> {
+    match ids.binary_search(&id) {
+        Ok(_) => Err(bad(name, "unique")),
+        Err(index) => {
+            ids.insert(index, id);
+            Ok(())
+        }
+    }
+}
+
+fn anchors(
+    project: &Project,
+    markers: &[u64],
+    marks: &mut Vec<u8>,
+    path: &mut Vec<Slot>,
+) -> Result<(), PackageError> {
+    marks.clear();
+    marks.resize(
+        project
+            .items
+            .order()
+            .iter()
+            .max()
+            .map_or(0, |&slot| slot as usize + 1),
+        0,
+    );
+    path.clear();
     for &start in project.items.order() {
-        let mut path = Vec::new();
         let mut slot = start;
-        while checked.insert(slot) {
+        loop {
+            match marks[slot as usize] {
+                1 => return Err(bad("anchors", "acyclic")),
+                2 => break,
+                _ => {}
+            }
+            marks[slot as usize] = 1;
             path.push(slot);
             match project.items.timing(slot).expect("live item").anchor {
                 Anchor::ClipSource { clip, source } => {
@@ -168,8 +229,9 @@ fn anchors(project: &Project, markers: &BTreeSet<u64>) -> Result<(), PackageErro
                     item: TimelineId::Item(id),
                     ..
                 } => {
-                    slot = *items
-                        .get(&id.serial())
+                    slot = project
+                        .items
+                        .find(id)
                         .ok_or_else(|| bad("item anchor", "an existing item ID"))?;
                     continue;
                 }
@@ -178,17 +240,16 @@ fn anchors(project: &Project, markers: &BTreeSet<u64>) -> Result<(), PackageErro
                     item: TimelineId::Marker(marker),
                     ..
                 } => {
-                    if !markers.contains(&marker.serial()) {
+                    if markers.binary_search(&marker.serial()).is_err() {
                         return Err(bad("marker anchor", "an existing marker ID"));
                     }
                 }
                 Anchor::Pinned(_) | Anchor::Word { .. } => {}
             }
-            path.clear();
             break;
         }
-        if path.contains(&slot) {
-            return Err(bad("anchors", "acyclic"));
+        for slot in path.drain(..) {
+            marks[slot as usize] = 2;
         }
     }
     Ok(())
@@ -214,7 +275,7 @@ fn crop(crop: Option<Rect>) -> Result<(), PackageError> {
 fn appearance(
     appearance: &Appearance,
     length: Frame,
-    effect_ids: &mut BTreeSet<u64>,
+    effect_ids: &mut Vec<u64>,
 ) -> Result<(), PackageError> {
     if appearance.fade_in < 0
         || appearance.fade_out < 0
@@ -225,11 +286,9 @@ fn appearance(
     effects(&appearance.effects, effect_ids)
 }
 
-fn effects(effects: &[Effect], ids: &mut BTreeSet<u64>) -> Result<(), PackageError> {
+fn effects(effects: &[Effect], ids: &mut Vec<u64>) -> Result<(), PackageError> {
     for effect in effects {
-        if !ids.insert(effect.id.serial()) {
-            return Err(bad("effect IDs", "unique"));
-        }
+        insert_id(ids, effect.id.serial(), "effect IDs")?;
         let allowed = match effect.kind.as_str() {
             "window" => &[
                 "padding",
@@ -256,8 +315,7 @@ fn effects(effects: &[Effect], ids: &mut BTreeSet<u64>) -> Result<(), PackageErr
             "keystrokes" => &["size", "position"],
             _ => return Err(bad("effect.type", "a known effect type")),
         };
-        let mut names = BTreeSet::new();
-        for param in &effect.params {
+        for (index, param) in effect.params.iter().enumerate() {
             if !allowed.contains(&param.name.as_str()) {
                 return Err(PackageError::new(
                     "FORMAT_UNKNOWN_KEY",
@@ -265,7 +323,10 @@ fn effects(effects: &[Effect], ids: &mut BTreeSet<u64>) -> Result<(), PackageErr
                     "Use fields from this effect's schema.",
                 ));
             }
-            if !names.insert(param.name.as_str()) {
+            if effect.params[..index]
+                .iter()
+                .any(|earlier| earlier.name == param.name)
+            {
                 return Err(bad("effect parameter names", "unique"));
             }
         }

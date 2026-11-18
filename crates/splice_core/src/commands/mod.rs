@@ -44,11 +44,11 @@ pub struct Command {
     pub ui: &'static [&'static str],
     /// Canonical JSON operation using the sample project.
     pub example: &'static str,
-    decoder: fn(&Json) -> Result<Op, CommandError>,
+    decoder: fn(&Json, &mut DecodeScratch) -> Result<Op, CommandError>,
 }
 
 impl Command {
-    fn decode(&self, value: &Json) -> Result<Op, CommandError> {
+    fn decode(&self, value: &Json, scratch: &mut DecodeScratch) -> Result<Op, CommandError> {
         let fields = value
             .as_object()
             .ok_or_else(|| CommandError::bad("op", "an object"))?;
@@ -71,7 +71,7 @@ impl Command {
                 ));
             }
         }
-        (self.decoder)(value)
+        (self.decoder)(value, scratch)
     }
 
     fn summary(&self) -> Vec<(String, Json)> {
@@ -146,6 +146,20 @@ pub struct Decoded {
 
 /// Parses a wire operation. Commands reserved by the prototype return `PLANNED`.
 pub fn decode(value: &Json) -> Result<Decoded, CommandError> {
+    decode_reusing(value, &mut DecodeScratch::default())
+}
+
+#[derive(Default)]
+pub(crate) struct DecodeScratch {
+    pub(crate) targets: Vec<Target>,
+    pub(crate) name: String,
+    pub(crate) color: String,
+}
+
+pub(crate) fn decode_reusing(
+    value: &Json,
+    scratch: &mut DecodeScratch,
+) -> Result<Decoded, CommandError> {
     let id = value
         .field("cmd")
         .and_then(Json::as_str)
@@ -158,7 +172,7 @@ pub fn decode(value: &Json) -> Result<Decoded, CommandError> {
             "Call commands.describe for commands available in this cut.".into(),
         ));
     }
-    let op = command.decode(value)?;
+    let op = command.decode(value, scratch)?;
     let bind = value.field("ref").map(args::binding).transpose()?;
     Ok(Decoded { op, bind })
 }

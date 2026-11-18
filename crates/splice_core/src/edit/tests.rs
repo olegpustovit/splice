@@ -42,6 +42,7 @@ fn apply_matches_prototype_refs_mints_and_cascade() {
 #[test]
 fn apply_is_atomic_on_failure_and_dry_run() {
     let mut project = sample();
+    let mut workspace = ApplyWorkspace::default();
     let batch = splice_json::parse(
         r#"[
         {"cmd":"item.split","item":"clp_take","at":372,"ref":"$cut"},
@@ -50,24 +51,34 @@ fn apply_is_atomic_on_failure_and_dry_run() {
     )
     .unwrap();
     let before = format!("{project:?}");
-    let error = apply(
-        &mut project,
-        batch.as_array().unwrap(),
-        Source::Human,
-        false,
-    )
-    .unwrap_err();
+    let error = workspace
+        .apply(
+            &mut project,
+            batch.as_array().unwrap(),
+            Source::Human,
+            false,
+        )
+        .unwrap_err();
     assert_eq!(error.op, Some(1));
     assert_eq!(error.error.code, "BAD_ARGS");
     assert_eq!(format!("{project:?}"), before);
 
     let ops = &batch.as_array().unwrap()[..1];
-    let dry = apply(&mut project, ops, Source::Human, true).unwrap();
+    let dry = workspace
+        .apply(&mut project, ops, Source::Human, true)
+        .unwrap()
+        .clone();
     assert_eq!(format!("{project:?}"), before);
     assert!(!dry.diff.is_empty());
     assert_ne!(dry.mints.len(), 0);
-    let live = apply(&mut project, ops, Source::Human, false).unwrap();
-    assert_eq!(live, dry);
+    let live = workspace
+        .apply(&mut project, ops, Source::Human, false)
+        .unwrap();
+    assert_eq!(live, &dry);
+
+    let mut cold = sample();
+    assert_eq!(apply(&mut cold, ops, Source::Human, false).unwrap(), dry);
+    assert_eq!(format!("{project:?}"), format!("{cold:?}"));
 
     let mut original = sample();
     let error = replay(&mut original, ops, Source::Human, &[]).unwrap_err();
@@ -518,4 +529,145 @@ fn tier_a_fractional_trim_keeps_the_clip_inside_its_media() {
     apply(&mut project, &[op], Source::Human, false).unwrap();
     let timing = project.clips.timing(slot).unwrap();
     assert_eq!((timing.length, timing.source), (79, 1));
+}
+
+fn budget_project() -> Project {
+    let mut project = sample();
+    let lane = LaneId::from_serial(11);
+    project.lanes.push(Lane {
+        id: lane,
+        name: "Budget titles".into(),
+        kind: LaneKind::Graphics,
+        effects: Vec::new(),
+    });
+    let clip = "clp_take".parse().unwrap();
+    for index in 0..2000 - project.items.order().len() {
+        let start = 800 + i32::try_from(index).unwrap() * 20;
+        let anchor = if index < 30 {
+            Anchor::ClipSource {
+                clip,
+                source: i32::try_from(index).unwrap() * 12,
+            }
+        } else {
+            Anchor::Pinned(start)
+        };
+        project
+            .items
+            .insert(Item {
+                id: ItemId::from_serial(10_000 + index as u64),
+                timing: ItemTiming { anchor, length: 8 },
+                data: ItemData {
+                    lane,
+                    kind: ItemKind::Title {
+                        text: format!("Item {index}"),
+                    },
+                    appearance: Appearance::default(),
+                },
+            })
+            .unwrap();
+    }
+    let slot = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    let appearance = &mut project.clips.data_mut(slot).unwrap().appearance;
+    appearance.name = Some("Edited take".into());
+    appearance.color = Some("orange".into());
+    project
+}
+
+fn budget_ops() -> [Json; 6] {
+    [
+        r#"{"cmd":"item.trim","item":"clp_take","edge":"out","delta":-1}"#,
+        r#"{"cmd":"item.move","items":"ovl_broll","delta":1}"#,
+        r#"{"cmd":"item.set","items":"clp_take","name":"Edited take","color":"orange","fadeOut":7}"#,
+        r#"{"cmd":"item.trim","item":"clp_take","edge":"out","delta":1}"#,
+        r#"{"cmd":"item.move","items":"ovl_broll","delta":-1}"#,
+        r#"{"cmd":"item.set","items":"clp_take","name":"Clean take","color":"blue","fadeOut":0}"#,
+    ]
+    .map(|op| splice_json::parse(op).unwrap())
+}
+
+#[test]
+fn budget_warm_trim_move_set_allocate_nothing() {
+    let mut project = budget_project();
+    let mut workspace = ApplyWorkspace::default();
+    let operations = budget_ops();
+    let meter = splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset);
+    meter.warm(&mut || {
+        for op in &operations {
+            let report = workspace
+                .apply(&mut project, std::slice::from_ref(op), Source::Human, false)
+                .unwrap();
+            assert!(!report.diff.is_empty());
+        }
+    });
+}
+
+#[test]
+fn budget_warm_magnetic_move_and_marker_order_allocate_nothing() {
+    let mut project = budget_project();
+    for (serial, at) in [(3, 400), (4, 500)] {
+        project.markers.push(Marker {
+            id: MarkerId::from_serial(serial),
+            at,
+            name: String::new(),
+            color: None,
+        });
+    }
+    let mut workspace = ApplyWorkspace::default();
+    let operations = [
+        r#"{"cmd":"item.move","items":"clp_end","to":100}"#,
+        r#"{"cmd":"item.move","items":"mrk_1","to":500}"#,
+    ]
+    .map(|op| splice_json::parse(op).unwrap());
+    let meter = splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset);
+    meter.warm(&mut || {
+        for op in &operations {
+            let report = workspace
+                .apply(&mut project, std::slice::from_ref(op), Source::Human, true)
+                .unwrap();
+            assert!(!report.diff.is_empty());
+        }
+    });
+    workspace
+        .apply(&mut project, &operations[1..], Source::Human, false)
+        .unwrap();
+    let markers: Vec<_> = project
+        .markers
+        .iter()
+        .map(|marker| marker.id.serial())
+        .collect();
+    assert_eq!(markers, [2, 3, 1, 4]);
+}
+
+#[test]
+fn budget_apply_p99_under_one_millisecond() {
+    use std::time::{Duration, Instant};
+    let mut project = budget_project();
+    let operations = budget_ops();
+    let mut workspace = ApplyWorkspace::default();
+    let mut times = Vec::with_capacity(300);
+    assert_eq!(project.items.order().len(), 2_000);
+    for i in 0..306 {
+        let at = Instant::now();
+        std::hint::black_box(
+            workspace
+                .apply(
+                    &mut project,
+                    std::slice::from_ref(&operations[i % 6]),
+                    Source::Human,
+                    false,
+                )
+                .unwrap(),
+        );
+        if i >= 6 {
+            times.push(at.elapsed());
+        }
+    }
+    times.sort_unstable();
+    let p99 = times[times.len() * 99 / 100 - 1];
+    eprintln!(
+        "apply on {} items: p99 {p99:?} ({} samples)",
+        project.items.order().len(),
+        times.len()
+    );
+    assert!(p99 < Duration::from_millis(1));
 }

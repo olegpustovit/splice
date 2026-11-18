@@ -6,38 +6,34 @@ use splice_model::timing::{self, TimingError};
 /// Resolves the current frame range of a clip, overlay, or marker.
 pub fn span(project: &Project, id: TimelineId) -> Result<Span, CommandError> {
     match id {
-        TimelineId::Clip(clip) => {
-            let slot = clip_slot(project, clip)?;
-            let timing = project.clips.timing(slot).expect("live clip");
-            Ok(Span {
-                start: timing.start,
-                end: timing.end().ok_or_else(frame_range)?,
-                lane: None,
-            })
-        }
-        TimelineId::Item(item) => {
-            let slot = item_slot(project, item)?;
-            let timing = project.items.timing(slot).expect("live item");
-            let start = anchor_start(project, timing.anchor)?;
-            Ok(Span {
-                start,
-                end: frame_add(start, timing.length)?,
-                lane: Some(project.items.data(slot).expect("live item").lane),
-            })
-        }
+        TimelineId::Clip(clip) => Row::Clip(clip_slot(project, clip)?).span(project),
+        TimelineId::Item(item) => item_span(project, item_slot(project, item)?),
         TimelineId::Marker(marker) => {
-            let at = project
+            let index = project
                 .markers
                 .iter()
-                .find(|m| m.id == marker)
-                .ok_or_else(|| not_found(&marker, "Call timeline.find for markers."))?
-                .at;
-            Ok(Span {
-                start: at,
-                end: at,
-                lane: None,
-            })
+                .position(|m| m.id == marker)
+                .ok_or_else(|| not_found(&marker, "Call timeline.find for markers."))?;
+            Row::Marker(index).span(project)
         }
+    }
+}
+
+pub(super) fn item_span(project: &Project, slot: Slot) -> Result<Span, CommandError> {
+    let timing = project.items.timing(slot).expect("live item");
+    let start = anchor_start(project, timing.anchor)?;
+    Ok(Span {
+        start,
+        end: frame_add(start, timing.length)?,
+        lane: Some(project.items.data(slot).expect("live item").lane),
+    })
+}
+
+pub(super) fn find_item(items: &Items, id: ItemId, slot: Slot) -> Option<Slot> {
+    if items.id(slot) == Some(id) {
+        Some(slot)
+    } else {
+        items.find(id)
     }
 }
 
@@ -270,76 +266,143 @@ fn need_word(project: &Project, id: WordId, hash: Option<u64>) -> Result<WordSpa
     })
 }
 
-pub(super) fn timeline_ids(project: &Project) -> Vec<TimelineId> {
-    project
-        .clips
-        .order()
-        .iter()
-        .map(|&slot| TimelineId::Clip(project.clips.id(slot).expect("live clip")))
-        .chain(
-            project
-                .items
-                .order()
-                .iter()
-                .map(|&slot| TimelineId::Item(project.items.id(slot).expect("live item"))),
-        )
-        .chain(
-            project
-                .markers
-                .iter()
-                .map(|marker| TimelineId::Marker(marker.id)),
-        )
-        .collect()
+#[derive(Clone, Copy)]
+enum Row {
+    Clip(Slot),
+    Item(Slot),
+    Marker(usize),
 }
 
-pub(super) fn diff(before: &Project, after: &Project) -> Result<Vec<Diff>, CommandError> {
-    let mut ids = timeline_ids(before);
-    for id in timeline_ids(after) {
-        if !ids.contains(&id) {
-            ids.push(id);
+impl Row {
+    fn span(self, project: &Project) -> Result<Span, CommandError> {
+        match self {
+            Self::Clip(slot) => {
+                let timing = project.clips.timing(slot).expect("live clip");
+                Ok(Span {
+                    start: timing.start,
+                    end: timing.end().ok_or_else(frame_range)?,
+                    lane: None,
+                })
+            }
+            Self::Item(slot) => item_span(project, slot),
+            Self::Marker(index) => {
+                let at = project.markers[index].at;
+                Ok(Span {
+                    start: at,
+                    end: at,
+                    lane: None,
+                })
+            }
         }
     }
-    let mut changed = Vec::new();
-    for id in ids {
-        let old = span(before, id).map(Some).or_else(absent)?;
-        let new = span(after, id).map(Some).or_else(absent)?;
-        if old != new || properties_changed(before, after, id) {
+
+    fn matching(self, id: TimelineId, project: &Project) -> Option<Self> {
+        match (self, id) {
+            (Self::Clip(slot), TimelineId::Clip(id)) => {
+                if project.clips.id(slot) == Some(id) {
+                    Some(self)
+                } else {
+                    project.clips.find(id).map(Self::Clip)
+                }
+            }
+            (Self::Item(slot), TimelineId::Item(id)) => {
+                find_item(&project.items, id, slot).map(Self::Item)
+            }
+            (Self::Marker(index), TimelineId::Marker(id)) => {
+                if project
+                    .markers
+                    .get(index)
+                    .is_some_and(|marker| marker.id == id)
+                {
+                    Some(self)
+                } else {
+                    project
+                        .markers
+                        .iter()
+                        .position(|marker| marker.id == id)
+                        .map(Self::Marker)
+                }
+            }
+            _ => unreachable!("row kind matches timeline ID"),
+        }
+    }
+
+    fn properties_changed(self, new: Self, before: &Project, after: &Project) -> bool {
+        match (self, new) {
+            (Self::Clip(a), Self::Clip(b)) => {
+                before.clips.data(a) != after.clips.data(b)
+                    || before.clips.timing(a) != after.clips.timing(b)
+            }
+            (Self::Item(a), Self::Item(b)) => {
+                before.items.data(a) != after.items.data(b)
+                    || before.items.timing(a) != after.items.timing(b)
+            }
+            (Self::Marker(a), Self::Marker(b)) => before.markers[a] != after.markers[b],
+            _ => unreachable!("matching rows have the same kind"),
+        }
+    }
+}
+
+pub(super) fn diff(
+    before: &Project,
+    after: &Project,
+    changed: &mut Vec<Diff>,
+) -> Result<(), CommandError> {
+    changed.clear();
+    visit_timeline(before, &mut |id, row| {
+        let next = row.matching(id, after);
+        let old = optional_span(row, before)?;
+        let new = next
+            .map(|row| optional_span(row, after))
+            .transpose()?
+            .flatten();
+        if old != new || next.is_none_or(|next| row.properties_changed(next, before, after)) {
             changed.push(Diff {
                 id,
                 before: old,
                 after: new,
             });
         }
-    }
-    Ok(changed)
-}
-
-fn absent(error: CommandError) -> Result<Option<Span>, CommandError> {
-    if error.code == "NOT_FOUND" {
-        Ok(None)
-    } else {
-        Err(error)
-    }
-}
-
-fn properties_changed(before: &Project, after: &Project, id: TimelineId) -> bool {
-    match id {
-        TimelineId::Clip(id) => match (before.clips.find(id), after.clips.find(id)) {
-            (Some(a), Some(b)) => {
-                before.clips.data(a) != after.clips.data(b)
-                    || before.clips.timing(a) != after.clips.timing(b)
-            }
-            _ => true,
-        },
-        TimelineId::Item(id) => match (before.items.find(id), after.items.find(id)) {
-            (Some(a), Some(b)) => {
-                before.items.data(a) != after.items.data(b)
-                    || before.items.timing(a) != after.items.timing(b)
-            }
-            _ => true,
-        },
-        TimelineId::Marker(id) => {
-            before.markers.iter().find(|m| m.id == id) != after.markers.iter().find(|m| m.id == id)
+        Ok(())
+    })?;
+    visit_timeline(after, &mut |id, row| {
+        if row.matching(id, before).is_none() {
+            changed.push(Diff {
+                id,
+                before: None,
+                after: optional_span(row, after)?,
+            });
         }
+        Ok(())
+    })
+}
+
+fn optional_span(row: Row, project: &Project) -> Result<Option<Span>, CommandError> {
+    match row.span(project) {
+        Ok(span) => Ok(Some(span)),
+        Err(error) if error.code == "NOT_FOUND" => Ok(None),
+        Err(error) => Err(error),
     }
+}
+
+fn visit_timeline(
+    project: &Project,
+    visit: &mut dyn FnMut(TimelineId, Row) -> Result<(), CommandError>,
+) -> Result<(), CommandError> {
+    for &slot in project.clips.order() {
+        visit(
+            TimelineId::Clip(project.clips.id(slot).expect("live clip")),
+            Row::Clip(slot),
+        )?;
+    }
+    for &slot in project.items.order() {
+        visit(
+            TimelineId::Item(project.items.id(slot).expect("live item")),
+            Row::Item(slot),
+        )?;
+    }
+    for (index, marker) in project.markers.iter().enumerate() {
+        visit(TimelineId::Marker(marker.id), Row::Marker(index))?;
+    }
+    Ok(())
 }
