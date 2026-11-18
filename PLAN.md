@@ -70,7 +70,7 @@ SHA.
 
 ### T3 · MCP and CLI, headless
 - [x] T3.1 [L] JSON-RPC 2.0 stdio (33e67ce), newline-delimited, hand-rolled. `initialize` negotiates 2025-11-25 and 2026-07-28. `tools/list` comes from the table in a fixed order with `inputSchema` and `outputSchema`. Results are `structuredContent` plus a text mirror; business errors are `isError` results with `code` and `fix`. Accept: a conformance transcript and a `tools/list` golden.
-- [ ] T3.2 [L] The 19 tools (docs/MCP.md) wired to the core. `project.info {path, create}` opens a project headless; `ui.show` returns `{applied:false, reason:"headless"}` with no UI. Accept: one transcript per tool in `fixtures/mcp/`.
+- [x] T3.2 [L] The 19 tools (docs/MCP.md) wired to the core (b2a72c1). `project.info {path, create}` opens a project headless; `ui.show` returns `{applied:false, reason:"headless"}` with no UI. Accept: one transcript per tool in `fixtures/mcp/`.
 - [ ] T3.3 [L] Friction log: every `isError` result, the next calls and whether they recovered, and the optional `friction` argument every tool accepts → `<project>.splice/friction.jsonl` plus the global state dir. `splice friction [list|show|repro <id>|resolve <id> <sha>]`. Accept: transcript tests for logging, the recovery flag, and `repro` writing a failing transcript fixture.
 - [ ] T3.4 [L] Transcript runner: `fixtures/mcp/*.jsonl` replays request → expected structured result with `"…"` wildcards. Accept: every T3.2 fixture runs under `cargo t -p splice_mcp transcript`.
 - [ ] T3.5 [L] `splice` CLI: `new`, `open`, `mcp`, `apply`, `snapshot`, `describe`, `export`, `frame`, `friction`, `check`, `version`, and `splice <path>` = open. On Linux, `open`, `export` and `frame` return the typed error `UNSUPPORTED_PLATFORM`. Accept: CLI tests over a temp project.
@@ -197,3 +197,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T2.5 · done · 809dcae · `cargo t -p splice_eval` 0.11 s, `make check` 6.01 s (48 tests, slowest: seeded history replay 1.839 s)
 - 2026-11-18 · T2.6 · done · ab85713 · `cargo t -p splice_core budget` 0.20 s, release qualification 27.42 s (2,000-item apply p99 269 µs, zero warm allocations), `make check` 5.54 s (51 tests, slowest: seeded history replay 1.721 s)
 - 2026-11-18 · T3.1 · done · 33e67ce · `cargo t -p splice_mcp` 0.34 s (3 tests), legacy and modern CLI smoke tests passed, `make check` 2.82 s (54 tests, slowest: seeded history replay 1.839 s)
+- 2026-11-18 · T3.2 · done · b2a72c1 · `cargo t -p splice_mcp` 0.40 s (19 tool transcripts), CLI writer-lock and durable reopen smoke passed, `make check` 3.88 s (55 tests, slowest: seeded history replay 1.911 s)
