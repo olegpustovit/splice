@@ -5,6 +5,7 @@ products=${1:?usage: bundle-macos.sh PRODUCTS SIGNING_KEYCHAIN SDL_PREFIX}
 keychain=${2:?usage: bundle-macos.sh PRODUCTS SIGNING_KEYCHAIN SDL_PREFIX}
 sdl_prefix=${3:?usage: bundle-macos.sh PRODUCTS SIGNING_KEYCHAIN SDL_PREFIX}
 root=${4:-target/bundle}
+mode=${5:-}
 cd "$(dirname "$0")/.."
 
 fail() {
@@ -93,6 +94,26 @@ if [ -e "$output" ]; then
     bundle_id=$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$output/Contents/Info.plist" 2>/dev/null) ||
         fail "Move the existing item at $output before bundling."
     [ "$bundle_id" = com.olegpustovit.splice ] || fail "Move the existing app at $output before bundling."
+    if [ "$mode" = --install ]; then
+        /usr/bin/swift packaging/quit-macos-app.swift "$output" "$bundle_id"
+        # A terminal or MCP host owns its CLI process and must close it normally.
+        if pids=$(/usr/sbin/lsof -t -a -d txt "$output/Contents/MacOS/splice" 2>"$stage/lsof.error"); then
+            fail "Close the installed Splice CLI processes before reinstalling (PIDs: $(printf '%s' "$pids" | tr '\n' ' '))."
+        elif [ -s "$stage/lsof.error" ]; then
+            cat "$stage/lsof.error" >&2
+            fail "Could not check which Splice processes are running."
+        fi
+        if [ "$root" -ef "$HOME/Applications" ]; then
+            previous=$(/usr/bin/codesign --display -r- "$output" 2>&1 | /usr/bin/sed -n 's/^designated => //p')
+            if [ "$previous" != "$(cat packaging/designated-requirement.txt)" ]; then
+                printf 'Splice signing identity changed. Resetting its Screen Recording, Microphone, Camera and Input Monitoring grants.\n'
+                for service in ScreenCapture Microphone Camera ListenEvent; do
+                    /usr/bin/tccutil reset "$service" "$bundle_id" ||
+                        fail "Could not reset $service for $bundle_id. Retry the install after resolving the error."
+                done
+            fi
+        fi
+    fi
     /bin/mv "$output" "$stage/previous.app"
 fi
 /bin/mv "$app" "$output"

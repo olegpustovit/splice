@@ -129,6 +129,10 @@ recoveries, undos. A drop from the baseline is a red check for the loop.
   application with Launch Services so Finder can open `.splice` packages.
   The executable resolves the link before looking in `Contents/Resources`. The viewer places its
   local sockets under `live/` in the Splice state directory.
+  Install asks the running app at that path to quit and waits for it to exit. Disconnect installed
+  CLI or MCP processes before replacing their executable. The verifier checks the requirement pinned
+  in `packaging/designated-requirement.txt`. An identity change at the default install location resets
+  only Splice's screen recording, microphone, camera and input monitoring grants.
 - Recording checks are 3 s captures. Never record for longer, and never leave a capture agent running.
 - Privacy grants are a **HUMAN** step (`splice permissions --request` on the Mini, then a person
   clicks). The loop marks such a task `- [~] … HUMAN: <what to click>` and moves on; it never tries

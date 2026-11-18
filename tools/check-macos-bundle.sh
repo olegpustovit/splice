@@ -8,8 +8,9 @@ if [ "$#" -gt 2 ] || { [ -n "$mode" ] && [ "$mode" != --static-only ]; }; then
     exit 2
 fi
 app=$(cd "$app" && pwd -P)
+root=$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)
 
-python3 -I - "$app" <<'PY'
+python3 -I - "$app" "$root/packaging/designated-requirement.txt" <<'PY'
 import plistlib
 import re
 import subprocess
@@ -107,6 +108,16 @@ for binary in (executable, *(frameworks / name for name in sorted(library_names)
 
 app = contents.parent
 subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", app], check=True)
+expected_requirement = Path(sys.argv[2]).read_text().strip()
+display = subprocess.check_output(
+    ["/usr/bin/codesign", "--display", "-r-", app], stderr=subprocess.STDOUT, text=True,
+)
+require(f"designated => {expected_requirement}" in display.splitlines(),
+        "designated requirement differs from packaging/designated-requirement.txt")
+subprocess.run(
+    ["/usr/bin/codesign", "--verify", "--strict", "--test-requirement", f"={expected_requirement}", app],
+    check=True,
+)
 signature = subprocess.check_output(
     ["/usr/bin/codesign", "--display", "--xml", "--entitlements", "-", app],
     stderr=subprocess.DEVNULL,

@@ -54,7 +54,7 @@ BUNDLE_DIR ?= target/bundle
 bundle: build
 	@/usr/bin/security unlock-keychain -p '' '$(SPLICE_SIGNING_KEYCHAIN)' >/dev/null 2>&1 || \
 		{ printf '%s\n' 'Set up the passwordless splice-signing keychain with the Developer ID Application identity for team 7ZH3FYV964.' >&2; exit 1; }
-	packaging/bundle-macos.sh '$(PRODUCTS)' '$(SPLICE_SIGNING_KEYCHAIN)' '$(SDL3_DIR)' '$(BUNDLE_DIR)'
+	packaging/bundle-macos.sh '$(PRODUCTS)' '$(SPLICE_SIGNING_KEYCHAIN)' '$(SDL3_DIR)' '$(BUNDLE_DIR)' '$(BUNDLE_MODE)'
 
 sign: bundle
 
@@ -62,7 +62,7 @@ install:
 	@mkdir -p '$(APPDIR)' '$(PREFIX)/bin'
 	@test ! -e '$(PREFIX)/bin/splice' || test -L '$(PREFIX)/bin/splice' || \
 		{ printf '%s\n' 'Move the existing $(PREFIX)/bin/splice before installing.' >&2; exit 1; }
-	$(MAKE) bundle BUNDLE_DIR='$(APPDIR)'
+	$(MAKE) bundle BUNDLE_DIR='$(APPDIR)' BUNDLE_MODE=--install
 	appdir=$$(cd '$(APPDIR)' && pwd -P) && ln -sfn "$$appdir/Splice.app/Contents/MacOS/splice" '$(PREFIX)/bin/splice'
 	/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f '$(APPDIR)/Splice.app'
 	'$(PREFIX)/bin/splice' version
