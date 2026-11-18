@@ -13,6 +13,8 @@ fn main() {
             "native/composition.m",
             "native/image.m",
             "native/permissions.m",
+            "native/recording.m",
+            "native/recording_fixture.m",
         ])
         .flag("-fobjc-arc")
         .flag("-fblocks")

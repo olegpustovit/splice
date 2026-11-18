@@ -1,4 +1,4 @@
-#include "platform.h"
+#include "capture_internal.h"
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
@@ -9,7 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 
-static void capture_error(NSError *reason, const char *fallback, bool *denied, char **error) {
+void splice_capture_error(NSError *reason, const char *fallback, bool *denied, char **error) {
     if ([reason.domain isEqualToString:SCStreamErrorDomain] && reason.code == SCStreamErrorUserDeclined) {
         *denied = true;
     }
@@ -36,7 +36,7 @@ static SCShareableContent *shareable_content(bool *denied, char **error) {
         splice_set_error(error, "ScreenCaptureKit did not respond to source discovery.");
         return nil;
     }
-    if (content == nil) capture_error(failure, "Screen capture sources are unavailable.", denied, error);
+    if (content == nil) splice_capture_error(failure, "Screen capture sources are unavailable.", denied, error);
     return content;
 }
 
@@ -183,13 +183,17 @@ static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShar
     return filter;
 }
 
+SCContentFilter *splice_capture_prepare(const SpliceCaptureTarget *target, SCStreamConfiguration *configuration,
+                                        bool *denied, char **error) {
+    SCShareableContent *content = shareable_content(denied, error);
+    return content == nil ? nil : capture_filter(target, content, configuration, error);
+}
+
 void *splice_capture_screenshot(const SpliceCaptureTarget *target, const uint8_t **data, size_t *size,
                                 bool *denied, char **error) {
     @autoreleasepool {
-        SCShareableContent *content = shareable_content(denied, error);
-        if (content == nil) return NULL;
         SCStreamConfiguration *configuration = [SCStreamConfiguration new];
-        SCContentFilter *filter = capture_filter(target, content, configuration, error);
+        SCContentFilter *filter = splice_capture_prepare(target, configuration, denied, error);
         if (filter == nil) return NULL;
         dispatch_semaphore_t ready = dispatch_semaphore_create(0);
         __block NSData *bytes;
@@ -214,7 +218,7 @@ void *splice_capture_screenshot(const SpliceCaptureTarget *target, const uint8_t
             return NULL;
         }
         if (bytes.length == 0) {
-            capture_error(failure, "Could not encode a screenshot.", denied, error);
+            splice_capture_error(failure, "Could not encode a screenshot.", denied, error);
             return NULL;
         }
         *data = bytes.bytes;

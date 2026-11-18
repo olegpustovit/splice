@@ -6,6 +6,9 @@ use std::{
     ptr,
 };
 
+mod recording;
+pub use recording::{Recording, RecordingStats};
+
 /// Bounds in points. Area origins are local to their display.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(C)]

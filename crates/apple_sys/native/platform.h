@@ -72,6 +72,20 @@ void *splice_capture_screenshot(const SpliceCaptureTarget *target, const uint8_t
                                 size_t *size, bool *denied, char **error);
 
 typedef struct {
+    double elapsed_seconds;
+    uint64_t video_frames, dropped_frames;
+} SpliceRecordingStats;
+
+_Static_assert(sizeof(SpliceRecordingStats) == 24, "recording stats ABI");
+
+void *splice_recording_start(const SpliceCaptureTarget *target, const char *directory, const char *microphone,
+                             bool system_audio, bool *denied, char **error);
+bool splice_recording_status(void *recording, SpliceRecordingStats *out, bool *denied, char **error);
+void splice_recording_pause(void *recording, bool pause);
+bool splice_recording_finish(void *recording, SpliceRecordingStats *out, bool *denied, char **error);
+void splice_recording_release(void *recording);
+
+typedef struct {
     int32_t track_id;
     uint32_t codec;
     uint32_t channels;
