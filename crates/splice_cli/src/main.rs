@@ -12,6 +12,14 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("friction") => {
+            if let Err(error) =
+                splice_mcp::friction::command(&args[1..], &mut std::io::stdout().lock())
+            {
+                eprintln!("splice friction: {error}");
+                std::process::exit(1);
+            }
+        }
         Some("--version") | Some("version") => println!("splice {}", env!("CARGO_PKG_VERSION")),
         _ => {
             eprintln!(

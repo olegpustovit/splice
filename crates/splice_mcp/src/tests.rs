@@ -1,6 +1,10 @@
 use super::*;
-use std::io::Cursor;
+use std::io::{self, BufRead, Cursor, Write};
 use std::path::Path;
+
+fn isolated_serve(input: &mut dyn BufRead, output: &mut dyn Write) -> io::Result<()> {
+    rpc::serve_with_log(input, output, None)
+}
 
 #[test]
 fn stdio_conformance_transcript() {
@@ -19,7 +23,7 @@ fn stdio_conformance_transcript() {
             }
         }
         let mut output = Vec::new();
-        serve(&mut Cursor::new(input), &mut output).unwrap();
+        isolated_serve(&mut Cursor::new(input), &mut output).unwrap();
         let output = String::from_utf8(output).unwrap();
         let actual: Vec<_> = output
             .lines()
@@ -43,7 +47,7 @@ fn tools_list_golden() {
         "\n"
     ));
     let mut output = Vec::new();
-    serve(&mut input, &mut output).unwrap();
+    isolated_serve(&mut input, &mut output).unwrap();
     let output = String::from_utf8(output).unwrap();
     let response = output.lines().nth(1).unwrap();
     let message = splice_json::parse(response).unwrap();
@@ -72,7 +76,7 @@ fn stdio_recovers_after_oversized_and_invalid_utf8_lines() {
         b"\n\xff\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\r\n",
     ));
     let mut output = Vec::new();
-    serve(&mut BufReader::new(input), &mut output).unwrap();
+    isolated_serve(&mut BufReader::new(input), &mut output).unwrap();
     let output = String::from_utf8(output).unwrap();
     assert_eq!(
         output.lines().collect::<Vec<_>>(),
@@ -132,7 +136,7 @@ fn tool_transcripts_run_against_live_store() {
             }
         }
         let mut output = Vec::new();
-        serve(&mut Cursor::new(input), &mut output).unwrap();
+        isolated_serve(&mut Cursor::new(input), &mut output).unwrap();
         let output = String::from_utf8(output).unwrap();
         assert!(!output.contains("private"), "{name} disclosed key text");
         let mut actual = output.lines().skip(1);
@@ -190,4 +194,153 @@ impl Drop for TestDirectory {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.0).unwrap();
     }
+}
+
+#[test]
+fn friction_transcript_tracks_session_recovery_and_writes_repro() {
+    let root =
+        TestDirectory(std::env::temp_dir().join(format!("splice-friction-{}", std::process::id())));
+    let global = root.0.join("state");
+    let fixtures = root.0.join("fixtures");
+    let project = root.0.join("new.splice");
+    std::fs::create_dir_all(&root.0).unwrap();
+    let transcript = include_str!("../../../fixtures/mcp/friction-recovery.jsonl");
+    for (index, connection) in transcript.split("\n\n").enumerate() {
+        let mut input = String::from(concat!(
+            r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"fixtures","version":"1"}}}"#,
+            "\n",
+        ));
+        let mut expected = Vec::new();
+        for line in connection.lines() {
+            match line.split_at(2) {
+                ("> ", request) => {
+                    input.push_str(&request.replace(r#""$new""#, &quoted_path(&project)));
+                    input.push('\n');
+                }
+                ("< ", reply) => expected.push(splice_json::parse(reply).unwrap()),
+                _ => panic!("invalid transcript line {line:?}"),
+            }
+        }
+        let mut output = Vec::new();
+        rpc::serve_with_log(&mut Cursor::new(input), &mut output, Some(global.clone())).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        let replies: Vec<_> = output.lines().skip(1).collect();
+        assert_eq!(replies.len(), expected.len());
+        for (line, expected) in replies.into_iter().zip(&expected) {
+            assert!(
+                matches_fixture(expected, &splice_json::parse(line).unwrap()),
+                "{line}"
+            );
+        }
+        if index == 0 {
+            for path in [
+                global.join("friction.jsonl"),
+                project.join("friction.jsonl"),
+            ] {
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(path)
+                    .unwrap()
+                    .write_all(b"{\"partial\":\"\xff")
+                    .unwrap();
+            }
+        }
+    }
+
+    let entries = friction::read_entries(&global.join("friction.jsonl")).unwrap();
+    assert_eq!(
+        entries,
+        friction::read_entries(&project.join("friction.jsonl")).unwrap()
+    );
+    assert_eq!(entries.len(), 3);
+    let error = &entries[0];
+    assert_eq!(
+        error.field("client").and_then(Json::as_str),
+        Some("fixtures 1")
+    );
+    assert_eq!(error.field("session").and_then(Json::as_str), Some("ses_1"));
+    assert_eq!(error.field("recovered").and_then(Json::as_bool), Some(true));
+    assert_eq!(
+        error.field("command").and_then(Json::as_str),
+        Some("marker.add")
+    );
+    let next: Vec<_> = error
+        .field("next")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|call| call.field("tool").and_then(Json::as_str).unwrap())
+        .collect();
+    assert_eq!(next, ["timeline.snapshot", "edit.apply", "history.undo"]);
+    assert_eq!(
+        entries[1].field("code").and_then(Json::as_str),
+        Some("NOTE")
+    );
+    assert_eq!(
+        entries[2].field("code").and_then(Json::as_str),
+        Some("AGENT_UNDO")
+    );
+
+    let id = error.field("id").and_then(Json::as_str).unwrap().to_owned();
+    let mut cli = Vec::new();
+    friction::run(
+        &global,
+        &fixtures,
+        &["list".into(), "--open".into()],
+        &mut cli,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(cli.clone())
+            .unwrap()
+            .contains("marker.add")
+    );
+    cli.clear();
+    friction::run(&global, &fixtures, &["show".into(), id.clone()], &mut cli).unwrap();
+    assert_eq!(
+        splice_json::parse(std::str::from_utf8(&cli).unwrap()).unwrap(),
+        *error
+    );
+    let arguments = ["repro".into(), id.clone()];
+    cli.clear();
+    friction::run(&global, &fixtures, &arguments, &mut cli).unwrap();
+    let reproduced =
+        std::fs::read_to_string(fixtures.join(format!("friction-{id}.jsonl"))).unwrap();
+    assert!(reproduced.contains(r#""name":"edit.apply""#));
+    assert!(reproduced.contains(r#""code":"BAD_ARGS""#));
+    assert!(reproduced.contains(r#""cmd":"marker.add""#));
+    assert!(!reproduced.contains(project.to_str().unwrap()));
+    assert_eq!(
+        friction::run(&global, &fixtures, &arguments, &mut cli)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+
+    friction::run(
+        &global,
+        &fixtures,
+        &["resolve".into(), id.clone(), "1234abc".into()],
+        &mut cli,
+    )
+    .unwrap();
+    let updated = friction::read_entries(&global.join("friction.jsonl")).unwrap();
+    assert_eq!(
+        updated[0].field("resolved").and_then(Json::as_str),
+        Some("1234abc")
+    );
+    assert_eq!(
+        updated,
+        friction::read_entries(&project.join("friction.jsonl")).unwrap()
+    );
+    cli.clear();
+    friction::run(
+        &global,
+        &fixtures,
+        &["list".into(), "--open".into()],
+        &mut cli,
+    )
+    .unwrap();
+    assert!(!std::str::from_utf8(&cli).unwrap().contains(&id));
 }

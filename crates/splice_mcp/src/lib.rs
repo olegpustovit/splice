@@ -3,6 +3,8 @@
 
 use splice_json::Value as Json;
 
+/// Persistent MCP friction records and their CLI commands.
+pub mod friction;
 mod history;
 mod media;
 mod platform;

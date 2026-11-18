@@ -17,12 +17,7 @@ pub(super) struct Projects {
 impl Projects {
     pub(super) fn lookup(&mut self, args: &Json) -> Result<&mut Store, StoreError> {
         let id = args.string("projectId")?;
-        let index: Option<usize> = id
-            .strip_prefix("prj_")
-            .and_then(|n| n.parse::<usize>().ok())
-            .and_then(|n| n.checked_sub(1))
-            .filter(|&i| project_id(i) == id);
-        let store = index
+        let store = project_index(id)
             .and_then(|index| self.open.get_mut(index))
             .ok_or_else(|| {
                 failure(
@@ -72,6 +67,23 @@ impl Projects {
         info(store, id.expect("lookup validates project ID"))
     }
 
+    pub(super) fn context(&self, args: &Json, result: &Json) -> Option<&Store> {
+        if let Some(id) = result
+            .field("projectId")
+            .or_else(|| args.field("projectId"))
+        {
+            return project_index(id.as_str()?).and_then(|index| self.open.get(index));
+        }
+        if let Some(path) = args.field("path") {
+            let path = fs::canonicalize(package_path(path.as_str()?).ok()?).ok()?;
+            return self.open.iter().find(|store| store.path() == path);
+        }
+        match self.open.as_slice() {
+            [store] => Some(store),
+            _ => None,
+        }
+    }
+
     pub(super) fn close(self) -> io::Result<()> {
         for store in self.open {
             if store.problem().is_none() {
@@ -80,6 +92,13 @@ impl Projects {
         }
         Ok(())
     }
+}
+
+fn project_index(id: &str) -> Option<usize> {
+    id.strip_prefix("prj_")
+        .and_then(|n| n.parse::<usize>().ok())
+        .and_then(|n| n.checked_sub(1))
+        .filter(|&i| project_id(i) == id)
 }
 
 fn project_id(index: usize) -> String {

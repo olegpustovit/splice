@@ -47,8 +47,10 @@ These rules live in `skills/splice/SKILL.md`, which every agent using Splice loa
 
 ### Recorded automatically, by the server
 
-Every `isError` result is appended to `<project>.splice/friction.jsonl` and to the global state dir
-(`~/Library/Application Support/Splice/friction.jsonl`, or `$XDG_STATE_HOME/splice/` on Linux):
+Every `isError` tool result is appended to the global friction log and, when it belongs to an open
+project, to `<project>.splice/friction.jsonl`. The global log is in
+`~/Library/Application Support/Splice/` on macOS or `$XDG_STATE_HOME/splice/` on Linux. Linux uses
+`~/.local/state/splice/` when `XDG_STATE_HOME` is unset. The merged record contains the original call and its follow-ups.
 
 ```json
 {"id":"fr_7k","time":…,"client":"codex 0.x","tool":"edit.apply","args":{…},"code":"BAD_ARGS",
@@ -56,9 +58,13 @@ Every `isError` result is appended to `<project>.splice/friction.jsonl` and to t
  "next":[{"tool":"edit.apply","args":{…},"ok":true}],"recovered":true,"note":null}
 ```
 
-- `next` holds the following ≤ 3 calls of the same session. `recovered:true` means a later call
-  succeeded at the same intent. The diff between the failing args and the args that worked is the
-  most valuable signal: it shows what the agent expected the contract to be.
+- `next` holds up to three following calls in the same session, including after reconnect. Calls
+  without a session ID follow the only session observed for that project and client when the
+  association is unambiguous.
+- Recovery requires a successful retry of the same tool and target. Edit retries also match the
+  command sequence. A dry run counts toward the recovery of a failed dry run.
+- Follow-ups and resolutions append updates by friction ID. `splice friction show <id>` merges
+  them into the entry's `next`, `recovered`, and `resolved` fields.
 - Agent undos are logged too (`code:"AGENT_UNDO"`): an agent that reverted its own batch either
   misunderstood a command or got a surprising result.
 - `friction:"…"` notes are logged with `code:"NOTE"`.
@@ -76,9 +82,10 @@ the latest example. Each cluster gets exactly one of these outcomes:
 | A core bug | Fix it | A regression test |
 | A usage pattern agents keep missing | Add one line to the Pitfalls section of `skills/splice/SKILL.md`, citing the friction ID | An eval task (T3.6) |
 
-`splice friction repro <id>` writes the failing call as a transcript fixture. `splice friction resolve
-<id> <sha>` closes the entry. Skill pitfalls are deleted once a core change makes them unnecessary, so
-the skill shrinks as the core improves.
+`splice friction repro <id>` writes `fixtures/mcp/friction-<id>.jsonl` in the current directory.
+For a project-bound repro, point `$project` at a disposable copy with the recorded starting
+revision and session. `splice friction resolve <id> <sha>` closes the entry. Skill pitfalls are
+deleted once a core change makes them unnecessary, so the skill shrinks as the core improves.
 
 ### Real projects from recordings
 
