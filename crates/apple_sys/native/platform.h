@@ -83,6 +83,7 @@ bool splice_av_read_frame(void *composition, int32_t frame, uint8_t *rgba, size_
                          bool draw_text, char **error);
 void *splice_av_player(void *composition, char **error);
 void splice_av_player_play(void *player, bool playing);
+bool splice_av_player_ended(void *player);
 bool splice_av_player_seek(void *player, int32_t frame);
 int32_t splice_av_player_copy(void *player, uint8_t *rgba, size_t length, int32_t *frame, char **error);
 void *splice_av_texture(uint32_t width, uint32_t height, void **device, void **image, char **error);

@@ -15,6 +15,7 @@ pxui_host = { path = "../../pxui/crates/host/pxui_host" }
 pxui_sdl = { path = "../../pxui/crates/open/pxui_sdl" }
 splice_core = { path = "../splice_core" }
 splice_av = { path = "../splice_av" }
+splice_kit = { path = "../splice_kit" }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 mem_sys = { path = "../../pxui/crates/open/mem_sys", features = ["counting"] }

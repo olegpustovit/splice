@@ -1,5 +1,30 @@
 use super::*;
 
+#[test]
+fn scrub_phase_distinguishes_preview_release_and_cancellation() {
+    assert_eq!(Phase::from_interaction(false, false, false), None);
+    assert_eq!(
+        Phase::from_interaction(false, true, false),
+        Some(Phase::Began)
+    );
+    assert_eq!(
+        Phase::from_interaction(true, true, false),
+        Some(Phase::Changed)
+    );
+    assert_eq!(
+        Phase::from_interaction(true, false, true),
+        Some(Phase::Ended)
+    );
+    assert_eq!(
+        Phase::from_interaction(true, false, false),
+        Some(Phase::Cancelled)
+    );
+    assert_eq!(
+        Phase::from_interaction(false, false, true),
+        Some(Phase::Ended)
+    );
+}
+
 const PLAY: CommandId = CommandId(1);
 const UNDO: CommandId = CommandId(2);
 const TEXT_UNDO: CommandId = CommandId(3);

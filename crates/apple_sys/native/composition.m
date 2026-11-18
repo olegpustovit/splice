@@ -701,6 +701,15 @@ void splice_av_player_play(void *raw, bool playing) {
     }
 }
 
+bool splice_av_player_ended(void *raw) {
+    @autoreleasepool {
+        SpliceAVPlayer *preview = (__bridge SpliceAVPlayer *)raw;
+        CMTime now = preview.player.currentTime;
+        return CMTIME_IS_NUMERIC(now) &&
+               CMTimeCompare(now, time_for(preview.assembly, preview.assembly.end)) >= 0;
+    }
+}
+
 bool splice_av_player_seek(void *raw, int32_t frame) {
     @autoreleasepool {
         SpliceAVPlayer *preview = (__bridge SpliceAVPlayer *)raw;

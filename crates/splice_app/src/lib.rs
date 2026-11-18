@@ -7,6 +7,7 @@ use pxui::{FrameIn, Image, Label, Node, Ui, UiDesc, ui::Size};
 use pxui_host::{Accessibility, Events, Platform, Window};
 use pxui_sdl::{DialogFilter, DialogKind};
 use splice_core::history::{Store, StoreError};
+use splice_kit::Invoked;
 use std::{
     borrow::Cow,
     ffi::OsString,
@@ -19,9 +20,11 @@ use std::{
     },
     path::{Path, PathBuf},
     rc::Rc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod commands;
+mod playbar;
 mod program;
 mod snapshot;
 mod surface;
@@ -67,17 +70,12 @@ fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<Option<
     {
         eprintln!("splice: could not remember the last project: {error}");
     }
-    let name = project.as_ref().map(project_name);
-    let mut program = project
-        .as_ref()
-        .map(program::Program::prepare)
-        .transpose()?
-        .flatten();
+    let keymap = state.map(|dir| dir.join("keymap"));
     let result = run_surface(
         &mut window,
         &mut events,
-        name.as_deref(),
-        program.as_mut(),
+        project.as_mut(),
+        keymap.as_deref(),
         smoke,
     );
     window.destroy().map_err(|error| viewer_error(&error))?;
@@ -132,13 +130,24 @@ fn choose_project(
 fn run_surface(
     window: &mut Window,
     events: &mut Vec<Event>,
-    name: Option<&str>,
-    mut program: Option<&mut program::Program>,
+    mut store: Option<&mut Store>,
+    keymap: Option<&Path>,
     smoke: bool,
 ) -> Result<Option<i32>, StoreError> {
+    let name = store
+        .as_deref()
+        .map(|store| project_name(store).into_owned());
+    let mut program = store
+        .as_deref()
+        .map(program::Program::prepare)
+        .transpose()?
+        .flatten();
+    let mut history = store.as_deref().map(commands::History::new);
+    let mut revision = store.as_deref().map(|store| store.project().rev);
+    let mut keys = commands::Keys::new(keymap);
     let mut ui = Ui::new(&UiDesc::DEFAULT).map_err(|error| viewer_error(&error))?;
     let mut surface =
-        surface::Surface::open(window, &ui, program.as_deref().map(program::Program::size))?;
+        surface::Surface::open(window, &ui, program.as_ref().map(program::Program::size))?;
     let mut accessibility = Accessibility::open(window).map_err(|error| viewer_error(&error))?;
     let mut platform = Platform::default();
     let mut encoded = Events::default();
@@ -155,8 +164,47 @@ fn run_surface(
         if !open {
             break;
         }
+        events.retain(|event| {
+            !keys.route(event, &mut |action| {
+                if let Err(error) = dispatch(
+                    action,
+                    store.as_deref_mut(),
+                    history.as_mut(),
+                    program.as_mut(),
+                ) {
+                    eprintln!("splice: {error}");
+                }
+            })
+        });
+        if let Some(store) = store.as_deref()
+            && revision != Some(store.project().rev)
+        {
+            revision = Some(store.project().rev);
+            if let Some(history) = &mut history {
+                history.sync(store);
+            }
+            let at = program.as_ref().map_or(0, program::Program::at);
+            let playing = program.as_ref().is_some_and(program::Program::playing);
+            let mut next = program::Program::prepare(store)?;
+            if let Some(next) = &mut next {
+                next.seek(at)?;
+                if playing && next.at() < next.end() - 1 {
+                    next.play(true);
+                }
+            }
+            let size = next.as_ref().map(program::Program::size);
+            if size == program.as_ref().map(program::Program::size) {
+                surface.clear_program();
+            } else {
+                surface.close()?;
+                surface = surface::Surface::open(window, &ui, size)?;
+            }
+            program = next;
+            presented = None;
+        }
+        let mut repaint = false;
         if surface.begin(window)? {
-            if let Some(program) = program.as_deref_mut() {
+            if let Some(program) = &mut program {
                 program.sample(&mut surface)?;
             }
             let (width, height) = window.size();
@@ -168,13 +216,33 @@ fn run_surface(
             let packets = encoded.encode(events);
             input.wire.events = packets.as_ptr();
             input.wire.event_count = packets.len();
+            let mut intents = playbar::Intents::default();
+            let (at, end, playing, dragging) =
+                program.as_ref().map_or((0, 0, false, false), |program| {
+                    (
+                        program.at(),
+                        program.end(),
+                        program.playing(),
+                        program.dragging(),
+                    )
+                });
+            let fps = store.as_deref().map_or(30, |store| store.project().fps);
+            let play = commands::states(end > 0 && !dragging, playing, (false, false))
+                [commands::PLAY.0 as usize];
             accessibility.frame(&mut ui);
             ui.frame(&input, &mut |ui| {
-                paint_viewer(
+                intents = paint_viewer(
                     ui,
-                    name,
-                    program.as_deref().and_then(program::Program::contents),
+                    name.as_deref(),
+                    program.as_ref().and_then(program::Program::contents),
                     surface.image(),
+                    playbar::View {
+                        at,
+                        end,
+                        fps,
+                        play,
+                        dragging,
+                    },
                 );
             })
             .map_err(|error| viewer_error(&error))?;
@@ -182,23 +250,74 @@ fn run_surface(
                 .apply(window, &ui)
                 .map_err(|error| viewer_error(&error))?;
             if surface.draw(window, &ui)? {
-                presented = program.as_deref().and_then(program::Program::shown);
+                presented = program.as_ref().and_then(program::Program::shown);
                 if smoke && (program.is_none() || presented.is_some()) {
                     break;
                 }
             }
+            if let Some((phase, at)) = intents.scrub
+                && let Some(program) = &mut program
+            {
+                program.scrub(phase, at)?;
+                repaint = true;
+            }
+            if intents.play {
+                dispatch(
+                    keys.play_button(),
+                    store.as_deref_mut(),
+                    history.as_mut(),
+                    program.as_mut(),
+                )?;
+                repaint = true;
+            }
         }
-        let waiting = program.is_some() && presented.is_none();
+        let waiting = program.as_ref().is_some_and(program::Program::wants_frame);
         if smoke && Instant::now() >= deadline {
             return Err(viewer_error(
                 &"Timed out presenting the first program frame.",
             ));
         }
-        window.wait((waiting || smoke).then(|| window.time() + 1.0 / 120.0));
+        let next = if waiting || repaint || smoke {
+            Some(window.time() + 1.0 / 120.0)
+        } else {
+            ui.repaint_at()
+        };
+        window.wait(next);
     }
     drop(accessibility);
     surface.close()?;
     Ok(presented)
+}
+
+fn dispatch(
+    action: Invoked,
+    store: Option<&mut Store>,
+    history: Option<&mut commands::History>,
+    program: Option<&mut program::Program>,
+) -> Result<(), StoreError> {
+    use commands::{BACK, FORWARD, PLAY, REDO, UNDO};
+    let enabled = program.as_ref().is_some_and(|program| !program.dragging());
+    let playing = program.as_ref().is_some_and(|program| program.playing());
+    let availability = store
+        .as_deref()
+        .map_or((false, false), Store::human_history_available);
+    if !commands::states(enabled, playing, availability)[action.id.0 as usize].enabled {
+        return Ok(());
+    }
+    match (action.id, program, store, history) {
+        (PLAY, Some(program), _, _) => program.toggle(),
+        (BACK, Some(program), _, _) => program.step(-1),
+        (FORWARD, Some(program), _, _) => program.step(1),
+        (UNDO | REDO, _, Some(store), Some(history)) => {
+            let time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|time| u64::try_from(time.as_millis()).ok())
+                .unwrap_or(0);
+            history.invoke(store, action.id, time).map(|_| ())
+        }
+        _ => Ok(()),
+    }
 }
 
 fn project_name(store: &Store) -> Cow<'_, str> {
@@ -214,7 +333,9 @@ fn paint_viewer(
     name: Option<&str>,
     contents: Option<(i32, &Rc<splice_av::Composition>)>,
     image: Option<Image>,
-) {
+    view: playbar::View,
+) -> playbar::Intents {
+    let mut intents = playbar::Intents::default();
     ui.column(
         Node {
             w: Size::Grow,
@@ -226,8 +347,10 @@ fn paint_viewer(
                 ui.label(name, Label::DEFAULT);
             }
             program::paint(ui, contents, image);
+            intents = playbar::paint(ui, view);
         },
     );
+    intents
 }
 
 fn recall(file: &Path) -> Option<PathBuf> {

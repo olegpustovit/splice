@@ -50,6 +50,10 @@ Name.splice/
 - On macOS, `splice open Name.splice` opens the viewer. Run `splice` or `splice open`
   to choose a project in the native open panel. The panel starts in the last project's directory
   when that project is available.
+- In the viewer, press Space to play or pause and Left or Right to step one frame. The scrubber
+  previews while dragged and returns to its starting frame if capture is cancelled. The clock shows
+  hours, minutes, seconds, and frames. Command-Z and Command-Shift-Z undo and redo the latest batch
+  through the project journal, including batches committed by an agent.
 - `splice open Name.splice --snapshot out.png [--at N]` saves the viewer content at frame `N`.
   The default is frame zero. The PNG uses the viewer's default 960 × 640 size at 1×. Pass a new
   filename. The command renders offscreen and prints the frame,

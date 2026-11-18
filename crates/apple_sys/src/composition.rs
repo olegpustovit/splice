@@ -144,6 +144,7 @@ unsafe extern "C" {
     ) -> bool;
     fn splice_av_player(composition: *mut c_void, error: *mut *mut c_char) -> *mut c_void;
     fn splice_av_player_play(player: *mut c_void, playing: bool);
+    fn splice_av_player_ended(player: *mut c_void) -> bool;
     fn splice_av_player_seek(player: *mut c_void, frame: i32) -> bool;
     fn splice_av_player_copy(
         player: *mut c_void,
@@ -364,6 +365,12 @@ impl Composition {
 }
 
 impl Player {
+    /// Whether the native playback clock has reached the end of its composition.
+    pub fn ended(&self) -> bool {
+        // SAFETY: this handle owns the player and is called on its owning thread.
+        unsafe { splice_av_player_ended(self.0.as_ptr()) }
+    }
+
     /// Copies the newest sample to the caller's exact-size RGBA buffer if one is ready.
     pub fn copy_frame(&mut self, rgba: &mut [u8]) -> Result<Option<i32>, Error> {
         let mut frame = 0;

@@ -1,4 +1,4 @@
-use super::{VIEWER_SIZE, paint_viewer, program, project_name, viewer_error};
+use super::{VIEWER_SIZE, commands, paint_viewer, playbar, program, project_name, viewer_error};
 use crate::surface::{gpu_error, open_device, open_renderer};
 use ogpu_core::{
     backend as be,
@@ -55,6 +55,13 @@ pub fn render(store: &Store, at: i32) -> Result<Vec<u8>, StoreError> {
             Some(&name),
             composition.as_ref().map(|composition| (at, composition)),
             image,
+            playbar::View {
+                at,
+                end,
+                fps: store.project().fps,
+                play: commands::states(end > 0, false, (false, false))[commands::PLAY.0 as usize],
+                dragging: false,
+            },
         );
     })
     .map_err(|error| viewer_error(&error))?;

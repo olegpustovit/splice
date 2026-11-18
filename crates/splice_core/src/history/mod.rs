@@ -356,6 +356,15 @@ impl Store {
         Ok(result)
     }
 
+    /// Whether the writer currently has human undo and redo targets, respectively.
+    pub fn human_history_available(&self) -> (bool, bool) {
+        let writable = self.problem().is_none();
+        (
+            writable && !self.versions.undo.is_empty(),
+            writable && !self.versions.redo.is_empty(),
+        )
+    }
+
     /// Human undo of the most recent undoable batch, including a revert or restore.
     pub fn human_undo(&mut self, time: u64) -> Result<HistoryResult, StoreError> {
         if let Some(&previous) = self.versions.undo.last() {

@@ -4,12 +4,16 @@ use pxui::{
 };
 use splice_av::{Composition, Player};
 use splice_core::history::{Store, StoreError};
+use splice_kit::Phase;
 use std::rc::Rc;
 
 pub(super) struct Program {
     composition: Rc<Composition>,
     player: Player,
     shown: Option<i32>,
+    pending: Option<i32>,
+    playing: bool,
+    scrub_origin: Option<(i32, bool)>,
 }
 
 impl Program {
@@ -22,6 +26,9 @@ impl Program {
             composition,
             player,
             shown: None,
+            pending: None,
+            playing: false,
+            scrub_origin: None,
         }))
     }
 
@@ -32,8 +39,85 @@ impl Program {
     pub(super) fn sample(&mut self, surface: &mut Surface) -> Result<(), StoreError> {
         if let Some(at) = surface.sample(&mut self.player)? {
             self.shown = Some(at);
+            if self.pending == Some(at) || self.playing {
+                self.pending = None;
+            }
+        }
+        if self.playing && self.player.ended() {
+            self.playing = false;
         }
         Ok(())
+    }
+
+    pub(super) fn at(&self) -> i32 {
+        self.pending.or(self.shown).unwrap_or(0)
+    }
+
+    pub(super) fn end(&self) -> i32 {
+        self.composition.end()
+    }
+
+    pub(super) fn playing(&self) -> bool {
+        self.playing
+    }
+
+    pub(super) fn dragging(&self) -> bool {
+        self.scrub_origin.is_some()
+    }
+
+    pub(super) fn wants_frame(&self) -> bool {
+        self.playing || self.pending.is_some() || self.shown.is_none()
+    }
+
+    pub(super) fn play(&mut self, playing: bool) {
+        self.player.set_playing(playing);
+        self.playing = playing;
+    }
+
+    pub(super) fn toggle(&mut self) -> Result<(), StoreError> {
+        if !self.playing && self.at() == self.end() - 1 {
+            self.seek(0)?;
+        }
+        self.play(!self.playing);
+        Ok(())
+    }
+
+    pub(super) fn step(&mut self, delta: i32) -> Result<(), StoreError> {
+        self.play(false);
+        self.seek(self.at() + delta)
+    }
+
+    pub(super) fn seek(&mut self, at: i32) -> Result<(), StoreError> {
+        let at = at.clamp(0, self.end() - 1);
+        if at == self.at() && !self.player.ended() {
+            return Ok(());
+        }
+        self.player.seek(at).map_err(|error| viewer_error(&error))?;
+        self.pending = Some(at);
+        Ok(())
+    }
+
+    pub(super) fn scrub(&mut self, phase: Phase, at: i32) -> Result<(), StoreError> {
+        match phase {
+            Phase::Began => {
+                self.scrub_origin = Some((self.at(), self.playing));
+                self.play(false);
+                self.seek(at)
+            }
+            Phase::Changed => self.seek(at),
+            Phase::Ended | Phase::Cancelled => {
+                let origin = self.scrub_origin.take();
+                if phase == Phase::Ended {
+                    self.seek(at)?;
+                } else if let Some((original, _)) = origin {
+                    self.seek(original)?;
+                }
+                if let Some((_, true)) = origin {
+                    self.play(true);
+                }
+                Ok(())
+            }
+        }
     }
 
     pub(super) fn shown(&self) -> Option<i32> {

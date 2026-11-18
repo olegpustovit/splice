@@ -60,6 +60,11 @@ impl Modifiers {
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
+
+    /// Removes the given modifiers from this set.
+    pub const fn without(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
 }
 
 /// A keyboard key and its exact modifier set.

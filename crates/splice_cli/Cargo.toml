@@ -16,5 +16,8 @@ splice_mcp = { path = "../splice_mcp" }
 [target.'cfg(target_os = "macos")'.dependencies]
 splice_app = { path = "../splice_app" }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+splice_testkit = { path = "../splice_testkit" }
+
 [lints]
 workspace = true

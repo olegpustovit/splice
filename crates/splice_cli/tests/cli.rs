@@ -765,3 +765,26 @@ fn viewer_snapshot_rejects_malformed_options() {
         error(scratch.run(&args), "BAD_ARGS");
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_viewer_playbar_golden() {
+    let scratch = Scratch::new("playbar-golden");
+    let project = "Transport.splice";
+    success(scratch.run(&["new", project]));
+    fs::write(
+        scratch.0.join("title.json"),
+        r#"[{"cmd":"title.add","at":60,"length":60,"text":"End card"}]"#,
+    )
+    .unwrap();
+    success(scratch.run(&["apply", "title.json", project]));
+    success(scratch.run(&["open", project, "--snapshot", "bar.png", "--at", "46"]));
+    let png = fs::read(scratch.0.join("bar.png")).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let file = if std::env::var("SPLICE_BLESS").as_deref() == Ok("1") {
+        root.join("target/splice-playbar.png")
+    } else {
+        root.join("fixtures/render/playbar.png")
+    };
+    splice_testkit::golden(&file, &png).unwrap();
+}

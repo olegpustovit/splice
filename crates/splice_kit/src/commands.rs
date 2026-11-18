@@ -44,6 +44,8 @@ impl Default for CommandState {
 pub enum Source {
     /// Keyboard shortcut.
     Key,
+    /// An activated control in the editor.
+    Control,
     /// Menu selection.
     Menu,
     /// Command palette selection.

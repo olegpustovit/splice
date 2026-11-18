@@ -106,6 +106,10 @@ impl Surface {
             .and_then(|slot| self.images.get(slot + 1, "program", 1.0, None))
     }
 
+    pub(super) fn clear_program(&mut self) {
+        self.current = None;
+    }
+
     pub(super) fn draw(&mut self, window: &Window, ui: &Ui) -> Result<bool, StoreError> {
         let (w, h) = window.extent().drawable;
         let frames = self.frames.as_mut().expect("open surface");

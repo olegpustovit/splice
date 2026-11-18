@@ -139,6 +139,7 @@ fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
             "pxui_sdl",
             "splice_av",
             "splice_core",
+            "splice_kit",
             "splice_model",
         ],
         "splice_av" => &["apple_sys", "splice_eval", "splice_model"],

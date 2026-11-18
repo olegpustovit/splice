@@ -149,6 +149,7 @@ dependencies = [
  "pxui_sdl",
  "splice_av",
  "splice_core",
+ "splice_kit",
  "splice_model",
  "splice_testkit",
 ]
@@ -170,6 +171,7 @@ dependencies = [
  "splice_core",
  "splice_json",
  "splice_mcp",
+ "splice_testkit",
 ]
 
 [[package]]

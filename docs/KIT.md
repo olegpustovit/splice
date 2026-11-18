@@ -21,7 +21,7 @@ pub struct CommandId(pub u32);
 pub struct Command { pub id: CommandId, pub name: &'static str, pub title: &'static str,
                      pub keys: &'static [Shortcut], pub group: &'static str }
 pub struct CommandState { pub enabled: bool, pub checked: bool, pub title: Option<&'static str> }
-pub enum Source { Key, Menu, Palette, A11y, Automation }
+pub enum Source { Key, Control, Menu, Palette, A11y, Automation }
 pub struct Invoked { pub id: CommandId, pub source: Source, pub target: u64 }
 
 pub struct Responders { /* preallocated: node → &'static [CommandId] */ }
@@ -37,9 +37,10 @@ pub fn validate(table: &[Command], states: &mut [CommandState],
                 fill: &mut dyn FnMut(CommandId, &mut CommandState));
 ```
 
-- Splice's command table is generated from the core registry plus view commands
-  (`transport.play`, `transport.step`, `history.undo`, `history.redo`). A key, a menu item, the palette
-  and MCP all produce the same `Invoked` → the same core op, so parity holds below the UI.
+- The viewer builds its command table from the core registry and its view commands. The 0.1 viewer
+  binds `transport.play`, `transport.step`, `transport.stepBack`, `history.undo`, and `history.redo`.
+  Keyboard and button actions use the same `Invoked` dispatch. Core edit commands gain responders
+  as their controls are added.
 - Call `validate` with a reusable state buffer in table order. Check the command's current
   `enabled` state before handling its `Invoked` intent.
 - Load the UTF-8 keymap with `Keymap::read`. Each `key = command` line overrides one chord.
@@ -48,6 +49,8 @@ pub fn validate(table: &[Command], states: &mut [CommandState],
   Keys include characters, `Space`, the arrows (`Left`, `Right`, `Up`, `Down`), `F1` through `F12`,
   and named navigation keys. Spell the delimiters `Plus`, `Equals` and `Hash` when binding them.
   The loader reports the line number for unknown commands and both line numbers for duplicate chords.
+  Splice reads `keymap` from `~/Library/Application Support/Splice/` when the viewer opens. It
+  reports an invalid file on stderr and uses the default shortcuts for that launch.
 
 ## Undo
 
@@ -73,13 +76,15 @@ impl UndoStack {
 - In Splice the payload is a **core revision**. The core's history (journal, sessions, revert with
   replay) is the source of truth. Feed the kit the revision after each edit with the core's batch
   label. The stack accepts owned labels from the journal and borrowed labels for constant actions.
-  Agent batches are `Step`s labelled `Agent: …`. The viewer uses `titles` for the actions on each
-  side of the current revision.
+  Agent batches are `Step`s labelled `Agent: …`. The viewer retains the labels of recent actions
+  and uses the store for undo and redo availability and for each durable restore.
 
 ## Gesture phases
 
-`Phase::{Began, Changed, Ended, Cancelled}` on continuous controls (scrubber now, timeline drags
-later). `Began` opens a `Gesture(id)` merge, `Ended` seals it, `Cancelled` restores the payload from `Began`.
+`Phase::{Began, Changed, Ended, Cancelled}` describes pointer capture on continuous controls.
+The scrubber previews a playhead until release and restores its original frame if capture is lost.
+A focused keyboard adjustment or accessibility SetValue may commit without an active drag.
+Timeline edit gestures use a `Gesture(id)` merge at `Began` and seal it at `Ended`.
 
 ## Later (only when a Splice task needs it)
 

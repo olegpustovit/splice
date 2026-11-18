@@ -161,6 +161,9 @@ fn window_program_4k_reuses_shared_textures_without_allocations() {
         );
         window.wait(Some(window.time() + 0.01));
     }
+    assert!(surface.image().is_some());
+    surface.clear_program();
+    assert!(surface.image().is_none());
     surface.close().unwrap();
     window.destroy().unwrap();
 }
