@@ -1,10 +1,12 @@
 "use strict";
-/* ══ MCP surface: 17 tools over the same Store and registry. In the product this is signal_mcp (stdio shim → app socket). ══ */
+/* ══ MCP surface: 19 tools over the same Store and registry. In the product this is splice_mcp (stdio shim → app socket). ══ */
 const PROJECT_ID = "prj_field-notes";
 const rid = () => "r"+Store.rev;
 const revNum = v => typeof v==="number"?v:parseInt(String(v||"").replace(/^r/,""),10);
 const JOBS = {};
-let approval = null;
+const EXPORTED = new Set();
+const EXISTED = p => EXPORTED.has(p);
+function runJob(j){const tick=()=>{if(j.state!=="running")return;j.progress=Math.min(1,+(j.progress+.12).toFixed(2));if(j.progress>=1){j.state="done";j.output=j.settings.path;}else setTimeout(tick,350);if(document.body.dataset.view==="mcp")renderLab();};setTimeout(tick,350);}
 
 function needAccess(level){
   const a=proj().access;
@@ -40,9 +42,9 @@ function captionsOut(p,format,laneId){
   return {revision:rid(),format,cues:cues.length,text:(format==="vtt"?"WEBVTT\n\n":"")+body+"\n"};
 }
 const TOOLS = {
-  "project.info":{group:"Perception",hint:"read",desc:"Project metadata: fps, aspect, duration, lanes, media, access level, revision, transcript state.",
-    example:()=>({projectId:PROJECT_ID}),
-    run(a){needProject(a);needAccess("read");const p=proj();
+  "project.info":{group:"Perception",hint:"read",desc:"Opens a project by path (create:true makes a new one) or by projectId, and returns its metadata: fps, aspect, duration, lanes, media, access level, revision, transcript state.",
+    example:()=>({path:"~/Movies/Field Notes.splice"}),
+    run(a){if(a.path!==undefined&&!/\.splice\/?$/.test(a.path))throw fail("BAD_ARGS","path must name a .splice project package.","Pass path:\"…/Name.splice\", with create:true to make a new one.",{valid:["*.splice"]});needProject(a);needAccess("read");const p=proj();
       return {projectId:PROJECT_ID,revision:rid(),fps:FPS,aspect:p.aspect,durationFrames:endOf(p),access:p.access,
         lanes:[...p.lanes.map(l=>({id:l.id,name:l.name,kind:l.kind,items:p.items.filter(i=>i.lane===l.id).length})),{id:"spine",name:"Video",kind:"spine",items:p.clips.length}],
         media:Object.entries(mediaIds).map(([k,m])=>({id:m,name:assets[k].name,type:assets[k].type,frames:assets[k].frames>1e8?null:assets[k].frames})),
@@ -93,7 +95,7 @@ const TOOLS = {
     run(a){needProject(a);needAccess("read");const p=a.preview||proj(), ats=a.count?Array.from({length:a.count},(_,i)=>Math.round(i*(endOf(p)-1)/(a.count-1||1))):list(a.at);
       if(!ats.length)throw fail("BAD_ARGS","Pass at:[frames] or count.","Frames are integers.");
       const cv=document.createElement("canvas");
-      const frames=ats.map(f=>{if(!Number.isInteger(f))throw fail("BAD_ARGS","at must be integer frames.","Multiply seconds by fps.");draw(cv,p,clamp(f,0,endOf(p)-1));const s=document.createElement("canvas");s.width=Math.round(cv.width/4);s.height=Math.round(cv.height/4);s.getContext("2d").drawImage(cv,0,0,s.width,s.height);return {frame:f,uri:`signal://${PROJECT_ID}/${rid()}/frame/${f}.jpg`,_img:s.toDataURL("image/jpeg",.7)};});
+      const frames=ats.map(f=>{if(!Number.isInteger(f))throw fail("BAD_ARGS","at must be integer frames.","Multiply seconds by fps.");draw(cv,p,clamp(f,0,endOf(p)-1));const s=document.createElement("canvas");s.width=Math.round(cv.width/4);s.height=Math.round(cv.height/4);s.getContext("2d").drawImage(cv,0,0,s.width,s.height);return {frame:f,uri:`splice://${PROJECT_ID}/${rid()}/frame/${f}.jpg`,_img:s.toDataURL("image/jpeg",.7)};});
       return {revision:rid(),frames};}},
   "commands.describe":{group:"Perception",hint:"read",desc:"Registry search and schemas with examples: the catalog for edit.apply. Pass id for one schema, or query to search.",
     example:()=>({query:"lane"}),
@@ -123,9 +125,11 @@ const TOOLS = {
     example:()=>({projectId:PROJECT_ID,sessionId:Store.openSession()?.id??Object.keys(Store.sessions).at(-1)??"ses_…"}),
     run(a){const s=Store.sessions[a.sessionId];if(!s)throw fail("NOT_FOUND",`No session ${a.sessionId}.`,"session.start returns a sessionId.");
       return {sessionId:s.id,open:s.open,checkpoint:"r"+s.checkpoint,revision:rid(),batches:s.batches.map(i=>{const e=Store.log[i];return {revision:"r"+e.rev,summary:e.title,state:e.reverted?"reverted":e.undone?"undone":"live",created:e.changes.flatMap(c=>c.created||[]),sideEffects:e.sideEffects.length};}),humanEditsSince:Store.log.filter((e,i)=>e.source==="human"&&e.rev>s.checkpoint&&!e.revertOf).length};}},
-  "history.undo":{group:"Session and history",hint:"edit",desc:"scope:last reverts the agent's last batch; scope:session reverts everything since the checkpoint in one step. Later human edits are replayed on top; any that no longer apply are listed.",
+  "history.undo":{group:"Session and history",hint:"edit",desc:"scope:last reverts the session's last batch; scope:session reverts everything since the checkpoint in one step (later human edits are replayed on top; any that no longer apply are listed); scope:to with revision restores that exact state. Every undo is a new revision, so an undo can itself be undone.",
     example:()=>({projectId:PROJECT_ID,sessionId:Store.openSession()?.id??Object.keys(Store.sessions).at(-1)??"ses_…",scope:"last"}),
-    run(a){needProject(a);if(!["last","session"].includes(a.scope))throw fail("BAD_ARGS","scope must be last or session.","Pass scope.");return Store.undoSession(a.sessionId,a.scope);}},
+    run(a){needProject(a);
+      if(a.scope==="to"){if(a.revision===undefined)throw fail("BAD_ARGS","scope:to needs a revision.","Pass revision, e.g. \"r12\"; history.list shows them.");return Store.restoreTo(revNum(a.revision),a.sessionId);}
+      if(!["last","session"].includes(a.scope))throw fail("BAD_ARGS","scope must be last, session or to.","Pass scope:\"last\", \"session\", or \"to\" with a revision.",{valid:["last","session","to"]});return Store.undoSession(a.sessionId,a.scope);}},
   "ui.show":{group:"View",hint:"edit (view only)",desc:"Moves the playhead, selects, frames a range, expands components, sets viewer zoom (viewer:{zoom:\"fit\"|1}) or switches view. Never edits the project.",
     example:()=>({at:372,select:["ovl_broll"]}),
     run(a){
@@ -136,26 +140,38 @@ const TOOLS = {
       if(a.at!==undefined)seek(resolveFrame(proj(),a.at,{resolve:v=>v}));
       if(a.viewer){if(a.viewer.zoom==="fit")fitViewer();else if(typeof a.viewer.zoom==="number")zoomViewer(a.viewer.zoom);}
       return {revision:rid(),playhead:frame,selection:selIds(),edited:false};}},
-  "export.start":{group:"Jobs",hint:"edit",desc:"Starts an export. Writing to disk needs human approval in Signal's UI; the job waits in awaiting_approval until then.",
-    example:()=>({projectId:PROJECT_ID,preset:"social-hevc",path:"~/Movies/Field Notes 01.mp4"}),
+  "export.start":{group:"Jobs",hint:"edit",desc:"Starts an export job. No approval: agents export freely. Writes <project>.splice/exports/<name>-r<rev>.mp4 by default and never overwrites unless overwrite:true.",
+    example:()=>({projectId:PROJECT_ID,preset:"social-hevc"}),
     run(a){needProject(a);needAccess("read");
-      if(Object.values(JOBS).some(j=>["running","awaiting_approval"].includes(j.state)))throw fail("BUSY","Another job is already running.","Wait for jobs.status to finish, or jobs.cancel it.");
       const sizes={"9:16":[1080,1920],"1:1":[1080,1080],"16:9":[1920,1080]}, [w,h]=sizes[proj().aspect];
+      const path=a.path||`Field Notes.splice/exports/Field Notes-${rid()}.mp4`;
+      if(EXISTED(path)&&!a.overwrite)throw fail("EXISTS",`${path} already exists.`,"Pass overwrite:true, or a different path.",{current:path});
+      if(Object.values(JOBS).some(j=>["running","recording"].includes(j.state)))throw fail("BUSY","Another job is already running.","Wait for jobs.status to finish, or jobs.cancel it.");
       const id="job_"+(SERIAL++).toString(36);
-      JOBS[id]={id,kind:"export",state:"awaiting_approval",progress:0,revision:rid(),settings:{width:w,height:h,fps:FPS,codec:a.preset==="social-h264"?"H.264":"HEVC",container:"MP4",encoder:"VideoToolbox (hardware)",path:a.path||"~/Movies/export.mp4",durationFrames:endOf(proj())}};
-      approval=id;showApproval();
-      return {jobId:id,state:"awaiting_approval",settings:JOBS[id].settings,note:"NEEDS_APPROVAL: the human approves or denies in Signal. Poll jobs.status."};}},
-  "jobs.status":{group:"Jobs",hint:"read",desc:"Progress for export and transcription jobs.",
+      JOBS[id]={id,kind:"export",state:"running",progress:0,revision:rid(),settings:{width:w,height:h,fps:FPS,codec:a.preset==="social-h264"?"H.264":"HEVC",container:"MP4",encoder:"VideoToolbox (hardware)",path,durationFrames:endOf(proj())}};
+      EXPORTED.add(path);runJob(JOBS[id]);
+      return {jobId:id,state:"running",settings:JOBS[id].settings};}},
+  "record.start":{group:"Jobs",hint:"edit",desc:"Starts a headless recording (screen or window, mic, system audio, camera, input events) into the project. No UI opens. Simulated here; built in 0.2 (PLAN.md T8).",
+    example:()=>({projectId:PROJECT_ID,display:"main",mic:true,events:true}),
+    run(a){needProject(a);needAccess("live");
+      if(Object.values(JOBS).some(j=>j.state==="recording"))throw fail("BUSY","A recording is already running.","record.stop it first.");
+      const id="job_"+(SERIAL++).toString(36);
+      JOBS[id]={id,kind:"record",state:"recording",progress:0,settings:{display:a.display??"main",window:a.window??null,mic:!!a.mic,systemAudio:!!a.systemAudio,camera:!!a.camera,events:a.events!==false}};
+      return {jobId:id,state:"recording",settings:JOBS[id].settings};}},
+  "record.stop":{group:"Jobs",hint:"edit",desc:"Finishes a recording. In the product the take lands as a spine clip with its components (mic, system, cursor, keys); here the job just completes.",
+    example:()=>({jobId:Object.values(JOBS).find(j=>j.kind==="record")?.id??"job_…"}),
+    run(a){const j=JOBS[a.jobId];if(!j||j.kind!=="record")throw fail("NOT_FOUND",`No recording ${a.jobId}.`,"record.start returns a jobId.");if(j.state==="recording"){j.state="done";j.progress=1;}return {...copy(j)};}},
+  "jobs.status":{group:"Jobs",hint:"read",desc:"Progress for export, transcription and recording jobs.",
     example:()=>({jobId:Object.keys(JOBS).at(-1)??"job_…"}),
     run(a){const j=JOBS[a.jobId];if(!j)throw fail("NOT_FOUND",`No job ${a.jobId}.`,"export.start returns a jobId.");return {...copy(j)};}},
   "jobs.cancel":{group:"Jobs",hint:"edit",desc:"Cancels a running or pending job.",
     example:()=>({jobId:Object.keys(JOBS).at(-1)??"job_…"}),
-    run(a){const j=JOBS[a.jobId];if(!j)throw fail("NOT_FOUND",`No job ${a.jobId}.`,"export.start returns a jobId.");if(["done","cancelled","denied"].includes(j.state))return {...copy(j)};j.state="cancelled";hideApproval();return {...copy(j)};}}
+    run(a){const j=JOBS[a.jobId];if(!j)throw fail("NOT_FOUND",`No job ${a.jobId}.`,"export.start returns a jobId.");if(["done","cancelled"].includes(j.state))return {...copy(j)};j.state="cancelled";return {...copy(j)};}}
 };
 function callTool(name,args){
   const t=TOOLS[name];
   try{
-    if(!t)throw fail("UNKNOWN_COMMAND",`No tool ${name}.`,"tools/list returns the 17 tools.");
+    if(!t)throw fail("UNKNOWN_COMMAND",`No tool ${name}.`,"tools/list returns the 19 tools.");
     const r=t.run(args||{});
     return {isError:false,structuredContent:r};
   }catch(e){
@@ -164,14 +180,6 @@ function callTool(name,args){
     return {isError:true,structuredContent:{error:err}};
   }
 }
-function showApproval(){
-  const j=JOBS[approval];if(!j)return;
-  $("approval-body").innerHTML=`<p>An agent wants to export the timeline to disk.</p><dl class="kv"><dt>File</dt><dd>${esc(j.settings.path)}</dd><dt>Format</dt><dd>${j.settings.width} × ${j.settings.height} · ${j.settings.fps} fps · ${j.settings.codec} / ${j.settings.container}</dd><dt>Encoder</dt><dd>${j.settings.encoder}</dd><dt>Revision</dt><dd>${j.revision} · ${sec(j.settings.durationFrames)} s</dd></dl>`;
-  $("approval").showModal();
-}
-function hideApproval(){if($("approval").open)$("approval").close();approval=null;}
-$("approve").onclick=()=>{const j=JOBS[approval];if(!j)return;j.state="running";hideApproval();const tick=()=>{if(j.state!=="running")return;j.progress=Math.min(1,+(j.progress+.12).toFixed(2));if(j.progress>=1){j.state="done";j.output=j.settings.path;}else setTimeout(tick,350);if(document.body.dataset.view==="mcp")renderLab();};tick();setNote("Export approved. The job runs on the VideoToolbox encoder in the product.");};
-$("deny").onclick=()=>{const j=JOBS[approval];if(j)j.state="denied";hideApproval();setNote("Export denied. The agent sees state: denied (DENIED).");};
 
 /* ── Agent tab ── */
 let tool="edit.apply", callLog=[], shown=null;

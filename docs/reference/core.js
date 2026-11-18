@@ -1,5 +1,5 @@
 "use strict";
-/* ══ Signal core (prototype of the Rust core) ══
+/* ══ Splice core (prototype of the Rust core) ══
    Pure model + command registry + apply engine. No DOM here.
    Everything that changes the project goes through COMMANDS via Core.apply(). */
 const FPS = 30;
@@ -47,8 +47,7 @@ const ERRORS = {
   BAD_ARGS:"A parameter is missing, has the wrong type, or is not an integer frame",
   UNKNOWN_COMMAND:"No registry command has this id; the error lists close matches",
   PLANNED:"The command is in the registry but not built in this prototype",
-  NEEDS_APPROVAL:"Export to disk, which needs a human",
-  DENIED:"The human declined the export",
+  EXISTS:"The export path exists; pass overwrite:true or another path",
   BUSY:"Another job is already running",
   PERMISSION_DENIED:"The project's access level doesn't allow this call",
   NO_SESSION:"Writes need a sessionId from session.start"
@@ -993,7 +992,7 @@ function applyOps(base,ops,{source="human",replay=null}={}){
 
 /* ══ Store: revisions, human undo stack, command log, agent sessions ══ */
 const Store = {
-  project:sampleProject(), rev:1, history:[], future:[], log:[], sessions:{}, idem:{}, listeners:[], lastKey:null, badges:new Map(),
+  project:sampleProject(), rev:1, at:{}, history:[], future:[], log:[], sessions:{}, idem:{}, listeners:[], lastKey:null, badges:new Map(),
   on(fn){this.listeners.push(fn);},
   emit(ev){for(const fn of this.listeners)fn(ev);},
   /* One entry point for every write. ops: [{cmd,...args}] */
@@ -1012,7 +1011,7 @@ const Store = {
       this.log.push({rev:this.rev+1,title,source,sessionId,ops:copy(ops),mints:r.mints,before,key,undone:false,reverted:false,changes:r.changes,sideEffects:r.sideEffects,time:Date.now()});
     }
     this.lastKey=key;
-    this.project=r.project;this.rev++;
+    this.project=r.project;this.rev++;this.at[this.rev]=this.project;
     if(sessionId){const s=this.sessions[sessionId];if(s){s.batches.push(this.log.length-1);for(const id of affectedIds(before,r.project))if(byId(r.project,id))this.badges.set(id,sessionId);}}
     this.emit({type:"commit",source,title,result,cascade});
     return result;
@@ -1021,13 +1020,13 @@ const Store = {
     if(!this.history.length)return false;
     const h=this.history.pop();this.future.push({project:this.project,logIndex:h.logIndex});
     if(this.log[h.logIndex])this.log[h.logIndex].undone=true;
-    this.project=h.project;this.rev++;this.lastKey=null;this.emit({type:"undo",title:this.log[h.logIndex]?.title});return true;
+    this.project=h.project;this.rev++;this.at[this.rev]=this.project;this.lastKey=null;this.emit({type:"undo",title:this.log[h.logIndex]?.title});return true;
   },
   redo(){
     if(!this.future.length)return false;
     const f=this.future.pop();this.history.push({project:this.project,logIndex:f.logIndex});
     if(this.log[f.logIndex])this.log[f.logIndex].undone=false;
-    this.project=f.project;this.rev++;this.lastKey=null;this.emit({type:"redo",title:this.log[f.logIndex]?.title});return true;
+    this.project=f.project;this.rev++;this.at[this.rev]=this.project;this.lastKey=null;this.emit({type:"redo",title:this.log[f.logIndex]?.title});return true;
   },
   /* Revert a set of log entries: rebuild from the state before the first one and replay everything
      after it that is not reverted (human edits replay on top; ones that can no longer apply are skipped). */
@@ -1045,7 +1044,7 @@ const Store = {
     const before=this.project;
     this.history.push({project:before,logIndex:this.log.length});this.future=[];
     this.log.push({rev:this.rev+1,title,source:meta.source||"human",sessionId:meta.sessionId||null,ops:[],mints:[],before,undone:false,reverted:false,changes:[],sideEffects:[],time:Date.now(),revertOf:[...set]});
-    this.project=p;this.rev++;this.lastKey=null;
+    this.project=p;this.rev++;this.at[this.rev]=this.project;this.lastKey=null;
     for(const [id,s] of [...this.badges])if(meta.sessionId===s&&(meta.scope==="session"))this.badges.delete(id);
     this.emit({type:"revert",title,skipped});
     return {reverted:set.size,skipped,replayed};
@@ -1057,6 +1056,17 @@ const Store = {
   },
   endSession(id){const s=this.sessions[id];if(!s)return;s.open=false;for(const [k,v] of [...this.badges])if(v===id)this.badges.delete(k);this.emit({type:"session",id});},
   openSession(){return Object.values(this.sessions).find(s=>s.open)||null;},
+  /* history.undo {scope:"to"}: restore the exact state at revision r as a new revision. Nothing is destroyed. */
+  restoreTo(r,sessionId=null){
+    const target=this.at[r];if(!target)throw fail("NOT_FOUND",`No revision r${r}.`,"history.list shows revisions; pass one of them.",{current:"r"+this.rev});
+    const before=this.project;
+    this.history.push({project:before,logIndex:this.log.length});this.future=[];
+    this.log.push({rev:this.rev+1,title:`Restore r${r}`,source:sessionId?"agent":"human",sessionId,ops:[],mints:[],before,undone:false,reverted:false,changes:[],sideEffects:[],time:Date.now(),restoreTo:r});
+    if(sessionId&&this.sessions[sessionId])this.sessions[sessionId].batches.push(this.log.length-1);
+    this.project=target;this.rev++;this.lastKey=null;this.at[this.rev]=this.project;
+    this.emit({type:"revert",title:`Restore r${r}`,skipped:[]});
+    return {restored:"r"+r,revision:"r"+this.rev,skipped:[]};
+  },
   undoSession(id,scope){
     const s=this.sessions[id];if(!s)throw fail("NOT_FOUND",`No session ${id}.`,"session.start returns a sessionId.");
     const live=s.batches.filter(i=>!this.log[i].undone&&!this.log[i].reverted);
@@ -1067,6 +1077,7 @@ const Store = {
     return {...r,revision:"r"+this.rev};
   }
 };
+Store.at[Store.rev]=Store.project;
 function affectedIds(a,b){
   const ids=new Set([...a.clips,...a.items,...b.clips,...b.items].map(x=>x.id)), out=[];
   for(const id of ids){const x=byId(a,id),y=byId(b,id);if(!x||!y||JSON.stringify(x)!==JSON.stringify(y)||startOf(a,x)!==startOf(b,y))out.push(id);}
