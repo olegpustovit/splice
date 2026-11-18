@@ -9,7 +9,7 @@ use std::time::Duration;
 pub(super) enum Source {
     Display(u32),
     Window(u32),
-    NamedWindow { app: String, title: String },
+    NamedWindow { app: String, title: Option<String> },
     Area(u32, [f64; 4]),
 }
 
@@ -87,13 +87,13 @@ fn source(args: &Json) -> Result<Source, StoreError> {
             }
             Ok(Source::NamedWindow {
                 app: app.into(),
-                title: value.string("title")?.into(),
+                title: value.optional_string("title")?.map(str::to_owned),
             })
         }
         (None, Some(value), None) => id(value, "win_").map(Source::Window).ok_or_else(|| {
             bad(
                 "window",
-                "a window ID or an app and title from record.start dryRun",
+                "a window ID or an app name with an optional title from record.start dryRun",
             )
         }),
         (None, None, Some(value)) => {
@@ -157,6 +157,15 @@ mod tests {
         assert_eq!(options.countdown.as_secs(), 1);
         assert!(options.mic && options.events);
         assert!(!options.camera && !options.system_audio && !options.still);
+        let by_app =
+            splice_json::parse(r#"{"source":{"window":{"app":"com.apple.Safari"}}}"#).unwrap();
+        assert_eq!(
+            Options::parse(&by_app).unwrap().source,
+            Source::NamedWindow {
+                app: "com.apple.Safari".into(),
+                title: None
+            }
+        );
 
         for invalid in [
             r#"{"duration":0}"#,

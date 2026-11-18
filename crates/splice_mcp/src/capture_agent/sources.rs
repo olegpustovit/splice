@@ -18,15 +18,15 @@ pub(super) fn target(source: &crate::record_options::Source) -> Result<Target, S
         },
         Selector::NamedWindow { app, title } => {
             let sources = capture::sources(true).map_err(super::capture_source_error)?;
-            Target::Window(window(&sources, app, title)?)
+            Target::Window(window(&sources, app, title.as_deref())?)
         }
     })
 }
 
-fn window(sources: &[Source], app: &str, title: &str) -> Result<u32, StoreError> {
+fn window(sources: &[Source], app: &str, title: Option<&str>) -> Result<u32, StoreError> {
     let mut matches = sources.iter().filter_map(|source| match source {
         Source::Window { id, app: owner, title: name, pid, .. }
-            if name == title && (owner == app || sources.iter().any(|source| {
+            if title.is_none_or(|title| name == title) && (owner == app || sources.iter().any(|source| {
                 matches!(source, Source::Application { pid: owner, name, .. } if owner == pid && name == app)
             })) => Some(*id),
         _ => None,
@@ -36,11 +36,11 @@ fn window(sources: &[Source], app: &str, title: &str) -> Result<u32, StoreError>
         (first, _) => Err(StoreError::new(
             "CAPTURE_SOURCE",
             if first.is_none() {
-                "No shareable window matches the app and title."
+                "No shareable window matches this selector."
             } else {
-                "Multiple shareable windows match the app and title."
+                "Multiple shareable windows match this selector."
             },
-            "Use a window ID from record.start with dryRun:true.",
+            "Supply the window title or use a window ID from record.start with dryRun:true.",
         )),
     }
 }
@@ -175,17 +175,18 @@ mod tests {
             },
         ];
         assert_eq!(
-            window(&sources[1..], "Fixture App", "Test window").unwrap(),
+            window(&sources[1..], "Fixture App", Some("Test window")).unwrap(),
             38
         );
+        assert_eq!(window(&sources[1..], "Fixture App", None).unwrap(), 38);
         assert_eq!(
-            window(&sources, "com.example.fixture", "Test window")
+            window(&sources, "com.example.fixture", None)
                 .unwrap_err()
                 .code,
             "CAPTURE_SOURCE"
         );
         assert_eq!(
-            window(&sources, "Fixture App", "Other window")
+            window(&sources, "Fixture App", Some("Other window"))
                 .unwrap_err()
                 .code,
             "CAPTURE_SOURCE"

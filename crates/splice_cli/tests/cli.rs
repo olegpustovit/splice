@@ -349,6 +349,15 @@ fn recording_preflight_requires_the_macos_agent() {
         "UNSUPPORTED_PLATFORM",
     );
     assert!(!scratch.0.join("new.splice").exists());
+    for flags in [
+        vec!["--area", "main", "10", "20", "640", "400"],
+        vec!["--window", "com.apple.Safari"],
+        vec!["--window", "Safari", "--title", "Start Page"],
+    ] {
+        let command = [vec!["record", "new.splice", "--duration", "3"], flags].concat();
+        error(scratch.run(&command), "UNSUPPORTED_PLATFORM");
+        assert!(!scratch.0.join("new.splice").exists());
+    }
 }
 
 #[test]
@@ -361,6 +370,8 @@ fn record_rejects_bad_options_before_accessing_the_project() {
         vec!["--countdown", "-1"],
         vec!["--duration", "2.5", "--duration", "3"],
         vec!["--source", "[]"],
+        vec!["--area", "main", "10", "20", "0", "400"],
+        vec!["--window", "win_42", "--title", "Docs"],
     ] {
         let command = [vec!["record", "new.splice"], flags].concat();
         error(scratch.run(&command), "BAD_ARGS");

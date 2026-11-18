@@ -60,9 +60,10 @@ PNG pixels, and `scale` is pixels per point.
   Control-D discards an interactive recording. Use `--still` for a PNG, `--no-insert` to keep the
   media off the timeline, or `--no-events` to omit cursor and input capture. `splice record --dry-run`
   reports sources and grant status without opening or creating a project.
-- Use `--window win_<id>` or `--source '<json>'` for a window or area selector from `record.start`.
-  `--countdown` sets a whole number of seconds before capture. `--system-audio` and `--camera`
-  enable those tracks.
+- Use `--window win_<id>` or `--window <app> [--title <title>]` for a window. The app selector
+  needs a unique match. `--area <display> <x> <y> <width> <height>` takes display-local points.
+  `--source '<json>'` accepts the same selectors as `record.start`. `--countdown` sets a whole
+  number of seconds before capture. `--system-audio` and `--camera` enable those tracks.
 
 - On macOS, `splice open Name.splice` opens the viewer. Run `splice` or `splice open`
   to choose a project in the native open panel. The panel starts in the last project's directory

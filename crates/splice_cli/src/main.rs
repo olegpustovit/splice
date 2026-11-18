@@ -21,7 +21,8 @@ const HELP: &str = "Usage: splice [<project.splice>]
        splice new <project.splice>
        splice mcp
        splice record --dry-run
-       splice record <project.splice> [--display <main|id> | --window <id> | --source <json>]
+       splice record <project.splice> [--display <main|id> | --window <id|app> [--title <title>]
+                     | --area <main|id> <x> <y> <width> <height> | --source <json>]
                      [--duration <seconds> | --still] [--countdown <seconds>]
                      [--mic] [--system-audio] [--camera] [--no-events] [--no-insert] [--dry-run]
        splice permissions [--request [screen|microphone|camera|inputMonitoring]]

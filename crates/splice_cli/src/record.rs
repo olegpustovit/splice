@@ -41,6 +41,7 @@ fn arguments(args: &[String]) -> Result<Json, StoreError> {
         ("path".into(), Json::String(path.clone())),
         ("create".into(), Json::Bool(true)),
     ];
+    let mut title = None;
     while let Some((flag, remaining)) = flags.split_first() {
         flags = remaining;
         let (key, value) = match flag.as_str() {
@@ -51,12 +52,27 @@ fn arguments(args: &[String]) -> Result<Json, StoreError> {
             "--no-insert" => ("insert", Json::Bool(false)),
             "--still" => ("still", Json::Bool(true)),
             "--dry-run" => ("dryRun", Json::Bool(true)),
-            "--display" | "--window" | "--source" | "--duration" | "--countdown" => {
+            "--area" => {
+                let [display, x, y, width, height, remaining @ ..] = flags else {
+                    return Err(option_error(
+                        "Use --area <display> <x> <y> <width> <height>.",
+                    ));
+                };
+                flags = remaining;
+                ("source", area(display, [x, y, width, height])?)
+            }
+            "--display" | "--window" | "--title" | "--source" | "--duration" | "--countdown" => {
                 let (value, remaining) = flags
                     .split_first()
                     .filter(|(value, _)| !value.starts_with("--"))
                     .ok_or_else(|| option_error(&format!("{flag} needs a value.")))?;
                 flags = remaining;
+                if flag == "--title" {
+                    if title.replace(value).is_some() {
+                        return Err(option_error("Use --title once."));
+                    }
+                    continue;
+                }
                 value_option(flag, value)?
             }
             _ => return Err(option_error(&format!("Unknown recording option {flag}."))),
@@ -67,6 +83,22 @@ fn arguments(args: &[String]) -> Result<Json, StoreError> {
             )));
         }
         fields.push((key.into(), value));
+    }
+    if let Some(title) = title {
+        let error = || option_error("Use --title to select a window from the named application.");
+        let Some(Json::Object(source)) = fields
+            .iter_mut()
+            .find_map(|(name, value)| (name == "source").then_some(value))
+        else {
+            return Err(error());
+        };
+        let [(key, Json::Object(window))] = source.as_mut_slice() else {
+            return Err(error());
+        };
+        if key != "window" || window.iter().any(|(name, _)| name == "title") {
+            return Err(error());
+        }
+        window.push(("title".into(), Json::String(title.clone())));
     }
     let args = Json::Object(fields);
     if enabled(&args, "still")
@@ -85,10 +117,20 @@ fn arguments(args: &[String]) -> Result<Json, StoreError> {
 fn value_option(flag: &str, value: &str) -> Result<(&'static str, Json), StoreError> {
     let invalid = || option_error(&format!("Invalid value for {flag}."));
     Ok(match flag {
-        "--display" | "--window" if !value.is_empty() => (
-            "source",
-            Json::Object(vec![(flag[2..].into(), Json::String(value.into()))]),
-        ),
+        "--display" if display(value) => {
+            ("source", selector("display", Json::String(value.into())))
+        }
+        "--window" if !value.is_empty() => {
+            let id = value.strip_prefix("win_").unwrap_or(value);
+            let window = if positive_id(id) {
+                Json::String(value.into())
+            } else if value.starts_with("win_") {
+                return Err(invalid());
+            } else {
+                selector("app", Json::String(value.into()))
+            };
+            ("source", selector("window", window))
+        }
         "--source" => {
             let source = splice_json::parse(value).map_err(|_| invalid())?;
             let [(_, _)] = source.as_object().ok_or_else(invalid)? else {
@@ -116,6 +158,44 @@ fn value_option(flag: &str, value: &str) -> Result<(&'static str, Json), StoreEr
         }
         _ => return Err(invalid()),
     })
+}
+
+fn area(display_id: &str, coordinates: [&str; 4]) -> Result<Json, StoreError> {
+    let [x, y, width, height] =
+        coordinates.map(|value| value.parse::<f64>().ok().filter(|v| v.is_finite()));
+    let (Some(x), Some(y), Some(width), Some(height)) = (x, y, width, height) else {
+        return Err(option_error("Pass numeric display points to --area."));
+    };
+    if !display(display_id) || x < 0.0 || y < 0.0 || width <= 0.0 || height <= 0.0 {
+        return Err(option_error(
+            "Use an active display, nonnegative x and y, and positive width and height.",
+        ));
+    }
+    let rect = Json::Object(
+        [("x", x), ("y", y), ("width", width), ("height", height)]
+            .into_iter()
+            .map(|(key, value)| (key.into(), Json::Float(value)))
+            .collect(),
+    );
+    Ok(selector(
+        "area",
+        Json::Object(vec![
+            ("display".into(), Json::String(display_id.into())),
+            ("rect".into(), rect),
+        ]),
+    ))
+}
+
+fn selector(key: &str, value: Json) -> Json {
+    Json::Object(vec![(key.into(), value)])
+}
+
+fn display(value: &str) -> bool {
+    value == "main" || positive_id(value)
+}
+
+fn positive_id(value: &str) -> bool {
+    value.parse::<u32>().is_ok_and(|id| id > 0)
 }
 
 fn option_error(message: &str) -> StoreError {

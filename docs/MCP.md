@@ -154,7 +154,8 @@ omit `sessionId` and `ifRevision` with `path`. The start receipt identifies the 
 and job. Include the session in later edits or undo calls.
 
 Pass one `source` containing `display`, `window`, or `area`. A display is `"main"` or a display ID.
-A window is a `win_<id>` from preflight or an object with `app` and `title`. An area has a display
+A window is a `win_<id>` from preflight or an object with `app` and an optional `title` that
+identifies one shareable window. An area has a display
 and a `rect` with `x`, `y`, `width` and `height` in display-local points. The default is the main
 display. Enable `mic`, `systemAudio` and `camera` to add those tracks. Set `events:false` to omit
 cursor and input events. `countdown` and optional `duration` are in seconds.
