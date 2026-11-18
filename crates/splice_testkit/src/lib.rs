@@ -81,18 +81,8 @@ fn check_golden(path: &Path, actual: &[u8], bless: bool) -> io::Result<()> {
     ))
 }
 
-/// Entry point reserved for JSONL transcript verification.
-pub mod transcript {
-    use std::{io, path::Path};
-
-    /// Reports that replay is unavailable until the MCP transport and fixtures land in T3.4.
-    pub fn run(_path: &Path) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "MCP transcript replay is pending T3.4",
-        ))
-    }
-}
+/// Replays newline-delimited MCP fixtures against an injected transport.
+pub mod transcript;
 
 #[cfg(test)]
 mod tests {
@@ -112,9 +102,63 @@ mod tests {
     }
 
     #[test]
-    fn pending_transcript_uses_an_explicit_error() {
-        let error = transcript::run(Path::new("sample.jsonl")).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    fn transcript_replays_bound_paths_and_reports_nested_differences() {
+        let dir = std::env::temp_dir().join(format!("splice-transcript-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("sample.jsonl");
+        std::fs::write(&path, concat!(
+            r#"> {"jsonrpc":"2.0","method":"notifications/initialized"}"#, "\n",
+            r#"> {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"arguments":{"path":"$sample","text":"$sample"}}}"#, "\n",
+            r#"< {"id":1,"result":{"structuredContent":{"items":[{"id":"…","frame":4}]}}}"#, "\n",
+        )).unwrap();
+        let mut server = |input: &[u8]| {
+            let input = std::str::from_utf8(input).unwrap();
+            let request = splice_json::parse(input.lines().nth(1).unwrap()).unwrap();
+            let args = request.field("params").unwrap().field("arguments").unwrap();
+            assert_eq!(
+                args.field("path").and_then(splice_json::Value::as_str),
+                Some("quoted \" path.splice")
+            );
+            assert_eq!(
+                args.field("text").and_then(splice_json::Value::as_str),
+                Some("$sample")
+            );
+            Ok(concat!(
+                r#"{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"items":[{"id":"ovl_1","frame":7,"extra":true}]}}}"#, "\n"
+            ).as_bytes().to_vec())
+        };
+        let error = transcript::run(
+            &path,
+            "",
+            &[("$sample", Path::new("quoted \" path.splice"))],
+            &mut server,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let detail = error.to_string();
+        assert!(detail.contains("sample.jsonl:3"), "{detail}");
+        assert!(
+            detail.contains("$.result.structuredContent.items[0].frame"),
+            "{detail}"
+        );
+        let wildcard = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace(r#""frame":4"#, r#""frame":"…""#);
+        std::fs::write(&path, wildcard).unwrap();
+        transcript::run(
+            &path,
+            "",
+            &[("$sample", Path::new("quoted \" path.splice"))],
+            &mut server,
+        )
+        .unwrap();
+        let error = transcript::run(&path, "", &[], &mut server).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("provide a disposable path for $sample")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

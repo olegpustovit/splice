@@ -118,5 +118,14 @@ Splice.app, so grants would not apply).
 
 ## Tests
 
-`fixtures/mcp/*.jsonl` transcripts: alternating `>` request and `<` expected result lines, `"…"` as
-a wildcard. Each tool has one; every fixed friction entry adds one. `tools/list` is a golden.
+Run the fixtures in `fixtures/mcp/*.jsonl` with `cargo t -p splice_mcp transcript`.
+A `> ` line sends one wire request. Its following `< ` line specifies the expected reply.
+Notifications have only a request line. Blank lines start a new connection. Tool fixtures use
+the shared initialization prelude, and the conformance fixture supplies its own handshakes.
+
+Expectations can name a subset of object fields. Arrays match in order and in full. The string
+`"…"` matches any present value. Failures report the fixture line and the JSON field that differs.
+
+The tool tests bind `$sample` and `$new` in request paths to disposable packages. A project-bound
+friction repro can name a sibling `<fixture-stem>.splice` seed, whose copy becomes `$project`.
+`tools/list` is checked against its own golden.
