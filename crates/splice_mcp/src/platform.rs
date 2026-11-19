@@ -155,6 +155,19 @@ fn export_fcpxml(store: &Store, path: Option<&str>) -> Result<Json, StoreError> 
 
 pub(super) fn export(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
     let owner = args.string("projectId")?;
+    // An export reads one revision; without a session it gets its own, so the first call works
+    // (a missing session cost agents a round trip).
+    let mut implicit;
+    let args = if args.field("sessionId").is_none() {
+        let session = projects.lookup_id(owner)?.start_session("export", now())?;
+        implicit = args.clone();
+        if let Json::Object(fields) = &mut implicit {
+            fields.push(("sessionId".into(), Json::String(session.id.to_string())));
+        }
+        &implicit
+    } else {
+        args
+    };
     let store = projects.lookup_id(owner)?;
     let path = args.optional_string("path")?;
     let overwrite = args.flag("overwrite")?;
