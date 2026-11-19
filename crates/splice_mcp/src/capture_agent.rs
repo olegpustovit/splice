@@ -357,6 +357,17 @@ fn dispatch(
             let sources = capture::sources(permissions::screen_granted(&snapshot))
                 .map_err(capture_source_error)?;
             result.push(("sources", sources::payload(&sources)));
+            let devices: Vec<Json> = apple_sys::capture::devices()
+                .into_iter()
+                .map(|(kind, id, name)| {
+                    object(vec![
+                        ("kind", crate::text(&kind)),
+                        ("id", crate::text(&id)),
+                        ("name", crate::text(&name)),
+                    ])
+                })
+                .collect();
+            result.push(("devices", Json::Array(devices)));
             Ok(object(result))
         }
         "take.check" => {
@@ -368,7 +379,8 @@ fn dispatch(
             permissions::require_options(&options, &permissions::snapshot())?;
             jobs.begin(Path::new(args.string("package")?), options)
         }
-        method @ ("take.status" | "take.stop" | "take.cancel") => jobs.command(method, args),
+        method @ ("take.status" | "take.stop" | "take.cancel" | "take.pause" | "take.resume"
+        | "take.mark") => jobs.command(method, args),
         _ => Err(bad("method", "a capture agent command")),
     }
 }

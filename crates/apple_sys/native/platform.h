@@ -315,4 +315,7 @@ bool splice_free_space(const char *path, uint64_t *bytes);
 uint8_t *splice_media_first_frame(const char *path, uint32_t *width, uint32_t *height, char **error);
 char *splice_media_chapters(const char *path, char **error);
 
+void splice_capture_exclude(const char *names);
+char *splice_capture_devices(void);
+
 #endif

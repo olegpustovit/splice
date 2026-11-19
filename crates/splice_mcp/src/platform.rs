@@ -293,6 +293,32 @@ pub(super) fn missing_job(id: JobId) -> StoreError {
 }
 
 pub(super) fn record_start(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
+    // record.start {resume: jobId} resumes a paused take; with marker, it marks the running take.
+    if let Some(job) = args.optional_string("resume")? {
+        let id: JobId = job
+            .parse()
+            .map_err(|_| bad("resume", "a recording jobId"))?;
+        #[cfg(target_os = "macos")]
+        {
+            let method = if args.field("marker").is_some() {
+                "take.mark"
+            } else {
+                "take.resume"
+            };
+            return super::record::command(projects, id, method, args);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = id;
+            return Err(unavailable("Recording"));
+        }
+    }
+    if args.flag("recover")? {
+        #[cfg(target_os = "macos")]
+        return super::record::recover(projects, args);
+        #[cfg(not(target_os = "macos"))]
+        return Err(unavailable("Recording"));
+    }
     let path = args.optional_string("path")?;
     let dry = args.flag("dryRun")?;
     let create = args.flag("create")?;
@@ -332,13 +358,18 @@ pub(super) fn record_start(projects: &mut Projects, args: &Json) -> Result<Json,
 pub(super) fn record_stop(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
     let id = job_id(args)?;
     args.flag("insert")?;
+    let method = if args.flag("pause")? {
+        "take.pause"
+    } else {
+        "take.stop"
+    };
     #[cfg(target_os = "macos")]
     {
-        super::record::command(projects, id, "take.stop", args)
+        super::record::command(projects, id, method, args)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = id;
+        let _ = (id, method);
         if args.field("projectId").is_some() {
             projects.lookup(args)?.check_write(&write_options(args)?)?;
         }

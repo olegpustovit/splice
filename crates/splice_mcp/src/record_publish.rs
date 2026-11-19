@@ -23,6 +23,7 @@ pub(super) fn publish(
     insert: bool,
     mut descriptor: Media,
     options: &WriteOptions,
+    (before, extra, after): (Vec<Json>, Vec<(&'static str, Json)>, Vec<Json>),
 ) -> Result<Publication, StoreError> {
     store.check_write(options)?;
     let primary = if descriptor.kind == MediaKind::Image {
@@ -45,11 +46,19 @@ pub(super) fn publish(
         ));
     }
     let request = format!("takes/.{job}/{primary}");
-    let ops = [object(vec![
+    let mut fields = vec![
         ("cmd", text("clip.insert")),
         ("path", text(&request)),
         ("insert", Json::Bool(insert)),
-    ])];
+    ];
+    if insert {
+        fields.extend(extra);
+    }
+    let mut ops = before;
+    ops.push(object(fields));
+    if insert {
+        ops.extend(after);
+    }
     descriptor.path.clone_from(&request);
     let mut preview = options.clone();
     preview.dry_run = true;
@@ -189,7 +198,15 @@ mod tests {
             }),
         };
 
-        let receipt = publish(&mut store, id, true, descriptor.clone(), &write).unwrap();
+        let receipt = publish(
+            &mut store,
+            id,
+            true,
+            descriptor.clone(),
+            &write,
+            Default::default(),
+        )
+        .unwrap();
         assert_eq!(receipt.revision, 1);
         let clip = receipt.clip.unwrap();
         let slot = store.project().clips.find(clip).unwrap();
@@ -217,15 +234,30 @@ mod tests {
         fs::write(staged.join("screen.mov"), b"second stand-in").unwrap();
         fs::write(staged.join("events.json"), b"{\"events\":[]}").unwrap();
         assert_eq!(
-            publish(&mut store, id, false, descriptor.clone(), &write)
-                .err()
-                .unwrap()
-                .code,
+            publish(
+                &mut store,
+                id,
+                false,
+                descriptor.clone(),
+                &write,
+                Default::default()
+            )
+            .err()
+            .unwrap()
+            .code,
             "STALE_REVISION"
         );
         assert!(staged.is_dir());
         write.if_revision = Some(2);
-        let second = publish(&mut store, id, false, descriptor, &write).unwrap();
+        let second = publish(
+            &mut store,
+            id,
+            false,
+            descriptor,
+            &write,
+            Default::default(),
+        )
+        .unwrap();
         assert_eq!(second.revision, 3);
         assert_ne!(second.media, receipt.media);
         assert_eq!(second.clip, None);

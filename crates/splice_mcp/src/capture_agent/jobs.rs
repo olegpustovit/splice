@@ -39,6 +39,10 @@ struct Job {
     stage: Option<Stage>,
     stats: RecordingStats,
     peer: Option<UnixStream>,
+    /// Writing is paused; the take's clock excludes the pause.
+    paused: bool,
+    /// Markers dropped during the take: take seconds and names.
+    markers: Vec<(f64, String)>,
 }
 
 enum State {
@@ -90,6 +94,8 @@ impl Jobs {
             stage: Some(Stage::create(package, id)?),
             stats: RecordingStats::default(),
             peer: None,
+            paused: false,
+            markers: Vec::new(),
         };
         job.tick(Instant::now());
         let receipt = job.status()?;
@@ -156,6 +162,31 @@ impl Jobs {
                 job.peer = None;
             }
             "take.cancel" => (),
+            "take.pause" | "take.resume" => {
+                let State::Running { recording, .. } = &mut job.state else {
+                    return Err(failure(
+                        "NOT_RECORDING",
+                        "Only a running take pauses or resumes.",
+                        "Check jobs.status; start a new take with record.start.",
+                    ));
+                };
+                job.paused = method == "take.pause";
+                recording.set_paused(job.paused);
+            }
+            "take.mark" => {
+                if !matches!(job.state, State::Running { .. }) {
+                    return Err(failure(
+                        "NOT_RECORDING",
+                        "Markers go on a running take.",
+                        "Add markers after recording with marker.add.",
+                    ));
+                }
+                let name = args
+                    .optional_string("marker")?
+                    .unwrap_or("Marker")
+                    .to_owned();
+                job.markers.push((job.stats.elapsed_seconds, name));
+            }
             _ => unreachable!("validated capture method"),
         }
         job.status()
@@ -195,6 +226,7 @@ impl Job {
             stage.sync()?;
             self.state = State::Ready;
         } else {
+            apple_sys::capture::exclude(&self.options.exclude);
             let recording = Recording::start(
                 &stage.0,
                 target,
@@ -276,6 +308,7 @@ impl Job {
     fn status(&self) -> Result<Json, StoreError> {
         let state = match &self.state {
             State::Pending(_) => "pending",
+            State::Running { .. } if self.paused => "paused",
             State::Running { .. } => "recording",
             State::Ready => "ready",
             State::Cancelled => "cancelled",
@@ -308,6 +341,19 @@ impl Job {
                 ]),
             ),
         ];
+        if !self.markers.is_empty() {
+            fields.push((
+                "markers",
+                Json::Array(
+                    self.markers
+                        .iter()
+                        .map(|(t, name)| {
+                            object(vec![("seconds", Json::Float(*t)), ("name", text(name))])
+                        })
+                        .collect(),
+                ),
+            ));
+        }
         if let State::Ready = self.state {
             let path = &self.stage.as_ref().expect("ready job has a stage").0;
             fields.push(("staged", display(&path.display())));

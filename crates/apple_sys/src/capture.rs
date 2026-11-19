@@ -1,6 +1,6 @@
 use crate::Error;
 use std::{
-    ffi::{CStr, c_char},
+    ffi::{CStr, CString, c_char},
     fmt,
     mem::size_of,
     ptr,
@@ -233,4 +233,41 @@ impl RawSource {
             _ => None,
         }
     }
+}
+
+unsafe extern "C" {
+    fn splice_capture_exclude(names: *const c_char);
+    fn splice_capture_devices() -> *mut c_char;
+    fn free(pointer: *mut std::ffi::c_void);
+}
+
+/// Apps (names or bundle IDs) the next display capture leaves out, besides Splice.
+pub fn exclude(apps: &[String]) {
+    let list = CString::new(apps.join("\n").replace('\0', "")).expect("NUL removed");
+    // SAFETY: the string lives for the call; native copies it.
+    unsafe { splice_capture_exclude(list.as_ptr()) };
+}
+
+/// A microphone or camera: kind ("mic" or "camera"), unique ID and name.
+pub type Device = (String, String, String);
+
+/// Microphones and cameras present now.
+pub fn devices() -> Vec<Device> {
+    // SAFETY: native returns a strdup'd string.
+    let text = unsafe { splice_capture_devices() };
+    if text.is_null() {
+        return Vec::new();
+    }
+    // SAFETY: NUL-terminated strdup allocation, freed once here.
+    let lines = unsafe { std::ffi::CStr::from_ptr(text) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { free(text.cast()) };
+    lines
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.splitn(3, '\t');
+            Some((f.next()?.into(), f.next()?.into(), f.next()?.into()))
+        })
+        .collect()
 }

@@ -81,6 +81,8 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
     if (self == nil) return nil;
     AVMediaType type = video ? AVMediaTypeVideo : AVMediaTypeAudio;
     _writer = [[AVAssetWriter alloc] initWithURL:url fileType:video ? AVFileTypeQuickTimeMovie : AVFileTypeAppleM4A error:error];
+    // Fragments every 2 s keep a take readable up to the last fragment after a crash (T22.4).
+    _writer.movieFragmentInterval = CMTimeMakeWithSeconds(2, 600);
     if (_writer == nil) return nil;
     if (![_writer canApplyOutputSettings:settings forMediaType:type]) {
         *error = recording_error(@"The native encoder does not support the capture settings.");

@@ -22,8 +22,106 @@ pub(super) struct Job {
     session: SessionId,
     insert: bool,
     still: bool,
+    /// Where the take lands (T22.2–T22.3).
+    placement: Placement,
     terminal: Option<Json>,
     peer: Option<UnixStream>,
+}
+
+/// How a finished take joins the timeline.
+#[derive(Clone, Default)]
+struct Placement {
+    /// Voice-over: the take's audio as a sound on a new audio lane at this frame.
+    voiceover: Option<Frame>,
+    /// Retake: right after this clip, named after it.
+    retake_of: Option<splice_model::ClipId>,
+    /// Camera-only: the screen component starts off.
+    no_screen: bool,
+}
+
+impl Placement {
+    fn parse(args: &Json) -> Result<Self, StoreError> {
+        let voiceover = args
+            .flag("voiceover")?
+            .then(|| args.frame("at").map(|at| at.unwrap_or(0)))
+            .transpose()?;
+        let retake_of = args
+            .optional_string("retakeOf")?
+            .map(|id| id.parse().map_err(|_| bad("retakeOf", "a take clip ID")))
+            .transpose()?;
+        let no_screen = args.field("screen").and_then(Json::as_bool) == Some(false);
+        if no_screen && !args.flag("camera")? {
+            return Err(bad(
+                "screen",
+                "false only with camera:true (a camera-only take)",
+            ));
+        }
+        Ok(Self {
+            voiceover,
+            retake_of,
+            no_screen,
+        })
+    }
+
+    /// Ops before and after the take's clip.insert, and extra clip.insert arguments.
+    fn ops(
+        &self,
+        project: &splice_model::Project,
+        markers: &[(f64, String)],
+    ) -> (Vec<Json>, Vec<(&'static str, Json)>, Vec<Json>) {
+        let mut before = Vec::new();
+        let mut insert = vec![("ref", text("take"))];
+        let mut after = Vec::new();
+        let spine_end = project
+            .clips
+            .order()
+            .last()
+            .and_then(|&s| project.clips.timing(s))
+            .map_or(0, |t| t.start + t.length);
+        let mut start = spine_end;
+        if let Some(at) = self.voiceover {
+            before.push(object(vec![
+                ("cmd", text("lane.create")),
+                ("kind", text("audio")),
+                ("name", text("Voice-over")),
+                ("ref", text("vo")),
+            ]));
+            insert.push(("lane", text("$vo")));
+            insert.push(("at", Json::Signed(i64::from(at))));
+            start = at;
+        } else if let Some(clip) = self.retake_of
+            && let Some(slot) = project.clips.find(clip)
+        {
+            let t = project.clips.timing(slot).expect("live clip");
+            start = t.start + t.length;
+            insert.push(("at", Json::Signed(i64::from(start))));
+            after.push(object(vec![
+                ("cmd", text("item.set")),
+                ("items", Json::Array(vec![text("$take")])),
+                ("name", text(&format!("Retake of {clip}"))),
+            ]));
+        }
+        if self.no_screen {
+            after.push(object(vec![
+                ("cmd", text("component.set")),
+                ("clip", text("$take")),
+                ("component", text("screen")),
+                ("enabled", Json::Bool(false)),
+            ]));
+        }
+        let fps = f64::from(project.fps);
+        for (seconds, name) in markers {
+            let at = start + (seconds * fps).round() as Frame;
+            if !project.markers.iter().any(|m| m.at == at) {
+                after.push(object(vec![
+                    ("cmd", text("marker.add")),
+                    ("at", Json::Signed(i64::from(at))),
+                    ("name", text(name)),
+                ]));
+            }
+        }
+        (before, insert, after)
+    }
 }
 
 impl Job {
@@ -36,6 +134,7 @@ impl Job {
 pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
     let insert = args.flag("insert")? || args.field("insert").is_none();
     let still = args.flag("still")?;
+    let placement = Placement::parse(args)?;
     let explicit = (args.field("projectId").is_some()
         || args.field("sessionId").is_some()
         || args.field("ifRevision").is_some())
@@ -82,10 +181,65 @@ pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreE
         session,
         insert,
         still,
+        placement,
         terminal: None,
         peer: Some(peer),
     });
     Ok(reply)
+}
+
+/// `record.start {recover:true}`: publishes takes left staged by a crash (fragmented writing
+/// keeps them readable up to the last fragment, T22.4).
+pub(super) fn recover(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
+    let options = write_options(args)?;
+    let store = projects.lookup(args)?;
+    store.check_write(&options)?;
+    let takes = store.path().join("takes");
+    let mut staged: Vec<JobId> = fs::read_dir(&takes)
+        .map(|dir| {
+            dir.filter_map(Result::ok)
+                .filter_map(|entry| {
+                    let name = entry.file_name().into_string().ok()?;
+                    let id = name.strip_prefix('.')?.parse::<JobId>().ok()?;
+                    entry.path().join("screen.mov").is_file().then_some(id)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    staged.sort_unstable_by_key(|id| id.serial());
+    let busy: Vec<JobId> = projects
+        .recordings
+        .iter()
+        .filter(|j| j.terminal.is_none())
+        .map(|j| j.id)
+        .collect();
+    let store = projects.lookup(args)?;
+    let mut recovered = Vec::new();
+    for id in staged.into_iter().filter(|id| !busy.contains(id)) {
+        let stage = stage_path(store.path(), id);
+        let size = fs::read_dir(&stage)
+            .map(|d| {
+                d.filter_map(Result::ok)
+                    .filter_map(|e| e.metadata().ok())
+                    .map(|m| m.len())
+                    .sum()
+            })
+            .unwrap_or(0);
+        let descriptor = describe(&stage, store.project().fps, false, size)?;
+        let sealed = publish(store, id, true, descriptor, &options, Default::default())?;
+        recovered.push(object(vec![
+            ("mediaId", display(&sealed.media)),
+            (
+                "clipId",
+                sealed.clip.map_or(Json::Null, |clip| display(&clip)),
+            ),
+        ]));
+    }
+    Ok(object(vec![
+        ("state", text("done")),
+        ("revision", rev(store.project().rev)),
+        ("recovered", Json::Array(recovered)),
+    ]))
 }
 
 pub(super) fn command(
@@ -112,13 +266,20 @@ pub(super) fn command(
         .field("insert")
         .map_or(Ok(job.insert), |_| args.flag("insert"))?;
     let still = job.still;
+    let placement = job.placement.clone();
     let terminal = job.terminal.clone();
     let store = projects.lookup_id(&owner)?;
     if let Some(reply) = terminal {
         return Ok(reply);
     }
-    let request = object(vec![("jobId", display(&id))]);
-    if method == "take.status" {
+    let mut request = object(vec![("jobId", display(&id))]);
+    if let (Json::Object(fields), Some(marker)) = (&mut request, args.optional_string("marker")?) {
+        fields.push(("marker".into(), text(marker)));
+    }
+    if matches!(
+        method,
+        "take.status" | "take.pause" | "take.resume" | "take.mark"
+    ) {
         return capture_agent::request(method, &request).map(public_status);
     }
     let options = WriteOptions {
@@ -160,7 +321,20 @@ pub(super) fn command(
             .take
             .as_ref()
             .is_some_and(|take| take.mic.is_none() && take.system.is_none());
-        let sealed = publish(store, id, insert, descriptor, &options)?;
+        let markers: Vec<(f64, String)> = reply
+            .field("markers")
+            .and_then(Json::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|m| {
+                Some((
+                    m.field("seconds")?.as_f64()?,
+                    m.field("name")?.as_str()?.to_owned(),
+                ))
+            })
+            .collect();
+        let ops = placement.ops(store.project(), &markers);
+        let sealed = publish(store, id, insert, descriptor, &options, ops)?;
         let Json::Object(mut fields) = reply else {
             unreachable!("job status object")
         };
@@ -358,7 +532,15 @@ mod tests {
             movie.take.as_ref().unwrap().events.as_deref(),
             Some("events.json")
         );
-        publish(&mut store, video, true, movie, &WriteOptions::default()).unwrap();
+        publish(
+            &mut store,
+            video,
+            true,
+            movie,
+            &WriteOptions::default(),
+            Default::default(),
+        )
+        .unwrap();
 
         let still = JobId::from_serial(2);
         let stage = stage_path(store.path(), still);
@@ -371,7 +553,15 @@ mod tests {
             (image.probe.width, image.probe.height, image.probe.frames),
             (4, 2, 3)
         );
-        let receipt = publish(&mut store, still, true, image, &WriteOptions::default()).unwrap();
+        let receipt = publish(
+            &mut store,
+            still,
+            true,
+            image,
+            &WriteOptions::default(),
+            Default::default(),
+        )
+        .unwrap();
         assert!(
             package
                 .join(format!("takes/{}/screen.png", receipt.media))

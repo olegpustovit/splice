@@ -463,7 +463,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "record.start",
-        description: "Start headless capture of a display, window or area. Use dryRun to list capture sources and permissions.",
+        description: "Start headless capture of a display, window or area. dryRun lists sources, microphones, cameras and permissions. voiceover:true records the mic onto a new audio lane at frame at; camera:true with screen:false is a camera-only take; retakeOf places the take after an earlier one; exclude hides apps. resume:jobId resumes a take paused with record.stop {pause:true}; resume with marker drops a marker. recover:true publishes takes a crash left staged.",
         read_only: false,
         input: &[
             ("projectId", "string"),
@@ -484,6 +484,14 @@ pub(super) const TOOLS: &[Tool] = &[
             ("countdown", FRAME),
             ("dryRun", "boolean"),
             ("duration", r#"{"type":"number","exclusiveMinimum":0}"#),
+            ("voiceover", "boolean"),
+            ("at", FRAME),
+            ("screen", "boolean"),
+            ("retakeOf", "string"),
+            ("exclude", IDS),
+            ("resume", "string"),
+            ("marker", "string"),
+            ("recover", "boolean"),
         ],
         required: &[],
         output: &[
@@ -493,14 +501,21 @@ pub(super) const TOOLS: &[Tool] = &[
             ("sessionId", "string"),
             ("settings", "object"),
             ("sources", "object"),
+            ("devices", "array"),
+            ("recovered", "array"),
+            ("markers", "array"),
             ("permissions", "object"),
             ("identity", "object"),
         ],
-        success: &[&["jobId", "state"], &["sources", "permissions"]],
+        success: &[
+            &["jobId", "state"],
+            &["sources", "permissions"],
+            &["state", "recovered"],
+        ],
     },
     Tool {
         name: "record.stop",
-        description: "Finish a recording and insert the take as one undoable edit. Use insert:false to keep it in media only.",
+        description: "Finish a recording and insert the take as one undoable edit. Use insert:false to keep it in media only; pause:true pauses instead (resume with record.start {resume}).",
         read_only: false,
         input: &[
             ("projectId", "string"),
@@ -508,6 +523,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ("sessionId", "string"),
             ("ifRevision", REVISION),
             ("insert", "boolean"),
+            ("pause", "boolean"),
         ],
         required: &["jobId"],
         output: &[

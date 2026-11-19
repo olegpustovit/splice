@@ -14,6 +14,9 @@ pub(super) enum Source {
 }
 
 pub(super) struct Options {
+    /// Apps a display capture leaves out (names or bundle IDs).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub exclude: Vec<String>,
     pub source: Source,
     pub duration: Option<f64>,
     pub countdown: Duration,
@@ -39,7 +42,9 @@ impl Options {
                     .ok_or_else(|| bad("duration", "positive seconds in the supported range"))
             })
             .transpose()?;
-        let mic = args.flag("mic")?;
+        // A voice-over records the microphone; its screen track is not used.
+        let voiceover = args.flag("voiceover")?;
+        let mic = args.flag("mic")? || voiceover;
         let source = source(args)?;
         // A window or app capture usually wants its sound: record it unless told otherwise.
         let system_audio = match args.field("systemAudio") {
@@ -54,14 +59,29 @@ impl Options {
                 "true for a single image without recording tracks or duration",
             ));
         }
+        let exclude = match args.field("exclude") {
+            None => Vec::new(),
+            Some(list) => list
+                .as_array()
+                .ok_or_else(|| bad("exclude", "an array of app names or bundle IDs"))?
+                .iter()
+                .map(|name| {
+                    name.as_str()
+                        .filter(|n| !n.is_empty() && n.len() < 256)
+                        .map(str::to_owned)
+                        .ok_or_else(|| bad("exclude", "app names or bundle IDs"))
+                })
+                .collect::<Result<_, _>>()?,
+        };
         Ok(Self {
             source,
             duration,
+            exclude,
             countdown: Duration::from_secs(args.frame("countdown")?.unwrap_or(0) as u64),
             mic,
             system_audio,
             camera,
-            events: !still && (input || args.field("events").is_none()),
+            events: !still && !voiceover && (input || args.field("events").is_none()),
             still,
         })
     }

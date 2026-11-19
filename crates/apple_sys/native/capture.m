@@ -1,5 +1,6 @@
 #include "capture_internal.h"
 
+#import <AVFoundation/AVFoundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
@@ -14,6 +15,36 @@ void splice_capture_error(NSError *reason, const char *fallback, bool *denied, c
         *denied = true;
     }
     splice_set_error(error, reason.localizedDescription.UTF8String ?: fallback);
+}
+
+// Apps a display capture leaves out besides Splice (record.start {exclude}); the capture agent
+// records one take at a time.
+static NSArray<NSString *> *excluded_apps;
+
+void splice_capture_exclude(const char *names) {
+    NSString *list = names == NULL ? @"" : [NSString stringWithUTF8String:names];
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSString *name in [list componentsSeparatedByString:@"\n"]) {
+        if (name.length > 0) [out addObject:name];
+    }
+    excluded_apps = out;
+}
+
+// Microphones and cameras as "kind\tuniqueID\tname" lines (record.start dryRun).
+char *splice_capture_devices(void) {
+    @autoreleasepool {
+        NSMutableString *out = [NSMutableString string];
+        AVCaptureDeviceDiscoverySession *mics = [AVCaptureDeviceDiscoverySession
+            discoverySessionWithDeviceTypes:@[AVCaptureDeviceTypeMicrophone, AVCaptureDeviceTypeExternal]
+                                  mediaType:AVMediaTypeAudio position:AVCaptureDevicePositionUnspecified];
+        for (AVCaptureDevice *device in mics.devices) [out appendFormat:@"mic\t%@\t%@\n", device.uniqueID, device.localizedName];
+        AVCaptureDeviceDiscoverySession *cameras = [AVCaptureDeviceDiscoverySession
+            discoverySessionWithDeviceTypes:@[AVCaptureDeviceTypeBuiltInWideAngleCamera, AVCaptureDeviceTypeExternal,
+                                              AVCaptureDeviceTypeContinuityCamera]
+                                  mediaType:AVMediaTypeVideo position:AVCaptureDevicePositionUnspecified];
+        for (AVCaptureDevice *device in cameras.devices) [out appendFormat:@"camera\t%@\t%@\n", device.uniqueID, device.localizedName];
+        return strdup(out.UTF8String);
+    }
 }
 
 static SCShareableContent *shareable_content(bool *denied, char **error) {
@@ -153,7 +184,10 @@ static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShar
         const uint32_t id = target->id == 0 ? CGMainDisplayID() : target->id;
         NSMutableArray<SCRunningApplication *> *excluded = [NSMutableArray array];
         for (SCRunningApplication *app in content.applications) {
-            if (is_splice(app)) [excluded addObject:app];
+            if (is_splice(app) || [excluded_apps containsObject:app.applicationName] ||
+                [excluded_apps containsObject:app.bundleIdentifier]) {
+                [excluded addObject:app];
+            }
         }
         for (SCDisplay *display in content.displays) {
             if (display.displayID == id) {
