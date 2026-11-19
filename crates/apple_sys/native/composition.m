@@ -41,6 +41,8 @@ enum { SourceVideo, SourceAudio, SourceStill, SourceColor };
 @property(nonatomic, strong) NSMutableArray<NSArray *> *frames;
 @property(nonatomic, strong) NSMutableDictionary<NSURL *, AVURLAsset *> *inputs;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSURL *> *stills;
+// Picture movies made from animated images (GIF, APNG): they loop instead of stretching.
+@property(nonatomic, strong) NSMutableSet<NSURL *> *animated;
 @property(nonatomic, strong) NSURL *scratch;
 @property(nonatomic, strong) AVMutableVideoComposition *video;
 @property(nonatomic, strong) NSMutableDictionary *surfaces;  // frame grabs' IOSurface views
@@ -158,7 +160,10 @@ static CVPixelBufferRef still_buffer(CGImageRef image, const uint32_t colors[2])
     return pixel;
 }
 
-static bool write_still(NSURL *url, CVPixelBufferRef pixel, char **error) {
+// Encodes `count` frames, frame i shown for `durations[i]` seconds, as a ProRes 4444 picture
+// movie (a still is one frame of 1/30 s that placement stretches).
+static bool write_frames(NSURL *url, CVPixelBufferRef *pixels, const double *durations, size_t count,
+                         char **error) {
     NSError *failure = nil;
     AVAssetWriter *writer = [[AVAssetWriter alloc] initWithURL:url fileType:AVFileTypeQuickTimeMovie error:&failure];
     if (writer == nil) {
@@ -167,8 +172,8 @@ static bool write_still(NSURL *url, CVPixelBufferRef pixel, char **error) {
     }
     AVAssetWriterInput *input = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:@{
         AVVideoCodecKey: AVVideoCodecTypeAppleProRes4444,
-        AVVideoWidthKey: @(CVPixelBufferGetWidth(pixel)),
-        AVVideoHeightKey: @(CVPixelBufferGetHeight(pixel)),
+        AVVideoWidthKey: @(CVPixelBufferGetWidth(pixels[0])),
+        AVVideoHeightKey: @(CVPixelBufferGetHeight(pixels[0])),
     }];
     if (![writer canAddInput:input]) {
         fail(error, writer.error, "Could not encode a picture track.");
@@ -184,25 +189,31 @@ static bool write_still(NSURL *url, CVPixelBufferRef pixel, char **error) {
     }
     [writer startSessionAtSourceTime:kCMTimeZero];
     dispatch_semaphore_t complete = dispatch_semaphore_create(0);
-    id pixel_owner = (__bridge id)pixel;
-    __block bool appended = false;
+    __block size_t next = 0;
+    __block double at = 0;
+    __block bool done = false;
     [input requestMediaDataWhenReadyOnQueue:dispatch_queue_create("splice.still", DISPATCH_QUEUE_SERIAL) usingBlock:^{
-        if (appended) return;
-        appended = true;
-        if (writer.status != AVAssetWriterStatusWriting) {
-            dispatch_semaphore_signal(complete);
-            return;
+        if (done) return;
+        while (input.readyForMoreMediaData && next < count) {
+            if (writer.status != AVAssetWriterStatusWriting ||
+                ![adaptor appendPixelBuffer:pixels[next] withPresentationTime:CMTimeMakeWithSeconds(at, 600)]) {
+                done = true;
+                [writer cancelWriting];
+                dispatch_semaphore_signal(complete);
+                return;
+            }
+            at += durations[next];
+            next += 1;
         }
-        if (![adaptor appendPixelBuffer:(__bridge CVPixelBufferRef)pixel_owner withPresentationTime:kCMTimeZero]) {
-            [writer cancelWriting];
-            dispatch_semaphore_signal(complete);
-            return;
+        if (next == count) {
+            done = true;
+            [writer endSessionAtSourceTime:CMTimeMakeWithSeconds(at, 600)];
+            [input markAsFinished];
+            [writer finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(complete); }];
         }
-        [writer endSessionAtSourceTime:CMTimeMake(1, 30)];
-        [input markAsFinished];
-        [writer finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(complete); }];
     }];
-    if (dispatch_semaphore_wait(complete, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0) {
+    int64_t wait = (int64_t)(3 + count / 20) * (int64_t)NSEC_PER_SEC;
+    if (dispatch_semaphore_wait(complete, dispatch_time(DISPATCH_TIME_NOW, wait)) != 0) {
         [writer cancelWriting];
         splice_set_error(error, "Timed out encoding a temporary picture track.");
         return false;
@@ -212,6 +223,56 @@ static bool write_still(NSURL *url, CVPixelBufferRef pixel, char **error) {
         return false;
     }
     return true;
+}
+
+// Seconds frame `index` of an animated GIF or APNG stays on screen (browsers' 0.1 s for 0).
+static double frame_delay(CGImageSourceRef source, size_t index) {
+    NSDictionary *properties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, index, NULL));
+    NSDictionary *gif = properties[(__bridge NSString *)kCGImagePropertyGIFDictionary];
+    NSDictionary *png = properties[(__bridge NSString *)kCGImagePropertyPNGDictionary];
+    NSNumber *delay = gif[(__bridge NSString *)kCGImagePropertyGIFUnclampedDelayTime]
+        ?: gif[(__bridge NSString *)kCGImagePropertyGIFDelayTime]
+        ?: png[(__bridge NSString *)kCGImagePropertyAPNGUnclampedDelayTime]
+        ?: png[(__bridge NSString *)kCGImagePropertyAPNGDelayTime];
+    double seconds = delay.doubleValue;
+    return seconds >= 0.011 ? seconds : 0.1;
+}
+
+// Every frame of an animated image as a looping picture movie (M23); nil when it has one frame.
+static NSURL *animated_movie(SpliceAVAssembly *assembly, NSURL *file, NSURL *url, char **error) {
+    CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)file, NULL);
+    if (source == NULL) return nil;
+    size_t count = CGImageSourceGetCount(source);
+    if (count < 2) {
+        CFRelease(source);
+        return nil;
+    }
+    count = MIN(count, (size_t)2000);
+    CVPixelBufferRef *pixels = calloc(count, sizeof(CVPixelBufferRef));
+    double *durations = calloc(count, sizeof(double));
+    bool ok = pixels != NULL && durations != NULL;
+    const uint32_t black[2] = {0, 0};
+    for (size_t i = 0; ok && i < count; i++) {
+        CGImageRef image = CGImageSourceCreateImageAtIndex(source, i, NULL);
+        pixels[i] = image != NULL ? still_buffer(image, black) : NULL;
+        if (image != NULL) CGImageRelease(image);
+        durations[i] = frame_delay(source, i);
+        ok = pixels[i] != NULL;
+    }
+    CFRelease(source);
+    if (ok) {
+        ok = write_frames(url, pixels, durations, count, error);
+    } else {
+        splice_set_error(error, "Could not decode the frames of an animated image.");
+    }
+    for (size_t i = 0; pixels != NULL && i < count; i++) {
+        if (pixels[i] != NULL) CFRelease(pixels[i]);
+    }
+    free(pixels);
+    free(durations);
+    if (!ok) return nil;
+    [assembly.animated addObject:url];
+    return url;
 }
 
 static NSURL *still_movie(SpliceAVAssembly *assembly, NSURL *file, const uint32_t colors[2], char **error) {
@@ -231,6 +292,15 @@ static NSURL *still_movie(SpliceAVAssembly *assembly, NSURL *file, const uint32_
             return nil;
         }
     }
+    NSURL *url = [assembly.scratch URLByAppendingPathComponent:[NSString stringWithFormat:@"%lu.mov", assembly.stills.count]];
+    if (file != nil) {
+        NSURL *movie = animated_movie(assembly, file, url, error);
+        if (movie != nil) {
+            assembly.stills[key] = movie;
+            return movie;
+        }
+        if (error != NULL && *error != NULL) return nil;
+    }
     CGImageRef image = file != nil ? still_image(file) : NULL;
     if (file != nil && image == NULL) {
         fail(error, nil, "ImageIO could not read a still image.");
@@ -242,8 +312,8 @@ static NSURL *still_movie(SpliceAVAssembly *assembly, NSURL *file, const uint32_
         splice_set_error(error, "Could not allocate the still image buffer.");
         return nil;
     }
-    NSURL *url = [assembly.scratch URLByAppendingPathComponent:[NSString stringWithFormat:@"%lu.mov", assembly.stills.count]];
-    bool written = write_still(url, pixel, error);
+    const double one = 1.0 / 30.0;
+    bool written = write_frames(url, &pixel, &one, 1, error);
     CFRelease(pixel);
     if (!written) return nil;
     assembly.stills[key] = url;
@@ -268,6 +338,17 @@ static bool place(SpliceAVAssembly *assembly, AVMutableCompositionTrack *destina
     CMTimeRange available = input.timeRange;
     CMTime start = time_for(assembly, spec->timeline[0]);
     CMTime end = time_for(assembly, spec->timeline[1]);
+    if (spec->kind >= SourceStill && [assembly.animated containsObject:((AVURLAsset *)input.asset).URL]) {
+        // An animated image loops at its own pace for as long as the item lasts.
+        CMTime at = start;
+        while (CMTimeCompare(at, end) < 0) {
+            CMTime length = CMTimeMinimum(available.duration, CMTimeSubtract(end, at));
+            CMTimeRange range = CMTimeRangeMake(available.start, length);
+            if (!insert(destination, input, range, at, length, error)) return false;
+            at = CMTimeAdd(at, length);
+        }
+        return true;
+    }
     if (spec->kind >= SourceStill) {
         return insert(destination, input, available, start, CMTimeSubtract(end, start), error);
     }
@@ -312,6 +393,7 @@ void *splice_av_create(uint32_t width, uint32_t height, uint32_t fps, int32_t en
         assembly.instructions = [NSMutableArray array];
         assembly.inputs = [NSMutableDictionary dictionary];
         assembly.stills = [NSMutableDictionary dictionary];
+        assembly.animated = [NSMutableSet set];
         return (__bridge_retained void *)assembly;
     }
 }

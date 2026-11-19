@@ -647,6 +647,41 @@ mod looks {
 
     /// H8, T36.5: a thick caption stroke outlines the glyphs instead of covering them, two
     /// lines that do not fit shrink instead of dropping the second, and the spoken word draws
+    /// M23: an animated GIF sticker plays its frames at their own delays and loops, instead of
+    /// showing its first frame for the whole item.
+    pub(super) fn m23_animated_gifs_play_and_loop() {
+        let dir = scratch("gif");
+        // 1x1, two frames from a red/blue palette, 0.5 s each (hand-encoded LZW, code size 2).
+        let frame = |index_code: u8| {
+            let mut f = vec![0x21, 0xf9, 0x04, 0x00, 50, 0x00, 0x00, 0x00];
+            f.extend([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0]);
+            f.extend([0x02, 0x02, index_code, 0x01, 0x00]);
+            f
+        };
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend([1, 0, 1, 0, 0x80, 0, 0, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff]);
+        gif.extend(frame(0x44)); // palette 0: red
+        gif.extend(frame(0x4c)); // palette 1: blue
+        gif.push(0x3b);
+        fs::write(dir.0.join("sticker.gif"), gif).unwrap();
+        let mut media = still(&dir.0, 1, [0, 0, 0]);
+        media.path = "sticker.gif".into();
+        (media.probe.width, media.probe.height) = (1, 1);
+        let composition =
+            Composition::prepare(&project(vec![media], vec![(1, 60, vec![])]), &dir.0).unwrap();
+        let red = |frame| {
+            let p = pixel(&composition, frame, [48, 32]);
+            p[0] > 200 && p[2] < 60
+        };
+        let blue = |frame| {
+            let p = pixel(&composition, frame, [48, 32]);
+            p[2] > 200 && p[0] < 60
+        };
+        assert!(red(5), "frame 0 at 0.17 s");
+        assert!(blue(20), "frame 1 at 0.67 s");
+        assert!(red(35), "loops at 1.17 s");
+    }
+
     /// M22: a title animated per character draws every character (120 units is past the old
     /// 64-layer cap, which dropped the rest silently): once the animation ends it covers the
     /// same pixels as the static title.
@@ -1259,6 +1294,10 @@ fn main() {
         (
             "looks_ocr_reads_text_and_a_blur_mask_hides_it",
             looks::ocr_reads_text_and_a_blur_mask_hides_it,
+        ),
+        (
+            "looks_m23_animated_gifs_play_and_loop",
+            looks::m23_animated_gifs_play_and_loop,
         ),
         (
             "looks_m22_per_character_titles_draw_every_character",
