@@ -401,7 +401,7 @@ impl Editor {
         ))
     }
 
-    fn delete(
+    pub(super) fn delete(
         &mut self,
         selection: &[Target],
         ripple: bool,

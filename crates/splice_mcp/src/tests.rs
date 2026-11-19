@@ -1121,3 +1121,33 @@ fn transcript_get_reads_a_sound_items_words() {
         "BAD_ARGS"
     );
 }
+
+/// T38.6: a zoom item reports the largest amount whose card stays on the canvas. On the
+/// portrait sample `auto` zooms the content (never overflows, 5×); in `frame` mode the
+/// 972×1057 card on a 1080×1920 canvas fits up to 1080/972.
+#[test]
+fn zoom_items_report_their_fit_safe_scale() {
+    let mut project = sample_project();
+    let safe = |project: &splice_model::Project| {
+        let args = splice_json::parse(r#"{"ids":["ovl_detail"]}"#).unwrap();
+        let reply = super::timeline::inspect(project, &args).unwrap();
+        reply.field("items").unwrap().as_array().unwrap()[0]
+            .field("fitSafeScale")
+            .and_then(Json::as_f64)
+            .unwrap()
+    };
+    assert_eq!(safe(&project), 5.0);
+    let ops =
+        splice_json::parse(r#"[{"cmd":"zoom.set","zoom":"ovl_detail","mode":"frame"}]"#).unwrap();
+    splice_core::edit::apply(
+        &mut project,
+        ops.as_array().unwrap(),
+        splice_core::package::journal::Source::Agent,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        safe(&project),
+        (1080.0_f64 / 972.0 * 1000.0).floor() / 1000.0
+    );
+}

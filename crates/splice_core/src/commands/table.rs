@@ -790,4 +790,11 @@ pub const COMMANDS: &[Command] = &[
         ui: &["File ▸ Consolidate Media"],
         example: r#"{"cmd":"media.consolidate","media":["med_broll"]}"#, decoder: decode::media_consolidate,
     },
+    Command {
+        id: "zoom.remove", title: "Remove Zoom", group: "Titles, motion and effects",
+        risk: "edit", shortcut: "", tier: Tier::Second,
+        params: &[("zoom", "!ovl_… zoom · the camera springs back to 1× where it was")],
+        ui: &["Zoom segment menu ▸ Delete"],
+        example: r#"{"cmd":"zoom.remove","zoom":"ovl_detail"}"#, decoder: decode::zoom_remove,
+    },
 ];

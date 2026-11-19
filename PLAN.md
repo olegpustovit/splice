@@ -439,7 +439,7 @@ eight places; the board below already carries the changes.
 - [x] T38.3 [L] Producers: `motion.*`, `zoom.set`/click zoom and `intent.autoZoom` write camera segments; the old click-zoom curve and Picture scale/focus go; load-time migration of motion items. (48cf147)
 - [x] T38.4 [L] Auto zoom v2: lead 0.3 s, tail 2.5 s, merge ≤ 2.5 s, distance split < 0.25, 1.5× default (warn > 2.5×), dead zone 0.5 × 0.7, edge snap 0.25, `autoZoom.version`. (48cf147)
 - [x] T38.5 [L] Backing never borrows camera/transform; one pivot convention. Accept: backdrop constant under camera moves. (5295624: the backing draws its own evaluated values; the camera applies to pictures only)
-- [ ] T38.6 [L] API `zoom.add/set/remove {at,length,amount,center|follow,in,out,mode}`; describe reports `fitSafeScale`.
+- [x] T38.6 [L] API `zoom.add/set/remove {at,length,amount,center|follow,in,out,mode}`; describe reports `fitSafeScale`. (zoom.add/set/remove {at,length,amount,focus,mode,spring}; items.inspect reports fitSafeScale from the evaluated card; `follow` is the cursor work of T39)
 
 ### T39 · Cursor [L + M]
 - [ ] T39.1 [L] Smoothed 60 Hz table per take: decimate, shake filter (0.015 UV/100 ms), hold gaps > 67 ms, Mellow spring 470/3/70 with lead c/k, click lookahead 500 ms, click spring 530/1/40 for 175 ms; replaces the 0.25 s teleport rule.

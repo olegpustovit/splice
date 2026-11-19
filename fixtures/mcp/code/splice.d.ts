@@ -810,6 +810,12 @@ declare namespace Splice {
       /** med_…[] · omit for every external file */
       media?: string[];
     }
+    /** Remove Zoom (edit, 0.2). */
+    interface ZoomRemove extends Base {
+      cmd: "zoom.remove";
+      /** ovl_… zoom · the camera springs back to 1× where it was */
+      zoom: string;
+    }
   }
   /** Effect types and parameters (effects.json, the validator's own schema). */
   interface Effects {
@@ -1188,7 +1194,8 @@ declare namespace Splice {
     | op.TemplateAdd
     | op.TemplateSet
     | op.MediaRelink
-    | op.MediaConsolidate;
+    | op.MediaConsolidate
+    | op.ZoomRemove;
 }
 
 declare const splice: {
@@ -1239,6 +1246,7 @@ declare const splice: {
     zoom: {
       add(args: Omit<Splice.op.ZoomAdd, "cmd">): Splice.op.ZoomAdd;
       set(args: Omit<Splice.op.ZoomSet, "cmd">): Splice.op.ZoomSet;
+      remove(args: Omit<Splice.op.ZoomRemove, "cmd">): Splice.op.ZoomRemove;
     };
     lane: {
       create(args: Omit<Splice.op.LaneCreate, "cmd">): Splice.op.LaneCreate;

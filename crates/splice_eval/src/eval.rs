@@ -545,6 +545,14 @@ impl Evaluator {
         Some((interval, input))
     }
 
+    /// The camera mode in effect at `at` (the zoom segment's, or `Auto` outside segments).
+    pub fn camera_mode(&self, at: Frame) -> CameraMode {
+        usize::try_from(at)
+            .ok()
+            .and_then(|i| self.camera.get(i))
+            .map_or(CameraMode::Auto, |view| view.mode)
+    }
+
     /// Reserves enough space to evaluate any frame of this snapshot.
     pub fn buffer(&self) -> FramePlan {
         let clip_tracks = self

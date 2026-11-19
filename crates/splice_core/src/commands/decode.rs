@@ -235,6 +235,12 @@ pub(super) fn zoom_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     })
 }
 
+pub(super) fn zoom_remove(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ZoomRemove {
+        zoom: a.target("zoom")?,
+    })
+}
+
 pub(super) fn zoom_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::ZoomEdit {
         zoom: a.target("zoom")?,

@@ -248,6 +248,7 @@ pub(super) fn inspect(p: &Project, args: &Json) -> Result<Json, StoreError> {
         })?;
     let rows = rows(p)?;
     let schemas = effect_schemas();
+    let mut evaluator = None;
     let items = ids
         .iter()
         .map(|value| {
@@ -270,16 +271,55 @@ pub(super) fn inspect(p: &Project, args: &Json) -> Result<Json, StoreError> {
                 return Ok(effect);
             }
             let row = rows.iter().find(|row| row.value.field("id") == Some(value));
-            row.map_or_else(
-                || Ok(object(vec![("id", text(id)), ("error", text("NOT_FOUND"))])),
-                |row| row.describe(p, true, schemas),
-            )
+            let Some(row) = row else {
+                return Ok(object(vec![("id", text(id)), ("error", text("NOT_FOUND"))]));
+            };
+            let mut described = row.describe(p, true, schemas)?;
+            if row.value.field("kind").and_then(Json::as_str) == Some("zoom")
+                && let Json::Object(fields) = &mut described
+            {
+                if evaluator.is_none() {
+                    evaluator = splice_eval::Evaluator::prepare(p).ok();
+                }
+                if let Some(evaluator) = &evaluator {
+                    fields.push((
+                        "fitSafeScale".into(),
+                        Json::Float(fit_safe_scale(evaluator, row.span.start)),
+                    ));
+                }
+            }
+            Ok::<Json, StoreError>(described)
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(object(vec![
         ("revision", rev(p.rev)),
         ("items", Json::Array(items)),
     ]))
+}
+
+/// The largest zoom whose card stays on the canvas at `at` (T38.6): in frame mode the card
+/// scales with the zoom, so past min(canvas / card) it overflows; content mode never does
+/// (the camera's own limit, 5×).
+fn fit_safe_scale(evaluator: &splice_eval::Evaluator, at: splice_model::Frame) -> f64 {
+    let mut plan = evaluator.buffer();
+    evaluator.frame(at, &mut plan);
+    let [cw, ch] = plan.size.map(f64::from);
+    let card = plan.layers.iter().find_map(|layer| match layer {
+        splice_eval::Layer::Picture(picture) if matches!(picture.item, TimelineId::Clip(_)) => {
+            Some(picture.destination)
+        }
+        _ => None,
+    });
+    let content = |portrait: bool| match evaluator.camera_mode(at) {
+        splice_model::CameraMode::Content => true,
+        splice_model::CameraMode::Frame => false,
+        splice_model::CameraMode::Auto => portrait,
+    };
+    let safe = match card {
+        Some(d) if !content(ch > cw) && d.w > 0.0 && d.h > 0.0 => (cw / d.w).min(ch / d.h),
+        _ => splice_model::Zoom::AMOUNT[1],
+    };
+    (safe.clamp(1.0, splice_model::Zoom::AMOUNT[1]) * 1000.0).floor() / 1000.0
 }
 
 pub(super) fn find(p: &Project, args: &Json) -> Result<Json, StoreError> {

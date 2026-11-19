@@ -159,6 +159,11 @@ impl Editor {
                 mode,
                 spring,
             } => self.set_zoom(&zoom, amount, focus, mode, spring),
+            Op::ZoomRemove { zoom } => {
+                // Only a zoom: set_zoom with no changes is the kind check.
+                self.set_zoom(&zoom, None, None, None, None)?;
+                self.delete(std::slice::from_ref(&zoom), false, false)
+            }
             Op::EffectAdd {
                 target,
                 kind,

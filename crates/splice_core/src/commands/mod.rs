@@ -44,6 +44,7 @@ pub const EXTENSIONS: &[&str] = &[
     "template.set",
     "media.relink",
     "media.consolidate",
+    "zoom.remove",
 ];
 
 #[cfg(test)]

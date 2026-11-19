@@ -142,6 +142,11 @@ pub enum Op {
         /// Camera lane (default: the first, created if missing).
         lane: Option<Target>,
     },
+    /// Remove Zoom: deletes one camera segment.
+    ZoomRemove {
+        /// Zoom item to remove.
+        zoom: Target,
+    },
     /// Edit Zoom.
     ZoomEdit {
         /// Zoom item to edit.
