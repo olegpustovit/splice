@@ -66,7 +66,7 @@ pub(super) fn declarations(filter: Option<&str>) -> String {
     let ids: Vec<&str> = commands.iter().map(|row| row.id).collect();
     if !commands.is_empty() {
         out.push_str("\n  namespace op {\n");
-        out.push_str("    interface Base {\n      /** Binds the result as \"$name\" for later ops (\"$name.new\": its first created item). */\n      ref?: `$${string}`;\n    }\n");
+        out.push_str("    interface Base {\n      /** Binds the result for later ops as \"$name\" (\"$name.new\": its first created item). Pass \"$music\" (a bare name binds the same). */\n      ref?: `$${string}`;\n    }\n");
         for row in &commands {
             command(&mut out, row);
         }
@@ -215,6 +215,9 @@ fn param_type(kind: &str, doc: &str) -> String {
     let kind = kind.trim();
     if kind.starts_with("{clip") {
         return "{ clip: string; sourceFrame?: number } | { pinned: true; frame?: number }".into();
+    }
+    if kind.starts_with("{amount,attack,release}") {
+        return "{ amount: number; attack?: number; release?: number } | null".into();
     }
     if kind.starts_with("{x,y}") {
         let point = "{ x: number; y: number }";

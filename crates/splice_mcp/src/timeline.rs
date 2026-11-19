@@ -67,6 +67,9 @@ impl Row {
                     ItemKind::Media(overlay) if name.is_none() => {
                         Json::String(media_name(p, overlay.media))
                     }
+                    ItemKind::Sound(sound) if name.is_none() => {
+                        Json::String(media_name(p, sound.media))
+                    }
                     _ => text(name.unwrap_or("Scale animation")),
                 })
             }
@@ -239,6 +242,18 @@ pub(super) fn inspect(p: &Project, args: &Json) -> Result<Json, StoreError> {
             let id = value
                 .as_str()
                 .ok_or_else(|| bad("ids", "an array of timeline ID strings"))?;
+            if let Some(lane) = p.lanes.iter().find(|lane| lane.id.to_string() == id) {
+                return Ok(object(vec![
+                    ("id", text(id)),
+                    ("kind", text("lane")),
+                    ("laneKind", text(lane_kind(lane.kind))),
+                    ("name", text(&lane.name)),
+                    (
+                        "effects",
+                        splice_core::package::encode_effects(&lane.effects),
+                    ),
+                ]));
+            }
             let row = rows.iter().find(|row| row.value.field("id") == Some(value));
             row.map_or_else(
                 || Ok(object(vec![("id", text(id)), ("error", text("NOT_FOUND"))])),

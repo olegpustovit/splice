@@ -550,7 +550,8 @@ fn decode_edge(value: &Json) -> Result<Edge, PackageError> {
     }
 }
 
-pub(super) fn encode_effects(effects: &[Effect]) -> Json {
+/// Effects as the package and the MCP read surface encode them.
+pub fn encode_effects(effects: &[Effect]) -> Json {
     Json::Array(
         effects
             .iter()

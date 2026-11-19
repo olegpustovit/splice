@@ -628,3 +628,88 @@ fn code_mode_declarations_index_and_multi_query() {
     assert!(slice.contains("interface ClipCrop") && slice.contains("interface EffectAdd"));
     assert!(!slice.contains("interface ItemSplit"));
 }
+
+/// Eval friction: sound items were labelled "Scale animation" and lanes were not inspectable.
+#[test]
+fn inspect_labels_sound_items_by_file_and_reads_lanes() {
+    use splice_model::*;
+    let mut p = Project::default();
+    p.media.push(Media {
+        id: MediaId::from_serial(2),
+        kind: MediaKind::Audio,
+        path: "music.wav".into(),
+        bookmark: None,
+        size: 1,
+        mtime: 0,
+        probe: Probe {
+            fps: 30.0,
+            frames: 90,
+            width: 0,
+            height: 0,
+            audio: Vec::new(),
+            codec: None,
+            loudness: None,
+        },
+        take: None,
+    });
+    let lane = LaneId::from_serial(7);
+    p.lanes.push(Lane {
+        id: lane,
+        name: "Music".into(),
+        kind: LaneKind::Audio,
+        effects: Vec::new(),
+    });
+    p.items
+        .insert(Item {
+            id: ItemId::from_serial(5),
+            timing: ItemTiming {
+                anchor: Anchor::Pinned(0),
+                length: 90,
+            },
+            data: ItemData {
+                lane,
+                kind: ItemKind::Sound(Sound {
+                    media: MediaId::from_serial(2),
+                    source: 0,
+                    volume: 1.0,
+                    duck: None,
+                }),
+                appearance: Appearance::default(),
+            },
+        })
+        .unwrap();
+    let args = splice_json::parse(r#"{"ids":["ovl_5","lan_7"]}"#).unwrap();
+    let reply = timeline::inspect(&p, &args).unwrap();
+    let items = reply.field("items").and_then(Json::as_array).unwrap();
+    let label = items[0].field("label").and_then(Json::as_str);
+    assert_eq!(label, Some("music.wav"), "{:?}", items[0]);
+    assert_eq!(
+        items[1].field("laneKind").and_then(Json::as_str),
+        Some("audio"),
+        "{:?}",
+        items[1]
+    );
+    assert_eq!(items[1].field("name").and_then(Json::as_str), Some("Music"));
+}
+
+/// A program that starts a job and then fails still reports the job, so it can be polled.
+#[test]
+fn code_run_reports_started_jobs_even_when_the_program_fails() {
+    let args = splice_json::parse(
+        r#"{"code":"splice.export.start({ifRevision: 1}); throw new Error(\"later\");"}"#,
+    )
+    .unwrap();
+    let reply = code::run(&args, &mut |_, _| {
+        Ok(object(vec![(
+            "structuredContent",
+            object(vec![("jobId", text("job_3")), ("state", text("running"))]),
+        )]))
+    })
+    .unwrap();
+    assert!(reply.field("error").is_some(), "{reply:?}");
+    assert_eq!(
+        reply.field("jobs"),
+        Some(&Json::Array(vec![text("job_3")])),
+        "{reply:?}"
+    );
+}

@@ -3,6 +3,7 @@ pub mod journal;
 mod media;
 pub(crate) mod project;
 mod timeline;
+pub use timeline::encode_effects;
 pub(crate) mod validate;
 
 use codec::{ReadFields, object, text};

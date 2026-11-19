@@ -40,6 +40,7 @@ const CODE_RUN: Tool = Tool {
         ("logs", r#"{"type":"array","items":{"type":"string"}}"#),
         ("calls", "array"),
         ("revisions", r#"{"type":["object","null"]}"#),
+        ("jobs", r#"{"type":"array","items":{"type":"string"}}"#),
     ],
     success: &[&["result", "logs", "calls", "revisions"]],
 };
@@ -377,7 +378,10 @@ pub(super) const TOOLS: &[Tool] = &[
             ("projectId", "string"),
             ("sessionId", "string"),
             ("ifRevision", REVISION),
-            ("preset", r#"{"enum":["social-h264","social-hevc"]}"#),
+            (
+                "preset",
+                r#"{"enum":["social","social-h264","social-hevc"]}"#,
+            ),
             ("path", "string"),
             ("overwrite", "boolean"),
         ],
@@ -391,7 +395,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "jobs.status",
-        description: "Check the progress and result of an export, transcription or recording job.",
+        description: "Check the progress and result of an export, transcription or recording job. Each call advances a running export by up to 50 ms; poll until state is done. Inside code.run (2 s limit) return the jobId and poll from later calls.",
         read_only: true,
         input: &[("projectId", "string"), ("jobId", "string")],
         required: &["jobId"],

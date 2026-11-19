@@ -26,7 +26,7 @@ declare namespace Splice {
 
   namespace op {
     interface Base {
-      /** Binds the result as "$name" for later ops ("$name.new": its first created item). */
+      /** Binds the result for later ops as "$name" ("$name.new": its first created item). Pass "$music" (a bare name binds the same). */
       ref?: `$${string}`;
     }
     /** Split at Playhead (edit, 0.1). */
@@ -109,7 +109,7 @@ declare namespace Splice {
       ripple?: boolean;
       /** @default true (set false with path to register media only) */
       insert?: boolean;
-      /** lan_… audio lane · audio files always land on an audio lane (default: the first, created if missing) at frame 0 unless at is given */
+      /** lan_… audio lane · audio files (music, voice-over, sound effects) become sound items on an audio lane (default: the first, created if missing) at frame 0 unless at is given; then audio.set for volume, duck and normalize */
       lane?: string;
     }
     /** Lift to Overlay (edit, 0.2). */
@@ -237,7 +237,7 @@ declare namespace Splice {
     /** New Lane (edit, 0.1). */
     interface LaneCreate extends Base {
       cmd: "lane.create";
-      kind: "graphics" | "overlay" | "motion" | "captions";
+      kind: "graphics" | "overlay" | "motion" | "captions" | "audio";
       name?: string;
     }
     /** Rename Lane (edit, 0.1). */
@@ -271,10 +271,10 @@ declare namespace Splice {
       volume?: number;
       /** ovl_…[] sound items on an audio lane (instead of clip) */
       items?: string[];
-      /** {amount 0–1, attack, release frames} lowers sound items under speech, or null */
-      duck?: string;
-      /** LUFS target for sound items (e.g. -14 for social), from the measured loudness */
-      normalize?: string;
+      /** {amount,attack,release} · amount 0–1, attack and release in frames; lowers sound items under speech, or null */
+      duck?: { amount: number; attack?: number; release?: number } | null;
+      /** number · LUFS target for sound items (e.g. -14 for social), from the measured loudness */
+      normalize?: number;
     }
     /** Cursor Settings (edit, 0.2). */
     interface CursorSet extends Base {
@@ -643,10 +643,10 @@ declare const splice: {
   };
   export: {
     /** Start an MP4 export job. Use overwrite:true to replace an existing output file. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */
-    start(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; preset?: "social-h264" | "social-hevc"; path?: string; overwrite?: boolean; }): { jobId: string; state: string; settings?: Record<string, unknown>; };
+    start(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; preset?: "social" | "social-h264" | "social-hevc"; path?: string; overwrite?: boolean; }): { jobId: string; state: string; settings?: Record<string, unknown>; };
   };
   jobs: {
-    /** Check the progress and result of an export, transcription or recording job. */
+    /** Check the progress and result of an export, transcription or recording job. Each call advances a running export by up to 50 ms; poll until state is done. Inside code.run (2 s limit) return the jobId and poll from later calls. */
     status(args: { projectId?: string; jobId: string; }): { jobId: string; id?: string; kind?: string; state: string; progress?: number; settings?: Record<string, unknown>; output?: string; elapsed?: number; bytes?: number; droppedFrames?: number; revision?: Splice.Revision; };
     /** Cancel a running or pending job. */
     cancel(args: { projectId?: string; jobId: string; sessionId?: string; ifRevision?: Splice.Revision; }): { jobId: string; id?: string; state: string; };

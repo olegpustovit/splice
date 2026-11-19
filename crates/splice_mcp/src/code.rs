@@ -60,8 +60,9 @@ pub(super) fn run(
     let prelude = PRELUDE.replace("__CONTEXT__", &context(project, session)?);
     let mut calls = Vec::new();
     let mut revisions = Revisions::default();
+    let mut jobs = Vec::new();
     let outcome = quickjs_sys::run(&prelude, code, &LIMITS, &mut |name, args| {
-        host(name, args, call, &mut calls, &mut revisions)
+        host(name, args, call, &mut calls, &mut revisions, &mut jobs)
     });
     let parse = |json: &str| splice_json::parse(json).unwrap_or(Json::Null);
     let mut fields = vec![
@@ -73,6 +74,10 @@ pub(super) fn run(
         ("calls", Json::Array(calls.iter().map(Call::json).collect())),
         ("revisions", revisions.json()),
     ];
+    // Jobs the code started survive a failed or timed-out program, so they can still be polled.
+    if !jobs.is_empty() {
+        fields.push(("jobs", Json::Array(jobs)));
+    }
     if let Some(failure) = outcome.error {
         fields.push(("error", error(&failure, &parse(&failure.data))));
     }
@@ -160,9 +165,18 @@ fn host(
     call: &mut dyn FnMut(&str, &Json) -> Result<Json, splice_json::NonFiniteNumber>,
     calls: &mut Vec<Call>,
     revisions: &mut Revisions,
+    jobs: &mut Vec<Json>,
 ) -> Result<String, String> {
     let began = Instant::now();
     let result = dispatch(name, args, call, revisions);
+    if let Some(job) = result
+        .as_ref()
+        .ok()
+        .and_then(|value| value.field("jobId"))
+        .filter(|job| !jobs.contains(job))
+    {
+        jobs.push(job.clone());
+    }
     let ms = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX);
     match calls.last_mut() {
         Some(last) if last.tool == name && last.ok == result.is_ok() => {

@@ -244,14 +244,22 @@ pub fn describe(id: Option<&str>, query: Option<&str>) -> Result<Json, CommandEr
         }
         return Ok(Json::Object(fields));
     }
+    // Any whitespace- or comma-separated term, in the id, title, group or a param's doc.
     let query = query.unwrap_or("").to_lowercase();
+    let terms: Vec<&str> = query
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|term| !term.is_empty())
+        .collect();
     let commands = COMMANDS
         .iter()
         .filter(|row| {
-            query.is_empty()
-                || [row.id, row.title, row.group]
-                    .iter()
-                    .any(|field| field.to_lowercase().contains(&query))
+            terms.is_empty()
+                || terms.iter().any(|term| {
+                    [row.id, row.title, row.group]
+                        .into_iter()
+                        .chain(row.params.iter().map(|(_, hint)| *hint))
+                        .any(|field| field.to_lowercase().contains(term))
+                })
         })
         .map(|row| Json::Object(row.summary()))
         .collect();

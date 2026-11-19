@@ -152,12 +152,18 @@ fn validate_binding(name: &str, key: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// The batch name an op binds. A bare `music` binds `$music` (agents read "binds as $name" both ways).
 pub(super) fn binding(value: &Json) -> Result<String, Error> {
     let name = value
         .as_str()
-        .ok_or_else(|| Error::bad("ref", "a name starting with $"))?;
-    validate_binding(name, "ref")?;
-    Ok(name.into())
+        .ok_or_else(|| Error::bad("ref", "a name like $music"))?;
+    let name = if name.starts_with('$') {
+        name.to_owned()
+    } else {
+        format!("${name}")
+    };
+    validate_binding(&name, "ref")?;
+    Ok(name)
 }
 
 fn target(value: &Json, key: &str) -> Result<Target, Error> {

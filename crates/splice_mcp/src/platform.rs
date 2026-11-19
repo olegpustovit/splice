@@ -103,8 +103,9 @@ pub(super) fn frames(
 pub(super) fn export_options(preset: Option<&str>, path: Option<&str>) -> Result<bool, StoreError> {
     let hevc = match preset {
         None | Some("social-hevc") => true,
-        Some("social-h264") => false,
-        _ => return Err(bad("preset", "social-h264 or social-hevc")),
+        // "social" is the name tasks and people use; H.264 plays everywhere.
+        Some("social-h264" | "social") => false,
+        _ => return Err(bad("preset", "social (H.264), social-h264 or social-hevc")),
     };
     if path.is_some_and(|path| {
         path.contains('\0')

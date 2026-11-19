@@ -212,3 +212,25 @@ fn decoders_reject_unknown_and_invalid_arguments() {
     let error = describe(Some("clip.inser"), None).unwrap_err();
     assert!(error.valid.contains(&"clip.insert"));
 }
+
+/// Eval friction: agents passed bare ref names and multi-word describe queries.
+#[test]
+fn bare_refs_bind_with_a_dollar_and_describe_matches_any_term() {
+    let op = splice_json::parse(r#"{"cmd":"marker.add","at":3,"ref":"beat"}"#).unwrap();
+    assert_eq!(decode(&op).unwrap().bind.as_deref(), Some("$beat"));
+    let op = splice_json::parse(r#"{"cmd":"marker.add","at":3,"ref":"$beat"}"#).unwrap();
+    assert_eq!(decode(&op).unwrap().bind.as_deref(), Some("$beat"));
+    let found = describe(None, Some("effect color marker split")).unwrap();
+    let ids: Vec<_> = found
+        .field("commands")
+        .and_then(Json::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(|row| row.field("id").and_then(Json::as_str))
+        .collect();
+    for id in ["effect.set", "marker.add", "item.split"] {
+        assert!(ids.contains(&id), "{id} in {ids:?}");
+    }
+    let music = describe(None, Some("music")).unwrap();
+    assert!(format!("{music:?}").contains("clip.insert"), "{music:?}");
+}
