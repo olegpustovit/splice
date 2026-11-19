@@ -800,4 +800,12 @@ pub const COMMANDS: &[Command] = &[
         ui: &["Zoom segment menu ▸ Delete"],
         example: r#"{"cmd":"zoom.remove","zoom":"ovl_detail"}"#, decoder: decode::zoom_remove,
     },
+    Command {
+        id: "take.pointer", title: "Declare Pointer", group: "Recording",
+        risk: "edit", shortcut: "", tier: Tier::Second,
+        params: &[("clip", "!clp_… of a screen take"),
+            ("marks", "![{at, x, y, action}] · timeline frames inside the clip; x, y in 0–1 of the captured source; action move | click. Where an automation moved or clicked unseen: the cursor travels there on a human path")],
+        ui: &["Cursor track ▸ Add Pointer Point"],
+        example: r#"{"cmd":"take.pointer","clip":"clp_take","marks":[{"at":200,"x":0.62,"y":0.4,"action":"click"}]}"#, decoder: decode::take_pointer,
+    },
 ];

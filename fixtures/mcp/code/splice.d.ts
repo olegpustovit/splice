@@ -822,6 +822,14 @@ declare namespace Splice {
       /** ovl_… zoom · the camera springs back to 1× where it was */
       zoom: string;
     }
+    /** Declare Pointer (edit, 0.2). */
+    interface TakePointer extends Base {
+      cmd: "take.pointer";
+      /** clp_… of a screen take */
+      clip: string;
+      /** [{at, x, y, action}] · timeline frames inside the clip; x, y in 0–1 of the captured source; action move | click. Where an automation moved or clicked unseen: the cursor travels there on a human path */
+      marks: { at: number; x: number; y: number; action: string }[];
+    }
   }
   /** Effect types and parameters (effects.json, the validator's own schema). */
   interface Effects {
@@ -1213,7 +1221,8 @@ declare namespace Splice {
     | op.TemplateSet
     | op.MediaRelink
     | op.MediaConsolidate
-    | op.ZoomRemove;
+    | op.ZoomRemove
+    | op.TakePointer;
 }
 
 declare const splice: {
@@ -1356,6 +1365,9 @@ declare const splice: {
     media: {
       relink(args: Omit<Splice.op.MediaRelink, "cmd">): Splice.op.MediaRelink;
       consolidate(args: Omit<Splice.op.MediaConsolidate, "cmd">): Splice.op.MediaConsolidate;
+    };
+    take: {
+      pointer(args: Omit<Splice.op.TakePointer, "cmd">): Splice.op.TakePointer;
     };
   };
   project: {

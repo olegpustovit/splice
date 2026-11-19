@@ -118,6 +118,7 @@ impl Editor {
             Op::CropKeys { item, keys } => self.crop_keys(&item, keys),
             Op::TransitionAdd { item, params } => self.transition(&item, params, true),
             Op::TransitionSet { item, params } => self.transition(&item, params, false),
+            Op::TakePointer { clip, marks } => self.take_pointer(&clip, &marks),
             Op::TransitionRemove { item } => {
                 let owner = self.spine_owner(&item)?;
                 let list = effects_vec_mut(&mut self.project, owner);
@@ -286,6 +287,58 @@ impl Editor {
     }
 
     // ── Spine structure ──
+
+    /// Merges declared pointer marks into the take's media, in source time (T39.4).
+    fn take_pointer(
+        &mut self,
+        clip: &Target,
+        marks: &[(Frame, f64, f64, bool)],
+    ) -> Result<Outcome, CommandError> {
+        let (id, slot) = self.spine_clip(clip)?;
+        let timing = self.project.clips.timing(slot).expect("live clip");
+        let media_id = self.project.clips.data(slot).expect("live clip").media;
+        let index = media_id
+            .and_then(|m| self.project.media.iter().position(|media| media.id == m))
+            .filter(|&i| self.project.media[i].kind == MediaKind::Take)
+            .ok_or_else(|| wrong_kind(&format!("{id} is not a screen take.")))?;
+        let fps = self.project.media[index].probe.fps.max(1.0);
+        let mut seconds = Vec::with_capacity(marks.len());
+        for &(at, x, y, click) in marks {
+            if !(timing.start..timing.start + timing.length).contains(&at) {
+                return Err(CommandError::rule(
+                    "OUT_OF_RANGE",
+                    "marks",
+                    Some(Json::Signed(i64::from(at))),
+                    &format!(
+                        "frames {}–{} (inside {id})",
+                        timing.start,
+                        timing.start + timing.length - 1
+                    ),
+                    "Declare marks inside the take's clip.",
+                ));
+            }
+            let t = time::source_value(&self.project, slot, at)? / fps;
+            seconds.push(PointerMark { t, x, y, click });
+        }
+        let take = self.project.media[index]
+            .take
+            .get_or_insert_with(TakeComponents::default);
+        for mark in seconds {
+            // A new mark at the same instant replaces the old one.
+            take.pointer.retain(|old| (old.t - mark.t).abs() > 1e-6);
+            take.pointer.push(mark);
+        }
+        take.pointer.sort_by(|a, b| a.t.total_cmp(&b.t));
+        self.say(format_args!(
+            "Declared {} pointer marks on {id}",
+            marks.len()
+        ));
+        Ok(Outcome {
+            summary: Summary::Note,
+            primary: Some(Target::Timeline(TimelineId::Clip(id))),
+            created: Vec::new(),
+        })
+    }
 
     fn spine_clip(&self, target: &Target) -> Result<(ClipId, Slot), CommandError> {
         let TimelineId::Clip(id) = self.timeline(target)? else {

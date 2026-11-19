@@ -449,6 +449,7 @@ fn describe(stage: &Path, fps: u32, still: bool, size: u64) -> Result<Media, Sto
             camera: component(stage, "camera.mov", false)?,
             events: component(stage, "events.json", false)?,
             cursors: component(stage, "cursors", true)?,
+            pointer: Vec::new(),
         };
         let audio = [("mic", &take.mic), ("system", &take.system)]
             .into_iter()

@@ -65,7 +65,7 @@ pub struct AudioTrack {
 }
 
 /// Individual files present in a captured take.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct TakeComponents {
     /// Screen video file.
     pub screen: Option<String>,
@@ -79,6 +79,22 @@ pub struct TakeComponents {
     pub events: Option<String>,
     /// Cursor image directory.
     pub cursors: Option<String>,
+    /// Pointer positions declared after the fact, in source-time order (T39.4).
+    pub pointer: Vec<PointerMark>,
+}
+
+/// A pointer position declared for a take (T39.4): where an automation moved or pressed while
+/// the recorder saw no hand move. The drawn cursor travels there on a synthesized human path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointerMark {
+    /// Source seconds.
+    pub t: f64,
+    /// Position normalized to the captured source (0–1).
+    pub x: f64,
+    /// Position normalized to the captured source (0–1).
+    pub y: f64,
+    /// A press at this position.
+    pub click: bool,
 }
 
 /// Versioned words on the media source clock.
@@ -182,6 +198,7 @@ impl Clone for TakeComponents {
             system: self.system.clone(),
             events: self.events.clone(),
             cursors: self.cursors.clone(),
+            pointer: self.pointer.clone(),
         }
     }
 
@@ -192,6 +209,7 @@ impl Clone for TakeComponents {
         self.system.clone_from(&source.system);
         self.events.clone_from(&source.events);
         self.cursors.clone_from(&source.cursors);
+        self.pointer.clone_from(&source.pointer);
     }
 }
 

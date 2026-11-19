@@ -1174,6 +1174,37 @@ pub(super) fn template_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp 
     })
 }
 
+pub(super) fn take_pointer(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let expected = "[{at, x, y, action}] with x, y in 0–1 and action move or click";
+    let mut marks = Vec::new();
+    for mark in list(a.required("marks")?) {
+        let unit = |key: &str| {
+            mark.field(key)
+                .and_then(Json::as_f64)
+                .filter(|v| (0.0..=1.0).contains(v))
+                .ok_or_else(|| Error::bad("marks", expected))
+        };
+        let at = mark
+            .field("at")
+            .and_then(Json::as_i64)
+            .and_then(|at| Frame::try_from(at).ok())
+            .ok_or_else(|| Error::bad("marks", expected))?;
+        let click = match mark.field("action").and_then(Json::as_str) {
+            None | Some("move") => false,
+            Some("click") => true,
+            Some(_) => return Err(Error::bad("marks", expected)),
+        };
+        marks.push((at, unit("x")?, unit("y")?, click));
+    }
+    if marks.is_empty() {
+        return Err(Error::bad("marks", expected));
+    }
+    Ok(Op::TakePointer {
+        clip: a.target("clip")?,
+        marks,
+    })
+}
+
 pub(super) fn media_relink(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let path = a.string("path")?;
     if path.is_empty() || path.contains('\0') {

@@ -51,6 +51,17 @@ pub(super) fn encode_media(media: &Media) -> Json {
         ] {
             push_text(&mut files, name, path);
         }
+        if !take.pointer.is_empty() {
+            let marks = take.pointer.iter().map(|mark| {
+                object(vec![
+                    ("t", Json::Float(mark.t)),
+                    ("x", Json::Float(mark.x)),
+                    ("y", Json::Float(mark.y)),
+                    ("click", Json::Bool(mark.click)),
+                ])
+            });
+            files.push(("pointer", Json::Array(marks.collect())));
+        }
         fields.push(("components", object(files)));
     }
     object(fields)
@@ -73,8 +84,26 @@ pub(super) fn decode_media(value: &Json) -> Result<Media, PackageError> {
     let take = if let Some(value) = value.optional("components") {
         shape(
             value,
-            &["screen", "camera", "mic", "system", "events", "cursors"],
+            &[
+                "screen", "camera", "mic", "system", "events", "cursors", "pointer",
+            ],
         )?;
+        let mut pointer = Vec::new();
+        for mark in value.array_or_empty("pointer")? {
+            shape(mark, &["t", "x", "y", "click"])?;
+            let number = |key| {
+                mark.required(key)?
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .ok_or_else(|| bad("pointer", "marks {t ≥ 0, x, y in 0–1, click}"))
+            };
+            let (t, x, y) = (number("t")?, number("x")?, number("y")?);
+            if x > 1.0 || y > 1.0 || pointer.last().is_some_and(|last: &PointerMark| last.t > t) {
+                return Err(bad("pointer", "marks in time order with x, y in 0–1"));
+            }
+            let click = optional_bool(mark, "click")?.unwrap_or(false);
+            pointer.push(PointerMark { t, x, y, click });
+        }
         Some(TakeComponents {
             screen: optional_string(value, "screen")?,
             camera: optional_string(value, "camera")?,
@@ -82,6 +111,7 @@ pub(super) fn decode_media(value: &Json) -> Result<Media, PackageError> {
             system: optional_string(value, "system")?,
             events: optional_string(value, "events")?,
             cursors: optional_string(value, "cursors")?,
+            pointer,
         })
     } else {
         None

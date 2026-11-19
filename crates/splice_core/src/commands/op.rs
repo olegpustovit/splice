@@ -634,6 +634,13 @@ pub enum Op {
         /// Text fields to change.
         fields: Vec<(String, String)>,
     },
+    /// Declare Pointer (Splice extension, T39.4): positions and presses the recorder never saw.
+    TakePointer {
+        /// Spine clip of a take.
+        clip: Target,
+        /// (timeline frame, x, y, press).
+        marks: Vec<(Frame, f64, f64, bool)>,
+    },
     /// Relink Media (Splice extension).
     MediaRelink {
         /// Media descriptor.

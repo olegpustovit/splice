@@ -629,3 +629,41 @@ fn low_slide_speed_and_lift_keep_keys_and_looks() {
     assert_eq!(appearance.fade_in, 15);
     assert!(appearance.effects.iter().any(|e| e.kind == "transform"));
 }
+
+/// T39.4: declared pointer marks land on the take's media in source seconds, in time order;
+/// a mark outside the clip or on a non-take clip is refused with the rule.
+#[test]
+fn take_pointer_declares_marks_in_source_time() {
+    let mut project = sample();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"take.pointer","clip":"clp_take","marks":[{"at":300,"x":0.2,"y":0.3},{"at":180,"x":0.6,"y":0.4,"action":"click"}]}]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let screen = "med_screen".parse().unwrap();
+    let media = project.media.iter().find(|m| m.id == screen).unwrap();
+    let marks = &media.take.as_ref().unwrap().pointer;
+    // clp_take starts at 120 with source 0 at 30 fps.
+    assert_eq!(marks.len(), 2);
+    assert!((marks[0].t - 2.0).abs() < 1e-9 && marks[0].click);
+    assert!((marks[1].t - 6.0).abs() < 1e-9 && !marks[1].click);
+    for (ops, code) in [
+        (
+            r#"[{"cmd":"take.pointer","clip":"clp_take","marks":[{"at":600,"x":0.2,"y":0.3}]}]"#,
+            "OUT_OF_RANGE",
+        ),
+        (
+            r#"[{"cmd":"take.pointer","clip":"clp_open","marks":[{"at":10,"x":0.2,"y":0.3}]}]"#,
+            "WRONG_KIND",
+        ),
+        (
+            r#"[{"cmd":"take.pointer","clip":"clp_take","marks":[{"at":200,"x":1.2,"y":0.3}]}]"#,
+            "BAD_ARGS",
+        ),
+    ] {
+        let ops = splice_json::parse(ops).unwrap();
+        let error =
+            apply(&mut sample(), ops.as_array().unwrap(), Source::Agent, false).unwrap_err();
+        assert_eq!(error.error.code, code, "{ops:?}");
+    }
+}

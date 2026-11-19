@@ -177,6 +177,11 @@ Rules:
   (`WRONG_KIND`, `NO_NEIGHBOR`, `TOO_LONG`, `NO_HANDLES`). Files from 0.3 without handles still
   play: edge frames hold.
 
+- **Declared pointer marks (T39.4).** A take's `components` may carry
+  `"pointer":[{"t":2.0,"x":0.6,"y":0.4,"click":true}]` (source seconds, positions normalized to the
+  captured source, time order), written by `take.pointer`. They merge with the recorded cursor
+  samples, and the renderer synthesizes a human path to each one.
+
 ## `journal.ops`
 
 One JSON object per line:

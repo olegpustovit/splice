@@ -27,6 +27,31 @@ pub struct Sample {
     pub click: bool,
 }
 
+/// Recorded samples with declared pointer marks (T39.4) merged in time order. A mark keeps the
+/// cursor image in use at its time; the synthesized path then carries the cursor to it.
+pub fn with_marks(samples: &[Sample], marks: &[splice_model::PointerMark]) -> Vec<Sample> {
+    let mut merged = Vec::with_capacity(samples.len() + marks.len());
+    merged.extend_from_slice(samples);
+    for mark in marks {
+        let at = merged.partition_point(|s| s.t <= mark.t);
+        let image = at
+            .checked_sub(1)
+            .or((!merged.is_empty()).then_some(0))
+            .map_or(0, |i| merged[i].image);
+        merged.insert(
+            at,
+            Sample {
+                t: mark.t,
+                x: mark.x,
+                y: mark.y,
+                image,
+                click: mark.click,
+            },
+        );
+    }
+    merged
+}
+
 /// How a take's cursor moves and shows (the `cursor` effect).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Motion {
@@ -536,6 +561,29 @@ mod tests {
                 assert!((at.x - click.x).abs() < 1e-9 && (at.y - click.y).abs() < 1e-9);
             }
         }
+    }
+
+    /// T39.4: a declared press the recorder never saw becomes a human path that lands on it.
+    #[test]
+    fn declared_marks_get_a_path_and_land_exactly() {
+        let samples = [sample(0.0, 0.2, 0.2, false), sample(4.0, 0.2, 0.2, false)];
+        let marks = [splice_model::PointerMark {
+            t: 2.0,
+            x: 0.8,
+            y: 0.7,
+            click: true,
+        }];
+        let merged = with_marks(&samples, &marks);
+        assert_eq!(merged.len(), 3);
+        assert!(merged[1].click && merged[1].image == 0);
+        let track = Track::build(&merged, SIZE, Motion::default());
+        let at = track.at(2.0).unwrap();
+        assert!((at.x - 0.8).abs() < 1e-9 && (at.y - 0.7).abs() < 1e-9);
+        assert!(largest_step(&track) < 120.0);
+        assert!(
+            track.at(1.0).unwrap().x < 0.25,
+            "rests until the move starts"
+        );
     }
 
     #[test]

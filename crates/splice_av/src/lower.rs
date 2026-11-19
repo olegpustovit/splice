@@ -349,7 +349,14 @@ impl Lowering {
                 self.plan.cursors.push(CursorTable {
                     media: picture.media,
                     motion: style.motion,
-                    track: cursor::Track::build(&events.samples, events.size, style.motion),
+                    track: cursor::Track::build(
+                        &cursor::with_marks(
+                            &events.samples,
+                            media.take.as_ref().map_or(&[][..], |take| &take.pointer),
+                        ),
+                        events.size,
+                        style.motion,
+                    ),
                     images: events.images.clone(),
                     points: events.size[0],
                     fps,
