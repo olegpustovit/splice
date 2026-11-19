@@ -22,7 +22,8 @@ const MSL: &str = include_str!("../shaders/layer.metal");
 /// Constant-buffer offsets are 256-byte aligned on every Metal GPU.
 const STRIDE: usize = 512;
 /// Most layers one frame can draw.
-pub const MAX_LAYERS: usize = 64;
+/// Layers per encode: room for per-character animators on long titles (M22).
+pub const MAX_LAYERS: usize = 256;
 /// Parameter pages in flight: a frame can encode twice (a transition group, then the canvas).
 const PAGES: usize = 6;
 

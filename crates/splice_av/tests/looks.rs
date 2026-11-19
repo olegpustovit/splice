@@ -647,6 +647,71 @@ mod looks {
 
     /// H8, T36.5: a thick caption stroke outlines the glyphs instead of covering them, two
     /// lines that do not fit shrink instead of dropping the second, and the spoken word draws
+    /// M22: a title animated per character draws every character (120 units is past the old
+    /// 64-layer cap, which dropped the rest silently): once the animation ends it covers the
+    /// same pixels as the static title.
+    pub(super) fn m22_per_character_titles_draw_every_character() {
+        let dir = scratch("letters");
+        let black = still(&dir.0, 1, [0, 0, 0]);
+        let titled = |animate: bool| {
+            let mut project = project(vec![black.clone()], vec![(1, 30, vec![])]);
+            project.size = [640, 360];
+            let lane = LaneId::from_serial(9);
+            project.lanes.push(Lane {
+                id: lane,
+                name: "Graphics".into(),
+                kind: LaneKind::Graphics,
+                effects: Vec::new(),
+            });
+            let effects = if animate {
+                vec![fx(
+                    3,
+                    "animate",
+                    vec![
+                        ("preset", s("fade")),
+                        ("unit", s("character")),
+                        ("duration", n(1.0)),
+                        ("stagger", n(0.0)),
+                    ],
+                )]
+            } else {
+                Vec::new()
+            };
+            project
+                .items
+                .insert(Item {
+                    id: ItemId::from_serial(2),
+                    timing: ItemTiming {
+                        anchor: Anchor::Pinned(0),
+                        length: 30,
+                    },
+                    data: ItemData {
+                        lane,
+                        kind: ItemKind::Title {
+                            text: "ABCDEFGHIJ".repeat(12),
+                        },
+                        appearance: Appearance {
+                            effects,
+                            ..Appearance::default()
+                        },
+                    },
+                })
+                .unwrap();
+            let composition = Composition::prepare(&project, &dir.0).unwrap();
+            let mut rgba = vec![0; 640 * 360 * 4];
+            composition.read_frame(20, &mut rgba).unwrap();
+            rgba.chunks_exact(4).filter(|p| p[0] > 128).count()
+        };
+        let (still_text, animated) = (titled(false), titled(true));
+        assert!(still_text > 500, "{still_text}");
+        // Per-unit rasters anti-alias their edges separately (a few % fewer bright pixels at
+        // this size); dropping units at the old cap lost about half.
+        assert!(
+            animated * 10 >= still_text * 9 && animated <= still_text,
+            "animated {animated} vs static {still_text}"
+        );
+    }
+
     /// H7: a window backing draws its own evaluated values; the picture's look (here half
     /// opacity) never applies to it a second time.
     pub(super) fn h7_the_backing_never_borrows_the_picture_look() {
@@ -1194,6 +1259,10 @@ fn main() {
         (
             "looks_ocr_reads_text_and_a_blur_mask_hides_it",
             looks::ocr_reads_text_and_a_blur_mask_hides_it,
+        ),
+        (
+            "looks_m22_per_character_titles_draw_every_character",
+            looks::m22_per_character_titles_draw_every_character,
         ),
         (
             "looks_h7_the_backing_never_borrows_the_picture_look",

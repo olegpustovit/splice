@@ -345,9 +345,13 @@ impl GpuProgram {
                 layer.flags |= Layer::OUT_BGRA;
             }
         }
+        // Never drop layers silently (M22): an overfull frame is refused with the fix.
         if self.layers.len() > MAX_LAYERS {
-            self.layers.truncate(MAX_LAYERS);
-            self.textures.truncate(MAX_LAYERS);
+            return Err(Error::Input(format!(
+                "Frame {at} draws {} layers; at most {MAX_LAYERS}. Animate titles by word or \
+                 line instead of by character, or split the text.",
+                self.layers.len()
+            )));
         }
         self.compositor
             .encode(
