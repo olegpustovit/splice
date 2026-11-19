@@ -84,8 +84,8 @@ The capability sweep runs these exact ops, so they stay correct.
   `marker.add` per chapter; `captions.generate`; export `variants:[{aspect:"16:9"},{aspect:"9:16"}]`.
 - **Podcast:** `audio.sync {item, to}` for a second mic; `transcript.get` lists `fillers` and
   `retakes`, cut them with `cut.words`; `cut.pauses {min:21}`; `effect.add {type:"voiceIsolation"}`
-  and `{type:"compressor"}` on the voice; `audio.set {normalize:-16}`; export `audio-m4a` plus
-  the video.
+  and `{type:"compressor"}` on the voice; `audio.set {items, normalize:-16}` on music; export
+  `audio-m4a` plus the video.
 - **Talking head:** `effect.add {type:"cutout", params:{background:"blur"}}` after
   `media.analyze {kinds:["matte"]}`; `crop.keys {item, follow:"face", aspect:"9:16"}`;
   `effect.add {type:"color", params:{lut:"look.cube"}}`; `audio.unlink` then trim the sound for a

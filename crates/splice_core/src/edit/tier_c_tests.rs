@@ -105,3 +105,86 @@ fn baked_ducking_becomes_visible_volume_keys() {
     assert!(keys.iter().any(|k| k.value == 0.3));
     assert!(keys.windows(2).all(|w| w[0].at < w[1].at));
 }
+
+/// Scale at timeline frame `at`, from whichever spine clip covers it (owner-relative keys).
+fn scale_at(project: &Project, at: Frame) -> f64 {
+    for &slot in project.clips.order() {
+        let timing = project.clips.timing(slot).unwrap();
+        if timing.start <= at && at < timing.start + timing.length {
+            let data = project.clips.data(slot).unwrap();
+            let Some(param) = data
+                .appearance
+                .effects
+                .iter()
+                .find(|e| e.kind == "transform")
+                .and_then(|e| e.params.iter().find(|p| p.name == "scale"))
+            else {
+                return 1.0;
+            };
+            let EffectValue::Keys(keys) = &param.value else {
+                panic!("{param:?}")
+            };
+            return splice_model::keys::sample(keys, f64::from(at - timing.start));
+        }
+    }
+    panic!("no clip at {at}")
+}
+
+#[test]
+fn keys_stay_on_their_content_across_split_trim_and_roll() {
+    let mut project = sample();
+    // clp_take covers 120..540; zoom 1 → 2 over its first 200 frames.
+    let ops = splice_json::parse(
+        r#"[{"cmd":"param.keys","target":"clp_take","path":"transform.scale","keys":[{"at":0,"value":1},{"at":200,"value":2}]},
+            {"cmd":"transition.add","item":"clp_take","kind":"dissolve","length":10}]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let before: Vec<f64> = [150, 250, 300]
+        .iter()
+        .map(|&at| scale_at(&project, at))
+        .collect();
+    let edits =
+        splice_json::parse(r#"[{"cmd":"item.split","item":"clp_take","at":220,"ref":"cut"}]"#)
+            .unwrap();
+    apply(
+        &mut project,
+        edits.as_array().unwrap(),
+        Source::Agent,
+        false,
+    )
+    .unwrap();
+    let after: Vec<f64> = [150, 250, 300]
+        .iter()
+        .map(|&at| scale_at(&project, at))
+        .collect();
+    assert_eq!(before, after, "split moved the zoom");
+    // Only the left piece keeps the incoming dissolve.
+    let transitions = project
+        .clips
+        .order()
+        .iter()
+        .filter(|&&slot| {
+            let data = project.clips.data(slot).unwrap();
+            data.appearance
+                .effects
+                .iter()
+                .any(|e| e.kind == "transition")
+        })
+        .count();
+    assert_eq!(transitions, 1);
+    // Trimming the right piece's in-edge by 20 frames (no ripple) keeps frame 300's zoom.
+    let id = project
+        .clips
+        .order()
+        .iter()
+        .find(|&&slot| project.clips.timing(slot).unwrap().start == 220)
+        .map(|&slot| project.clips.id(slot).unwrap())
+        .unwrap();
+    let trim = splice_json::parse(&format!(
+        r#"[{{"cmd":"item.trim","item":"{id}","edge":"in","delta":20,"ripple":false}}]"#
+    ))
+    .unwrap();
+    apply(&mut project, trim.as_array().unwrap(), Source::Agent, false).unwrap();
+    assert!((scale_at(&project, 300) - before[2]).abs() < 1e-9);
+}

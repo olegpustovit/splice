@@ -586,6 +586,14 @@ impl Editor {
         timing.start += by;
         timing.length -= by;
         timing.source = rounded(source_b)?;
+        let effects = &mut self
+            .project
+            .clips
+            .data_mut(b)
+            .expect("live clip")
+            .appearance
+            .effects;
+        super::edits::shift_keys(effects, by);
         Ok(Outcome::edit(
             format!("Rolled the edit after {id} by {by} frames"),
             Target::Timeline(TimelineId::Clip(id)),

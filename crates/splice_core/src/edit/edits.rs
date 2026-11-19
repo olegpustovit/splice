@@ -150,6 +150,12 @@ impl Editor {
         let source = super::spine::source_for_interval(&self.project, slot, at, length)?;
         let right = ClipId::from_serial(self.mint("clp")?);
         data.appearance.fade_in = 0;
+        // The right piece starts `cut` frames into the content: its keys follow, and the transition
+        // into the original clip stays on the left piece.
+        shift_keys(&mut data.appearance.effects, cut);
+        data.appearance
+            .effects
+            .retain(|effect| effect.kind != "transition");
         clamp_fades(&mut data.appearance, length);
         self.project
             .clips
@@ -224,6 +230,7 @@ impl Editor {
         clamp_fades(&mut original.appearance, cut);
         data.appearance.fade_in = 0;
         clamp_fades(&mut data.appearance, length);
+        shift_keys(&mut data.appearance.effects, cut);
         match (&mut original.kind, &mut data.kind) {
             (ItemKind::Motion { from, to, .. }, ItemKind::Motion { from: right, .. }) => {
                 let midpoint = *from + (*to - *from) * f64::from(cut) / f64::from(timing.length);
@@ -579,4 +586,19 @@ pub(super) fn arena_full() -> CommandError {
         "The timeline has exhausted its arena slots.",
         "Use a smaller project.",
     )
+}
+
+/// Keeps owner-relative keys on the same content when the owner's start moves `by` frames into it
+/// (a split's right piece, an in-edge trim, a roll).
+pub(super) fn shift_keys(effects: &mut [splice_model::Effect], by: Frame) {
+    for param in effects
+        .iter_mut()
+        .flat_map(|effect| effect.params.iter_mut())
+    {
+        if let splice_model::EffectValue::Keys(keys) = &mut param.value {
+            for key in keys {
+                key.at -= by;
+            }
+        }
+    }
 }

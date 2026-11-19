@@ -50,6 +50,8 @@ impl Editor {
                     if !ripple {
                         timing.start = to;
                     }
+                    let effects = &mut self.project.clips.data_mut(slot).expect("live clip");
+                    super::edits::shift_keys(&mut effects.appearance.effects, to - from);
                 }
                 self.resize_clip(slot, timing, ripple)?;
             }
@@ -62,7 +64,8 @@ impl Editor {
                         .timing_mut(slot)
                         .expect("live item")
                         .anchor = anchor;
-                    let data = self.project.items.data(slot).expect("live item");
+                    let data = self.project.items.data_mut(slot).expect("live item");
+                    super::edits::shift_keys(&mut data.appearance.effects, to - from);
                     if let ItemKind::Media(overlay) = data.kind {
                         let descriptor = media(&self.project, overlay.media)?;
                         let delta = f64::from(subtract(to, from)?) * descriptor.probe.fps
