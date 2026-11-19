@@ -278,10 +278,18 @@ pub(super) fn media_frames(
     rounded(f64::from(frames) * fps / f64::from(project.fps))
 }
 
+/// The source frame (fractional) a clip plays at timeline frame `at`, through its speed effect;
+/// `timing::anchor_start` maps it back the same way, so anchors round-trip on ramped clips.
 pub(super) fn source_value(project: &Project, slot: Slot, at: Frame) -> Result<f64, CommandError> {
     let timing = project.clips.timing(slot).expect("live clip");
-    Ok(f64::from(timing.source)
-        + (f64::from(at) - f64::from(timing.start)) * source_rate(project, slot)?)
+    let local = f64::from(at) - f64::from(timing.start);
+    // Before the clip there is no ramp to integrate: extend at the clip's base rate.
+    let played = if local < 0.0 {
+        local * source_rate(project, slot)?
+    } else {
+        consumed(project, slot, local)?
+    };
+    Ok(f64::from(timing.source) + played)
 }
 
 pub(super) fn source_frame(

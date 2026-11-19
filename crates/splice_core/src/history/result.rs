@@ -52,6 +52,8 @@ pub struct EditResult {
     pub report: ApplyReport,
     /// A periodic snapshot failure after a successful journal append.
     pub warning: Option<PackageError>,
+    /// A dry run's resulting project (what the batch would make), for checks such as lints.
+    pub staged: Option<Box<splice_model::Project>>,
 }
 
 /// Agent history undo scope.

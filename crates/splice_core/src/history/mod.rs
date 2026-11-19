@@ -244,6 +244,7 @@ impl Store {
                 replayed: false,
                 report,
                 warning: None,
+                staged: Some(Box::new(candidate)),
             });
         }
         let rev = self.project().rev.checked_add(1).ok_or_else(|| {
@@ -284,6 +285,7 @@ impl Store {
             replayed: false,
             report,
             warning,
+            staged: None,
         })
     }
 
@@ -538,6 +540,7 @@ impl Store {
             replayed: true,
             report,
             warning: None,
+            staged: None,
         }))
     }
 

@@ -310,13 +310,16 @@ pub(super) fn fit_safe_scale(evaluator: &splice_eval::Evaluator, at: splice_mode
         }
         _ => None,
     });
-    let content = |portrait: bool| match evaluator.camera_mode(at) {
-        splice_model::CameraMode::Content => true,
-        splice_model::CameraMode::Frame => false,
-        splice_model::CameraMode::Auto => portrait,
-    };
+    // A card that already fills the canvas looks the same zoomed either way: no limit.
     let safe = match card {
-        Some(d) if !content(ch > cw) && d.w > 0.0 && d.h > 0.0 => (cw / d.w).min(ch / d.h),
+        Some(d)
+            if !evaluator.camera_mode(at).zooms_content(ch > cw)
+                && d.w > 0.0
+                && d.h > 0.0
+                && (d.w < cw - 0.5 || d.h < ch - 0.5) =>
+        {
+            (cw / d.w).min(ch / d.h)
+        }
         _ => splice_model::Zoom::AMOUNT[1],
     };
     // Floored to a hundredth: a suggestion that is always safe to pass back.

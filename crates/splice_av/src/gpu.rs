@@ -10,7 +10,7 @@ use ogpu_core::backend::{self as b, Commands, Device, PreparedRenderTarget, Text
 use ogpu_core::types::{Extent, Origin, TextureDescriptor, TextureFormat, TextureUsage};
 use splice_eval::{Animate, FramePlan, Look, MaskMode, MaskShape};
 use splice_gpu::{Bound, Compositor, Layer, MAX_LAYERS, rgb};
-use splice_model::{CameraMode, Frame, ShapeKind};
+use splice_model::{Frame, ShapeKind};
 
 const RING_SECONDS: f64 = 0.45;
 
@@ -468,11 +468,7 @@ impl GpuProgram {
         let view = p.view;
         let scale = view.amount.max(1.0);
         let [vx, vy, vw, vh] = view.viewport();
-        let content = match view.mode {
-            CameraMode::Content => true,
-            CameraMode::Frame => false,
-            CameraMode::Auto => ch > cw,
-        };
+        let content = view.mode.zooms_content(ch > cw);
         let zoomed = if content || scale <= 1.0 {
             (cx, cy, cwid, chei) = (cx + vx * cwid, cy + vy * chei, cwid * vw, chei * vh);
             [dx, dy, dw, dh]

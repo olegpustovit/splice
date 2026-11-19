@@ -1188,7 +1188,10 @@ fn capability_sweep_applies_every_row_and_restores_the_start() {
         .field("result")
         .unwrap_or_else(|| panic!("{output}"));
     let count = |key: &str| result.field(key).and_then(Json::as_u64).unwrap();
-    let failures = result.field("failures").unwrap().as_array().unwrap();
+    let failures = result
+        .field("failures")
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("{content:?}"));
     assert!(failures.is_empty(), "{failures:?}");
     assert_eq!(count("rows"), splice_core::commands::COMMANDS.len() as u64);
     assert_eq!(count("applied"), count("rows"));
@@ -1367,4 +1370,19 @@ fn zoom_items_report_their_fit_safe_scale() {
     .unwrap();
     // 1080 / 972 = 1.111…, floored to a hundredth.
     assert_eq!(safe(&project), 1.11);
+    // A card that fills the canvas (no window, fill) never overflows: no limit (review #2).
+    let ops = splice_json::parse(
+        r#"[{"cmd":"effect.set","effect":"fx_projwin","enabled":false},
+            {"cmd":"effect.set","effect":"fx_takewin","enabled":false},
+            {"cmd":"clip.crop","items":["clp_take"],"rect":null,"fit":"fill"}]"#,
+    )
+    .unwrap();
+    splice_core::edit::apply(
+        &mut project,
+        ops.as_array().unwrap(),
+        splice_core::package::journal::Source::Agent,
+        false,
+    )
+    .unwrap();
+    assert_eq!(safe(&project), 5.0);
 }

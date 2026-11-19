@@ -183,3 +183,34 @@ fn a_0_3_project_migrates_motion_click_zoom_and_unanimated_keys() {
     };
     assert_eq!((zoom.amount, zoom.focus), (1.4, Some([0.25, 0.75])));
 }
+
+/// Review #4: a zoom item outside the camera's range is refused on load with the rule, never
+/// opened and then failing every render.
+#[test]
+fn zoom_items_out_of_range_are_refused_on_load() {
+    for (params, field) in [
+        (r#"{"amount":7}"#, "zoom.amount"),
+        (r#"{"amount":2,"focus":{"x":1.5,"y":0.5}}"#, "zoom.focus"),
+        (r#"{"amount":2,"spring":3}"#, "zoom.mode/spring"),
+    ] {
+        let temp = Temp::new("zoom-range");
+        let path = temp.project();
+        fs::create_dir_all(&path).unwrap();
+        let project = format!(
+            r#"{{"format":"splice/1","rev":0,"hash":"0000000000000001","serial":9,"fps":30,"size":[1080,1920],"aspect":"9:16","access":"live",
+"effects":[],"spine":{{"id":"lan_spine","name":"Video","effects":[]}},
+"lanes":[{{"id":"lan_2","name":"Camera","kind":"camera","effects":[]}}],
+"clips":[{{"id":"clp_3","media":null,"start":0,"length":120,"source":0,"speed":1,"fadeIn":0,"fadeOut":0,"volume":{{"mic":1,"system":0.8}},"enabled":{{}},"crop":null,"fit":"fit","effects":[]}}],
+"items":[{{"id":"ovl_4","kind":"zoom","lane":"lan_2","anchor":{{"pinned":true,"frame":10}},"length":60,"params":{params},"effects":[]}}],
+"markers":[]}}"#
+        );
+        fs::write(path.join("project.json"), project).unwrap();
+        fs::write(
+            path.join("media.json"),
+            r#"{"format":"splice/1","media":[]}"#,
+        )
+        .unwrap();
+        let error = Package::open(&path).unwrap_err();
+        assert!(error.message.contains(field), "{params}: {}", error.message);
+    }
+}

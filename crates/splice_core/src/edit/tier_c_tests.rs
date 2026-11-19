@@ -667,3 +667,75 @@ fn take_pointer_declares_marks_in_source_time() {
         assert_eq!(error.error.code, code, "{ops:?}");
     }
 }
+
+/// Review #1: words on a clip with a speed effect sit where they play, inside the clip.
+#[test]
+fn words_follow_the_speed_effect() {
+    let mut project = sample();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"param.set","target":"clp_take","path":"speed.rate","value":1.25}]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let slot = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    let timing = project.clips.timing(slot).unwrap();
+    let mut spans = Vec::new();
+    splice_model::timing::visible_words(&project, slot, &mut |word, span| {
+        spans.push((word.from, span.start, span.end));
+    })
+    .unwrap();
+    assert!(!spans.is_empty());
+    for (source, start, end) in spans {
+        // clp_take: timeline 120 + source / 1.25 (source starts at 0).
+        let expected = (120.0 + f64::from(source) / 1.25 + 0.5).floor() as i32;
+        assert!(
+            (start - expected).abs() <= 1,
+            "word at source {source}: {start} vs {expected}"
+        );
+        assert!(
+            end <= timing.start + timing.length,
+            "word past the clip: {end}"
+        );
+    }
+}
+
+/// Review #1 follow-up: on a ramped clip, items anchored to a source frame and the words of
+/// that frame resolve through one speed-aware mapping, so captions stay on their words.
+#[test]
+fn captions_stay_on_their_words_on_a_ramped_clip() {
+    let mut project = sample();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"param.keys","target":"clp_take","path":"speed.rate","keys":[{"at":0,"value":1},{"at":60,"value":1.5,"ease":"linear"},{"at":120,"value":1}]}]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let take = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    let take_id = project.clips.id(take).unwrap();
+    let mut words = Vec::new();
+    splice_model::timing::visible_words(&project, take, &mut |word, span| {
+        words.push((word.from, span.start));
+    })
+    .unwrap();
+    let mut checked = 0;
+    for &slot in project.items.order() {
+        let timing = project.items.timing(slot).unwrap();
+        let splice_model::Anchor::ClipSource { clip, source } = timing.anchor else {
+            continue;
+        };
+        if let Some(&(_, start)) = words
+            .iter()
+            .find(|(from, _)| clip == take_id && *from == source)
+        {
+            let id = project.items.id(slot).unwrap();
+            assert_eq!(
+                crate::edit::span(&project, TimelineId::Item(id))
+                    .unwrap()
+                    .start,
+                start,
+                "{id}"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 3, "{checked} cues checked");
+}

@@ -246,31 +246,41 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
         }
         "zoom" => {
             shape(params, &["amount", "focus", "mode", "spring"])?;
-            let point = |key: &str| -> Result<Option<[f64; 2]>, PackageError> {
-                match params.field(key) {
-                    None => Ok(None),
-                    Some(point) => {
-                        shape(point, &["x", "y"])?;
-                        Ok(Some([number(point, "x")?, number(point, "y")?]))
+            let focus = match params.field("focus") {
+                None => None,
+                Some(point) => {
+                    shape(point, &["x", "y"])?;
+                    let [x, y] = [number(point, "x")?, number(point, "y")?];
+                    if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
+                        return Err(bad("zoom.focus", "a content point with x and y in 0–1"));
                     }
+                    Some([x, y])
                 }
             };
-            let named = |key: &str, default| {
-                match params.field(key).and_then(Json::as_str) {
-                    None => Ok(default),
-                    Some(name) => Ok(name),
-                }
-                .map(str::to_owned)
+            let amount = number(params, "amount")?;
+            if !(Zoom::AMOUNT[0]..=Zoom::AMOUNT[1]).contains(&amount) {
+                return Err(bad("zoom.amount", "a magnification from 1 to 5"));
+            }
+            let named = |key: &str| match params.field(key) {
+                None => Ok(None),
+                Some(value) => value
+                    .as_str()
+                    .map(Some)
+                    .ok_or_else(|| bad("zoom.mode/spring", "a name")),
             };
-            let mode = named("mode", "auto")?;
-            let spring = named("spring", "focused")?;
             ItemKind::Zoom(Zoom {
-                amount: number(params, "amount")?,
-                focus: point("focus")?,
-                mode: CameraMode::parse(&mode)
-                    .ok_or_else(|| bad("zoom.mode", "auto, content or frame"))?,
-                spring: Spring::parse(&spring)
-                    .ok_or_else(|| bad("zoom.spring", "focused, smooth, snappy or instant"))?,
+                amount,
+                focus,
+                mode: match named("mode")? {
+                    None => CameraMode::Auto,
+                    Some(name) => CameraMode::parse(name)
+                        .ok_or_else(|| bad("zoom.mode", "auto, content or frame"))?,
+                },
+                spring: match named("spring")? {
+                    None => Spring::Focused,
+                    Some(name) => Spring::parse(name)
+                        .ok_or_else(|| bad("zoom.spring", "focused, smooth, snappy or instant"))?,
+                },
             })
         }
         // 0.3 motion items migrate to camera segments that hold their end scale (D12): the old

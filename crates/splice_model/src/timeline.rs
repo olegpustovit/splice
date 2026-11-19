@@ -361,6 +361,16 @@ pub enum CameraMode {
 }
 
 impl CameraMode {
+    /// Whether the zoom happens inside a fixed frame (content) rather than scaling the card:
+    /// `auto` is content on a portrait canvas (D13).
+    pub fn zooms_content(self, portrait: bool) -> bool {
+        match self {
+            Self::Content => true,
+            Self::Frame => false,
+            Self::Auto => portrait,
+        }
+    }
+
     /// Wire names, in order.
     pub const NAMES: [(Self, &'static str); 3] = [
         (Self::Auto, "auto"),

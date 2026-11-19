@@ -35,8 +35,12 @@ pub fn anchor_start(project: &Project, mut anchor: Anchor) -> Result<Frame, Timi
             Anchor::Pinned(frame) => frame,
             Anchor::ClipSource { clip, source } => {
                 let slot = project.clips.find(clip).ok_or(TimingError::Clip(clip))?;
-                let timing = project.clips.timing(slot).ok_or(TimingError::Slot)?;
-                timeline_frame(timing, source_rate(project, slot)?, f64::from(source))?
+                played_at(
+                    project,
+                    slot,
+                    source_rate(project, slot)?,
+                    f64::from(source),
+                )?
             }
             Anchor::Item {
                 item: TimelineId::Item(id),
@@ -160,6 +164,33 @@ pub fn consumed(project: &Project, slot: Slot, frames: f64) -> Result<f64, Timin
     Ok(rate * source_rate(project, slot)?)
 }
 
+/// The timeline frame where the clip plays source frame `frame`: the inverse of `consumed`, so a
+/// speed effect places words where they are heard. Without one the mapping is linear.
+fn played_at(project: &Project, slot: Slot, rate: f64, frame: f64) -> Result<Frame, TimingError> {
+    let timing = project.clips.timing(slot).ok_or(TimingError::Slot)?;
+    let ramped = project.clips.data(slot).is_some_and(|data| {
+        data.appearance
+            .effects
+            .iter()
+            .any(|e| e.kind == "speed" && e.enabled != Some(false))
+    });
+    if !ramped {
+        return timeline_frame(timing, rate, frame);
+    }
+    // consumed() is nondecreasing in the local frame: bisect for the first frame reaching it.
+    let target = frame - f64::from(timing.source);
+    let (mut low, mut high) = (0.0, f64::from(timing.length));
+    for _ in 0..40 {
+        let mid = (low + high) / 2.0;
+        if consumed(project, slot, mid)? < target {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    timeline_frame(timing, 1.0, f64::from(timing.source) + high)
+}
+
 fn timeline_frame(timing: ClipTiming, source_rate: f64, frame: f64) -> Result<Frame, TimingError> {
     let at =
         (f64::from(timing.start) + (frame - f64::from(timing.source)) / source_rate + 0.5).floor();
@@ -267,8 +298,8 @@ fn span_in(
     if word.from < timing.source || f64::from(word.from) >= source_end {
         return Ok(None);
     }
-    let start = timeline_frame(timing, rate, f64::from(word.from))?;
-    let end = timeline_frame(timing, rate, f64::from(word.to).min(source_end))?
+    let start = played_at(project, slot, rate, f64::from(word.from))?;
+    let end = played_at(project, slot, rate, f64::from(word.to).min(source_end))?
         .max(start.checked_add(1).ok_or(TimingError::Range)?);
     Ok(Some(WordSpan {
         clip: project.clips.id(slot).ok_or(TimingError::Slot)?,
