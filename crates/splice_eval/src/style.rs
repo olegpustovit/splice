@@ -210,14 +210,12 @@ pub(super) fn caption(scopes: &[&[Effect]]) -> Option<CaptionStyle> {
     if style.enabled == Some(false) {
         return None;
     }
-    let preset = match style.text("preset") {
-        Some("karaoke") => CaptionPreset::Karaoke,
-        Some("pop") => CaptionPreset::Pop,
-        Some("box") => CaptionPreset::Box,
-        Some("clean") => CaptionPreset::Clean,
-        Some("typewriter") => CaptionPreset::Typewriter,
-        _ => CaptionPreset::Bold,
-    };
+    let named = style.text("preset").unwrap_or("bold");
+    let base = CAPTION_PRESETS
+        .iter()
+        .find(|p| p.0 == named)
+        .unwrap_or(&CAPTION_PRESETS[0]);
+    let preset = base.1;
     let safe = match style.text("safe") {
         Some("reels") => [0.14, 0.2, 0.05, 0.12],
         Some("shorts") => [0.12, 0.18, 0.05, 0.14],
@@ -226,15 +224,217 @@ pub(super) fn caption(scopes: &[&[Effect]]) -> Option<CaptionStyle> {
     };
     Some(CaptionStyle {
         preset,
-        size: style.number("size", 0.075).clamp(0.03, 0.14),
+        size: style.number("size", base.6).clamp(0.03, 0.14),
         position: style.number("position", 0.68).clamp(0.1, 0.9),
-        color: style.color("color", 0xffffff),
-        active: style.color("active", 0xffd23f),
-        stroke: style.number("stroke", 0.14).clamp(0.0, 0.3),
-        uppercase: preset != CaptionPreset::Clean && style.boolean("uppercase", true),
+        color: style.color("color", base.2),
+        active: style.color("active", base.3),
+        stroke: style.number("stroke", base.4).clamp(0.0, 0.3),
+        uppercase: style.boolean("uppercase", base.5),
         safe,
     })
 }
+
+/// Named caption looks: name, render behavior, text, highlight, stroke, uppercase, size.
+pub const CAPTION_PRESETS: &[(&str, CaptionPreset, u32, u32, f64, bool, f64)] = &[
+    (
+        "bold",
+        CaptionPreset::Bold,
+        0xffffff,
+        0xffd23f,
+        0.14,
+        true,
+        0.075,
+    ),
+    (
+        "karaoke",
+        CaptionPreset::Karaoke,
+        0xffffff,
+        0xffd23f,
+        0.14,
+        true,
+        0.075,
+    ),
+    (
+        "pop",
+        CaptionPreset::Pop,
+        0xffffff,
+        0xffd23f,
+        0.14,
+        true,
+        0.075,
+    ),
+    (
+        "box",
+        CaptionPreset::Box,
+        0xffffff,
+        0xffd23f,
+        0.14,
+        true,
+        0.075,
+    ),
+    (
+        "clean",
+        CaptionPreset::Clean,
+        0xffffff,
+        0xffd23f,
+        0.14,
+        false,
+        0.075,
+    ),
+    (
+        "typewriter",
+        CaptionPreset::Typewriter,
+        0xffffff,
+        0xffd23f,
+        0.14,
+        true,
+        0.075,
+    ),
+    (
+        "neon",
+        CaptionPreset::Bold,
+        0xffffff,
+        0x39ff14,
+        0.2,
+        true,
+        0.075,
+    ),
+    (
+        "comic",
+        CaptionPreset::Pop,
+        0xffffff,
+        0xff3b30,
+        0.25,
+        true,
+        0.085,
+    ),
+    (
+        "minimal",
+        CaptionPreset::Clean,
+        0xffffff,
+        0xffffff,
+        0.0,
+        false,
+        0.055,
+    ),
+    (
+        "subtitle",
+        CaptionPreset::Clean,
+        0xffffff,
+        0xffffff,
+        0.08,
+        false,
+        0.05,
+    ),
+    (
+        "highlight",
+        CaptionPreset::Box,
+        0xffffff,
+        0xff2d55,
+        0.1,
+        false,
+        0.07,
+    ),
+    (
+        "outline",
+        CaptionPreset::Bold,
+        0xffffff,
+        0xffffff,
+        0.3,
+        true,
+        0.08,
+    ),
+    (
+        "shadow",
+        CaptionPreset::Clean,
+        0xffffff,
+        0xffd23f,
+        0.0,
+        false,
+        0.07,
+    ),
+    (
+        "bubble",
+        CaptionPreset::Box,
+        0x111111,
+        0xffd23f,
+        0.0,
+        false,
+        0.07,
+    ),
+    (
+        "gaming",
+        CaptionPreset::Pop,
+        0x00e5ff,
+        0xff00e5,
+        0.22,
+        true,
+        0.08,
+    ),
+    (
+        "news",
+        CaptionPreset::Box,
+        0xffffff,
+        0xd70015,
+        0.0,
+        true,
+        0.055,
+    ),
+    (
+        "podcast",
+        CaptionPreset::Karaoke,
+        0xf5f5f5,
+        0x7c5cff,
+        0.1,
+        false,
+        0.065,
+    ),
+    (
+        "cinematic",
+        CaptionPreset::Clean,
+        0xf0e6d2,
+        0xf0e6d2,
+        0.0,
+        false,
+        0.05,
+    ),
+    (
+        "glow",
+        CaptionPreset::Karaoke,
+        0xffffff,
+        0x00d1ff,
+        0.18,
+        false,
+        0.075,
+    ),
+    (
+        "retro",
+        CaptionPreset::Pop,
+        0xffe66d,
+        0xff6b6b,
+        0.2,
+        true,
+        0.08,
+    ),
+    (
+        "elegant",
+        CaptionPreset::Typewriter,
+        0xffffff,
+        0xe0c097,
+        0.0,
+        false,
+        0.06,
+    ),
+    (
+        "hype",
+        CaptionPreset::Bold,
+        0xffffff,
+        0xff9500,
+        0.2,
+        true,
+        0.09,
+    ),
+];
 
 /// Returns an effect's enabled state and merged overrides in project-to-item scope order.
 pub fn resolve_effect(scopes: &[&[Effect]], kind: &str) -> Option<(bool, Vec<EffectParam>)> {
@@ -332,4 +532,125 @@ impl Resolution {
             .and_then(|hex| u32::from_str_radix(hex, 16).ok())
             .unwrap_or(default)
     }
+}
+
+/// How a text's words or characters come in (T18.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Animate {
+    /// Static.
+    None,
+    /// Opacity.
+    Fade,
+    /// Slide up while fading in.
+    Rise,
+    /// Scale from small.
+    Pop,
+    /// One unit at a time, no fade.
+    Typewriter,
+    /// Units light up in the accent color.
+    Highlight,
+    /// Overshooting pop.
+    Bounce,
+    /// Slide in from the left.
+    Slide,
+}
+
+/// Resolved text styling for a title or caption (project › lane › item).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextStyle {
+    /// Font family.
+    pub font: String,
+    /// Weight: 0 regular … 5 black.
+    pub weight: u8,
+    /// Size as a fraction of the canvas's shorter side.
+    pub size: f64,
+    /// Text RGB.
+    pub color: u32,
+    /// Stroke RGB.
+    pub stroke: u32,
+    /// Stroke width relative to the font size.
+    pub stroke_width: f64,
+    /// Drop shadow 0…1.
+    pub shadow: f64,
+    /// Backing box: 0 none, 1 solid, 2 rounded.
+    pub boxed: u8,
+    /// Backing RGB.
+    pub box_color: u32,
+    /// 0 left, 1 center, 2 right.
+    pub align: u8,
+    /// Line height relative to the font size.
+    pub line_height: f64,
+    /// Vertical placement: 0 top, 1 middle, 2 bottom, 3 lower third.
+    pub position: u8,
+    /// Animator.
+    pub animate: Animate,
+    /// Animate words (0), characters (1) or lines (2).
+    pub unit: u8,
+    /// Frames each unit takes to come in.
+    pub duration: f64,
+    /// Frames between units.
+    pub stagger: f64,
+}
+
+fn index(options: &[&str], value: Option<&str>, default: u8) -> u8 {
+    value
+        .and_then(|value| options.iter().position(|o| *o == value))
+        .map_or(default, |i| i as u8)
+}
+
+/// The text style of an item, when the project, its lane or the item set one.
+pub(super) fn text(scopes: &[&[Effect]]) -> Option<TextStyle> {
+    let style = Resolution::on(scopes, &[], "text");
+    let animate = Resolution::on(scopes, &[], "animate");
+    if style.is_none() && animate.is_none() {
+        return None;
+    }
+    let style = style.unwrap_or(Resolution {
+        enabled: Some(true),
+        params: Vec::new(),
+    });
+    let (preset, unit, duration, stagger) = match &animate {
+        Some(a) => (
+            a.text("preset"),
+            index(&["word", "character", "line"], a.text("unit"), 0),
+            a.number("duration", 8.0).clamp(1.0, 60.0),
+            a.number("stagger", 3.0).clamp(0.0, 30.0),
+        ),
+        None => (None, 0, 8.0, 3.0),
+    };
+    Some(TextStyle {
+        font: style.text("font").unwrap_or("SF Pro Display").to_owned(),
+        weight: index(
+            &["regular", "medium", "semibold", "bold", "heavy", "black"],
+            style.text("weight"),
+            3,
+        ),
+        size: style.number("size", 0.06).clamp(0.02, 0.3),
+        color: style.color("color", 0xffffff),
+        stroke: style.color("stroke", 0),
+        stroke_width: style.number("strokeWidth", 0.0).clamp(0.0, 0.3),
+        shadow: style.number("shadow", 0.3).clamp(0.0, 1.0),
+        boxed: index(&["none", "solid", "rounded"], style.text("box"), 0),
+        box_color: style.color("boxColor", 0),
+        align: index(&["left", "center", "right"], style.text("align"), 1),
+        line_height: style.number("lineHeight", 1.15).clamp(0.8, 2.0),
+        position: index(
+            &["top", "middle", "bottom", "lowerThird"],
+            style.text("position"),
+            0,
+        ),
+        animate: match preset {
+            Some("fade") => Animate::Fade,
+            Some("rise") => Animate::Rise,
+            Some("pop") => Animate::Pop,
+            Some("typewriter") => Animate::Typewriter,
+            Some("highlight") => Animate::Highlight,
+            Some("bounce") => Animate::Bounce,
+            Some("slide") => Animate::Slide,
+            _ => Animate::None,
+        },
+        unit,
+        duration,
+        stagger,
+    })
 }

@@ -214,6 +214,7 @@ version = "0.1.0"
 dependencies = [
  "mem_sys",
  "splice_core",
+ "splice_json",
  "splice_model",
  "splice_testkit",
 ]

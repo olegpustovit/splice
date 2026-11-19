@@ -259,12 +259,7 @@ pub fn describe(id: Option<&str>, query: Option<&str>) -> Result<Json, CommandEr
             fields.push(("captionModel".into(), text("A cue holds transcript word IDs. Edits to a cue change its display and leave its transcript intact.")));
             fields.push((
                 "presets".into(),
-                Json::Array(
-                    args::CAPTION_PRESETS
-                        .iter()
-                        .map(|preset| text(preset))
-                        .collect(),
-                ),
+                Json::Array(args::caption_presets().to_vec()),
             ));
         }
         if id.starts_with("effect.") {

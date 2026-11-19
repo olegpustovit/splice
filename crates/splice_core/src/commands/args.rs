@@ -6,8 +6,16 @@ use splice_model::{
 
 type Error = CommandError;
 
-pub(super) const CAPTION_PRESETS: &[&str] =
-    &["bold", "karaoke", "pop", "box", "clean", "typewriter"];
+/// Caption preset names, from the `captions` effect schema.
+pub(super) fn caption_presets() -> &'static [Json] {
+    super::effect_schemas()
+        .field("captions")
+        .and_then(|c| c.field("params"))
+        .and_then(|p| p.field("preset"))
+        .and_then(|p| p.field("options"))
+        .and_then(Json::as_array)
+        .expect("checked caption schema")
+}
 
 pub(super) trait Args {
     fn required(&self, key: &str) -> Result<&Json, Error>;

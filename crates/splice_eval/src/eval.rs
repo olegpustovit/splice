@@ -200,6 +200,7 @@ struct PreparedTitle {
     interval: Interval,
     text: String,
     rig: Rig,
+    style: Option<style::TextStyle>,
 }
 
 struct PreparedMotion {
@@ -216,6 +217,7 @@ struct PreparedCaption {
     style: CaptionStyle,
     words: Vec<CaptionWord>,
     rig: Rig,
+    text: Option<style::TextStyle>,
 }
 
 #[derive(Clone, Copy)]
@@ -284,6 +286,13 @@ impl Interval {
 impl Evaluator {
     /// Resolves anchors, source clocks, geometry, and effects. Call again after a project edit.
     pub fn prepare(project: &Project) -> Result<Self, EvalError> {
+        match super::compound::flatten(project)? {
+            Some(flat) => Self::prepare_flat(&flat),
+            None => Self::prepare_flat(project),
+        }
+    }
+
+    fn prepare_flat(project: &Project) -> Result<Self, EvalError> {
         if project.fps == 0 || project.size.contains(&0) {
             return Err(EvalError::Canvas);
         }
@@ -607,21 +616,29 @@ impl Evaluator {
             });
         }
         let [w, h] = self.size.map(f64::from);
-        let height = h.min(w) * 0.1;
-        for (index, title) in self
+        let mut stacked = 0.0;
+        for title in self
             .titles
             .iter()
             .filter(|title| title.interval.contains(at))
-            .enumerate()
         {
+            // Styled titles size by font (bounds hold one line at 1/0.6 of the font size).
+            let (height, position) = title.style.as_ref().map_or((h.min(w) * 0.1, 0), |s| {
+                (s.size * h.min(w) / 0.6 * s.line_height / 1.15, s.position)
+            });
+            let y = match position {
+                1 => (h - height) / 2.0,
+                2 => h * 0.86 - height,
+                3 => h * 0.76,
+                _ => {
+                    let y = h * 0.07 + stacked;
+                    stacked += height * 1.2;
+                    y
+                }
+            };
             out.layers.push(Layer::Title {
                 item: title.id,
-                bounds: layout::rect(
-                    w * 0.06,
-                    h * 0.07 + index as f64 * height * 1.2,
-                    w * 0.88,
-                    height,
-                ),
+                bounds: layout::rect(w * 0.06, y, w * 0.88, height),
                 opacity: title.interval.alpha(at),
                 look: title.rig.look(f64::from(at - title.interval.start), canvas),
             });
@@ -650,6 +667,20 @@ impl Evaluator {
             .iter()
             .find(|title| title.id == id)
             .map(|title| title.text.as_str())
+    }
+
+    /// Resolved text style of a title or caption, when one is set.
+    pub fn text_style(&self, id: ItemId) -> Option<&style::TextStyle> {
+        self.titles
+            .iter()
+            .find(|title| title.id == id)
+            .and_then(|title| title.style.as_ref())
+            .or_else(|| {
+                self.captions
+                    .iter()
+                    .find(|caption| caption.id == id)
+                    .and_then(|caption| caption.text.as_ref())
+            })
     }
 
     /// Prepared text and timing for the words in a caption cue.
@@ -931,6 +962,7 @@ impl Evaluator {
                 interval,
                 text: text.clone(),
                 rig,
+                style: style::text(&[&p.effects, lane, local]),
             }),
             ItemKind::Shape { shape, rect } => {
                 let style = look::shape_style(local);
@@ -969,7 +1001,8 @@ impl Evaluator {
                 if !sound.volume.is_finite() || sound.volume < 0.0 {
                     return Err(EvalError::Range);
                 }
-                let tracks = file_tracks(media)
+                // Audio unlinked from a take plays its recorded components.
+                let tracks = overlay_tracks(media)
                     .into_iter()
                     .map(|(track, gain)| (track, gain * sound.volume))
                     .collect();
@@ -1028,6 +1061,7 @@ impl Evaluator {
                             style,
                             words,
                             rig,
+                            text: style::text(&[&p.effects, lane, local]),
                         });
                     }
                 }

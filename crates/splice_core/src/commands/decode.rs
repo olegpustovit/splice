@@ -557,9 +557,14 @@ pub(super) fn captions_generate(a: &Json, _scratch: &mut DecodeScratch) -> Decod
     }
     let style = a.opt_string("style")?;
     if let Some(style) = &style
-        && !CAPTION_PRESETS.contains(&style.as_str())
+        && !caption_presets()
+            .iter()
+            .any(|known| known.as_str() == Some(style))
     {
-        return Err(Error::bad("style", &CAPTION_PRESETS.join(", ")));
+        return Err(Error::bad(
+            "style",
+            "a caption preset from commands.describe {id:\"caption.set\"}",
+        ));
     }
     Ok(Op::CaptionsGenerate {
         clips: a

@@ -84,7 +84,7 @@ fn every_command_has_a_documented_decodable_example_and_distinct_variant() {
             .as_array()
             .unwrap()
             .len(),
-        6
+        22
     );
 
     let matches = describe(None, Some("FrAMing")).unwrap();

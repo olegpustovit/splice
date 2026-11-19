@@ -104,11 +104,28 @@ pub(crate) fn with_scratch(project: &Project, scratch: &mut Scratch) -> Result<(
                 .iter()
                 .find(|media| media.id == id)
                 .ok_or_else(|| bad("clip.media", "a media table ID"))?;
-            let source_frames = f64::from(timing.length) * timing.speed * descriptor.probe.fps
+            // A speed ramp consumes the integral of its rate instead of the clip length.
+            let consumed = data
+                .appearance
+                .effects
+                .iter()
+                .find(|e| e.kind == "speed" && e.enabled != Some(false))
+                .and_then(|e| e.params.iter().find(|p| p.name == "rate"))
+                .map_or(f64::from(timing.length), |rate| match &rate.value {
+                    EffectValue::Number(r) => r * f64::from(timing.length),
+                    EffectValue::Keys(keys) => {
+                        splice_model::keys::integrate(keys, f64::from(timing.length))
+                    }
+                    _ => f64::from(timing.length),
+                });
+            let source_frames = consumed * timing.speed * descriptor.probe.fps
                 / f64::from(project.fps)
                 + f64::from(timing.source);
-            if source_frames > f64::from(descriptor.probe.frames) + 0.000_001 {
-                return Err(bad("clip source range", "within its media duration"));
+            if source_frames > f64::from(descriptor.probe.frames) + 0.001 {
+                return Err(bad(
+                    "clip source range",
+                    "within its media duration (a faster speed ramp needs a shorter clip)",
+                ));
             }
         }
         appearance(&data.appearance, timing.length, effect_ids)?;

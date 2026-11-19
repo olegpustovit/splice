@@ -204,7 +204,7 @@ fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
             continue;
         }
         let allowed_test = (matches!(key, "mem_sys" | "splice_testkit")
-            || (name == "splice_eval" && key == "splice_core"))
+            || (name == "splice_eval" && matches!(key, "splice_core" | "splice_json")))
             && table.ends_with("dev-dependencies");
         let allowed_build = key == "cc"
             && matches!(name, "apple_sys" | "quickjs_sys")

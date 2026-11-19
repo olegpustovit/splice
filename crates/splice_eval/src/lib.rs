@@ -3,6 +3,7 @@
 
 use splice_model::{ClipId, Frame, ItemId, MediaId, Rect, ShapeKind, TimelineId, WordId};
 
+mod compound;
 mod eval;
 mod layout;
 mod look;
@@ -14,10 +15,12 @@ pub use look::{
     Transition, TransitionKind,
 };
 pub use style::{
-    Background, CaptionPreset, CaptionStyle, ClickZoom, Cursor, KeyPosition, Keys, Window,
-    resolve_effect,
+    Animate, Background, CaptionPreset, CaptionStyle, ClickZoom, Cursor, KeyPosition, Keys,
+    TextStyle, Window, resolve_effect,
 };
 
+#[cfg(test)]
+mod look_tests;
 #[cfg(test)]
 mod tests;
 
