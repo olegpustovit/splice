@@ -1,6 +1,6 @@
 use super::time::{anchor_at, clip_slot, item_slot, media, rounded, source_rate};
 use super::*;
-use crate::commands::{AnchorArg, FrameArg, OverlayContent};
+use crate::commands::{AnchorArg, Connected, FrameArg, OverlayContent};
 
 impl Editor {
     pub(super) fn run(
@@ -25,7 +25,8 @@ impl Editor {
                 items,
                 ripple,
                 keep_overlays,
-            } => self.delete(&items, ripple, keep_overlays),
+                connected,
+            } => self.delete(&items, ripple, keep_overlays, connected),
             Op::OverlayAdd {
                 content,
                 at,
@@ -423,6 +424,7 @@ impl Editor {
         selection: &[Target],
         ripple: bool,
         keep: bool,
+        connected: Option<Connected>,
     ) -> Result<Outcome, CommandError> {
         let ids = self.selection(selection)?;
         let mut clips: Vec<_> = ids
@@ -440,7 +442,7 @@ impl Editor {
             .collect();
         clips.sort_by_key(|&(_, start)| std::cmp::Reverse(start));
         for (id, _) in clips {
-            self.delete_clip(id, ripple, keep)?;
+            self.delete_clip(id, ripple, keep, connected)?;
         }
         for id in &ids {
             match *id {
@@ -465,10 +467,21 @@ impl Editor {
         })
     }
 
-    fn delete_clip(&mut self, id: ClipId, ripple: bool, keep: bool) -> Result<(), CommandError> {
+    fn delete_clip(
+        &mut self,
+        id: ClipId,
+        ripple: bool,
+        keep: bool,
+        connected: Option<Connected>,
+    ) -> Result<(), CommandError> {
         let slot = clip_slot(&self.project, id)?;
         let timing = self.project.clips.timing(slot).expect("live clip");
         let rate = source_rate(&self.project, slot)?;
+        let kids = if keep {
+            Vec::new()
+        } else {
+            self.children(&[TimelineId::Clip(id)])?
+        };
         self.project.clips.remove(slot);
         if keep {
             let gap = ClipId::from_serial(self.mint("clp")?);
@@ -509,11 +522,12 @@ impl Editor {
             self.project.clips.sort_by_start();
             return Ok(());
         }
-        self.cascade(TimelineId::Clip(id));
+        let end = timing.end().ok_or_else(frame_range)?;
         if ripple {
-            self.shift_after(timing.end().ok_or_else(frame_range)?, -timing.length, None)?;
+            self.shift_after(end, -timing.length, None)?;
         }
-        Ok(())
+        // A deleted clip takes its items unless they re-parent (D21).
+        self.settle_connected(&kids, &[], connected, timing.start, end, ripple)
     }
 
     pub(super) fn cascade(&mut self, root: TimelineId) {

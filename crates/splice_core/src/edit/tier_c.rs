@@ -1120,7 +1120,7 @@ impl Editor {
         for (from, to) in ranges {
             let to = to.min(limit);
             if to > from {
-                self.cut_range(from, to, true)?;
+                self.cut_range(from, to, true, None)?;
                 total += to - from;
                 limit = from;
             }

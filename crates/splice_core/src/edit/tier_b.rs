@@ -4,7 +4,8 @@ use super::settle::{Owner, effects, effects_vec_mut};
 use super::time::{anchor_at, clip_slot, item_slot, media, rounded};
 use super::*;
 use crate::commands::{
-    CaptionWordPatch, Component, EffectSelection, FrameArg, OverlayContent, effect_schemas,
+    CaptionWordPatch, Component, Connected, EffectSelection, FrameArg, OverlayContent,
+    effect_schemas,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -204,13 +205,27 @@ impl Editor {
                 to_project,
                 clear_overrides,
             } => self.promote(&effect, to_project, clear_overrides),
-            Op::CutRange { from, to, ripple } => {
+            Op::CutRange {
+                from,
+                to,
+                ripple,
+                connected,
+            } => {
                 let from = self.frame(&from)?;
                 let to = self.frame(&to)?;
+                if from < 0 {
+                    return Err(CommandError::rule(
+                        "BAD_ARGS",
+                        "from",
+                        Some(Json::Signed(i64::from(from))),
+                        "a frame at or after 0",
+                        "The timeline starts at frame 0; pass from:0 to cut from the start.",
+                    ));
+                }
                 if to <= from {
                     return Err(CommandError::bad("to", "a frame after from"));
                 }
-                self.cut_range(from, to, ripple)?;
+                self.cut_range(from, to, ripple, connected)?;
                 Ok(Outcome {
                     summary: Summary::Text(format!("Deleted frames {from}–{to}")),
                     primary: None,
@@ -220,7 +235,8 @@ impl Editor {
             Op::CutWords {
                 words,
                 transcript_hash,
-            } => self.cut_words(&words, transcript_hash),
+                connected,
+            } => self.cut_words(&words, transcript_hash, connected),
             Op::ClipLift { items, lane } => self.lift(&items, lane.as_ref()),
             Op::OverlayReplaceSpine { item, target } => self.replace_spine(&item, target.as_ref()),
             Op::CaptionsGenerate {
@@ -989,7 +1005,10 @@ impl Editor {
     // ── Cutting ──
 
     /// Items anchored to a clip, with their current start frames.
-    fn children(&self, parents: &[TimelineId]) -> Result<Vec<(Slot, Frame)>, CommandError> {
+    pub(super) fn children(
+        &self,
+        parents: &[TimelineId],
+    ) -> Result<Vec<(Slot, Frame)>, CommandError> {
         let mut kids = Vec::new();
         for &slot in self.project.items.order() {
             let anchor = self.project.items.timing(slot).expect("live item").anchor;
@@ -1010,12 +1029,18 @@ impl Editor {
         Ok(())
     }
 
+    /// Deletes timeline frames `from..to`. Items anchored to the removed clip frames follow
+    /// `connected` (D21): unset, a piece split off a surviving clip hands its items to the nearest
+    /// surviving clip, and a clip the range covers whole takes its items with it.
     pub(super) fn cut_range(
         &mut self,
         from: Frame,
         to: Frame,
         ripple: bool,
+        connected: Option<Connected>,
     ) -> Result<(), CommandError> {
+        // Pieces of clips that survive the cut in part.
+        let mut partial = Vec::new();
         for at in [from, to] {
             let inside = self.project.clips.order().iter().find_map(|&slot| {
                 let timing = self.project.clips.timing(slot).expect("live clip");
@@ -1027,7 +1052,8 @@ impl Editor {
                 })
             });
             if let Some((id, start)) = inside {
-                self.split_clip(id, at, at - start)?;
+                let right = self.split_clip(id, at, at - start)?;
+                partial.push(if at == from { right } else { id });
             }
         }
         let inside: Vec<(Slot, ClipId)> = self
@@ -1043,45 +1069,123 @@ impl Editor {
             .collect();
         let parents: Vec<TimelineId> = inside.iter().map(|&(_, id)| TimelineId::Clip(id)).collect();
         let kids = self.children(&parents)?;
+        // M19: an item that starts before the cut and runs into it loses the cut frames, so the
+        // items after it close up behind it instead of bumping to new lanes.
+        let mut shorten = Vec::new();
+        if ripple {
+            for &slot in self.project.items.order() {
+                if kids.iter().any(|kid| kid.0 == slot) {
+                    continue;
+                }
+                let span = time::item_span(&self.project, slot)?;
+                if span.start < from && span.end > from {
+                    shorten.push((slot, span.end.min(to) - from));
+                }
+            }
+        }
         for &(slot, _) in &inside {
             self.project.clips.remove(slot);
         }
         if ripple {
             self.shift_after(to, from - to, None)?;
-            // A pinned item spanning the removed range (a full-length watermark) keeps its start and
-            // loses the removed frames, so it still covers what it covered; other pinned items stay put.
-            for index in 0..self.project.items.order().len() {
-                let slot = self.project.items.order()[index];
+            for &(slot, cut) in &shorten {
                 let timing = self.project.items.timing_mut(slot).expect("live item");
-                if let Anchor::Pinned(start) = timing.anchor
-                    && start <= from
-                    && start + timing.length >= to
-                    && timing.length > to - from
-                {
-                    timing.length -= to - from;
-                    let length = timing.length;
-                    let data = self.project.items.data_mut(slot).expect("live item");
-                    super::edits::clamp_fades(&mut data.appearance, length);
-                }
+                timing.length = (timing.length - cut).max(MIN_LENGTH);
+                let length = timing.length;
+                let data = self.project.items.data_mut(slot).expect("live item");
+                super::edits::clamp_fades(&mut data.appearance, length);
             }
         }
-        let kids: Vec<(Slot, Frame)> = kids
-            .into_iter()
-            .map(|(slot, at)| {
-                (
-                    slot,
-                    if at >= to && ripple {
-                        at - (to - from)
-                    } else {
-                        at.min(from)
-                    },
-                )
-            })
-            .collect();
-        self.reanchor_at(&kids)
+        self.settle_connected(&kids, &partial, connected, from, to, ripple)
     }
 
-    fn cut_words(&mut self, words: &[WordId], hash: Option<u64>) -> Result<Outcome, CommandError> {
+    /// Applies D21 to `kids` (items anchored to clips just removed from `from..to`, with their
+    /// starts before the removal). `partial` lists removed pieces whose clip survives in part.
+    pub(super) fn settle_connected(
+        &mut self,
+        kids: &[(Slot, Frame)],
+        partial: &[ClipId],
+        connected: Option<Connected>,
+        from: Frame,
+        to: Frame,
+        ripple: bool,
+    ) -> Result<(), CommandError> {
+        for &(slot, at) in kids {
+            let Some(id) = self.project.items.id(slot) else {
+                continue; // already cascaded with an earlier kid
+            };
+            let timing = self.project.items.timing(slot).expect("live item");
+            let Some(TimelineId::Clip(parent)) = edits::anchor_parent(timing.anchor) else {
+                continue;
+            };
+            let whole = !partial.contains(&parent);
+            let shift = if ripple { to - from } else { 0 };
+            // The frame the item's start lands on, where the cut leaves one.
+            let landed = if at >= to { at - shift } else { at.min(from) };
+            let mode = match (connected, whole) {
+                (None, true) | (Some(Connected::Trim), true) => Connected::Delete,
+                (None, false) => Connected::Reparent,
+                (Some(mode), _) => mode,
+            };
+            let mut start = if ripple || at >= to { landed } else { at };
+            let mut length = timing.length;
+            if mode == Connected::Trim && (from..to).contains(&at) {
+                // Keep what ran past the cut, on the content it shows.
+                let kept = at + timing.length - to;
+                if kept < MIN_LENGTH {
+                    self.remove_cut(slot, id, parent, whole);
+                    continue;
+                }
+                start = to - shift;
+                length = kept;
+                let skipped = match self.project.items.data(slot).expect("live item").kind {
+                    ItemKind::Media(overlay) => {
+                        time::media_frames(&self.project, overlay.media, to - at)?
+                    }
+                    _ => 0,
+                };
+                let data = self.project.items.data_mut(slot).expect("live item");
+                super::edits::shift_keys(&mut data.appearance.effects, to - at);
+                if let ItemKind::Media(overlay) = &mut data.kind {
+                    overlay.source = frame_add(overlay.source, skipped)?;
+                }
+            } else if mode == Connected::Delete {
+                self.remove_cut(slot, id, parent, whole);
+                continue;
+            }
+            // Past the spine end, the nearest surviving clip is the last one.
+            let end = self.spine_end()?;
+            if !self.project.clips.order().is_empty() && start + length > end {
+                start = (end - length).max(0);
+            }
+            let anchor = anchor_at(&self.project, start)?;
+            self.reanchor_because(slot, anchor, Cause::Reparent);
+            let timing = self.project.items.timing_mut(slot).expect("live item");
+            if timing.length != length {
+                timing.length = length;
+                let data = self.project.items.data_mut(slot).expect("live item");
+                super::edits::clamp_fades(&mut data.appearance, length);
+            }
+        }
+        Ok(())
+    }
+
+    fn remove_cut(&mut self, slot: Slot, id: ItemId, parent: ClipId, whole: bool) {
+        self.project.items.remove(slot);
+        self.report.side_effects.push(SideEffect::Removed {
+            id,
+            cascade_from: Some(TimelineId::Clip(parent)),
+            cause: if whole { Cause::Cascade } else { Cause::Cut },
+        });
+        self.cascade(TimelineId::Item(id));
+    }
+
+    fn cut_words(
+        &mut self,
+        words: &[WordId],
+        hash: Option<u64>,
+        connected: Option<Connected>,
+    ) -> Result<Outcome, CommandError> {
         let mut ranges = Vec::with_capacity(words.len());
         if let Some(hash) = hash
             && !self.project.transcripts.iter().any(|t| t.hash == hash)
@@ -1108,7 +1212,7 @@ impl Editor {
         for (from, to) in ranges {
             let to = to.min(limit);
             if to - from >= 1 {
-                self.cut_range(from, to, true)?;
+                self.cut_range(from, to, true, connected)?;
                 limit = from;
             }
         }

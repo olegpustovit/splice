@@ -73,6 +73,8 @@ declare namespace Splice {
       ripple?: boolean;
       /** keep leaves a gap clip carrying them · @default delete */
       overlays?: "delete" | "keep";
+      /** default: anchored items of a deleted clip cascade */
+      connected?: "reparent" | "delete" | "trim";
     }
     /** Duplicate (edit, 0.1). */
     interface ItemDuplicate extends Base {
@@ -349,6 +351,8 @@ declare namespace Splice {
       to: At;
       /** @default true */
       ripple?: boolean;
+      /** default: items on a partly cut clip move to the nearest surviving clip; a wholly cut clip takes its items */
+      connected?: "reparent" | "delete" | "trim";
     }
     /** Delete Words (destructive, 0.2). */
     interface CutWords extends Base {
@@ -357,6 +361,8 @@ declare namespace Splice {
       words: string[];
       /** string from transcript.get */
       transcriptHash?: string;
+      /** as cut.range */
+      connected?: "reparent" | "delete" | "trim";
     }
     /** Add Effect (edit, 0.2). */
     interface EffectAdd extends Base {

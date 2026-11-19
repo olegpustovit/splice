@@ -238,6 +238,17 @@ pub(super) fn media(project: &Project, id: MediaId) -> Result<&Media, CommandErr
         .ok_or_else(|| not_found(&id, "Call project.info for current media IDs."))
 }
 
+/// Media frames of `media` that play in `frames` timeline frames at normal speed (M2: overlay
+/// sources live on the media clock).
+pub(super) fn media_frames(
+    project: &Project,
+    media_id: MediaId,
+    frames: Frame,
+) -> Result<Frame, CommandError> {
+    let fps = media(project, media_id)?.probe.fps;
+    rounded(f64::from(frames) * fps / f64::from(project.fps))
+}
+
 pub(super) fn source_value(project: &Project, slot: Slot, at: Frame) -> Result<f64, CommandError> {
     let timing = project.clips.timing(slot).expect("live clip");
     Ok(f64::from(timing.source)

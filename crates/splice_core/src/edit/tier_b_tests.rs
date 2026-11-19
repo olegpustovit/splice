@@ -1,4 +1,4 @@
-use super::tests::sample;
+use super::tests::{sample, start_of};
 use super::*;
 use std::path::Path;
 
@@ -686,4 +686,117 @@ fn c1_legacy_word_ids_migrate_on_load() {
         assert_eq!(legacy.items.data(a), current.items.data(b));
         assert_eq!(legacy.items.timing(a), current.items.timing(b));
     }
+}
+
+fn cause_of(report: &ApplyReport, item: &str) -> Option<Cause> {
+    let item: ItemId = item.parse().unwrap();
+    report
+        .side_effects
+        .iter()
+        .rev()
+        .find_map(|effect| match *effect {
+            SideEffect::Removed { id, cause, .. }
+            | SideEffect::Reanchored { id, cause, .. }
+            | SideEffect::Bumped { id, cause, .. }
+                if id == item =>
+            {
+                Some(cause)
+            }
+            _ => None,
+        })
+}
+
+/// T37.2 H2b: a cut that removes an item's whole parent clip deletes the item.
+#[test]
+fn h2b_cutting_a_whole_parent_cascades() {
+    let mut project = sample();
+    let report = run(&mut project, r#"[{"cmd":"cut.range","from":0,"to":120}]"#).unwrap();
+    assert!(project.items.find("ovl_hook".parse().unwrap()).is_none());
+    assert_eq!(cause_of(&report, "ovl_hook"), Some(Cause::Cascade));
+}
+
+/// T37.3 D21: a partial cut re-parents (default), deletes or trims the items on the cut piece.
+#[test]
+fn d21_partial_cut_reparents_deletes_or_trims_connected_items() {
+    let base = sample();
+    let broll = || "ovl_broll".parse::<ItemId>().unwrap();
+    // ovl_broll starts at 420 on clp_take for 75 frames; cut 410–440 out from under it.
+    let mut project = base.clone();
+    let report = run(&mut project, r#"[{"cmd":"cut.range","from":410,"to":440}]"#).unwrap();
+    assert_eq!(cause_of(&report, "ovl_broll"), Some(Cause::Reparent));
+    let at = span(&project, TimelineId::Item(broll())).unwrap();
+    assert_eq!((at.start, at.end), (410, 485));
+
+    let mut project = base.clone();
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"cut.range","from":410,"to":440,"connected":"delete"}]"#,
+    )
+    .unwrap();
+    assert!(project.items.find(broll()).is_none());
+    assert_eq!(cause_of(&report, "ovl_broll"), Some(Cause::Cut));
+
+    let mut project = base.clone();
+    run(
+        &mut project,
+        r#"[{"cmd":"cut.range","from":410,"to":440,"connected":"trim"}]"#,
+    )
+    .unwrap();
+    let slot = project.items.find(broll()).unwrap();
+    let at = span(&project, TimelineId::Item(broll())).unwrap();
+    assert_eq!((at.start, at.end), (410, 465));
+    let ItemKind::Media(overlay) = project.items.data(slot).unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(
+        overlay.source, 20,
+        "the trimmed overlay keeps showing the same frames"
+    );
+
+    // item.delete of a clip cascades unless told to re-parent.
+    let mut project = base.clone();
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"item.delete","items":["clp_open"],"connected":"reparent"}]"#,
+    )
+    .unwrap();
+    assert_eq!(cause_of(&report, "ovl_hook"), Some(Cause::Reparent));
+    assert_eq!(start_of(&project, "ovl_hook"), 0);
+}
+
+/// T37.6 M19: a ripple cut shortens the item that runs into it, so the next item on its lane
+/// closes up instead of bumping; a real bump names the item in the way.
+#[test]
+fn m19_ripple_shortens_spanning_items_and_bumps_carry_a_cause() {
+    let mut project = sample();
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"lane.create","kind":"graphics","name":"Notes","ref":"$lane"},
+            {"cmd":"title.add","at":300,"length":60,"lane":"$lane","text":"A"},
+            {"cmd":"title.add","at":365,"length":30,"lane":"$lane","text":"B"}]"#,
+    )
+    .unwrap();
+    let a = super::tests::created(&report, 1);
+    let b = super::tests::created(&report, 2);
+    let report = run(&mut project, r#"[{"cmd":"cut.range","from":320,"to":340}]"#).unwrap();
+    assert!(
+        !report
+            .side_effects
+            .iter()
+            .any(|e| matches!(e, SideEffect::Bumped { .. })),
+        "{:?}",
+        report.side_effects
+    );
+    let a_span = span(&project, TimelineId::Item(a.parse().unwrap())).unwrap();
+    assert_eq!((a_span.start, a_span.end), (300, 340));
+    assert_eq!(start_of(&project, &b), 345);
+    let report = run(
+        &mut project,
+        &format!(r#"[{{"cmd":"item.move","items":["{b}"],"to":310}}]"#),
+    )
+    .unwrap();
+    assert_eq!(
+        cause_of(&report, &b),
+        Some(Cause::Overlap(a.parse().unwrap()))
+    );
 }

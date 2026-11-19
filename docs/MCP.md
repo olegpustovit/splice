@@ -138,6 +138,14 @@ item, marker, or transcript relation. A frame in a gap between clips keeps its p
 to the end of the clip before it (or the start of the first clip). Overlapping items can move to a
 free lane during settle. Passing an explicit lane turns an overlap into `LANE_CONFLICT`.
 
+Cuts keep connected items (D21). `cut.range`, `cut.words` and `item.delete` take
+`connected:"reparent"|"delete"|"trim"`. Unset, an item on a piece of a clip that partly survives
+moves to the nearest surviving clip at the cut point (`cause:"reparent"`), and a clip removed
+whole takes its items with it (`cause:"cascade"`). `delete` removes the items on cut frames
+(`cause:"cut"`); `trim` keeps the part of each item that runs past the cut, on the same content.
+A ripple cut also shortens any item that runs into the cut, so the items after it close up
+instead of bumping to new lanes. `cut.range` refuses a negative `from`.
+
 The timeline ends where the spine ends. An item that would run past the last clip is trimmed
 there; one placed at or past the end (fewer than three frames before it) is refused with
 `PAST_END`; one an edit leaves past the end is removed (`cause:"spineEnd"`).

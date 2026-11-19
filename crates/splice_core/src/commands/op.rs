@@ -43,6 +43,8 @@ pub enum Op {
         ripple: bool,
         /// Keep overlays pinned to a gap.
         keep_overlays: bool,
+        /// What happens to items anchored to deleted clips (D21).
+        connected: Option<Connected>,
     },
     /// Duplicate.
     ItemDuplicate {
@@ -297,6 +299,8 @@ pub enum Op {
         to: FrameArg,
         /// Close the cut range.
         ripple: bool,
+        /// What happens to items anchored to the cut frames (D21).
+        connected: Option<Connected>,
     },
     /// Delete Words.
     CutWords {
@@ -304,6 +308,8 @@ pub enum Op {
         words: Vec<WordId>,
         /// Expected transcript version.
         transcript_hash: Option<u64>,
+        /// What happens to items anchored to the cut frames (D21).
+        connected: Option<Connected>,
     },
     /// Add Effect.
     EffectAdd {
@@ -747,6 +753,18 @@ pub enum Position {
     To(FrameArg),
     /// Frame offset.
     Delta(Frame),
+}
+
+/// What a cut does with items anchored to the clip frames it removes (D21). Unset: a partial cut
+/// re-parents and a whole deleted parent cascades.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Connected {
+    /// Move them to the nearest surviving clip at the cut point.
+    Reparent,
+    /// Delete them with the frames.
+    Delete,
+    /// Keep the part of each that runs past the cut; delete the ones the cut covers.
+    Trim,
 }
 
 /// Which edge a trim moves.

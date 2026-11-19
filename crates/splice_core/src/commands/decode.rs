@@ -47,6 +47,17 @@ pub(super) fn item_delete(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         items: a.targets("items")?,
         ripple: a.flag("ripple", true)?,
         keep_overlays,
+        connected: connected(a)?,
+    })
+}
+
+fn connected(a: &Json) -> Result<Option<Connected>, Error> {
+    Ok(match a.opt_string("connected")?.as_deref() {
+        None => None,
+        Some("reparent") => Some(Connected::Reparent),
+        Some("delete") => Some(Connected::Delete),
+        Some("trim") => Some(Connected::Trim),
+        Some(_) => return Err(Error::bad("connected", "reparent, delete or trim")),
     })
 }
 
@@ -509,6 +520,7 @@ pub(super) fn cut_range(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         from: a.frame("from")?,
         to: a.frame("to")?,
         ripple: a.flag("ripple", true)?,
+        connected: connected(a)?,
     })
 }
 
@@ -519,6 +531,7 @@ pub(super) fn cut_words(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
             .map(|value| word(value, "words"))
             .collect::<Result<Vec<_>, _>>()?,
         transcript_hash: hash(a)?,
+        connected: connected(a)?,
     })
 }
 
