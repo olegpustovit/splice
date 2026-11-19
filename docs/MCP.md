@@ -98,6 +98,17 @@ Stay under 20 tools in the default profile: new capabilities become `edit.apply`
   Out-of-range values are refused, never clamped. The `fix` says exactly what to call or change. If an agent had to guess, the fix hint was wrong;
   that is a friction entry and a bug.
 
+## Lints (0.4, D18)
+
+Every `edit.apply` result, dry run or committed, carries `lints` and `pacing` for the project the
+batch leads to. A lint is a warning, never a refusal: `{code, severity:"warning", message, items,
+fix, ops?}`, where `ops` is a batch that fixes it when one exists. Codes: `PAST_END` (an item runs
+past the last clip), `OUTSIDE_SAFE_ZONE` (a title's box leaves the versioned 9:16 safe zone
+`tiktok-2026`: top 8.4 %, bottom 18.75 %, left 8.4 %, right 11.2 % of the canvas),
+`TEXT_OVER_WINDOW` (a title covers over 30 % of itself with the recorded window), `ZOOM_OVERFLOW`
+(a frame-mode zoom past `fitSafeScale`), `LONG_STATIC` (over 8 s without a visual change on a
+vertical short). `pacing` is `{cutsPerMinute, longestStatic, safeZone}`.
+
 ## Command descriptions
 
 `commands.describe {id}` returns the argument descriptions and an example operation for the

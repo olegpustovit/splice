@@ -23,6 +23,7 @@ pub mod friction;
 mod history;
 #[cfg(target_os = "macos")]
 mod ipc;
+mod lints;
 #[cfg(target_os = "macos")]
 /// The private command channel between a project viewer and same-user clients.
 pub mod live;

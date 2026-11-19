@@ -35,7 +35,22 @@ pub(super) fn apply(store: &mut Store, args: &Json) -> Result<Json, StoreError> 
                 "a nonempty array of operations from commands.describe",
             )
         })?;
-    Ok(edit_result_json(apply_batch(store, ops, &options)?))
+    let result = apply_batch(store, ops, &options)?;
+    // Lints read the project the batch leads to (D18): the committed one, or the preview.
+    let checked = if result.dry_run {
+        store
+            .preview(ops, &[], &mut edit::missing_media)
+            .ok()
+            .map(|(project, _)| super::lints::check(&project))
+    } else {
+        Some(super::lints::check(store.project()))
+    };
+    let mut reply = edit_result_json(result);
+    if let (Some((lints, pacing)), Json::Object(fields)) = (checked, &mut reply) {
+        fields.push(("lints".into(), Json::Array(lints)));
+        fields.push(("pacing".into(), pacing));
+    }
+    Ok(reply)
 }
 
 /// Applies a client edit; MCP, `splice apply` and the viewer all come through here. It fills

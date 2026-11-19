@@ -1391,8 +1391,8 @@ declare const splice: {
     start(args?: { projectId?: string; agent?: string; }): { sessionId: string; checkpoint: Splice.Revision; revision: Splice.Revision; access?: string; resumed?: boolean; };
   };
   edit: {
-    /** Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry. */
-    apply(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; ops: Splice.Op[]; summary?: string; dryRun?: boolean; idempotencyKey?: string; }): { revision: Splice.Revision; dryRun?: boolean; replayed?: boolean; changes: unknown[]; sideEffects: unknown[]; diff: unknown[]; };
+    /** Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry. The result carries lints (warnings with a fix and a suggested ops batch: text outside the safe zone or over the window, items past the end, zooms past the canvas, long static stretches) and pacing stats. */
+    apply(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; ops: Splice.Op[]; summary?: string; dryRun?: boolean; idempotencyKey?: string; }): { revision: Splice.Revision; dryRun?: boolean; replayed?: boolean; changes: unknown[]; sideEffects: unknown[]; diff: unknown[]; lints?: unknown[]; pacing?: Record<string, unknown>; };
   };
   history: {
     /** List revision labels, sources and affected IDs. Filter by session to inspect its batch history. */
