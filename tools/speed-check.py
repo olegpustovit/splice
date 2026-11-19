@@ -47,12 +47,21 @@ def main():
     server.call("media.analyze", projectId=server.project, kinds=["loudness", "peaks", "beats", "sounds"], **target)
     analyze = time.time() - began
     count = len(words.get("words", []))
+    # The same speech as an audio-only file lands on an audio lane as a sound item.
+    added = server.call("edit.apply", projectId=server.project, sessionId=session,
+                        ifRevision=server.call("project.info", projectId=server.project)["revision"],
+                        ops=[{"cmd": "clip.insert", "path": speech}])
+    sound = added["changes"][0]["created"][-1]
+    voice = server.call("transcript.get", projectId=server.project, sessionId=session, transcribe=True,
+                        item=sound, limit=500)
+    item_words = len(voice.get("words", []))
     server.proc.stdin.close()
     server.proc.wait(timeout=60)
     result = {"check": "speed", "seconds": round(seconds, 1), "words": count,
               "transcribeX": round(seconds / transcribe, 1), "analyzeX": round(seconds / analyze, 1),
+              "soundItemWords": item_words,
               "revision": edit.get("revision")}
-    ok = count > 50 and seconds / transcribe >= 10 and seconds / analyze >= 5
+    ok = count > 50 and item_words > 100 and seconds / transcribe >= 10 and seconds / analyze >= 5
     print(json.dumps(dict(result, passed=ok)))
     return 0 if ok else 1
 

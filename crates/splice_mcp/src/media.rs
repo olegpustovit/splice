@@ -85,6 +85,9 @@ pub(super) fn transcript(p: &Project, args: &Json) -> Result<Json, StoreError> {
     if let Some(format) = args.optional_string("captions")? {
         return captions(p, args, format);
     }
+    if args.field("item").is_some() {
+        return item_transcript(p, args);
+    }
     let (id, slot) = if args.field("clip").is_some() {
         clip(p, args)?
     } else {
@@ -164,6 +167,93 @@ pub(super) fn transcript(p: &Project, args: &Json) -> Result<Json, StoreError> {
 }
 
 use splice_core::edit::is_filler as filler;
+
+/// The media behind a sound item or media overlay (voice-overs, podcast tracks, music).
+pub(super) fn item_media(
+    p: &Project,
+    args: &Json,
+) -> Result<(ItemId, Slot, MediaId, Frame), StoreError> {
+    let id: ItemId = args
+        .string("item")?
+        .parse()
+        .map_err(|_| bad("item", "a sound or media overlay ID (ovl_…)"))?;
+    let slot = p.items.find(id).ok_or_else(|| {
+        failure(
+            "NOT_FOUND",
+            &format!("No item {id}."),
+            "Call timeline.snapshot to find a current item ID.",
+        )
+    })?;
+    match p.items.data(slot).expect("live item").kind {
+        ItemKind::Sound(sound) => Ok((id, slot, sound.media, sound.source)),
+        ItemKind::Media(overlay) => Ok((id, slot, overlay.media, overlay.source)),
+        _ => Err(bad("item", "a sound or media overlay (it has audio)")),
+    }
+}
+
+/// `transcript.get {item}`: an item's words, on the timeline through the item's start.
+fn item_transcript(p: &Project, args: &Json) -> Result<Json, StoreError> {
+    let (id, slot, media, source) = item_media(p, args)?;
+    let transcript = p
+        .transcripts
+        .iter()
+        .find(|t| t.media == media)
+        .ok_or_else(|| {
+            failure(
+                "NOT_FOUND",
+                &format!("{id} has no transcript yet."),
+                "Call transcript.get {item, transcribe:true, sessionId} to transcribe it.",
+            )
+        })?;
+    let span = span(p, TimelineId::Item(id))
+        .map_err(|error| failure(error.code, &error.message, &error.fix))?;
+    let rate = p
+        .media
+        .iter()
+        .find(|m| m.id == media)
+        .map_or(1.0, |m| m.probe.fps / f64::from(p.fps));
+    let length = p.items.timing(slot).expect("live item").length;
+    let total = transcript.words.len();
+    let start = args.cursor('w', total)?;
+    let end = start.saturating_add(args.limit(60)?).min(total);
+    let on_timeline = |source_frame: Frame| {
+        let at = (f64::from(source_frame - source) / rate).round() as Frame;
+        (0..=length).contains(&at).then_some(span.start + at)
+    };
+    let words = transcript.words[start..end]
+        .iter()
+        .map(|word| {
+            let mut fields = vec![
+                ("id", display(&word.id)),
+                ("text", text(&word.text)),
+                ("sourceFrom", frame(word.from)),
+                ("sourceTo", frame(word.to)),
+                ("frame", on_timeline(word.from).map_or(Json::Null, frame)),
+                ("to", on_timeline(word.to).map_or(Json::Null, frame)),
+                ("length", frame(word.to - word.from)),
+            ];
+            if filler(&word.text) {
+                fields.push(("filler", Json::Bool(true)));
+            }
+            object(fields)
+        })
+        .collect();
+    let fillers = transcript
+        .words
+        .iter()
+        .filter(|word| filler(&word.text))
+        .map(|word| display(&word.id))
+        .collect();
+    Ok(object(vec![
+        ("revision", rev(p.rev)),
+        ("hash", hash(transcript.hash)),
+        ("item", display(&id)),
+        ("language", text(&transcript.language)),
+        ("words", Json::Array(words)),
+        ("fillers", Json::Array(fillers)),
+        ("nextCursor", next_cursor('w', end, total)),
+    ]))
+}
 
 fn media_fps(p: &Project, slot: Slot) -> f64 {
     clip_media(p, slot).map_or(f64::from(p.fps), |m| m.probe.fps)

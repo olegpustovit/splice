@@ -425,47 +425,51 @@ pub(super) fn transcribe(projects: &mut Projects, args: &Json) -> Result<Json, S
     let project = args.string("projectId")?.to_owned();
     let store = projects.lookup(args)?;
     let p = store.project();
-    let slot = match args.optional_string("clip")? {
-        Some(id) => {
-            let id: splice_model::ClipId = id
-                .parse()
-                .map_err(|_| bad("clip", "a clip ID from timeline.snapshot"))?;
-            p.clips.find(id).ok_or_else(|| {
-                failure(
-                    "NOT_FOUND",
-                    &format!("No clip {id}."),
-                    "Call timeline.snapshot to find a current clip ID.",
-                )
-            })?
-        }
-        None => p
-            .clips
-            .order()
-            .iter()
-            .copied()
-            .find(|&slot| {
-                p.clips
-                    .data(slot)
-                    .and_then(|data| data.media)
-                    .is_some_and(|id| {
-                        p.media
-                            .iter()
-                            .any(|m| m.id == id && !m.probe.audio.is_empty())
-                    })
-            })
-            .ok_or_else(|| {
-                failure(
-                    "NOT_FOUND",
-                    "No clip on the spine has audio.",
-                    "Record with mic or insert a clip with speech, then transcribe it.",
-                )
-            })?,
+    // A sound item or media overlay (voice-over, podcast track) transcribes its own media.
+    let media_id = if args.field("item").is_some() {
+        super::media::item_media(p, args)?.2
+    } else {
+        let slot = match args.optional_string("clip")? {
+            Some(id) => {
+                let id: splice_model::ClipId = id
+                    .parse()
+                    .map_err(|_| bad("clip", "a clip ID from timeline.snapshot"))?;
+                p.clips.find(id).ok_or_else(|| {
+                    failure(
+                        "NOT_FOUND",
+                        &format!("No clip {id}."),
+                        "Call timeline.snapshot to find a current clip ID.",
+                    )
+                })?
+            }
+            None => p
+                .clips
+                .order()
+                .iter()
+                .copied()
+                .find(|&slot| {
+                    p.clips
+                        .data(slot)
+                        .and_then(|data| data.media)
+                        .is_some_and(|id| {
+                            p.media
+                                .iter()
+                                .any(|m| m.id == id && !m.probe.audio.is_empty())
+                        })
+                })
+                .ok_or_else(|| {
+                    failure(
+                        "NOT_FOUND",
+                        "No clip on the spine has audio.",
+                        "Record with mic or insert a clip with speech, then transcribe it.",
+                    )
+                })?,
+        };
+        p.clips
+            .data(slot)
+            .and_then(|data| data.media)
+            .ok_or_else(|| bad("clip", "a clip with media"))?
     };
-    let media_id = p
-        .clips
-        .data(slot)
-        .and_then(|data| data.media)
-        .ok_or_else(|| bad("clip", "a clip with media"))?;
     let media = p
         .media
         .iter()

@@ -173,6 +173,7 @@ pub(super) const TOOLS: &[Tool] = &[
         input: &[
             ("projectId", "string"),
             ("clip", "string"),
+            ("item", "string"),
             ("transcribe", "boolean"),
             ("language", "string"),
             ("sessionId", "string"),

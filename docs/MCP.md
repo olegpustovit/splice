@@ -128,7 +128,7 @@ labels as runs), `shots`, `text` (Vision OCR with boxes), `faces`, `people` and 
 matte movie for `cutout`). Results are cached in `<package>/analysis/<media>/`, valid while the
 file's size and mtime match. Media over 10 minutes (or `async:true`) analyze as a job; poll
 `jobs.status`. A missing file is `MEDIA_OFFLINE`. `audio.summary` is an alias with no kinds.
-`transcript.get` also lists `fillers` and `retakes` (repeated phrases) for `cut.words`.
+`transcript.get` also lists `fillers` and `retakes` (repeated phrases) for `cut.words`. Pass `item` (a sound item or media overlay: voice-overs, podcast tracks) instead of `clip` to transcribe or read that item's media; its words map to the timeline through the item's start.
 
 `transcript.get {transcribe:true, sessionId}` recognizes a spine clip's speech on device
 (SpeechAnalyzer, macOS 26+; the first run downloads the language model) and commits the words as one

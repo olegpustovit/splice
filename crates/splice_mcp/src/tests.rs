@@ -1074,3 +1074,50 @@ fn code_run_returns_frame_previews_as_images() {
         6
     );
 }
+
+/// Sound items (voice-overs, podcast tracks) have transcripts too: transcript.get {item} reads
+/// the item's media words on the timeline through the item's start.
+#[test]
+fn transcript_get_reads_a_sound_items_words() {
+    let mut project = sample_project();
+    let ops = splice_json::parse(r#"[{"cmd":"audio.unlink","item":"clp_take"}]"#).unwrap();
+    splice_core::edit::apply(
+        &mut project,
+        ops.as_array().unwrap(),
+        splice_core::history::Source::Agent,
+        false,
+    )
+    .unwrap();
+    let item = project
+        .items
+        .order()
+        .iter()
+        .find(|&&slot| {
+            matches!(
+                project.items.data(slot).unwrap().kind,
+                splice_model::ItemKind::Sound(_)
+            )
+        })
+        .map(|&slot| project.items.id(slot).unwrap().to_string())
+        .unwrap();
+    let args = splice_json::parse(&format!(r#"{{"item":"{item}","limit":5}}"#)).unwrap();
+    let reply = super::media::transcript(&project, &args).unwrap();
+    assert_eq!(
+        reply.field("item").and_then(Json::as_str),
+        Some(item.as_str())
+    );
+    let words = reply.field("words").and_then(Json::as_array).unwrap();
+    assert_eq!(words.len(), 5);
+    // The take starts at frame 120 with source 0, so a word at source frame s plays at 120 + s.
+    let first = &words[0];
+    let source = first.field("sourceFrom").and_then(Json::as_i64).unwrap();
+    assert_eq!(
+        first.field("frame").and_then(Json::as_i64),
+        Some(120 + source)
+    );
+    let bad = splice_json::parse(r#"{"item":"ovl_hook"}"#).unwrap();
+    assert_eq!(
+        super::media::transcript(&project, &bad).unwrap_err().code,
+        "BAD_ARGS"
+    );
+}
