@@ -2,3 +2,5 @@
 *.splice/cache/
 .DS_Store
 /STOP
+.claude/worktrees/
+__pycache__/
