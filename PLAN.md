@@ -420,8 +420,8 @@ eight places; the board below already carries the changes.
 - [x] T36.6 [L] Motion items hold `to` after they end; `MOTION_ENDS_ZOOMED` warning when `to ≠ 1`. (superseded by D12: motion items are camera segments, 48cf147)
 - [x] T36.7 [L] Errors carry the rule: `{param, got, expected, fix}` on every BAD_ARGS; `UNKNOWN_PARAM` with `didYouMean`. (Rule {param, got, expected, didYouMean} on every BAD_ARGS/UNKNOWN_PARAM/UNKNOWN_COMMAND; apply fills got from the op)
 - [x] T36.8 [L] Docs, TS types and ranges generated from `effects.json` and validators; test fails on any mismatch (M8). (Splice.Effects generated from effects.json incl. keyability; documented_ranges_match_the_validators sweeps every documented command range; structured hints never type as string; union arrays parenthesized; out-of-range audio volume, cursor and keys size refused instead of clamped)
-- [ ] T36.9 [L] Build identity: `serverInfo.version = <crate>+<sha>[-dirty]`.
-- [ ] T36.10 [M] Recording discoverability: `window:{app}` in descriptions and fixes; dryRun omits titles unless `titles:true`.
+- [x] T36.9 [L] Build identity: `serverInfo.version = <crate>+<sha>[-dirty]`. (e181907)
+- [x] T36.10 [M] Recording discoverability: `window:{app}` in descriptions and fixes; dryRun omits titles unless `titles:true`. (bca5620)
 
 ### T37 · Edit-model correctness (report §4) [L]
 - [ ] T37.1 [L] C1 project-unique word IDs `w:<media>:<n>` with migration; cues break at clip boundaries.
@@ -430,7 +430,7 @@ eight places; the board below already carries the changes.
 - [ ] T37.4 [L] H3 word anchors resolve to clip anchors; H4 freeze = speed 0 (no OUT_OF_SOURCE after); H5 duplicate keeps captions on the copy.
 - [ ] T37.5 [L] M1 3-frame minimum on every edit; M2 overlay source in media frames; M3 overlays stop at media end; M4 join seams rebase on split; M5 compound with item anchors; M6 end-edge anchors on split; M7 `keepShots` needs a range.
 - [ ] T37.6 [L] M17 `style.set` doesn't enable windows; M18 `effect.add` checks components; M19 ripple shortens anchored items before bumping, bump report carries a cause; M21 lane/project transform applies or is refused.
-- [ ] T37.7 [L] H10 cancel only stops the job its request started, watch list bounded; M10 enrich resolves `$ref`s and runs in `splice apply`; M11 sidecars honour range/overwrite; M12 variant name collision; M13 consolidate only on commit; M14 relink re-probes; M16 recovery skips takes still being written.
+- [x] T37.7 [L] H10 cancel only stops the job its request started, watch list bounded; M10 enrich resolves `$ref`s and runs in `splice apply`; M11 sidecars honour range/overwrite; M12 variant name collision; M13 consolidate only on commit; M14 relink re-probes; M16 recovery skips takes still being written. (cd6c0e8 H10, 7deca25 M10/M13, 6975724 M11/M12, 3e35ce9 M14, b659842 M16)
 - [ ] T37.8 [L] Low list: silent clamps → errors; `marker.add` past end; negative `cut.range from`; SRT hour overflow; friction-log unwrap; `catch_unwind` per request; idle undo reports nothing to undo.
 
 ### T38 · Camera (D12, D13) [L + M]

@@ -781,7 +781,7 @@ pub const COMMANDS: &[Command] = &[
             ("frames", "number · expected length, checked against the probed file"),
             ("force", "boolean · accept a different length or kind")],
         ui: &["Offline badge ▸ Relink…"],
-        example: r#"{"cmd":"media.relink","media":"med_broll","path":"assets/broll-v2.mov","frames":240}"#, decoder: decode::media_relink,
+        example: r#"{"cmd":"media.relink","media":"med_broll","path":"assets/broll-v2.mov"}"#, decoder: decode::media_relink,
     },
     Command {
         id: "media.consolidate", title: "Consolidate Media", group: "Markers, project, cutting",

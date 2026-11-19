@@ -1112,8 +1112,18 @@ fn capability_sweep_applies_every_row_and_restores_the_start() {
     let root = TestDirectory::new("sweep");
     let sample = root.0.join("sample.splice");
     copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    // media.relink probes the file on macOS: give the placeholder b-roll a real file, and relink
+    // to a byte-identical copy (setup below), so the documented relink is the same media.
+    let real = mcp_fixtures().join("../media/probe.mov");
+    fs::create_dir_all(sample.join("assets")).unwrap();
+    for name in ["broll.mov", "broll-v2.mov"] {
+        fs::copy(&real, sample.join("assets").join(name)).unwrap();
+    }
     let setup = |id: &str| -> &'static str {
         match id {
+            "media.relink" => {
+                r#"[{"cmd":"media.relink","media":"med_broll","path":"assets/broll.mov","force":true}]"#
+            }
             "clip.join" => r#"[{"cmd":"item.split","item":"clp_take","at":300,"ref":"cut"}]"#,
             "clip.ungroup" => {
                 r#"[{"cmd":"item.split","item":"clp_take","at":300,"ref":"cut"},{"cmd":"clip.join","items":["clp_take","$cut.right"]}]"#
