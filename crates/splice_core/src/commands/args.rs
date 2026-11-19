@@ -328,7 +328,7 @@ pub(super) fn word(value: &Json, key: &str) -> Result<WordId, Error> {
     value
         .as_str()
         .and_then(|v| v.parse().ok())
-        .ok_or_else(|| Error::bad(key, "a word ID like w12"))
+        .ok_or_else(|| Error::bad(key, "a word ID like w:screen:12 from transcript.get"))
 }
 
 pub(super) fn hash(value: &Json) -> Result<Option<u64>, Error> {
@@ -377,7 +377,7 @@ pub(super) fn caption_patches(value: &Json) -> Result<Vec<CaptionWordPatch>, Err
     {
         let word = name
             .parse()
-            .map_err(|_| Error::bad(name, "a word ID like w12"))?;
+            .map_err(|_| Error::bad(name, "a word ID like w:screen:12 from transcript.get"))?;
         let edit = if matches!(data, Json::Null) {
             None
         } else {

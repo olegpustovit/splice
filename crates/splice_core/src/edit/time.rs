@@ -58,7 +58,7 @@ pub(super) fn anchor_start(project: &Project, anchor: Anchor) -> Result<Frame, C
 /// Resolves a timeline frame or anchor from a viewer request.
 pub fn resolve_view_frame(project: &Project, value: &Json) -> Result<Frame, CommandError> {
     let input = commands::frame_arg(value, "at")?;
-    let anchor = relative_anchor(project, &input, &|target| match target {
+    let anchor = relative_anchor(project, &input, false, &|target| match target {
         Target::Timeline(id) => Ok(*id),
         _ => Err(CommandError::bad(
             "at",
@@ -71,7 +71,7 @@ pub fn resolve_view_frame(project: &Project, value: &Json) -> Result<Frame, Comm
     }
 }
 
-fn timing_error(error_kind: TimingError) -> CommandError {
+pub(super) fn timing_error(error_kind: TimingError) -> CommandError {
     match error_kind {
         TimingError::Clip(id) => not_found(&id, "Call timeline.snapshot for current clip IDs."),
         TimingError::Item(id) => not_found(&id, "Call timeline.snapshot for current item IDs."),
@@ -87,11 +87,7 @@ fn timing_error(error_kind: TimingError) -> CommandError {
             "The item anchors form a cycle.",
             "Anchor one of the items to a clip or a fixed frame.",
         ),
-        TimingError::Transcript => error(
-            "TRANSCRIPT_CHANGED",
-            "The transcript hash has changed.",
-            "Call transcript.get and use the current hash.",
-        ),
+        TimingError::Transcript => transcript_changed(),
         TimingError::Rate | TimingError::Slot => error(
             "INVARIANT",
             "A clip has an invalid source rate or slot.",
@@ -109,7 +105,9 @@ impl Editor {
     }
 
     fn relative_anchor(&self, input: &FrameArg) -> Result<Anchor, CommandError> {
-        relative_anchor(&self.project, input, &|target| self.timeline(target))
+        relative_anchor(&self.project, input, self.replay.is_some(), &|target| {
+            self.timeline(target)
+        })
     }
 
     pub(super) fn explicit_anchor(
@@ -150,6 +148,7 @@ impl Editor {
 fn relative_anchor(
     project: &Project,
     input: &FrameArg,
+    replay: bool,
     timeline: &dyn Fn(&Target) -> Result<TimelineId, CommandError>,
 ) -> Result<Anchor, CommandError> {
     Ok(match input {
@@ -173,12 +172,15 @@ fn relative_anchor(
             transcript_hash,
             edge,
             offset,
-        } => Anchor::Word {
-            word: *word,
-            transcript_hash: need_word(project, *word, *transcript_hash)?.hash,
-            edge: *edge,
-            offset: *offset,
-        },
+        } => {
+            let word = bind_word(project, *word, *transcript_hash, replay)?;
+            Anchor::Word {
+                word,
+                transcript_hash: need_word(project, word, *transcript_hash)?.hash,
+                edge: *edge,
+                offset: *offset,
+            }
+        }
     })
 }
 
@@ -268,21 +270,78 @@ pub(super) fn word_span(
     project: &Project,
     id: WordId,
     hash: Option<u64>,
+    near: Option<ClipId>,
 ) -> Result<Option<WordSpan>, CommandError> {
-    timing::word_span(project, id, hash).map_err(timing_error)
+    timing::word_span(project, id, hash, near).map_err(timing_error)
+}
+
+/// Binds a word ID from an op to its media (T37.1). A legacy `w<n>` names a word in whichever
+/// transcript has that index; when several do, a replayed batch keeps its old meaning (the first
+/// occurrence on the timeline) and a live one is refused as ambiguous.
+pub(super) fn bind_word(
+    project: &Project,
+    word: WordId,
+    hash: Option<u64>,
+    replay: bool,
+) -> Result<WordId, CommandError> {
+    if word.media().is_some() {
+        return Ok(word);
+    }
+    if let Some(hash) = hash
+        && !project.transcripts.iter().any(|t| t.hash == hash)
+    {
+        return Err(transcript_changed());
+    }
+    let mut found: Option<(WordId, Frame)> = None;
+    for transcript in &project.transcripts {
+        if hash.is_some_and(|hash| hash != transcript.hash)
+            || !transcript
+                .words
+                .iter()
+                .any(|w| w.id.index() == word.index())
+        {
+            continue;
+        }
+        let bound = WordId::new(transcript.media, word.index());
+        let start = word_span(project, bound, hash, None)?.map_or(Frame::MAX, |span| span.start);
+        match found {
+            None => found = Some((bound, start)),
+            Some(_) if !replay => {
+                return Err(CommandError::rule(
+                    "AMBIGUOUS_WORD",
+                    "word",
+                    Some(Json::String(word.to_string())),
+                    "a project-unique word ID like w:<media>:<n>",
+                    "Several transcripts have this word number. Use the id transcript.get returns.",
+                ));
+            }
+            Some((_, old)) if start < old => found = Some((bound, start)),
+            Some(_) => {}
+        }
+    }
+    found.map(|(bound, _)| bound).ok_or_else(|| {
+        not_found(
+            &word,
+            "Call transcript.get; word IDs look like w:<media>:<n>.",
+        )
+    })
+}
+
+pub(super) fn transcript_changed() -> CommandError {
+    error(
+        "TRANSCRIPT_CHANGED",
+        "The transcript hash has changed.",
+        "Call transcript.get and use the current hash.",
+    )
 }
 
 fn need_word(project: &Project, id: WordId, hash: Option<u64>) -> Result<WordSpan, CommandError> {
     if let Some(hash) = hash
         && !project.transcripts.iter().any(|t| t.hash == hash)
     {
-        return Err(error(
-            "TRANSCRIPT_CHANGED",
-            "The transcript hash has changed.",
-            "Call transcript.get and use the current hash.",
-        ));
+        return Err(transcript_changed());
     }
-    word_span(project, id, hash)?.ok_or_else(|| {
+    word_span(project, id, hash, None)?.ok_or_else(|| {
         not_found(
             &id,
             "Call transcript.get and choose a word still in the timeline.",

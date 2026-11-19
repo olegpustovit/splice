@@ -225,9 +225,18 @@ relinking is a command (`media.relink`, 0.3). The core never touches media bytes
 
 ## Transcripts
 
-`transcripts/<med>.json`: `{"hash","language","words":[{"id":"w12","text":"so","from":131,"to":139,"conf":0.93}]}`
+`transcripts/<med>.json`: `{"hash","language","words":[{"id":"w:screen:12","text":"so","from":131,"to":139,"conf":0.93}]}`
 in source frames. Caption cues and word anchors refer to word IDs plus the transcript hash, so a
 re-transcription that changes words is detected rather than silently mis-anchored.
+
+Word IDs are project-unique (0.4): `w:<media>:<n>` is the `n`th word (from 1) of the transcript of
+`med_<media>`, so `w:screen:12` lives in `transcripts/med_screen.json`. A media item that plays in
+several clips (a split or duplicated take) shows the same word in each; a caption cue resolves its
+words in the clip it is anchored to first. Files written before 0.4 use `w<n>`: loading binds each
+to its transcript's media (a caption follows its clip's media), and the next save writes the new
+form. In ops, a legacy `w<n>` still works when one transcript has that number; a journal replays
+it with its old meaning, and a live call that several transcripts could mean is `AMBIGUOUS_WORD`.
+`captions.generate` starts a new cue at every clip boundary.
 
 Session metadata is versioned independently of the timeline with `format:"splice/1"`. Starting or
 closing a session writes that metadata atomically. It does not advance the revision.

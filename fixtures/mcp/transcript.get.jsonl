@@ -1,8 +1,8 @@
 > {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"$sample"}}}
 < {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"projectId":"prj_1","revision":"r0","fps":30,"durationFrames":660,"offlineMedia":"…"},"isError":false}}
 > {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"transcript.get","arguments":{"projectId":"prj_1","clip":"clp_take","limit":2}}}
-< {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"clip":"clp_take","hash":"3650c8864f4c43ec","words":[{"id":"w1","text":"Today","frame":126},{"id":"w2","text":"we","frame":140}],"nextCursor":"w2"},"isError":false}}
+< {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"clip":"clp_take","hash":"3650c8864f4c43ec","words":[{"id":"w:screen:1","text":"Today","frame":126},{"id":"w:screen:2","text":"we","frame":140}],"nextCursor":"w2"},"isError":false}}
 > {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"transcript.get","arguments":{"projectId":"prj_1","clip":"clp_take","limit":1,"cursor":"w2"}}}
-< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"words":[{"id":"w3","text":"build"}],"nextCursor":"w3"},"isError":false}}
+< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"words":[{"id":"w:screen:3","text":"build"}],"nextCursor":"w3"},"isError":false}}
 > {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"transcript.get","arguments":{"projectId":"prj_1","clip":"clp_take","captions":"vtt"}}}
 < {"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"format":"vtt","cues":10,"text":"…"},"isError":false}}

@@ -110,22 +110,10 @@ pub(crate) fn with_scratch(project: &Project, scratch: &mut Scratch) -> Result<(
             .filter(|media| media.kind != MediaKind::Image)
         {
             // A speed ramp consumes the integral of its rate instead of the clip length.
-            let consumed = data
-                .appearance
-                .effects
-                .iter()
-                .find(|e| e.kind == "speed" && e.enabled != Some(false))
-                .and_then(|e| e.params.iter().find(|p| p.name == "rate"))
-                .map_or(f64::from(timing.length), |rate| match &rate.value {
-                    EffectValue::Number(r) => r * f64::from(timing.length),
-                    EffectValue::Keys(keys) => {
-                        splice_model::keys::integrate(keys, f64::from(timing.length))
-                    }
-                    _ => f64::from(timing.length),
-                });
-            let source_frames = consumed * timing.speed * descriptor.probe.fps
-                / f64::from(project.fps)
-                + f64::from(timing.source);
+            let source_frames =
+                splice_model::timing::consumed(project, slot, f64::from(timing.length))
+                    .map_err(|_| bad("clip speed", "a positive rate"))?
+                    + f64::from(timing.source);
             if source_frames > f64::from(descriptor.probe.frames) + 0.001 {
                 return Err(bad(
                     "clip source range",
@@ -173,6 +161,12 @@ pub(crate) fn with_scratch(project: &Project, scratch: &mut Scratch) -> Result<(
         let words = &mut scratch.words;
         words.clear();
         for word in &transcript.words {
+            if word.id.media() != Some(transcript.media) {
+                return Err(bad(
+                    "word IDs",
+                    "w:<media>:<n> naming the transcript's media",
+                ));
+            }
             if word.from < 0
                 || word.to <= word.from
                 || word
@@ -328,4 +322,70 @@ fn effects(effects: &[Effect], ids: &mut Vec<u64>) -> Result<(), PackageError> {
         }
     }
     Ok(())
+}
+
+/// Load-time migration (T37.1): binds legacy `w<n>` word IDs in captions and word anchors to the
+/// media whose transcript holds them. A caption follows its clip's media; otherwise the transcript
+/// that has the index wins. Transcripts must already be attached.
+pub(crate) fn migrate_words(project: &mut Project) {
+    let transcripts = &project.transcripts;
+    let bind = |hint: Option<MediaId>, word: &mut WordId| {
+        if word.media().is_some() {
+            return;
+        }
+        let has = |t: &&Transcript| t.words.iter().any(|w| w.id.index() == word.index());
+        let media = transcripts
+            .iter()
+            .filter(has)
+            .find(|t| Some(t.media) == hint)
+            .or_else(|| transcripts.iter().find(has))
+            .map(|t| t.media);
+        if let Some(media) = media {
+            *word = WordId::new(media, word.index());
+        }
+    };
+    let hint = |clips: &Clips, anchor: Anchor| match anchor {
+        Anchor::ClipSource { clip, .. } => clips.find(clip).and_then(|s| clips.data(s)?.media),
+        Anchor::Word {
+            transcript_hash, ..
+        } => transcripts
+            .iter()
+            .find(|t| t.hash == transcript_hash)
+            .map(|t| t.media),
+        _ => None,
+    };
+    let order = project.items.order().to_vec();
+    for slot in order {
+        let anchor = project.items.timing(slot).expect("live item").anchor;
+        let media = hint(&project.clips, anchor);
+        if let Anchor::Word { mut word, .. } = anchor {
+            bind(media, &mut word);
+            if let Some(Anchor::Word { word: stored, .. }) = project
+                .items
+                .timing_mut(slot)
+                .map(|timing| &mut timing.anchor)
+            {
+                *stored = word;
+            }
+        }
+        if let ItemKind::Caption { words, edits } =
+            &mut project.items.data_mut(slot).expect("live item").kind
+        {
+            words.iter_mut().for_each(|word| bind(media, word));
+            edits
+                .iter_mut()
+                .for_each(|edit| bind(media, &mut edit.word));
+        }
+    }
+    for compound in &mut project.compounds {
+        for item in &mut compound.items {
+            if let Anchor::Word { word, .. } = &mut item.timing.anchor {
+                bind(None, word);
+            }
+            if let ItemKind::Caption { words, edits } = &mut item.data.kind {
+                words.iter_mut().for_each(|word| bind(None, word));
+                edits.iter_mut().for_each(|edit| bind(None, &mut edit.word));
+            }
+        }
+    }
 }

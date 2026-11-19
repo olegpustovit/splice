@@ -31,7 +31,7 @@ camera clp_take 30.000 766.800,1491.600,259.200,259.200 25.920 0.500
 keys clp_take 30.000 1.000 BottomLeft
 picture ovl_logo med_logo 150.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
 title ovl_label 64.800,134.400,950.400,108.000 1.000 01 / Build the frame
-caption ovl_cap1 2 1.000 Bold w1:126-137:TODAY w2:140-145:WE w3:148-159:BUILD
+caption ovl_cap1 2 1.000 Bold w:screen:1:126-137:TODAY w:screen:2:140-145:WE w:screen:3:148-159:BUILD
 audio clp_take Mic 30.000 1.000
 audio clp_take System 30.000 0.800
 frame 240 clp_take
@@ -41,7 +41,7 @@ camera clp_take 120.000 766.800,1491.600,259.200,259.200 25.920 0.500
 keys clp_take 120.000 1.000 BottomLeft
 picture ovl_logo med_logo 240.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
 title ovl_label 64.800,134.400,950.400,108.000 0.500 01 / Build the frame
-caption ovl_cap3 0 1.000 Bold w8:231-242:FIRST w9:245-254:OPEN w10:257-264:THE
+caption ovl_cap3 0 1.000 Bold w:screen:8:231-242:FIRST w:screen:9:245-254:OPEN w:screen:10:257-264:THE
 audio clp_take Mic 120.000 1.000
 audio clp_take System 120.000 0.800
 frame 422 clp_take
@@ -51,7 +51,7 @@ camera clp_take 302.000 766.800,1491.600,259.200,259.200 25.920 0.500
 keys clp_take 302.000 1.000 BottomLeft
 picture ovl_logo med_logo 422.000 0.000,0.216,1.000,0.569 805.680,54.000,220.320,70.502 1.000 1.000 - -
 picture ovl_broll med_broll 2.000 0.046,0.000,0.907,1.000 108.000,692.160,864.000,535.680 1.000 1.000 0.000/0.060 -
-caption ovl_cap7 0 1.000 Bold w19:415-424:THEN w20:427-436:OPEN w21:439-446:THE
+caption ovl_cap7 0 1.000 Bold w:screen:19:415-424:THEN w:screen:20:427-436:OPEN w:screen:21:439-446:THE
 audio clp_take Mic 302.000 1.000
 audio clp_take System 302.000 0.800
 frame 550 clp_end

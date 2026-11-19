@@ -133,10 +133,14 @@ impl Editor {
             };
             let timing = self.project.items.timing(slot).expect("live caption");
             let hash = caption_hash(&self.project, timing.anchor);
+            let near = match timing.anchor {
+                Anchor::ClipSource { clip, .. } => Some(clip),
+                _ => None,
+            };
             let mut first: Option<time::WordSpan> = None;
             let mut end = 0;
             for &word in words {
-                if let Some(span) = time::word_span(&self.project, word, hash)? {
+                if let Some(span) = time::word_span(&self.project, word, hash, near)? {
                     end = end.max(span.end);
                     if first.as_ref().is_none_or(|first| span.start < first.start) {
                         first = Some(span);

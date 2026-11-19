@@ -13,7 +13,22 @@ fn stable_ids_round_trip_and_reject_wrong_kind() {
         ClipId::from_serial(u64::MAX).to_string().parse(),
         Ok(ClipId::from_serial(u64::MAX))
     );
-    assert_eq!("w12".parse(), Ok(WordId::from_index(12)));
+    assert_eq!("w12".parse(), Ok(WordId::legacy(12)));
+    let word = WordId::new("med_screen".parse().unwrap(), 12);
+    assert_eq!(word.to_string(), "w:screen:12");
+    assert_eq!("w:screen:12".parse(), Ok(word));
+    assert_eq!(WordId::legacy(7).to_string(), "w7");
+    for bad in [
+        "w:",
+        "w:screen",
+        "w:screen:",
+        "w:0:1",
+        "w:Scr:1",
+        "w:screen:01",
+        "w::1",
+    ] {
+        assert!(bad.parse::<WordId>().is_err(), "{bad}");
+    }
 }
 
 #[test]

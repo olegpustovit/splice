@@ -1396,12 +1396,8 @@ fn blank_visual(
 /// Spans closer than 12 frames merge.
 fn speech(p: &Project, clips: &[PreparedClip]) -> Result<Vec<(Frame, Frame)>, EvalError> {
     let mut spans = Vec::new();
-    for transcript in &p.transcripts {
-        for word in &transcript.words {
-            if let Some(span) = timing::word_span(p, word.id, Some(transcript.hash))? {
-                spans.push((span.start, span.end));
-            }
-        }
+    for &slot in p.clips.order() {
+        timing::visible_words(p, slot, &mut |_, span| spans.push((span.start, span.end)))?;
     }
     if spans.is_empty() {
         spans.extend(
@@ -1490,9 +1486,13 @@ pub fn caption_tokens(
         } => Some(transcript_hash),
         _ => None,
     };
+    let near = match anchor {
+        Anchor::ClipSource { clip, .. } => Some(clip),
+        _ => None,
+    };
     let mut words = Vec::new();
     for &id in ids {
-        let Some(span) = timing::word_span(p, id, hash)? else {
+        let Some(span) = timing::word_span(p, id, hash, near)? else {
             continue;
         };
         let clip_slot = p

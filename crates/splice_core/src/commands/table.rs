@@ -151,7 +151,7 @@ pub const COMMANDS: &[Command] = &[
         ui: &["Shortcut T",
             "Toolbar T",
             "Graphics lane menu ▸ Add Title Here"],
-        example: r#"{"cmd":"title.add","at":{"word":"w12"},"length":60,"text":"Search “frame study”"}"#, decoder: decode::title_add,
+        example: r#"{"cmd":"title.add","at":{"word":"w:screen:12"},"length":60,"text":"Search “frame study”"}"#, decoder: decode::title_add,
     },
     Command {
         id: "title.set", title: "Edit Title", group: "Titles, motion and effects",
@@ -305,7 +305,7 @@ pub const COMMANDS: &[Command] = &[
         ui: &["Shortcut M",
             "Toolbar ⬇",
             "Ruler / lane menu ▸ Add Marker Here"],
-        example: r#"{"cmd":"marker.add","at":{"word":"w20"},"name":"Save beat"}"#, decoder: decode::marker_add,
+        example: r#"{"cmd":"marker.add","at":{"word":"w:screen:20"},"name":"Save beat"}"#, decoder: decode::marker_add,
     },
     Command {
         id: "marker.set", title: "Edit Marker", group: "Markers, project, cutting",
@@ -358,7 +358,7 @@ pub const COMMANDS: &[Command] = &[
         ui: &["Spine lane menu ▸ Cut Filler Words",
             "Command palette",
             "Transcript panel ▸ strike words (M6)"],
-        example: r#"{"cmd":"cut.words","words":["w7","w31"],"transcriptHash":"3650c8864f4c43ec"}"#, decoder: decode::cut_words,
+        example: r#"{"cmd":"cut.words","words":["w:screen:7","w:screen:31"],"transcriptHash":"3650c8864f4c43ec"}"#, decoder: decode::cut_words,
     },
     Command {
         id: "effect.add", title: "Add Effect", group: "Effects",
@@ -439,7 +439,7 @@ pub const COMMANDS: &[Command] = &[
             "Inspector ▸ word chips: text, emphasis, emoji, hide",
             "Double-click a caption block",
             "Caption menu ▸ Emphasize Word"],
-        example: r#"{"cmd":"caption.set","item":"ovl_cap1","words":{"w3":{"emph":true,"emoji":"⚡"}}}"#, decoder: decode::caption_set,
+        example: r#"{"cmd":"caption.set","item":"ovl_cap1","words":{"w:screen:3":{"emph":true,"emoji":"⚡"}}}"#, decoder: decode::caption_set,
     },
     Command {
         id: "caption.split", title: "Split Caption", group: "Captions",
@@ -449,7 +449,7 @@ pub const COMMANDS: &[Command] = &[
         ui: &["Inspector ▸ word chip ▸ Split Before",
             "Caption menu ▸ Split at Playhead",
             "Shortcut C on a caption"],
-        example: r#"{"cmd":"caption.split","item":"ovl_cap1","word":"w2"}"#, decoder: decode::caption_split,
+        example: r#"{"cmd":"caption.split","item":"ovl_cap1","word":"w:screen:2"}"#, decoder: decode::caption_split,
     },
     Command {
         id: "caption.merge", title: "Merge Captions", group: "Captions",

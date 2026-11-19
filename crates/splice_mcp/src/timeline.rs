@@ -394,7 +394,7 @@ pub(super) fn find(p: &Project, args: &Json) -> Result<Json, StoreError> {
                     .iter()
                     .filter(|word| word.text.to_lowercase().contains(&query))
                 {
-                    let at = timing::word_span(p, word.id, Some(transcript.hash))
+                    let at = timing::word_span(p, word.id, Some(transcript.hash), None)
                         .map_err(|error| {
                             failure(
                                 "INVARIANT",

@@ -348,6 +348,7 @@ fn read_origin(package: &Package) -> Result<Option<Project>, PackageError> {
             .transcripts
             .push(media::decode_transcript(media, item.required("data")?)?);
     }
+    validate::migrate_words(&mut origin);
     validate::project(&origin)?;
     Ok(Some(origin))
 }

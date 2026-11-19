@@ -1086,18 +1086,15 @@ impl Editor {
         if let Some(hash) = hash
             && !self.project.transcripts.iter().any(|t| t.hash == hash)
         {
-            return Err(error(
-                "TRANSCRIPT_CHANGED",
-                "The transcript hash has changed.",
-                "Call transcript.get and use the current hash.",
-            ));
+            return Err(time::transcript_changed());
         }
         for &word in words {
+            let word = time::bind_word(&self.project, word, hash, self.replay.is_some())?;
             // A transcript word outside every clip is already cut: skip it, like the prototype.
             if self.word_text(word).is_none() {
                 return Err(not_found(&word, "transcript.get lists words."));
             }
-            let Some(span) = time::word_span(&self.project, word, hash)? else {
+            let Some(span) = time::word_span(&self.project, word, hash, None)? else {
                 continue;
             };
             let slot = clip_slot(&self.project, span.clip)?;
@@ -1353,16 +1350,15 @@ impl Editor {
             }
             None => self.default_lane(LaneKind::Captions)?,
         };
-        // Visible words (word, clip, source start, timeline start, end), in timeline order.
+        // Visible words (word, clip, source start, timeline start, end), in timeline order. A
+        // media item playing in two clips shows its words twice: each clip gets its own cues.
         let mut visible: Vec<(WordId, ClipId, Frame, Frame, Frame, String)> = Vec::new();
-        for transcript in &self.project.transcripts {
-            for word in &transcript.words {
-                if !fillers && is_filler(&word.text) {
-                    continue;
-                }
-                if let Some(span) = time::word_span(&self.project, word.id, Some(transcript.hash))?
-                    && chosen.contains(&span.clip)
-                {
+        for &slot in self.project.clips.order() {
+            if !chosen.contains(&self.project.clips.id(slot).expect("live clip")) {
+                continue;
+            }
+            splice_model::timing::visible_words(&self.project, slot, &mut |word, span| {
+                if fillers || !is_filler(&word.text) {
                     visible.push((
                         word.id,
                         span.clip,
@@ -1372,7 +1368,8 @@ impl Editor {
                         word.text.clone(),
                     ));
                 }
-            }
+            })
+            .map_err(time::timing_error)?;
         }
         if visible.is_empty() {
             return Err(error(
@@ -1383,9 +1380,17 @@ impl Editor {
         }
         visible.sort_by_key(|word| word.3);
         let ids: Vec<WordId> = visible.iter().map(|word| word.0).collect();
+        // Replace only this lane's cues for these clips' words (another clip of the same media
+        // keeps its own cues).
         for slot in self.project.items.order().to_vec() {
             let data = self.project.items.data(slot).expect("live item");
+            let anchor = self.project.items.timing(slot).expect("live item").anchor;
+            let ours = match anchor {
+                Anchor::ClipSource { clip, .. } => chosen.contains(&clip),
+                _ => true,
+            };
             if data.lane == lane
+                && ours
                 && let ItemKind::Caption { words, .. } = &data.kind
                 && words.iter().any(|word| ids.contains(word))
             {
@@ -1409,7 +1414,9 @@ impl Editor {
                     .map(|&i| visible[i].5.len() + 1)
                     .sum::<usize>()
                     + visible[index].5.len();
-                if current.len() >= max_words as usize
+                // A cue never spans a cut between clips (T37.1).
+                if visible[index].1 != visible[last].1
+                    || current.len() >= max_words as usize
                     || gap > 12
                     || (gap >= 8 && current.len() > 1)
                     || chars > 22
@@ -1496,8 +1503,9 @@ impl Editor {
         let visible: Vec<(WordId, String)> = words
             .iter()
             .filter_map(|&id| {
-                let span = time::word_span(&self.project, id, None).ok().flatten()?;
-                let _ = span;
+                time::word_span(&self.project, id, None, None)
+                    .ok()
+                    .flatten()?;
                 Some((id, self.word_text(id)?))
             })
             .collect();
@@ -1530,7 +1538,8 @@ impl Editor {
                 };
             }
         }
-        for patch in patches {
+        for mut patch in patches {
+            patch.word = in_cue(&words, patch.word);
             if !words.contains(&patch.word) {
                 return Err(error(
                     "NOT_FOUND",
@@ -1572,7 +1581,7 @@ impl Editor {
         ))
     }
 
-    /// Stores a media item's words (replacing any earlier transcript). Word IDs are `w1…` in order;
+    /// Stores a media item's words (replacing any earlier transcript). Word IDs are `w:<media>:1…`;
     /// the hash covers the language and words, so captions anchored to an older version settle away.
     fn set_transcript(
         &mut self,
@@ -1603,7 +1612,7 @@ impl Editor {
                 .into_iter()
                 .enumerate()
                 .map(|(index, (text, from, to))| Word {
-                    id: WordId::from_index(index as u32 + 1),
+                    id: WordId::new(id, index as u32 + 1),
                     text,
                     from,
                     to,
@@ -1640,6 +1649,7 @@ impl Editor {
         let ItemKind::Caption { words, edits } = &mut data.kind else {
             unreachable!("checked caption")
         };
+        let word = in_cue(words, word);
         let index = words
             .iter()
             .position(|&w| w == word)
@@ -1732,6 +1742,18 @@ impl Editor {
             Target::Timeline(TimelineId::Item(id)),
         ))
     }
+}
+
+/// A legacy `w<n>` from an op means the cue's word with that number.
+fn in_cue(words: &[WordId], word: WordId) -> WordId {
+    if word.media().is_some() {
+        return word;
+    }
+    words
+        .iter()
+        .copied()
+        .find(|w| w.index() == word.index())
+        .unwrap_or(word)
 }
 
 fn caption_edit(edits: &mut Vec<CaptionEdit>, word: WordId) -> &mut CaptionEdit {

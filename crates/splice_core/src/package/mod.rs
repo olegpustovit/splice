@@ -161,6 +161,7 @@ impl Package {
                 );
             }
         }
+        validate::migrate_words(&mut project);
         validate::project(&project).map_err(|error| error.at(&self.path))?;
         Ok(project)
     }

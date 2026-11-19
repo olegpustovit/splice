@@ -1065,19 +1065,17 @@ impl Editor {
 
     fn spoken(&self) -> Result<Vec<Spoken>, CommandError> {
         let mut words = Vec::new();
-        for transcript in &self.project.transcripts {
-            for word in &transcript.words {
-                if let Some(span) = time::word_span(&self.project, word.id, Some(transcript.hash))?
-                {
-                    words.push(Spoken {
-                        start: span.start,
-                        end: span.end,
-                        clip: span.clip,
-                        filler: is_filler(&word.text),
-                        id: word.id,
-                    });
-                }
-            }
+        for &slot in self.project.clips.order() {
+            splice_model::timing::visible_words(&self.project, slot, &mut |word, span| {
+                words.push(Spoken {
+                    start: span.start,
+                    end: span.end,
+                    clip: span.clip,
+                    filler: is_filler(&word.text),
+                    id: word.id,
+                });
+            })
+            .map_err(time::timing_error)?;
         }
         if words.is_empty() {
             return Err(error(

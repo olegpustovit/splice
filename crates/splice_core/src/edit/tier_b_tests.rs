@@ -466,7 +466,10 @@ fn tier_b_transcript_set_replaces_words_and_feeds_captions() {
         .collect();
     assert_eq!(
         texts,
-        [("w1".to_owned(), "Hello"), ("w2".to_owned(), "world")]
+        [
+            ("w:screen:1".to_owned(), "Hello"),
+            ("w:screen:2".to_owned(), "world")
+        ]
     );
     // Captions on the old words settle away; the new ones caption the new words.
     let cues: Vec<_> = project
@@ -563,4 +566,124 @@ fn keys_on_a_non_keyable_parameter_are_refused() {
     assert_eq!(error.error.code, "NOT_KEYABLE");
     assert_eq!(error.error.rule.unwrap().param, "padding");
     assert!(error.error.fix.contains("none"), "{}", error.error.fix);
+}
+
+/// Media of a caption's anchor clip, and the media its words name.
+fn caption_media(project: &Project, slot: Slot) -> (Option<MediaId>, Vec<Option<MediaId>>) {
+    let ItemKind::Caption { words, .. } = &project.items.data(slot).unwrap().kind else {
+        panic!("not a caption")
+    };
+    let Anchor::ClipSource { clip, .. } = project.items.timing(slot).unwrap().anchor else {
+        panic!("caption anchored to a clip")
+    };
+    let clip = project
+        .clips
+        .data(project.clips.find(clip).unwrap())
+        .unwrap();
+    (clip.media, words.iter().map(|w| w.media()).collect())
+}
+
+fn captions(project: &Project) -> Vec<Slot> {
+    project
+        .items
+        .order()
+        .iter()
+        .copied()
+        .filter(|&s| {
+            matches!(
+                project.items.data(s).unwrap().kind,
+                ItemKind::Caption { .. }
+            )
+        })
+        .collect()
+}
+
+fn media_length(project: &Project, media: &str) -> Frame {
+    let media: MediaId = media.parse().unwrap();
+    project
+        .clips
+        .order()
+        .iter()
+        .filter(|&&s| project.clips.data(s).unwrap().media == Some(media))
+        .map(|&s| project.clips.timing(s).unwrap().length)
+        .sum()
+}
+
+/// T37.1 C1: two takes that both say "alpha bravo" keep their words apart.
+#[test]
+fn c1_word_ids_are_project_unique() {
+    let mut project = sample();
+    run(
+        &mut project,
+        r#"[{"cmd":"clip.insert","media":"med_webcam"},
+            {"cmd":"transcript.set","media":"med_screen","words":[{"text":"alpha","from":6,"to":17},{"text":"bravo","from":20,"to":30}]},
+            {"cmd":"transcript.set","media":"med_webcam","words":[{"text":"alpha","from":6,"to":17},{"text":"bravo","from":20,"to":30}]},
+            {"cmd":"captions.generate","maxWords":8}]"#,
+    )
+    .unwrap();
+    // One cue per take, never "alpha bravo alpha bravo"; each cue's words are its clip's.
+    let cues = captions(&project);
+    assert_eq!(cues.len(), 2);
+    for &cue in &cues {
+        let (media, words) = caption_media(&project, cue);
+        assert_eq!(words, [media, media]);
+    }
+    let before = (
+        media_length(&project, "med_screen"),
+        media_length(&project, "med_webcam"),
+    );
+    // A legacy ID two transcripts share is refused live, with the rule.
+    let error = run(&mut project, r#"[{"cmd":"cut.words","words":["w1"]}]"#).unwrap_err();
+    assert_eq!(error.error.code, "AMBIGUOUS_WORD");
+    assert!(error.error.rule.is_some());
+    // The webcam's "alpha" is cut from the webcam take, not the screen take.
+    run(
+        &mut project,
+        r#"[{"cmd":"cut.words","words":["w:webcam:1"]}]"#,
+    )
+    .unwrap();
+    assert_eq!(media_length(&project, "med_screen"), before.0);
+    assert!(media_length(&project, "med_webcam") < before.1);
+    // Regenerating the webcam's captions leaves the screen take's cue alone.
+    let webcam: MediaId = "med_webcam".parse().unwrap();
+    let cam = project
+        .clips
+        .order()
+        .iter()
+        .rfind(|&&s| project.clips.data(s).unwrap().media == Some(webcam))
+        .map(|&s| project.clips.id(s).unwrap())
+        .unwrap();
+    run(
+        &mut project,
+        &format!(r#"[{{"cmd":"captions.generate","clips":["{cam}"]}}]"#),
+    )
+    .unwrap();
+    let screen: MediaId = "med_screen".parse().unwrap();
+    assert!(
+        captions(&project)
+            .iter()
+            .any(|&s| caption_media(&project, s).0 == Some(screen))
+    );
+}
+
+/// T37.1 C1: a pre-0.4 package's `w<n>` IDs bind to their transcript's media on load.
+#[test]
+fn c1_legacy_word_ids_migrate_on_load() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/sample.splice");
+    let path = std::env::temp_dir().join(format!("splice-c1-{}.splice", std::process::id()));
+    std::fs::create_dir_all(path.join("transcripts")).unwrap();
+    for file in ["project.json", "media.json", "transcripts/med_screen.json"] {
+        let text = std::fs::read_to_string(source.join(file)).unwrap();
+        std::fs::write(path.join(file), text.replace("\"w:screen:", "\"w")).unwrap();
+    }
+    let (package, legacy) = crate::package::Package::open(&path).unwrap();
+    drop(package);
+    std::fs::remove_dir_all(path).unwrap();
+    let current = sample();
+    assert_eq!(legacy.transcripts, current.transcripts);
+    for (&a, &b) in legacy.items.order().iter().zip(current.items.order()) {
+        assert_eq!(legacy.items.data(a), current.items.data(b));
+        assert_eq!(legacy.items.timing(a), current.items.timing(b));
+    }
 }

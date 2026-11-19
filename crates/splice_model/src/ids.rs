@@ -285,19 +285,41 @@ impl fmt::Display for JobId {
     }
 }
 
-/// Stable word index within one transcript.
+/// Project-unique word ID: the media whose transcript holds the word and the word's index in it.
+/// Spelled `w:<media>:<n>`, `<media>` being the media ID's base36 serial (`med_screen` →
+/// `w:screen:12`). A legacy `w<n>` (before 0.4) names no media; loading binds it to its transcript.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct WordId(u32);
+pub struct WordId {
+    media: u64,
+    index: u32,
+}
 
 impl WordId {
-    /// Constructs a word ID using its decimal index.
-    pub const fn from_index(index: u32) -> Self {
-        Self(index)
+    /// The `index`th word (1-based) of `media`'s transcript.
+    pub const fn new(media: MediaId, index: u32) -> Self {
+        Self {
+            media: media.serial(),
+            index,
+        }
     }
 
-    /// Returns the word's index.
+    /// A legacy `w<n>` ID whose media is not known yet.
+    pub const fn legacy(index: u32) -> Self {
+        Self { media: 0, index }
+    }
+
+    /// The media whose transcript holds the word, or `None` for an unbound legacy ID.
+    pub const fn media(self) -> Option<MediaId> {
+        if self.media == 0 {
+            None
+        } else {
+            Some(MediaId::from_serial(self.media))
+        }
+    }
+
+    /// Returns the word's index within its transcript.
     pub const fn index(self) -> u32 {
-        self.0
+        self.index
     }
 }
 
@@ -305,14 +327,29 @@ impl FromStr for WordId {
     type Err = InvalidId;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let index = parse_serial(text, "w", 10)?;
-        u32::try_from(index).map(Self).map_err(|_| InvalidId)
+        let Some(rest) = text.strip_prefix("w:") else {
+            let index = parse_serial(text, "w", 10)?;
+            return u32::try_from(index)
+                .map(Self::legacy)
+                .map_err(|_| InvalidId);
+        };
+        let (media, index) = rest.split_once(':').ok_or(InvalidId)?;
+        let media = parse_serial(media, "", 36)?;
+        let index = u32::try_from(parse_serial(index, "", 10)?).map_err(|_| InvalidId)?;
+        if media == 0 {
+            return Err(InvalidId);
+        }
+        Ok(Self { media, index })
     }
 }
 
 impl fmt::Display for WordId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "w{}", self.0)
+        if self.media == 0 {
+            return write!(f, "w{}", self.index);
+        }
+        write_serial(f, "w:", self.media)?;
+        write!(f, ":{}", self.index)
     }
 }
 

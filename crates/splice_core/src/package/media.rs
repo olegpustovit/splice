@@ -208,8 +208,10 @@ pub(super) fn decode_transcript(media: MediaId, value: &Json) -> Result<Transcri
     let mut words = Vec::new();
     for word in value.array("words")? {
         shape(word, &["id", "text", "from", "to", "conf"])?;
+        let id: WordId = word.string("id")?.parse().map_err(|_| bad_id("word.id"))?;
         words.push(Word {
-            id: word.string("id")?.parse().map_err(|_| bad_id("word.id"))?,
+            // A legacy `w<n>` belongs to this transcript's media (T37.1).
+            id: WordId::new(media, id.index()),
             text: word.string("text")?.into(),
             from: frame(word, "from")?,
             to: frame(word, "to")?,
