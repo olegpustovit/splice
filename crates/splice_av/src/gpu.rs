@@ -31,6 +31,13 @@ pub struct GpuProgram {
     sources: Vec<FrameSource>,
     layers: Vec<Layer>,
     textures: Vec<Bound>,
+    /// Per entry of `layers`, the evaluated layer it draws (`Slot::NONE` for shapes and text).
+    depths: Vec<u32>,
+    /// A transition's incoming side (or a fading clip), flattened before it is composited once.
+    group_layers: Vec<Layer>,
+    group_textures: Vec<Bound>,
+    /// The pooled transparent canvas groups flatten into, by size.
+    group_target: Option<(Texture, PreparedRenderTarget, [u32; 2])>,
     /// Rasterized titles, captions and chips (export and grabs; the viewer draws text in PXUI).
     texts: Vec<(Texture, TimedText)>,
     /// LUT atlases by `Grade::lut` index, with their cube size.
@@ -123,6 +130,10 @@ impl GpuProgram {
             sources: vec![FrameSource::default(); MAX_LAYERS],
             layers: Vec::with_capacity(MAX_LAYERS),
             textures: Vec::with_capacity(MAX_LAYERS),
+            depths: Vec::with_capacity(MAX_LAYERS),
+            group_layers: Vec::with_capacity(MAX_LAYERS),
+            group_textures: Vec::with_capacity(MAX_LAYERS),
+            group_target: None,
             texts,
             luts,
             frame: plan
@@ -245,9 +256,11 @@ impl GpuProgram {
         }
         self.layers.clear();
         self.textures.clear();
+        self.depths.clear();
         self.mattes.clear();
         let canvas = size.map(f64::from);
         for (i, slot) in layers.iter().enumerate() {
+            self.depths.resize(self.layers.len(), Slot::NONE);
             let source = self.sources[i];
             let texture = match self.copies.get(i) {
                 Some(Some((texture, ..))) if !source.texture.is_null() => Some(texture.clone()),
@@ -284,11 +297,15 @@ impl GpuProgram {
                 .find_map(|&(track, o)| (track == slot.track).then_some(o))
                 .unwrap_or(0);
             self.layer(plan, slot, evaluated, canvas, source, texture, orient)?;
+            self.depths.resize(self.layers.len(), slot.depth);
         }
+        self.depths.resize(self.layers.len(), Slot::NONE);
         self.shapes(canvas);
         if text {
             self.text(at, canvas);
         }
+        self.depths.resize(self.layers.len(), Slot::NONE);
+        self.transition(size, commands)?;
         // Nothing under an opaque full-canvas fill shows (the black base under a window
         // background): skip it, ~2 ms per covered layer at 4K on an M1.
         let [cw, ch] = canvas;
@@ -526,7 +543,6 @@ impl GpuProgram {
             layer.key1 = [key.softness as f32, key.spill as f32, 0.0, 0.0];
         }
         self.cutout(&mut layer, &mut bound, look, slot.role);
-        clip(&mut layer, look);
         self.push(layer, bound);
         // The recorded cursor, on the take's clock (the evaluated source frame, so speed ramps
         // and freezes are exact).
@@ -746,6 +762,81 @@ impl GpuProgram {
         }
     }
 
+    /// Applies the frame's transition (D14): moves the outgoing side rigidly, then flattens the
+    /// incoming group into the pooled canvas and composites it as one layer, so its window and
+    /// backdrop fade, scale and wipe together instead of compounding layer by layer.
+    fn transition(&mut self, size: [u32; 2], commands: &Commands) -> Result<(), Error> {
+        let center = size.map(|v| v as f32 / 2.0);
+        let inside = |[from, to]: [usize; 2], depth: u32| {
+            depth != Slot::NONE && (from..to).contains(&(depth as usize))
+        };
+        if let Some(shift) = self.frame.shift {
+            let offset = shift.offset.map(|v| v as f32);
+            for (layer, &depth) in self.layers.iter_mut().zip(&self.depths) {
+                if inside(shift.layers, depth) {
+                    move_layer(layer, shift.scale as f32, offset, center);
+                }
+            }
+        }
+        let Some(group) = self.frame.group else {
+            return Ok(());
+        };
+        let Some(first) = self.depths.iter().position(|&d| inside(group.layers, d)) else {
+            return Ok(());
+        };
+        // Slots follow evaluated depth, so a group's layers are contiguous.
+        let end = first
+            + self.depths[first..]
+                .iter()
+                .take_while(|&&d| inside(group.layers, d))
+                .count();
+        self.group_layers.clear();
+        self.group_textures.clear();
+        self.group_layers.extend(self.layers.drain(first..end));
+        self.group_textures.extend(self.textures.drain(first..end));
+        self.depths.drain(first..end);
+        if self
+            .group_target
+            .as_ref()
+            .is_none_or(|(.., known)| *known != size)
+        {
+            let (texture, target) = crate::offscreen_target(&self.device, size, 0.0)?;
+            self.group_target = Some((texture, target, size));
+        }
+        let (texture, target, _) = self.group_target.as_mut().expect("group canvas");
+        self.compositor
+            .encode(
+                commands,
+                target,
+                size,
+                &self.group_layers,
+                &self.group_textures,
+                false,
+            )
+            .map_err(gpu)?;
+        let [w, h] = size.map(|v| v as f32);
+        let mut flat = Layer::new(Layer::TEXTURE, [0.0, 0.0, w, h], [w, h]);
+        move_layer(
+            &mut flat,
+            group.scale as f32,
+            group.offset.map(|v| v as f32),
+            center,
+        );
+        flat.opacity = group.opacity as f32;
+        if let Some(region) = group.clip {
+            flat.flags |= Layer::CLIP;
+            flat.clip = region.map(|v| v as f32);
+        }
+        let bound = Bound {
+            source: Some(texture.clone()),
+            ..Bound::default()
+        };
+        self.layers.insert(first, flat);
+        self.textures.insert(first, bound);
+        self.depths.insert(first, Slot::NONE);
+        Ok(())
+    }
+
     fn push(&mut self, layer: Layer, bound: Bound) {
         self.layers.push(layer);
         self.textures.push(bound);
@@ -772,12 +863,18 @@ fn transform([x, y, w, h]: [f64; 4], look: &Look) -> ([f32; 4], [f32; 2]) {
     )
 }
 
-/// Limits a layer to a transition wipe's region.
-fn clip(layer: &mut Layer, look: &Look) {
-    if let Some(region) = look.clip {
-        layer.flags |= Layer::CLIP;
-        layer.clip = region.map(|v| v as f32);
+/// Scales a layer about `center` and offsets it (a rigid move of a transition side).
+fn move_layer(layer: &mut Layer, scale: f32, [ox, oy]: [f32; 2], [cx, cy]: [f32; 2]) {
+    let point = |x: f32, y: f32| [cx + (x - cx) * scale + ox, cy + (y - cy) * scale + oy];
+    let [x, y] = point(layer.dest[0], layer.dest[1]);
+    layer.dest = [x, y, layer.dest[2] * scale, layer.dest[3] * scale];
+    layer.pivot = point(layer.pivot[0], layer.pivot[1]);
+    if layer.flags & Layer::CLIP != 0 {
+        let [x, y] = point(layer.clip[0], layer.clip[1]);
+        layer.clip = [x, y, layer.clip[2] * scale, layer.clip[3] * scale];
     }
+    layer.corner *= scale;
+    layer.ring *= scale;
 }
 
 /// The cursor sample in effect at `t`, gliding across gaps under 0.25 s (as the native one does).

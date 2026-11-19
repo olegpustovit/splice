@@ -1,7 +1,7 @@
 use super::look::{self, AudioFx, Look, Mix, Num, Rig, Transition, TransitionKind};
 use super::{
-    Audio, Background, CaptionStyle, CaptionWord, FramePlan, Keys, Layer, Picture, Track, layout,
-    style,
+    Audio, Background, CaptionStyle, CaptionWord, FramePlan, Group, Keys, Layer, Picture, Shift,
+    Track, layout, style,
 };
 use splice_model::timing::{self, TimingError};
 use splice_model::*;
@@ -578,6 +578,8 @@ impl Evaluator {
         out.size = self.size;
         out.layers.clear();
         out.audio.clear();
+        out.group = None;
+        out.shift = None;
         let index = self.clips.partition_point(|clip| clip.interval.start <= at);
         let clip = index
             .checked_sub(1)
@@ -586,9 +588,11 @@ impl Evaluator {
         out.clip = clip.map(|clip| clip.id);
         if let Some((from, to, progress, transition)) = self.transition_at(at) {
             let (mark, audio_mark) = (out.layers.len(), out.audio.len());
-            self.draw_clip(&self.clips[from], at, out);
+            self.draw_clip(&self.clips[from], at, true, out);
             let (mid, audio_mid) = (out.layers.len(), out.audio.len());
-            self.draw_clip(&self.clips[to], at, out);
+            // Behind-presenter overlays draw once, with the outgoing take (M15).
+            let behind = !self.clips[from].take;
+            self.draw_clip(&self.clips[to], at, behind, out);
             self.blend(
                 transition,
                 progress,
@@ -597,7 +601,24 @@ impl Evaluator {
                 out,
             );
         } else if let Some(clip) = clip {
-            self.draw_clip(clip, at, out);
+            let mark = out.layers.len();
+            self.draw_clip(clip, at, true, out);
+            // A fading clip fades as one image over its backdrop (not through black).
+            let opacity = clip.interval.alpha(at);
+            if opacity < 1.0 {
+                let start = mark
+                    + usize::from(matches!(
+                        out.layers.get(mark),
+                        Some(Layer::Background { .. })
+                    ));
+                out.group = Some(Group {
+                    layers: [start, out.layers.len()],
+                    opacity,
+                    scale: 1.0,
+                    offset: [0.0, 0.0],
+                    clip: None,
+                });
+            }
         }
         self.draw_overlays(at, clip.is_some_and(|clip| clip.take), false, out);
         for sound in self
@@ -716,7 +737,7 @@ impl Evaluator {
             .map(|clip| clip.hidden_keys.as_slice())
     }
 
-    fn draw_clip(&self, clip: &PreparedClip, frame: Frame, out: &mut FramePlan) {
+    fn draw_clip(&self, clip: &PreparedClip, frame: Frame, behind: bool, out: &mut FramePlan) {
         let Some(input) = &clip.input else { return };
         let local = f64::from(frame - clip.interval.start);
         let source = input.frame(frame - clip.interval.start);
@@ -733,7 +754,7 @@ impl Evaluator {
         }
         let (gain, pan) = self.mix(clip.mix.as_ref(), local);
         input.audio(source, TimelineId::Clip(clip.id), opacity * gain, pan, out);
-        if clip.take {
+        if clip.take && behind {
             self.draw_overlays(frame, true, true, out);
         }
         if let Some(camera) = &clip.camera {
@@ -753,12 +774,6 @@ impl Evaluator {
                 media: input.id,
                 source_frame: picture_source,
                 style,
-            });
-        }
-        if opacity < 1.0 {
-            out.layers.push(Layer::Fade {
-                opacity: 1.0 - opacity,
-                color: 0,
             });
         }
     }
@@ -838,31 +853,44 @@ impl Evaluator {
                 (t * quarter).sin()
             };
         }
-        let edit = |layer: &mut Layer, f: &dyn Fn(&mut Look, &mut f64)| match layer {
-            Layer::Picture(picture) => f(&mut picture.look, &mut picture.opacity),
-            Layer::Background { opacity, .. } => {
-                let mut look = Look::default();
-                f(&mut look, opacity);
-                *opacity *= look.opacity;
-            }
-            _ => {}
+        // One backdrop (D14): an incoming backdrop identical to the outgoing one is not drawn
+        // again, and the outgoing backdrop never moves with its content.
+        let outgoing_backdrop = matches!(out.layers.get(a), Some(Layer::Background { .. }));
+        if let (
+            Some(Layer::Background {
+                bounds: ba,
+                fill: fa,
+                ..
+            }),
+            Some(Layer::Background {
+                bounds: bb,
+                fill: fb,
+                ..
+            }),
+        ) = (out.layers.get(a).copied(), out.layers.get(b).copied())
+            && ba == bb
+            && fa == fb
+        {
+            out.layers.remove(b);
+        }
+        let end = out.layers.len();
+        let content = [a + usize::from(outgoing_backdrop), b];
+        let group = |opacity: f64, scale: f64, offset: [f64; 2], clip: Option<[f64; 4]>| Group {
+            layers: [b, end],
+            opacity,
+            scale,
+            offset,
+            clip,
         };
         match transition.kind {
-            TransitionKind::Dissolve | TransitionKind::Zoom => {
-                let zoom = transition.kind == TransitionKind::Zoom;
-                for (index, layer) in out.layers.iter_mut().enumerate().skip(a) {
-                    let incoming = index >= b;
-                    edit(layer, &|look, _| {
-                        if incoming {
-                            look.opacity *= t;
-                            if zoom {
-                                look.scale *= 1.15 - 0.15 * t;
-                            }
-                        } else if zoom {
-                            look.scale *= 1.0 + 0.15 * t;
-                        }
-                    });
-                }
+            TransitionKind::Dissolve => out.group = Some(group(t, 1.0, [0.0, 0.0], None)),
+            TransitionKind::Zoom => {
+                out.shift = Some(Shift {
+                    layers: content,
+                    scale: 1.0 + 0.15 * t,
+                    offset: [0.0, 0.0],
+                });
+                out.group = Some(group(t, 1.15 - 0.15 * t, [0.0, 0.0], None));
             }
             TransitionKind::Dip => {
                 let color = transition.color;
@@ -887,32 +915,22 @@ impl Evaluator {
                     if dx != 0.0 { w * t } else { w },
                     if dy != 0.0 { h * t } else { h },
                 ];
-                for layer in out.layers.iter_mut().skip(b) {
-                    edit(layer, &|look, _| look.clip = Some(clip));
-                }
+                out.group = Some(group(1.0, 1.0, [0.0, 0.0], Some(clip)));
             }
             TransitionKind::Push | TransitionKind::Slide => {
-                let push = transition.kind == TransitionKind::Push;
-                for (index, layer) in out.layers.iter_mut().enumerate().skip(a) {
-                    let incoming = index >= b;
-                    let shift = if incoming {
-                        [-dx * (1.0 - t) * w, -dy * (1.0 - t) * h]
-                    } else if push {
-                        [dx * t * w, dy * t * h]
-                    } else {
-                        [0.0, 0.0]
-                    };
-                    match layer {
-                        Layer::Background { bounds, .. } | Layer::Camera { bounds, .. } => {
-                            bounds.x += shift[0];
-                            bounds.y += shift[1];
-                        }
-                        _ => edit(layer, &|look, _| {
-                            look.offset[0] += shift[0];
-                            look.offset[1] += shift[1];
-                        }),
-                    }
+                if transition.kind == TransitionKind::Push {
+                    out.shift = Some(Shift {
+                        layers: content,
+                        scale: 1.0,
+                        offset: [dx * t * w, dy * t * h],
+                    });
                 }
+                out.group = Some(group(
+                    1.0,
+                    1.0,
+                    [-dx * (1.0 - t) * w, -dy * (1.0 - t) * h],
+                    None,
+                ));
             }
         }
     }

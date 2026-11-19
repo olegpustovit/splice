@@ -184,8 +184,6 @@ pub struct Look {
     pub key: Option<ChromaKey>,
     /// Person cutout.
     pub cutout: Option<Cutout>,
-    /// Visible canvas region in pixels (transition wipes), when limited.
-    pub clip: Option<[f64; 4]>,
 }
 
 impl Default for Look {
@@ -202,7 +200,6 @@ impl Default for Look {
             masks: [None; MAX_MASKS],
             key: None,
             cutout: None,
-            clip: None,
         }
     }
 }

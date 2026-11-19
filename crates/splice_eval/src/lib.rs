@@ -41,6 +41,40 @@ pub struct FramePlan {
     pub layers: Vec<Layer>,
     /// Audible tracks with their source positions and gain.
     pub audio: Vec<Audio>,
+    /// Layers composited as one flattened image: the incoming side of a transition or a fading
+    /// clip (D14). Opacity applied layer by layer would compound (a window over its backdrop
+    /// fades as t² and bleeds the backdrop through), so renderers flatten the group first.
+    pub group: Option<Group>,
+    /// A rigid move of a transition's outgoing side. It is opaque, so moving each layer is the
+    /// same as moving the flattened image.
+    pub shift: Option<Shift>,
+}
+
+/// A run of `layers` drawn into a transparent image, then composited once with `opacity`,
+/// `scale` about the canvas center, `offset` and an optional `clip` rectangle (canvas pixels).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Group {
+    /// Indices into `FramePlan::layers`, half-open.
+    pub layers: [usize; 2],
+    /// Opacity of the flattened image.
+    pub opacity: f64,
+    /// Scale about the canvas center.
+    pub scale: f64,
+    /// Offset in canvas pixels.
+    pub offset: [f64; 2],
+    /// Visible region in canvas pixels (wipes).
+    pub clip: Option<[f64; 4]>,
+}
+
+/// Scale about the canvas center and offset for a run of `layers`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shift {
+    /// Indices into `FramePlan::layers`, half-open.
+    pub layers: [usize; 2],
+    /// Scale about the canvas center.
+    pub scale: f64,
+    /// Offset in canvas pixels.
+    pub offset: [f64; 2],
 }
 
 /// A visible operation in the frame.

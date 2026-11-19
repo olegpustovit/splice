@@ -23,7 +23,8 @@ const MSL: &str = include_str!("../shaders/layer.metal");
 const STRIDE: usize = 512;
 /// Most layers one frame can draw.
 pub const MAX_LAYERS: usize = 64;
-const PAGES: usize = 3;
+/// Parameter pages in flight: a frame can encode twice (a transition group, then the canvas).
+const PAGES: usize = 6;
 
 /// Textures a layer samples: its source, LUT atlas and person matte (`Rc` handles: cloning
 /// into a reused `Vec` allocates nothing).
@@ -361,7 +362,7 @@ impl Compositor {
             fill,
             sampler,
             blank,
-            pages: [page()?, page()?, page()?],
+            pages: [page()?, page()?, page()?, page()?, page()?, page()?],
             next: 0,
             scratch: vec![0; STRIDE * MAX_LAYERS],
         })

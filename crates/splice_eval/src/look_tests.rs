@@ -71,8 +71,21 @@ fn dissolve_blends_both_clips_with_equal_power_audio() {
         picture(&plan, clip("clp_open")),
         picture(&plan, clip("clp_take")),
     );
-    assert_eq!(outgoing.look.opacity, 1.0);
-    assert!((incoming.look.opacity - 0.475).abs() < 1e-9);
+    // The incoming side is one group composited at the transition's progress (D14); its
+    // layers keep their own opacity, so a window and its backdrop never compound.
+    assert_eq!((outgoing.look.opacity, incoming.look.opacity), (1.0, 1.0));
+    let group = plan.group.expect("incoming group");
+    assert!((group.opacity - 0.475).abs() < 1e-9);
+    assert!(
+        plan.layers[group.layers[0]..group.layers[1]]
+            .iter()
+            .any(|l| matches!(l, Layer::Picture(p) if p.item == clip("clp_take")))
+    );
+    assert!(
+        !plan.layers[group.layers[0]..group.layers[1]]
+            .iter()
+            .any(|l| matches!(l, Layer::Picture(p) if p.item == clip("clp_open")))
+    );
     // The incoming take starts early on its own clock (held at frame 0, no head handle).
     assert_eq!(incoming.source_frame, 0.0);
     // Inside the take, its audio fades in on the equal-power curve.

@@ -160,6 +160,22 @@ fn render_plan_matches_ten_prototype_frames() {
                 }
             }
         }
+        if let Some(g) = plan.group {
+            writeln!(
+                &mut output,
+                "group {:?} {:.3} {:.3} {:?} {:?}",
+                g.layers, g.opacity, g.scale, g.offset, g.clip
+            )
+            .unwrap();
+        }
+        if let Some(s) = plan.shift {
+            writeln!(
+                &mut output,
+                "shift {:?} {:.3} {:?}",
+                s.layers, s.scale, s.offset
+            )
+            .unwrap();
+        }
         for audio in &plan.audio {
             writeln!(
                 &mut output,
@@ -258,8 +274,16 @@ fn take_fade_applies_to_audio_and_behind_presenter_layers() {
         index(&|layer| matches!(layer, Layer::Picture(picture) if picture.item == overlay));
     let front = index(&|layer| matches!(layer, Layer::Picture(picture) if picture.item == other));
     let camera = index(&|layer| matches!(layer, Layer::Camera { .. }));
-    let fade = index(&|layer| matches!(layer, Layer::Fade { opacity: 0.5, .. }));
-    assert!(behind < camera && camera < fade && fade < front);
+    // The take (with its behind-presenter overlay and camera) fades as one group over its
+    // backdrop; front overlays stay out of it.
+    let group = output.group.expect("fade group");
+    assert_eq!(group.opacity, 0.5);
+    assert!(group.layers[0] <= behind && behind < camera && camera < group.layers[1]);
+    assert!(group.layers[1] <= front);
+    assert!(!matches!(
+        output.layers[group.layers[0]],
+        Layer::Background { .. }
+    ));
     assert_eq!(output.audio.len(), 1);
     assert_eq!(output.audio[0].track, Track::System);
     assert_eq!(output.audio[0].gain, 0.4);

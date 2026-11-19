@@ -254,6 +254,67 @@ mod looks {
         );
         assert!(near(pixel(&composition, 45, [48, 32]), [30, 30, 220], 4));
 
+        // D14: the incoming side is flattened, then faded once. Per-layer opacity let the
+        // incoming backdrop (green) bleed through the incoming window as t·(1−t).
+        let windowed = |kind: &str| {
+            let mut project = project(
+                vec![red.clone(), blue.clone()],
+                vec![
+                    (1, 30, vec![]),
+                    (
+                        2,
+                        30,
+                        vec![fx(
+                            1,
+                            "transition",
+                            vec![
+                                ("kind", s(kind)),
+                                ("length", n(20.0)),
+                                ("direction", s("left")),
+                            ],
+                        )],
+                    ),
+                ],
+            );
+            project.effects.push(fx(
+                30,
+                "window",
+                vec![
+                    ("padding", n(0.2)),
+                    ("corner", n(0.0)),
+                    ("shadow", n(0.0)),
+                    ("background", s("color")),
+                    ("color", s("#00c800")),
+                ],
+            ));
+            Composition::prepare(&project, &dir.0).unwrap()
+        };
+        let composition = windowed("dissolve");
+        let middle = pixel(&composition, 29, [48, 32]);
+        assert!(
+            middle[0] > 90 && middle[2] > 90 && middle[1] < 45,
+            "window content mixes without backdrop bleed: {middle:?}"
+        );
+        assert!(
+            near(pixel(&composition, 29, [2, 2]), [0, 200, 0], 4),
+            "one backdrop through the transition"
+        );
+        for kind in ["wipe", "push", "slide", "zoom"] {
+            let composition = windowed(kind);
+            // The backdrop never moves or doubles; inside, every pixel is a clip or the backdrop.
+            assert!(
+                near(pixel(&composition, 30, [1, 1]), [0, 200, 0], 4),
+                "{kind}"
+            );
+            for x in [28, 48, 66] {
+                let p = pixel(&composition, 30, [x, 32]);
+                let pure = [[220, 30, 30], [30, 30, 220], [0, 200, 0]]
+                    .iter()
+                    .any(|&c| near(p, c, 6));
+                assert!(pure || kind == "zoom", "{kind} at x {x}: {p:?}");
+            }
+        }
+
         // A blue ellipse over the red clip.
         let lane = LaneId::from_serial(9);
         dissolve.lanes.push(Lane {
