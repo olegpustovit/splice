@@ -17,7 +17,12 @@ fn main() {
                 .is_some_and(|status| !status.is_empty());
             if dirty { format!("{sha}-dirty") } else { sha }
         }
-        _ => "unknown".to_owned(),
+        // A tree synced without .git (the Mac): `make mac-sync` writes the identity next to it.
+        _ => std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.build-sha"))
+            .ok()
+            .map(|sha| sha.trim().to_owned())
+            .filter(|sha| !sha.is_empty())
+            .unwrap_or_else(|| "unknown".to_owned()),
     };
     println!("cargo:rustc-env=SPLICE_BUILD={build}");
     // Rerun when HEAD moves (the SHA is exact). `-dirty` describes the tree when this crate last
@@ -30,4 +35,5 @@ fn main() {
         }
     }
     println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=../../.build-sha");
 }

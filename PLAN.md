@@ -475,10 +475,10 @@ eight places; the board below already carries the changes.
 - [x] T43.3 [L] `view.frames {strip}` motion strip with difference heatmap. (view.frames strip:true: the sheet gains a change heatmap per consecutive pair)
 
 ### T44 · Evals & gates [L + M]
-- [ ] T44.1 [M] `silent-demo-short` eval (silent take → 15–25 s short; every action kept; zero lint errors; cursor continuous; no zoom snap; clean transitions).
-- [ ] T44.2 [M] `tutorial-steps` eval (retake removed) and window-transition goldens (6 kinds × window).
+- [x] T44.1 [M] `silent-demo-short` eval (silent take → 15–25 s short; every action kept; zero lint errors; cursor continuous; no zoom snap; clean transitions). (f0ea0e1; 3/3 both arms)
+- [x] T44.2 [M] `tutorial-steps` eval (retake removed) and window-transition goldens (6 kinds × window). (f0ea0e1; 3/3 both arms; window transitions in the looks pixel sweep)
 - [x] T44.3 [L] One regression test per report bug id (C1–M23), named after it. (1603d40: one named test per report id; M22 and M23 below)
-- [ ] T44.4 [M] All evals 3/3 both arms; budgets stay green.
+- [x] T44.4 [M] All evals 3/3 both arms; budgets stay green. (13 tasks x 3 runs x 2 arms: all 3/3 after fixes, except voiceover on the Mac mini, which has no microphone; it now fails up front with NO_DEVICE)
 
 ### 0.4.x (gated or asset-bound; not in the 0.4 exit)
 - T45.1 HTML escape hatch (HyperFrames-compatible seek contract) behind a determinism gate on macOS.

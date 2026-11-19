@@ -83,6 +83,7 @@ dev:
 
 # ---- Mac mini (docs/LOOP.md §3): sync once, check once. ----
 mac-sync:
+	@{ git rev-parse --short=9 HEAD | tr -d '\n'; git diff --quiet HEAD -- || printf -- '-dirty'; } > .build-sha
 	rsync -az --delete --exclude /target --exclude /.git --exclude '.git' --exclude '*.splice/cache' --exclude /.claude ./ $(MAC):$(MAC_DIR)/
 
 mac-check: mac-sync
@@ -103,7 +104,7 @@ ifneq ($(filter splice_app,$(MAC_CRATES)),)
 	cargo t -p splice_mcp capture_agent_
 	cargo t -p splice_mcp capability_sweep
 endif
-	$(MAKE) bundle PROFILE=debug
+	SPLICE_TIMESTAMP=--timestamp=none $(MAKE) bundle PROFILE=debug
 	tools/check-macos-bundle.sh '$(BUNDLE_DIR)/Splice.app'
 	sh tools/test-macos-bundle.sh '$(BUNDLE_DIR)/Splice.app'
 	sh tools/check-macos-open.sh '$(BUNDLE_DIR)/Splice.app'

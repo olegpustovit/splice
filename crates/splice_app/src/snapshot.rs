@@ -186,7 +186,7 @@ fn load_picture(
         .map_err(|error| viewer_error(&error))?;
     pixels.resize(count, 0);
     composition
-        .read_picture(at, &mut pixels)
+        .read_frame(at, &mut pixels)
         .map_err(|error| viewer_error(&error))?;
     be::write_texture(
         texture,

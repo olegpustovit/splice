@@ -259,7 +259,13 @@ impl Track {
                 x: p[0].clamp(0.0, 1.0),
                 y: p[1].clamp(0.0, 1.0),
                 image,
-                opacity: if image < 0 { 0.0 } else { 1.0 },
+                // Outside the captured area (a window capture while the pointer is elsewhere)
+                // nothing is drawn: pinned to the edge it would hang over the backdrop.
+                opacity: if image < 0 || !inside(raw[i].0) {
+                    0.0
+                } else {
+                    1.0
+                },
                 scale,
             });
         }
@@ -305,6 +311,11 @@ impl Track {
     pub fn points(&self) -> &[Point] {
         &self.points
     }
+}
+
+/// Whether a recorded position is on the captured source.
+fn inside([x, y]: [f64; 2]) -> bool {
+    (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y)
 }
 
 fn smoothstep(x: f64) -> f64 {
@@ -579,6 +590,21 @@ mod tests {
                 assert!((at.x - click.x).abs() < 1e-9 && (at.y - click.y).abs() < 1e-9);
             }
         }
+    }
+
+    /// Found on a real take: a window capture records the pointer outside the window, and the
+    /// cursor must not hang at the card's edge over the backdrop.
+    #[test]
+    fn a_pointer_outside_the_captured_area_is_hidden() {
+        let samples = [
+            sample(0.0, 0.5, 0.5, false),
+            sample(1.0, 0.5, 1.4, false),
+            sample(3.0, 0.5, 0.5, false),
+        ];
+        let track = Track::build(&samples, SIZE, Motion::default());
+        assert!(track.at(0.5).unwrap().opacity > 0.99);
+        assert_eq!(track.at(2.0).unwrap().opacity, 0.0, "outside the window");
+        assert!(track.at(3.2).unwrap().opacity > 0.99);
     }
 
     /// T39.4: a declared press the recorder never saw becomes a human path that lands on it.

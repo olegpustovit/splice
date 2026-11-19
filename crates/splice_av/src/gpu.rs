@@ -55,9 +55,10 @@ fn gpu(error: ogpu_core::error::Error) -> Error {
 }
 
 impl GpuProgram {
-    /// Prepares the viewer's compositor for `composition` on `device` (text stays in PXUI).
+    /// Prepares the viewer's compositor for `composition` on `device`, titles and captions
+    /// rasterized exactly as export draws them (one text renderer: emoji, styles, animators).
     pub fn new(device: &Device, composition: &Composition) -> Result<Self, Error> {
-        Self::with_plan(device, &composition.plan, &[])
+        Self::with_plan(device, &composition.plan, &composition.text)
     }
 
     /// Prepares a compositor for `plan`, uploading its cursor images and rasterizing `text`.
@@ -181,7 +182,6 @@ impl GpuProgram {
             commands,
             target,
             false,
-            false,
         )?;
         Ok(drawn.then_some(at))
     }
@@ -200,7 +200,6 @@ impl GpuProgram {
         native_commands: *mut std::ffi::c_void,
         commands: &Commands,
         target: &mut PreparedRenderTarget,
-        text: bool,
         bgra: bool,
     ) -> Result<bool, Error> {
         self.blit_from.clear();
@@ -266,7 +265,7 @@ impl GpuProgram {
             let depth = slot.depth as usize;
             if depth < self.frame.layers.len() && depth > next {
                 self.depths.resize(self.layers.len(), Slot::NONE);
-                self.items_between([next, depth], at, canvas, text);
+                self.items_between([next, depth], at, canvas);
                 next = depth;
             }
             self.depths.resize(self.layers.len(), Slot::NONE);
@@ -309,11 +308,9 @@ impl GpuProgram {
             self.depths.resize(self.layers.len(), slot.depth);
         }
         self.depths.resize(self.layers.len(), Slot::NONE);
-        self.items_between([next, self.frame.layers.len()], at, canvas, text);
-        if text {
-            // Keystroke chips draw last, over everything.
-            self.text(at, canvas, None);
-        }
+        self.items_between([next, self.frame.layers.len()], at, canvas);
+        // Keystroke chips draw last, over everything.
+        self.text(at, canvas, None);
         self.depths.resize(self.layers.len(), Slot::NONE);
         self.transition(size, commands)?;
         // Nothing under an opaque full-canvas fill shows (the black base under a window
@@ -643,14 +640,12 @@ impl GpuProgram {
     }
 
     /// The shapes, titles and captions among evaluated layers `[from, to)`, in that order.
-    fn items_between(&mut self, [from, to]: [usize; 2], at: Frame, canvas: [f64; 2], text: bool) {
+    fn items_between(&mut self, [from, to]: [usize; 2], at: Frame, canvas: [f64; 2]) {
         for index in from..to {
             match self.frame.layers[index] {
                 splice_eval::Layer::Shape { .. } => self.shape(index, canvas),
                 splice_eval::Layer::Title { item, .. }
-                | splice_eval::Layer::Caption { item, .. }
-                    if text =>
-                {
+                | splice_eval::Layer::Caption { item, .. } => {
                     self.text(at, canvas, Some(item));
                 }
                 _ => {}

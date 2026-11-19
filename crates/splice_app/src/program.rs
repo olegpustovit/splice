@@ -1,7 +1,5 @@
 use super::{surface::Surface, viewer_error};
-use pxui::{
-    Fill, Image, ImageStyle, Label, Node, Point, Rect, Rgba, TextAlign, TextSpan, Ui, ui::Size,
-};
+use pxui::{Fill, Image, ImageStyle, Node, Rect, Rgba, Ui, ui::Size};
 use splice_av::{Composition, Player};
 use splice_core::history::{Store, StoreError};
 use splice_kit::Phase;
@@ -142,7 +140,8 @@ pub(super) fn composition(store: &Store) -> Result<Option<Rc<Composition>>, Stor
     }
 }
 
-pub(super) fn paint(ui: &mut Ui, contents: Option<(i32, &Rc<Composition>)>, image: Option<Image>) {
+/// The program image, letterboxed; titles and captions are in it (drawn by export's rasters).
+pub(super) fn paint(ui: &mut Ui, size: Option<[u32; 2]>, image: Option<Image>) {
     let viewport = ui.node(
         "program",
         Node {
@@ -151,11 +150,10 @@ pub(super) fn paint(ui: &mut Ui, contents: Option<(i32, &Rc<Composition>)>, imag
             ..Node::DEFAULT
         },
     );
-    let contents = contents.map(|(at, composition)| (at, Rc::clone(composition)));
     ui.canvas(&viewport, move |paint, rect| {
         paint.fill(rect, Fill::new(Rgba::BLACK));
-        if let (Some((at, clip)), Some(image)) = (&contents, image) {
-            let [w, h] = clip.size().map(|n| n as f32);
+        if let (Some(size), Some(image)) = (size, image) {
+            let [w, h] = size.map(|n| n as f32);
             let destination = letterbox(rect, [w, h]);
             if destination.w <= 0.0 || destination.h <= 0.0 {
                 return;
@@ -163,32 +161,6 @@ pub(super) fn paint(ui: &mut Ui, contents: Option<(i32, &Rc<Composition>)>, imag
             paint
                 .image(destination, &image, &ImageStyle::DEFAULT)
                 .expect("valid live program image");
-            let scale = destination.w / w;
-            for cue in clip.text_at(*at) {
-                let layer = &cue.layer;
-                let [x, y, width, _] = layer.bounds.map(|value| value as f32 * scale);
-                let alpha = (cue.opacity(*at).clamp(0.0, 1.0) * 255.0).round() as u8;
-                if alpha == 0 || layer.text.is_empty() {
-                    continue;
-                }
-                let rgb = layer.color.to_be_bytes();
-                let color = Rgba::rgba(rgb[1], rgb[2], rgb[3], alpha);
-                let span = TextSpan::new(0, layer.text.len() as u32).color(color);
-                let style = Label::BODY
-                    .size((layer.font as f32 * scale).max(1.0))
-                    .bold()
-                    .wrap()
-                    .align(TextAlign::Center);
-                paint
-                    .text_spans(
-                        Point::new(destination.x + x, destination.y + y),
-                        style,
-                        width,
-                        &layer.text,
-                        &[span],
-                    )
-                    .expect("valid program text span");
-            }
         }
     });
 }

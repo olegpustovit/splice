@@ -4,3 +4,4 @@
 /STOP
 .claude/worktrees/
 __pycache__/
+.build-sha

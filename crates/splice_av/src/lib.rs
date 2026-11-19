@@ -216,22 +216,17 @@ impl Composition {
 
     /// Reads one offscreen program frame, text included, into a caller-owned RGBA8 buffer.
     pub fn read_frame(&self, at: Frame, rgba: &mut [u8]) -> Result<(), Error> {
-        self.read(at, rgba, true, 0)
+        self.read(at, rgba, 0)
     }
 
     /// Reads a frame, then composes the same decoded sources `repeats` more times back to back,
     /// as the viewer does at its frame rate. `last_frame_timings` then reports the fastest warm
     /// compose, free of the GPU waking after a from-scratch decode.
     pub fn read_frame_warm(&self, at: Frame, rgba: &mut [u8], repeats: u32) -> Result<(), Error> {
-        self.read(at, rgba, true, repeats)
+        self.read(at, rgba, repeats)
     }
 
-    /// Reads the program picture so the viewer can draw text in its own layout.
-    pub fn read_picture(&self, at: Frame, rgba: &mut [u8]) -> Result<(), Error> {
-        self.read(at, rgba, false, 0)
-    }
-
-    fn read(&self, at: Frame, rgba: &mut [u8], text: bool, repeats: u32) -> Result<(), Error> {
+    fn read(&self, at: Frame, rgba: &mut [u8], repeats: u32) -> Result<(), Error> {
         use ogpu_core::backend as b;
         let gpu =
             |error: ogpu_core::error::Error| Error::Input(ogpu_core::error::to_string(&error));
@@ -275,7 +270,6 @@ impl Composition {
                 native,
                 &commands,
                 &mut offscreen.target,
-                text,
                 false,
             ) {
                 let _ = b::abandon(&commands);

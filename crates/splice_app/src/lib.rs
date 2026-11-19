@@ -496,7 +496,7 @@ fn paint_viewer(
             if let Some(name) = name {
                 ui.label(name, Label::DEFAULT);
             }
-            program::paint(ui, contents, image);
+            program::paint(ui, contents.map(|(_, program)| program.size()), image);
             intents = playbar::paint(ui, view);
         },
     );

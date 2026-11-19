@@ -141,7 +141,6 @@ impl Export {
                 &commands,
                 &mut self.target,
                 true,
-                true,
             )
             .and_then(|_| blit(native, &[drawn], &[out]).map_err(Error::from));
         if let Err(error) = encoded {

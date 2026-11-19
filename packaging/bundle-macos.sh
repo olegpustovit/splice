@@ -7,6 +7,9 @@ sdl_prefix=${3:?usage: bundle-macos.sh PRODUCTS SIGNING_KEYCHAIN SDL_PREFIX}
 root=${4:-target/bundle}
 mode=${5:-}
 cd "$(dirname "$0")/.."
+# Distribution needs Apple's secure timestamp (notarization); check bundles skip the network
+# round trip with SPLICE_TIMESTAMP=--timestamp=none.
+timestamp=${SPLICE_TIMESTAMP:---timestamp}
 
 fail() {
     printf 'splice: %s\n' "$1" >&2
@@ -79,10 +82,10 @@ done
 
 requirement="anchor apple generic and certificate leaf[subject.OU] = \"$team\" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
 for file in "$library" "$sdl"; do
-    /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" --timestamp --options runtime "$file"
+    /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" "$timestamp" --options runtime "$file"
     /usr/bin/codesign --verify --strict --test-requirement "=$requirement" "$file"
 done
-/usr/bin/codesign --force --keychain "$keychain" --sign "$identity" --timestamp --options runtime \
+/usr/bin/codesign --force --keychain "$keychain" --sign "$identity" "$timestamp" --options runtime \
     --entitlements packaging/splice.entitlements "$app"
 /usr/bin/codesign --verify --deep --strict --test-requirement "=$requirement" "$app"
 tools/check-macos-bundle.sh "$app" --static-only
