@@ -435,6 +435,41 @@ mod native {
             (48..=66).contains(&at[0]),
             "cursor center after zoom {at:?}"
         );
+        // D19: a typed key shows as a chip for people; renders an agent sees leave it out.
+        fs::write(
+            take.join("events.json"),
+            r#"{"t0":0,"source":{"kind":"display","rect":{"x":0,"y":0,"width":96,"height":64},"scale":1},"events":[
+                {"t":0.0,"k":"cursor","id":"c"},{"t":0.0,"k":"move","x":0.25,"y":0.25},
+                {"t":0.1,"k":"key","ch":"W","keyCode":13}]}"#,
+        )
+        .unwrap();
+        let slot = project.clips.order()[0];
+        let data = project.clips.data_mut(slot).unwrap();
+        data.enabled.keys = Some(true);
+        data.appearance
+            .effects
+            .push(effect(2, "keystrokes", Vec::new()));
+        let frame = |composition: &Composition| {
+            let [w, h] = composition.size().map(|n| n as usize);
+            let mut rgba = vec![0; w * h * 4];
+            composition.read_frame(5, &mut rgba).unwrap();
+            rgba
+        };
+        let human = frame(&Composition::prepare(&project, &scratch.0).unwrap());
+        let agent = frame(&Composition::prepare_for_agent(&project, &scratch.0).unwrap());
+        // Renders are deterministic: the only difference is the chip.
+        let changed = human
+            .chunks(4)
+            .zip(agent.chunks(4))
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(changed > 0, "the chip draws for people");
+        let slot = project.clips.order()[0];
+        let data = project.clips.data_mut(slot).unwrap();
+        data.appearance.effects.retain(|e| e.kind != "keystrokes");
+        data.enabled.keys = Some(false);
+        let plain = frame(&Composition::prepare(&project, &scratch.0).unwrap());
+        assert!(agent == plain, "the agent render shows no keystroke chip");
     }
 
     /// T13.1: a sound item on an audio lane reaches the exported mix.

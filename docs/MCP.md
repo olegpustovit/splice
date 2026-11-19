@@ -383,7 +383,7 @@ return {revision: e.revision, clips: t.spine.length};
 `LANE_NOT_EMPTY`, `OVERLAP`, `REPLAY_MINTS`, `REPLAY_MEDIA`, `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
 `MEDIA_OFFLINE`, `BAD_MEDIA`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`, `EXPORT_FAILED`, `FRAME_FAILED`,
 `CAPTURE_FAILED`, `CAPTURE_SOURCE`, `CAPTURE_CANCELLED` (CLI), `DISK_FULL`,
-0.4: `UNKNOWN_PARAM` (with `didYouMean`), `NOT_KEYABLE` (keys on a parameter the evaluator does not
+0.4: `NO_DEVICE` (recording a mic or camera this Mac does not have; refused before capture starts), `UNKNOWN_PARAM` (with `didYouMean`), `NOT_KEYABLE` (keys on a parameter the evaluator does not
 animate; the fix lists the keyable ones, also marked `keys:true` in `Splice.Effects`),
 `NO_ACTIVITY` (an activity basis or `intent.steps` with no recorded input on the timeline or
 inside the clip), `NO_TYPING` (`intent.speedTyping` found no run of at least `minRun`).

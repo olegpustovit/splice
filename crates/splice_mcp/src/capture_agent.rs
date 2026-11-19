@@ -397,6 +397,24 @@ fn dispatch(
         "take.begin" => {
             let options = crate::record_options::Options::parse(args)?;
             permissions::require_options(&options, &permissions::snapshot())?;
+            // A track with no device would start and fail seconds later with no samples.
+            let devices = apple_sys::capture::devices();
+            for (wanted, kind, name) in [
+                (options.mic, "mic", "microphone"),
+                (options.camera, "camera", "camera"),
+            ] {
+                if wanted && !devices.iter().any(|(k, ..)| k == kind) {
+                    return Err(StoreError::new(
+                        "NO_DEVICE",
+                        &format!("This Mac has no {name} to record from."),
+                        &format!(
+                            "Connect a {name}, or record without it (record.start {}:false); \
+                             record.start {{dryRun:true}} lists devices.",
+                            if kind == "mic" { "mic" } else { "camera" }
+                        ),
+                    ));
+                }
+            }
             jobs.begin(Path::new(args.string("package")?), options)
         }
         method @ ("take.status" | "take.stop" | "take.cancel" | "take.pause" | "take.resume"

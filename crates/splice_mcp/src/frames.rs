@@ -24,7 +24,7 @@ pub fn grab_frame(store: &Store, at: Frame, file: &Path) -> Result<Json, StoreEr
     FrameSelection::Explicit(vec![at]).resolve(timeline::duration(store.project())?)?;
     let output = Output::prepare(file.to_path_buf(), false)?;
     let revision = store.project().rev;
-    let composition = Composition::prepare(store.project(), store.path())
+    let composition = Composition::prepare_for_agent(store.project(), store.path())
         .map_err(|error| prepare_error(&error, render_error))?;
     let mut pixels = buffer(composition.size())?;
     composition
@@ -77,7 +77,7 @@ pub(super) fn render_tool(
     directory(&cache)?;
     let directory_path = cache.join("frames");
     directory(&directory_path)?;
-    let composition = Composition::prepare(store.project(), store.path())
+    let composition = Composition::prepare_for_agent(store.project(), store.path())
         .map_err(|error| prepare_error(&error, render_error))?;
     let size = composition.size();
     let mut pixels = buffer(size)?;

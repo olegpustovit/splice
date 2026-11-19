@@ -218,7 +218,8 @@ fn pixel_issues(
             "Retry with a smaller range.",
         )
     };
-    let composition = Composition::prepare(project, store.path()).map_err(|e| render(&e))?;
+    let composition =
+        Composition::prepare_for_agent(project, store.path()).map_err(|e| render(&e))?;
     let size = composition.size();
     let fps = project.fps.max(1) as Frame;
     // ponytail: at most 400 sampled frames (80 s at 5/s); a longer range samples more sparsely.

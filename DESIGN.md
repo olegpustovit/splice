@@ -17,7 +17,7 @@ A social editor starts from a blank sequence, imported camera footage, audio, a 
 - `editor_core` owns the project, revision, normalized command batches, validation, undo and change events. The UI and stdio adapter both use this boundary. A repository port handles atomic project and draft persistence, with a single project writer and immutable snapshots for rendering.
 - `media` provides immutable asset descriptors and decode access. `compositor` evaluates a revision and sequence time to a frame and audio interval. Preview, proxy and delivery use that evaluation path with different output quality. Capture extensions publish descriptors and bytes through media intake.
 - A sequence has ordered tracks. A clip instance points into an asset through a source range and a sequence-to-source map. Use rational asset timestamps and integral sequence edit units. The prototype fixes sequence time to integer frames at 30 fps. The production engine needs sample-accurate audio and a defined quantization rule per track.
-- `TakeAsset` contains a manifest with streams, per-stream clock offsets, discontinuities, and nullable component descriptors. Picture/audio streams only reference present media. Pointer samples and approved key cues are timed data that can produce ordinary compositing elements. Raw characters stay local and out of the tool view and agent preview rendering.
+- `TakeAsset` contains a manifest with streams, per-stream clock offsets, discontinuities, and nullable component descriptors. Picture/audio streams only reference present media. Pointer samples and approved key cues are timed data that can produce ordinary compositing elements. Raw characters stay local and out of the tool view and agent renders (`view.frames` and `view.check` draw no keystroke chips; exports for people do).
 - Split makes two instances with distinct IDs, source ranges and copied overrides. Ripple moves later primary instances, along with attached graphics. Clipping an attachment samples its property curves at the cut boundaries. A production detach operation would lift a component to an ordinary track, preserve its sampled playback map, and disable the parent's copy in one undoable batch. This avoids duplicate audio and double compositing.
 - Reusable motion compositions are typed layers with stable property IDs, interpolation and a duration. Bind templates through validated parameters. Production scope includes camera transforms, shape/text primitives, masks, curves and compositing order. The prototype uses linear scale and anchored title text.
 
@@ -25,16 +25,9 @@ A social editor starts from a blank sequence, imported camera footage, audio, a 
 
 Use MCP stdio for the first native adapter. Discover tools with JSON Schema through `tools/list`; return typed object results with `structuredContent`. Pick and test protocol negotiation as part of implementation. [MCP tool specification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
 
-| Tool | Main arguments | Result in editor |
-| --- | --- | --- |
-| `timeline.inspect` | `projectId`, `ifRevision` | Read current sequence, timing, clip IDs and safe component states. |
-| `clip.trim` | `draftId?`, `clipId`, `removeTailFrames`, `ripple` | Shorten the take, shift later clips with ripple, and outline changed clips in the preview. |
-| `motion.add` | `draftId?`, `clipId`, `offsetFrames`, `durationFrames`, `scale` | Add a motion block and preview the interpolated transform. |
-| `title.add` | `draftId?`, `clipId`, `offsetFrames`, `durationFrames`, `text` | Add a visible title and timeline block. |
-| `component.set` | `draftId?`, `clipId`, `component`, `enabled` | Hide cue renderings while retaining their source component. |
-| `render.preview` | `frame`, `draftId?` | Preview the requested frame. Native response should return scoped frame or proxy handles. |
-| `export.prepare` | `projectId`, `ifRevision`, `profile`, `aspect` | Show dimensions, duration and codec. A confirmed native delivery job owns destination selection, encoding, progress and cancellation. |
-| `draft.submit`, `draft.accept`, `draft.discard` | `draftId`, `ifRevision` for submit and accept, and `changeIds` for accept | Review a frozen draft, commit selected operations atomically or discard them. |
+The prototype's tool table (`timeline.inspect`, `draft.submit`, …) was a design sketch; the
+shipped contract has no drafts or approvals (agent batches commit live, history makes them safe)
+and is specified in [docs/MCP.md](docs/MCP.md).
 
 Proposals also carry `projectId` and `ifRevision`. A production mutation envelope adds a client action ID for retry deduplication. Stage typed operations against an immutable base. Validate every replay, including review subset changes. Compute affected IDs, cascade details and invalidated sequence intervals from the resulting state. At acceptance, compare the base revision atomically. A production rebase must surface semantic conflicts and produce a fresh review. The prototype lets reviewers discard a stale draft and propose again.
 

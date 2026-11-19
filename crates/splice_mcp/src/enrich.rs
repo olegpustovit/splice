@@ -240,7 +240,7 @@ fn fill_input(
         "intent.autoZoom" => {
             let item = take_clip(
                 get("item"),
-                "Pass clicks explicitly, or zoom with param.keys.",
+                "Pass clicks explicitly, or place a zoom yourself: zoom.add {at, length, amount, focus:{x, y}} on what matters (view.frames shows where).",
             )?;
             let events =
                 super::media::events(dir, project, &object(vec![("clip", Json::String(item))]))?;
@@ -264,7 +264,7 @@ fn fill_input(
                 return Err(failure(
                     "NO_CLICKS",
                     "The take recorded no clicks inside this clip.",
-                    "Pass clicks explicitly, or zoom with param.keys.",
+                    "Pass clicks explicitly, or place a zoom yourself: zoom.add {at, length, amount, focus:{x, y}} on what matters (view.frames shows where).",
                 ));
             }
             Ok(("clicks", Json::Array(clicks)))

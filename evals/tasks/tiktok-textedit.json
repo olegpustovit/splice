@@ -4,7 +4,26 @@
   "seed": {
     "record": {
       "app": "TextEdit",
-      "duration": 8
+      "duration": 8,
+      "events": [
+        {
+          "t": 1.5,
+          "do": "click",
+          "x": 0.3,
+          "y": 0.25
+        },
+        {
+          "t": 2.0,
+          "do": "type",
+          "for": 2
+        },
+        {
+          "t": 5.0,
+          "do": "click",
+          "x": 0.35,
+          "y": 0.6
+        }
+      ]
     }
   },
   "assets": {

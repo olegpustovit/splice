@@ -160,10 +160,21 @@ impl From<apple_sys::Error> for Error {
 impl Composition {
     /// Builds the program from a read-only project revision and its package directory.
     pub fn prepare(project: &Project, package: &Path) -> Result<Self, Error> {
+        Self::build(project, package, true)
+    }
+
+    /// The program for renders an agent sees (view.frames, view.check): keystroke chips, which
+    /// show typed characters, are left out; key text stays human-only (D19).
+    pub fn prepare_for_agent(project: &Project, package: &Path) -> Result<Self, Error> {
+        Self::build(project, package, false)
+    }
+
+    fn build(project: &Project, package: &Path, keystrokes: bool) -> Result<Self, Error> {
         let evaluator = std::sync::Arc::new(Evaluator::prepare(project).map_err(Error::Plan)?);
         let cuts = evaluator.breakpoints();
         let end = *cuts.last().unwrap_or(&0);
-        let (native, text, plan) = lower::build(project, package, &evaluator, &cuts, end)?;
+        let (native, text, plan) =
+            lower::build(project, package, &evaluator, &cuts, end, keystrokes)?;
         Ok(Self {
             native,
             evaluator,

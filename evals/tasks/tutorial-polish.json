@@ -1,12 +1,26 @@
 {
   "id": "tutorial-polish",
   "platform": "macos",
-  "seed": {"copy": "fixtures/projects/sample.splice"},
+  "seed": {
+    "copy": "fixtures/projects/sample.splice"
+  },
   "prompt": "Polish the tutorial in the Splice project {project}. The screen take shows a private email address in its top-right corner: blur it out for the whole take. Add a lower-third reading 'Ada Lovelace' with the subtitle 'Engineer' early in the take, add a chapter marker named 'Setup' where the take starts, and zoom the take in smoothly from 1x to 1.4x over its first two seconds. Use the splice MCP tools only.",
   "checks": [
-    {"name": "email blurred", "expr": "any(e['type'] == 'mask' and e['params'].get('mode', 'blur') in ('blur', 'pixelate', 'cover') and e['params'].get('x', 0.5) >= 0.4 and e['params'].get('y', 0.5) <= 0.35 for c in take_clips() for e in c['effects'])"},
-    {"name": "lower third", "expr": "any(e['type'] == 'template' and e['params'].get('name') == 'lower-third' for i in items for e in i['effects']) and any('Ada' in i['params'].get('text', '') for i in items if i['kind'] == 'title')"},
-    {"name": "chapter marker", "expr": "any(m['name'].strip().lower() == 'setup' and abs(m['at'] - 120) <= 15 for m in project['markers'])"},
-    {"name": "keyed zoom", "expr": "any(e['type'] == 'transform' and isinstance(e['params'].get('scale'), dict) and max(k['value'] for k in e['params']['scale']['keys']) >= 1.35 for c in take_clips() for e in c['effects']) or any(i['kind'] == 'motion' and i['params'].get('to', 1) >= 1.35 for i in items)"}
+    {
+      "name": "email blurred",
+      "expr": "any(e['type'] == 'mask' and e['params'].get('mode', 'blur') in ('blur', 'pixelate', 'cover') and e['params'].get('x', 0.5) >= 0.4 and e['params'].get('y', 0.5) <= 0.35 for c in take_clips() for e in c['effects'])"
+    },
+    {
+      "name": "lower third",
+      "expr": "any(e['type'] == 'template' and e['params'].get('name') == 'lower-third' for i in items for e in i['effects']) and any('Ada' in i['params'].get('text', '') for i in items if i['kind'] == 'title')"
+    },
+    {
+      "name": "chapter marker",
+      "expr": "any(m['name'].strip().lower() == 'setup' and abs(m['at'] - 120) <= 15 for m in project['markers'])"
+    },
+    {
+      "name": "keyed zoom",
+      "expr": "any(e['type'] == 'transform' and isinstance(e['params'].get('scale'), dict) and max(k['value'] for k in e['params']['scale']['keys']) >= 1.35 for c in take_clips() for e in c['effects']) or any(i['kind'] == 'zoom' and i['params'].get('amount', 1) >= 1.35 for i in items)"
+    }
   ]
 }

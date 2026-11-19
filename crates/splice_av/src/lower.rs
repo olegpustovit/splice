@@ -110,6 +110,7 @@ pub(super) fn build(
     shared: &Arc<Evaluator>,
     cuts: &[Frame],
     end: Frame,
+    keystrokes: bool,
 ) -> Result<(Composition, Vec<TimedText>, Plan), Error> {
     let evaluator: &Evaluator = shared;
     let mut luts = Vec::new();
@@ -307,7 +308,8 @@ pub(super) fn build(
         state.builder.range(range, &tracks, &audio)?;
         state.plan.intervals.push((range, video.clone()));
     }
-    for (clip, media, style) in chips {
+    // Keystroke chips carry typed characters: renders an agent sees leave them out (D19).
+    for (clip, media, style) in chips.into_iter().filter(|_| keystrokes) {
         state.chips(clip, media, style, project, package, evaluator)?;
     }
     Ok((state.builder.finish()?, state.text, state.plan))
