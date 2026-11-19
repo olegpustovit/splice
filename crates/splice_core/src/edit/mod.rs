@@ -20,6 +20,8 @@ pub use tier_c::{consolidated_path, is_filler, parse_cues, retakes};
 pub use time::{resolve_view_frame, span};
 
 #[cfg(test)]
+mod fuzz_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tier_b_tests;
