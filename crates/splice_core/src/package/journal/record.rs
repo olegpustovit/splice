@@ -73,9 +73,15 @@ pub struct Record {
     pub parent: u64,
     /// FNV-1a of the canonical record with this field omitted.
     pub hash: u64,
+    /// The edit engine that recorded it: replay of an older one translates retired ops and mints
+    /// leniently (0.3 journals carry no field: 3).
+    pub engine: u32,
     /// Batch recorded at this revision.
     pub batch: Batch,
 }
+
+/// The current edit engine (0.4 changed edit semantics; see `edit::legacy`).
+pub const ENGINE: u32 = 4;
 
 impl Record {
     pub(super) fn encode(&self, include_hash: bool) -> Json {
@@ -86,6 +92,9 @@ impl Record {
         ];
         if include_hash {
             fields.push(("hash", hash_text(self.hash)));
+        }
+        if self.engine >= ENGINE {
+            fields.push(("engine", Json::Unsigned(u64::from(self.engine))));
         }
         fields.extend([
             ("time", Json::Unsigned(batch.time)),
@@ -153,7 +162,7 @@ impl Record {
 
     pub(super) fn decode(value: &Json) -> Result<Self, PackageError> {
         let shared = [
-            "rev", "parent", "hash", "time", "source", "session", "label", "key",
+            "rev", "parent", "hash", "engine", "time", "source", "session", "label", "key",
         ];
         let mut fields = shared.to_vec();
         let change = if value.field("ops").is_some() {
@@ -210,6 +219,14 @@ impl Record {
             rev: u64_field(value, "rev")?,
             parent: hash(value, "parent")?,
             hash: hash(value, "hash")?,
+            engine: match value.field("engine") {
+                None => 3,
+                Some(engine) => engine
+                    .as_u64()
+                    .and_then(|e| u32::try_from(e).ok())
+                    .filter(|&e| e >= ENGINE)
+                    .ok_or_else(|| bad("engine", "an engine version, 4 or later"))?,
+            },
             batch: Batch {
                 time: u64_field(value, "time")?,
                 source: match value.string("source")? {

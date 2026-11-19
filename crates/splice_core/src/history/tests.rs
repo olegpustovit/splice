@@ -692,3 +692,53 @@ fn writer_races_never_share_a_package_or_lose_a_batch() {
     assert_eq!(store.project().markers.len() as u64, wins);
     assert_eq!(store.project().rev, wins);
 }
+
+/// A real 0.3 project (161 batches: motion items, the click-zoom curve, 0.3 autoZoom, keys on
+/// parameters 0.4 does not animate, a marker past the end) opens under 0.4: its records
+/// replay with their 0.3 meaning, the checkpoint 0.3 wrote is superseded by the replay, and
+/// a new edit on top is recorded by the current engine.
+#[test]
+fn a_0_3_journal_opens_replays_and_takes_new_edits() {
+    let temp = Temp::new("legacy");
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/projects/legacy-0.3.splice"
+    );
+    fs::create_dir_all(&temp.0).unwrap();
+    for entry in fs::read_dir(fixture).unwrap() {
+        let entry = entry.unwrap();
+        fs::copy(entry.path(), temp.0.join(entry.file_name())).unwrap();
+    }
+    let mut store = Store::open(&temp.0).unwrap();
+    assert!(store.problem().is_none(), "{:?}", store.problem());
+    assert_eq!(store.project().rev, 161);
+    store.verify().unwrap();
+    // The 0.3 motion items are camera zooms now; the titles survived.
+    let kinds: Vec<_> = store
+        .project()
+        .items
+        .order()
+        .iter()
+        .map(|&s| store.project().items.data(s).unwrap().kind.clone())
+        .collect();
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|k| matches!(k, splice_model::ItemKind::Title { .. }))
+            .count(),
+        7
+    );
+    let committed = store
+        .apply(
+            &[op(r#"{"cmd":"marker.add","at":10,"name":"after 0.4"}"#)],
+            &human(1),
+        )
+        .unwrap();
+    assert_eq!(committed.revision, 162);
+    let last = store.records().last().unwrap();
+    assert_eq!(last.engine, crate::package::journal::ENGINE);
+    store.close().unwrap();
+    let store = Store::open(&temp.0).unwrap();
+    assert!(store.problem().is_none());
+    store.verify().unwrap();
+}

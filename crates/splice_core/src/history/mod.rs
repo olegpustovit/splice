@@ -106,7 +106,12 @@ impl Store {
                 .unwrap_or(usize::MAX)
         });
         let verified = state_hash(&retained)?;
-        if checkpoint.hash != retained.hash || state_hash(&checkpoint)? != verified {
+        // A checkpoint written by an older engine holds that engine's state; the journal,
+        // replayed with today's meaning, is the truth, and the next snapshot rewrites it.
+        let older = self.records().iter().any(|record| {
+            record.rev <= checkpoint.rev && record.engine < crate::package::journal::ENGINE
+        });
+        if checkpoint.hash != retained.hash || (!older && state_hash(&checkpoint)? != verified) {
             return Err(StoreError::new(
                 "JOURNAL_CORRUPT",
                 &format!(
@@ -531,8 +536,14 @@ impl Store {
             ));
         }
         let previous = self.at(record.rev - 1)?;
-        let (_, report) =
-            edit::stage_recorded(&previous, original, record.batch.source, mints, imports)?;
+        let (_, report) = edit::stage_recorded(
+            &previous,
+            original,
+            record.batch.source,
+            mints,
+            imports,
+            record.engine,
+        )?;
         Ok(Some(EditResult {
             revision: record.rev,
             hash: record.hash,

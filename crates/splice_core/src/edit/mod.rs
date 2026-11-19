@@ -8,6 +8,7 @@ use splice_model::*;
 use std::fmt::{self, Write};
 
 mod edits;
+mod legacy;
 mod mints;
 mod motion;
 mod properties;
@@ -245,6 +246,7 @@ pub(crate) fn stage_recorded(
     source: Source,
     mints: &[String],
     imports: &[MediaImport],
+    engine: u32,
 ) -> Result<(Project, ApplyReport), ApplyError> {
     let mut load = |path: &str| {
         imports
@@ -253,8 +255,11 @@ pub(crate) fn stage_recorded(
             .map(|import| import.descriptor.clone())
             .map_or_else(|| missing_media(path), Ok)
     };
-    let (project, report, resolved) =
-        stage_above(base, ops, source, Some(mints), base.serial, &mut load)?;
+    let mut work = ApplyWorkspace::default();
+    // An older engine's record: translate retired ops and mint leniently (legacy.rs).
+    work.edit.legacy = engine < crate::package::journal::ENGINE;
+    work.stage(base, ops, source, Some(mints), base.serial, &mut load)?;
+    let (project, report, resolved) = (work.edit.project, work.edit.report, work.edit.imports);
     if resolved != imports {
         return Err(batch_error(error(
             "REPLAY_MEDIA",
@@ -374,7 +379,13 @@ impl ApplyWorkspace {
         edit.explicit_lanes.clear();
         edit.splits.clear();
         for (index, value) in ops.iter().enumerate() {
-            edit.step(value, index, load).map_err(|mut error| {
+            // A 0.3 op that 0.4 refuses (its rules got stricter) is dropped on replay; the rest
+            // of the batch applies (see legacy.rs).
+            let stepped = edit.step(value, index, load);
+            if edit.legacy && stepped.is_err() {
+                continue;
+            }
+            stepped.map_err(|mut error| {
                 // The refusing code knows the rule; the op knows what was passed.
                 if let Some(rule) = &mut error.rule {
                     rule.fill_got(value);
@@ -386,7 +397,7 @@ impl ApplyWorkspace {
             })?;
         }
         edit.settle(base).map_err(batch_error)?;
-        if replay.is_some_and(|mints| mints.len() != edit.report.mints.len()) {
+        if !edit.legacy && replay.is_some_and(|mints| mints.len() != edit.report.mints.len()) {
             return Err(batch_error(mints::bad_replay()));
         }
         validate::with_scratch(&edit.project, &mut edit.validate_scratch).map_err(|error| {
@@ -405,6 +416,8 @@ struct Editor {
     source: Source,
     serial_floor: u64,
     replay: Option<Vec<String>>,
+    /// Replaying a record from an older engine (see legacy.rs).
+    legacy: bool,
     report: ApplyReport,
     imports: Vec<MediaImport>,
     spare_changes: Vec<EditChange>,
@@ -430,6 +443,7 @@ impl Default for Editor {
             source: Source::Human,
             serial_floor: 0,
             replay: None,
+            legacy: false,
             report: ApplyReport::default(),
             imports: Vec::new(),
             spare_changes: Vec::new(),
@@ -507,8 +521,26 @@ impl Editor {
         op: usize,
         load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
     ) -> Result<(), CommandError> {
-        let commands::Decoded { op: decoded, bind } =
-            commands::decode_reusing(value, &mut self.decode_scratch)?;
+        let translated = if self.legacy {
+            legacy::translate(value)
+        } else {
+            None
+        };
+        let value = translated.as_ref().unwrap_or(value);
+        // 0.3's autoZoom baked transform keys: its records replay with that meaning.
+        let legacy_zoom = if self.legacy {
+            legacy::auto_zoom(value)?
+        } else {
+            None
+        };
+        let (decoded, bind) = match legacy_zoom {
+            Some(_) => (None, commands::binding_of(value)?),
+            None => {
+                let commands::Decoded { op, bind } =
+                    commands::decode_reusing(value, &mut self.decode_scratch)?;
+                (Some(op), bind)
+            }
+        };
         let id = value
             .field("cmd")
             .and_then(Json::as_str)
@@ -522,7 +554,11 @@ impl Editor {
             return Err(CommandError::bad("ref", "a unique name within the batch"));
         }
         self.detail = None;
-        let outcome = self.run(decoded, id, load)?;
+        let outcome = match (decoded, legacy_zoom) {
+            (Some(decoded), _) => self.run(decoded, id, load)?,
+            (None, Some(zoom)) => self.legacy_auto_zoom(zoom)?,
+            (None, None) => unreachable!("decoded or legacy"),
+        };
         if let Some(name) = bind {
             self.bindings.push(Binding {
                 name,

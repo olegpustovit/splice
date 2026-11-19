@@ -1,0 +1,1 @@
+{"format":"splice/1","media":[{"id":"med_1","kind":"take","path":"takes/med_1/screen.mov","size":7143707,"mtime":1795107240,"probe":{"fps":30,"frames":1615,"width":960,"height":1560,"audio":[],"codec":"hevc"},"components":{"screen":"screen.mov","events":"events.json","cursors":"cursors"}}]}

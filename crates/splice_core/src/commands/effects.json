@@ -1191,5 +1191,29 @@
         "label": "Logo position"
       }
     }
+  },
+  "clickZoom": {
+    "title": "Click Zoom (0.3, retired)",
+    "appliesTo": "screen takes",
+    "legacy": true,
+    "params": {
+      "scale": {
+        "type": "number",
+        "def": 1.6,
+        "min": 1.05,
+        "max": 2.5,
+        "step": 0.05,
+        "label": "Scale"
+      },
+      "hold": {
+        "type": "number",
+        "def": 45,
+        "min": 15,
+        "max": 120,
+        "step": 1,
+        "label": "Hold (f)"
+      }
+    },
+    "applies": "take"
   }
 }

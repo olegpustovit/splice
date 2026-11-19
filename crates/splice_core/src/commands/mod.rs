@@ -337,6 +337,11 @@ pub(crate) struct DecodeScratch {
     pub(crate) path: String,
 }
 
+/// The batch binding an op's `ref` declares, if any.
+pub(crate) fn binding_of(value: &Json) -> Result<Option<String>, CommandError> {
+    value.field("ref").map(args::binding).transpose()
+}
+
 pub(crate) fn decode_reusing(
     value: &Json,
     scratch: &mut DecodeScratch,
@@ -363,12 +368,35 @@ pub fn lookup(id: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|row| row.id == id)
 }
 
-/// Returns the effect schema catalog used by command discovery.
+/// Returns the effect schema catalog used by command discovery: current types only.
 pub fn effect_schemas() -> &'static Json {
+    static SCHEMAS: std::sync::OnceLock<Json> = std::sync::OnceLock::new();
+    SCHEMAS.get_or_init(|| match all_effect_schemas() {
+        Json::Object(types) => Json::Object(
+            types
+                .iter()
+                .filter(|(_, schema)| schema.field("legacy").is_none())
+                .cloned()
+                .collect(),
+        ),
+        other => other.clone(),
+    })
+}
+
+/// Every effect type, including `legacy` ones that 0.3 journals and files still hold (inert:
+/// validated and replayed, never offered or rendered).
+pub(crate) fn all_effect_schemas() -> &'static Json {
     static SCHEMAS: std::sync::OnceLock<Json> = std::sync::OnceLock::new();
     SCHEMAS.get_or_init(|| {
         splice_json::parse(include_str!("effects.json")).expect("checked effect schemas")
     })
+}
+
+/// Whether an effect type is retired (kept only so old journals and files load).
+pub(crate) fn is_legacy_effect(kind: &str) -> bool {
+    all_effect_schemas()
+        .field(kind)
+        .is_some_and(|schema| schema.field("legacy").is_some())
 }
 
 /// Returns the documented schema for an ID or a filtered catalog when the ID is absent.
@@ -541,7 +569,7 @@ fn eases() -> Json {
 
 /// The schema entry for one parameter of an effect type.
 fn param_spec(kind: &str, name: &str) -> Result<&'static Json, CommandError> {
-    let schemas = effect_schemas();
+    let schemas = all_effect_schemas();
     let schema = schemas
         .field(kind)
         .and_then(|schema| schema.field("params"))

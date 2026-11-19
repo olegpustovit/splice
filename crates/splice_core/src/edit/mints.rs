@@ -2,7 +2,26 @@ use super::*;
 
 impl Editor {
     pub(super) fn mint(&mut self, prefix: &str) -> Result<u64, CommandError> {
-        let serial = if let Some(replay) = &self.replay {
+        // An older engine's record: its ops may mint a different number of IDs now (0.4 changed
+        // edit semantics). Each mint takes the first unused recorded ID of its kind, so the ops
+        // after it still find what they name; anything else mints fresh.
+        let lenient = if self.legacy {
+            self.replay.as_deref().and_then(|replay| {
+                replay.iter().find_map(|id| {
+                    let (recorded, digits) = id.split_once('_')?;
+                    let serial = u64::from_str_radix(digits, 36).ok()?;
+                    (recorded == prefix
+                        && !self.report.mints.contains(id)
+                        && !self.occupied(prefix, serial))
+                    .then_some(serial)
+                })
+            })
+        } else {
+            None
+        };
+        let serial = if let Some(serial) = lenient {
+            serial
+        } else if let Some(replay) = self.replay.as_ref().filter(|_| !self.legacy) {
             let id = replay.get(self.report.mints.len()).ok_or_else(bad_replay)?;
             let (recorded_prefix, digits) = id.split_once('_').ok_or_else(bad_replay)?;
             let serial = u64::from_str_radix(digits, 36).map_err(|_| bad_replay())?;

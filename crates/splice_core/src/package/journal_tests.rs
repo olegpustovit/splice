@@ -95,7 +95,8 @@ fn journal_crash_at_every_byte_recovers_a_complete_prefix() {
     drop(journal);
 
     let bytes = fs::read(&journal_path).unwrap();
-    assert_eq!(checkpoints[1].2, 0x16d9_758e_52e9_0695);
+    // Records carry `"engine":4` since 0.4 (older records replay as engine 3).
+    assert_eq!(checkpoints[1].2, 0x24b0_bc77_83f8_6971);
     let mut file = File::options()
         .read(true)
         .write(true)

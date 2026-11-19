@@ -171,10 +171,18 @@ fn a_0_3_project_migrates_motion_click_zoom_and_unanimated_keys() {
     .unwrap();
     let (_, loaded) = Package::open(&path).unwrap();
     assert_eq!(loaded.lanes[0].kind, splice_model::LaneKind::Camera);
-    // clickZoom dropped; keys on a non-keyable parameter keep the first value (T36.4).
-    assert_eq!(loaded.effects.len(), 1);
+    // clickZoom stays as inert data (nothing renders it; 0.3 journals replay onto it); keys on
+    // a non-keyable parameter keep the first value (T36.4).
     assert_eq!(
-        loaded.effects[0].params[0].value,
+        loaded
+            .effects
+            .iter()
+            .map(|e| e.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["clickZoom", "window"]
+    );
+    assert_eq!(
+        loaded.effects[1].params[0].value,
         splice_model::EffectValue::Number(0.12)
     );
     let slot = loaded.items.order()[0];

@@ -674,11 +674,6 @@ pub(super) fn decode_effects(value: &Json) -> Result<Vec<Effect>, PackageError> 
     let mut effects = Vec::new();
     for value in value.array_or_empty("effects")? {
         shape(value, &["id", "type", "enabled", "params"])?;
-        // 0.3 click zoom was a render-time curve; 0.4 zooms are explicit camera segments
-        // (intent.autoZoom makes them). The old setting is dropped on load.
-        if value.field("type").and_then(Json::as_str) == Some("clickZoom") {
-            continue;
-        }
         let kind = value.field("type").and_then(Json::as_str).unwrap_or("");
         let mut params = Vec::new();
         for (name, value) in value

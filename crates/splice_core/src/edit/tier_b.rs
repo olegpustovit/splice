@@ -37,7 +37,10 @@ pub(super) enum Applies {
 /// The schema's `applies` class and whether an owner may hold several instances.
 pub(super) fn applies(kind: &str) -> Result<(Applies, bool), CommandError> {
     let schemas = effect_schemas();
-    let Some(schema) = schemas.field(kind) else {
+    let Some(schema) = schemas
+        .field(kind)
+        .or_else(|| crate::commands::all_effect_schemas().field(kind))
+    else {
         let mut names = String::new();
         for (name, _) in schemas.as_object().into_iter().flatten() {
             if !names.is_empty() {
@@ -745,6 +748,14 @@ impl Editor {
         enabled: Option<bool>,
         created: &mut Vec<Target>,
     ) -> Result<EffectId, CommandError> {
+        // Retired types exist only so 0.3 journals replay; live edits cannot add them.
+        if !self.legacy && crate::commands::is_legacy_effect(kind) {
+            return Err(error(
+                "UNKNOWN_COMMAND",
+                &format!("The {kind} effect was retired in 0.4."),
+                "Zoom with the camera: intent.autoZoom (from clicks) or zoom.add.",
+            ));
+        }
         let (class, multiple) = applies(kind)?;
         if !self.fits(class, owner) {
             let schemas = effect_schemas();

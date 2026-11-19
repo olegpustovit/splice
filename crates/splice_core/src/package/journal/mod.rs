@@ -1,7 +1,7 @@
 //! Durable revision log for a writer-locked project.
 
 mod record;
-pub use record::{Batch, Change, MediaImport, Record, Source};
+pub use record::{Batch, Change, ENGINE, MediaImport, Record, Source};
 
 use super::{
     Package, PackageError, atomic_write, codec::*, json_bytes, media, project, read_optional_json,
@@ -197,6 +197,7 @@ impl Journal {
                 .ok_or_else(|| bad("rev", "a revision with a successor"))?,
             parent: project.hash,
             hash: 0,
+            engine: record::ENGINE,
             batch,
         };
         record.validate()?;

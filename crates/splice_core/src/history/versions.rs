@@ -129,7 +129,15 @@ impl Versions {
             else {
                 return Err(invalid_revert());
             };
-            project = edit::stage_recorded(&project, ops, record.batch.source, mints, imports)?.0;
+            project = edit::stage_recorded(
+                &project,
+                ops,
+                record.batch.source,
+                mints,
+                imports,
+                record.engine,
+            )?
+            .0;
         }
         project.rev = entry.rev;
         project.hash = entry.hash;
@@ -208,6 +216,7 @@ impl Versions {
                     record.batch.source,
                     mints,
                     imports,
+                    record.engine,
                 )?;
                 self.edit(candidate, record.rev)
             }
@@ -264,7 +273,14 @@ impl Versions {
             else {
                 return Err(invalid_revert());
             };
-            match edit::stage_recorded(&project, ops, record.batch.source, mints, imports) {
+            match edit::stage_recorded(
+                &project,
+                ops,
+                record.batch.source,
+                mints,
+                imports,
+                record.engine,
+            ) {
                 Ok((next, _)) => {
                     project = next;
                     active.push(rev);
