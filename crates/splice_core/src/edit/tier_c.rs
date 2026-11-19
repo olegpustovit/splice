@@ -318,7 +318,13 @@ impl Editor {
     /// Source frame just past the clip's last frame.
     fn source_end(&self, slot: Slot) -> Result<f64, CommandError> {
         let timing = self.project.clips.timing(slot).expect("live clip");
-        Ok(f64::from(timing.source) + f64::from(timing.length) * source_rate(&self.project, slot)?)
+        self.source_at(slot, timing.length)
+    }
+
+    /// Source frame `frames` timeline frames into the clip, speed effect included (H4).
+    fn source_at(&self, slot: Slot, frames: Frame) -> Result<f64, CommandError> {
+        let timing = self.project.clips.timing(slot).expect("live clip");
+        Ok(f64::from(timing.source) + time::consumed(&self.project, slot, f64::from(frames))?)
     }
 
     fn media_frames(&self, slot: Slot) -> Option<f64> {
@@ -521,7 +527,7 @@ impl Editor {
         let tb = self.project.clips.timing(b).expect("live clip");
         let rate_b = source_rate(&self.project, b)?;
         let source_b = f64::from(tb.source) + f64::from(by) * rate_b;
-        let end_a = self.source_end(a)? + f64::from(by) * source_rate(&self.project, a)?;
+        let end_a = self.source_at(a, ta.length + by)?;
         if ta.length + by < 1
             || tb.length - by < 1
             || source_b < -0.001
@@ -607,8 +613,7 @@ impl Editor {
         };
         let tp = self.project.clips.timing(previous).expect("live clip");
         let tn = self.project.clips.timing(next).expect("live clip");
-        let end_p =
-            self.source_end(previous)? + f64::from(by) * source_rate(&self.project, previous)?;
+        let end_p = self.source_at(previous, tp.length + by)?;
         let source_n = f64::from(tn.source) + f64::from(by) * source_rate(&self.project, next)?;
         if tp.length + by < 1
             || tn.length - by < 1

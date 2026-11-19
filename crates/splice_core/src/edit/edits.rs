@@ -615,6 +615,24 @@ pub(super) fn arena_full() -> CommandError {
     )
 }
 
+/// Stretches owner-relative keys by `factor` when the owner's clock does (a speed change), keeping
+/// them strictly increasing.
+pub(super) fn scale_keys(effects: &mut [splice_model::Effect], factor: f64) {
+    for param in effects
+        .iter_mut()
+        .flat_map(|effect| effect.params.iter_mut())
+    {
+        if let splice_model::EffectValue::Keys(keys) = &mut param.value {
+            let mut previous = Frame::MIN;
+            for key in keys {
+                let at = (f64::from(key.at) * factor).round() as Frame;
+                key.at = at.max(previous.saturating_add(1));
+                previous = key.at;
+            }
+        }
+    }
+}
+
 /// Keeps owner-relative keys on the same content when the owner's start moves `by` frames into it
 /// (a split's right piece, an in-edge trim, a roll).
 pub(super) fn shift_keys(effects: &mut [splice_model::Effect], by: Frame) {

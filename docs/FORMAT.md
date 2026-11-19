@@ -241,6 +241,11 @@ form. In ops, a legacy `w<n>` still works when one transcript has that number; a
 it with its old meaning, and a live call that several transcripts could mean is `AMBIGUOUS_WORD`.
 `captions.generate` starts a new cue at every clip boundary.
 
+An item placed at a word (`anchor:{word, transcriptHash}`) is stored as the clip-source frame
+under that word, so cutting the word or re-transcribing never strands it; files that saved a word
+anchor are converted the same way on load. Edits measure a clip's source through its `speed`
+effect, so a freeze (`rate` 0) can be trimmed, split and retimed anywhere in its media.
+
 Session metadata is versioned independently of the timeline with `format:"splice/1"`. Starting or
 closing a session writes that metadata atomically. It does not advance the revision.
 

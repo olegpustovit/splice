@@ -126,18 +126,25 @@ impl Editor {
         clips.sort_by_key(|&(start, _)| std::cmp::Reverse(start));
         for (_, slot) in clips {
             let old = self.project.clips.timing(slot).expect("live clip");
-            let mut length = rounded(f64::from(old.length) * old.speed / speed)?.max(3);
+            let mut length = rounded(f64::from(old.length) * old.speed / speed)?.max(MIN_LENGTH);
             if let Some(id) = self.project.clips.data(slot).expect("live clip").media {
                 let descriptor = media(&self.project, id)?;
-                let rate = source_rate(&self.project, slot)? / old.speed * speed;
+                // Source frames per timeline frame at the new speed; a freeze uses none (H4).
+                let rate = time::consumed(&self.project, slot, f64::from(old.length))?
+                    / f64::from(old.length)
+                    / old.speed
+                    * speed;
                 // Integer timeline frames may round past the media's last source frame.
                 let available =
                     (f64::from(descriptor.probe.frames - old.source) / rate + 0.000_001).floor();
-                if available < f64::from(length) {
+                if rate > 0.0 && available < f64::from(length) {
                     length = rounded(available)?;
                 }
             }
             ensure_length(length)?;
+            // Keys sit on the clip's clock: they stretch with it.
+            let data = self.project.clips.data_mut(slot).expect("live clip");
+            super::edits::scale_keys(&mut data.appearance.effects, old.speed / speed);
             self.resize_clip(
                 slot,
                 ClipTiming {
@@ -599,8 +606,10 @@ fn validate_source(project: &Project, slot: Slot, timing: ClipTiming) -> Result<
     }
     if let Some(id) = project.clips.data(slot).expect("live clip").media {
         let descriptor = media(project, id)?;
-        let rate = descriptor.probe.fps / f64::from(project.fps) * timing.speed;
-        let end = f64::from(timing.source) + f64::from(timing.length) * rate;
+        // The speed effect counts (a freeze consumes nothing: H4); `timing` may change speed.
+        let stored = project.clips.timing(slot).expect("live clip").speed;
+        let end = f64::from(timing.source)
+            + time::consumed(project, slot, f64::from(timing.length))? * timing.speed / stored;
         if end > f64::from(descriptor.probe.frames) + 0.000_001 {
             return Err(out_of_source());
         }
@@ -622,14 +631,27 @@ pub(super) fn source_for_interval(
     at: Frame,
     length: Frame,
 ) -> Result<Frame, CommandError> {
-    let exact = source_value(project, slot, at)?;
+    // Inside the clip the speed effect decides where the content is (a freeze holds its frame:
+    // H4); before it, extend at the clip's base rate.
+    let offset = at - project.clips.timing(slot).expect("live clip").start;
+    let (exact, needed) = if offset >= 0 {
+        let before = time::consumed(project, slot, f64::from(offset))?;
+        let source = f64::from(project.clips.timing(slot).expect("live clip").source);
+        let after = time::consumed(project, slot, f64::from(offset + length))?;
+        (source + before, after - before)
+    } else {
+        (
+            source_value(project, slot, at)?,
+            f64::from(length) * source_rate(project, slot)?,
+        )
+    };
     if exact < 0.0 {
         return Err(out_of_source());
     }
     let mut source = rounded(exact)?;
     if let Some(id) = project.clips.data(slot).expect("live clip").media {
         let frames = media(project, id)?.probe.frames;
-        let limit = f64::from(frames) - f64::from(length) * source_rate(project, slot)?;
+        let limit = f64::from(frames) - needed;
         if exact > limit + 0.000_001 {
             return Err(out_of_source());
         }

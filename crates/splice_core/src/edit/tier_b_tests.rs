@@ -800,3 +800,90 @@ fn m19_ripple_shortens_spanning_items_and_bumps_carry_a_cause() {
         Some(Cause::Overlap(a.parse().unwrap()))
     );
 }
+
+/// T37.4 H3: an item anchored to a word survives cutting the word and replacing the transcript.
+#[test]
+fn h3_word_anchored_items_survive_cuts_and_new_transcripts() {
+    let base = sample();
+    let anchor = r#"{"cmd":"item.anchor","item":"ovl_label","anchor":{"word":"w:screen:12"}}"#;
+    let mut project = base.clone();
+    run(&mut project, &format!("[{anchor}]")).unwrap();
+    let slot = project.items.find("ovl_label".parse().unwrap()).unwrap();
+    assert!(matches!(
+        project.items.timing(slot).unwrap().anchor,
+        Anchor::ClipSource { .. }
+    ));
+    run(
+        &mut project,
+        r#"[{"cmd":"cut.words","words":["w:screen:12"]}]"#,
+    )
+    .unwrap();
+    run(
+        &mut project,
+        r#"[{"cmd":"transcript.set","media":"med_screen","words":[{"text":"new","from":6,"to":17}]}]"#,
+    )
+    .unwrap();
+    let mut project = base;
+    run(
+        &mut project,
+        &format!(r#"[{anchor},{{"cmd":"item.delete","items":["clp_take"]}}]"#),
+    )
+    .unwrap();
+}
+
+/// T37.4 H4: a freeze near the media's end is speed 0, so later edits of it work.
+#[test]
+fn h4_freeze_near_media_end_stays_editable() {
+    let mut project = sample();
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"clip.freeze","item":"clp_take","at":538,"length":150}]"#,
+    )
+    .unwrap();
+    let freeze = super::tests::created(&report, 0);
+    run(
+        &mut project,
+        &format!(r#"[{{"cmd":"item.trim","item":"{freeze}","edge":"out","delta":30}}]"#),
+    )
+    .unwrap();
+    let report = run(
+        &mut project,
+        &format!(r#"[{{"cmd":"item.split","item":"{freeze}","at":600}}]"#),
+    )
+    .unwrap();
+    let right = super::tests::created(&report, 0);
+    let held = |project: &Project, id: &str| {
+        let slot = project.clips.find(id.parse().unwrap()).unwrap();
+        project.clips.timing(slot).unwrap().source
+    };
+    assert_eq!(held(&project, &freeze), held(&project, &right));
+    run(
+        &mut project,
+        &format!(r#"[{{"cmd":"clip.speed","items":["{right}"],"speed":0.5}}]"#),
+    )
+    .unwrap();
+}
+
+/// T37.4 H5: a duplicated take's captions stay on the copy.
+#[test]
+fn h5_duplicate_keeps_captions_on_the_copy() {
+    let mut project = sample();
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"item.duplicate","items":["clp_take"]}]"#,
+    )
+    .unwrap();
+    let copy: ClipId = super::tests::created(&report, 0).parse().unwrap();
+    let take: ClipId = "clp_take".parse().unwrap();
+    let on = |clip: ClipId| {
+        captions(&project)
+            .iter()
+            .filter(|&&s| {
+                matches!(project.items.timing(s).unwrap().anchor,
+                    Anchor::ClipSource { clip: c, .. } if c == clip)
+            })
+            .count()
+    };
+    assert_eq!(on(take), 10);
+    assert_eq!(on(copy), 10);
+}

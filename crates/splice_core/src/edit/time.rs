@@ -140,8 +140,31 @@ impl Editor {
             }
             AnchorArg::At(position) => self.relative_anchor(position)?,
         };
-        anchor_start(&self.project, anchor)?;
+        let at = anchor_start(&self.project, anchor)?;
+        // H3: a word anchor becomes the clip frame under the word, so cutting the word or
+        // replacing the transcript never leaves an item without a position.
+        if matches!(anchor, Anchor::Word { .. }) {
+            return anchor_at(&self.project, at);
+        }
         Ok(anchor)
+    }
+}
+
+/// Load-time half of H3: word anchors saved before 0.4 become clip anchors at the frame they
+/// resolve to. One that no longer resolves (a stale transcript) is pinned where it can be found
+/// last, frame 0.
+pub(crate) fn resolve_word_anchors(project: &mut Project) {
+    for index in 0..project.items.order().len() {
+        let slot = project.items.order()[index];
+        let anchor = project.items.timing(slot).expect("live item").anchor;
+        if !matches!(anchor, Anchor::Word { .. }) {
+            continue;
+        }
+        let to = timing::anchor_start(project, anchor)
+            .ok()
+            .and_then(|at| anchor_at(project, at).ok())
+            .unwrap_or(Anchor::Pinned(0));
+        project.items.timing_mut(slot).expect("live item").anchor = to;
     }
 }
 
@@ -236,6 +259,12 @@ pub(super) fn media(project: &Project, id: MediaId) -> Result<&Media, CommandErr
         .iter()
         .find(|media| media.id == id)
         .ok_or_else(|| not_found(&id, "Call project.info for current media IDs."))
+}
+
+/// Source frames the clip's first `frames` timeline frames consume, speed effect included (a
+/// freeze consumes none: H4).
+pub(super) fn consumed(project: &Project, slot: Slot, frames: f64) -> Result<f64, CommandError> {
+    timing::consumed(project, slot, frames).map_err(timing_error)
 }
 
 /// Media frames of `media` that play in `frames` timeline frames at normal speed (M2: overlay
