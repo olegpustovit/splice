@@ -375,7 +375,7 @@ coverage; visual rows a frame golden; hot paths an allocation proof and a measur
 - [x] T23.2 [L] Multi-project revisions in `code.run`; job waits excluded from the 2 s wall. — 5bb6021 · per-project revisions; host time excluded from the 2 s wall; record.* callable (ed81d09).
 - [x] T23.3 [L] `notifications/progress` and `notifications/cancelled`; `view.frames {sheet:true}` contact sheet. — 5bb6021 · notifications/progress and cancelled; view.frames {sheet:true}.
 - [x] T23.4 [L] Skill recipes per workflow, each run by the sweep. — f91ed4d · five recipes in the splice skill, exercised by the sweep.
-- [ ] T23.5 [L] Code-mode cost ≤ direct on every eval task. — open: code mode costs −11% overall (12.28M vs 13.85M tokens, 66 runs) and −33% to −47% on music-duck, tutorial-polish and undo-session, but more on talking-head (+13%), tiktok-textedit (+10%), hand-off (+5%) and crop-and-frame (+1%, noise at n=3).
+- [ ] T23.5 [L] Code-mode cost ≤ direct on every eval task. — open, 10 of 11: cb53017 returns frame previews from code.run (agents had Read full-size PNGs) and 9c0f164 drops the NO_SESSION round trip. Re-run (n=3 each arm): tiktok-textedit −26%, crop-and-frame −23%, talking-head −9%; earlier music-duck −33%, tutorial-polish −44%, undo-session −47%, overall −11%. hand-off stays +7% (151k vs 141k): a two-call task where code mode's fixed discovery cost (skill, ToolSearch, type index) exceeds its savings.
 
 ### T24 · Verification gate (0.3) [L + M]
 - [x] T24.1 [L+M] Capability sweep: one deterministic code-mode program applies every row and preset, exports, frame-probes each feature, undoes to the start hash. A row missing from the sweep fails the parity test. — f91ed4d · evals/sweep.js: all 78 rows dry-run, a layered batch commits, session undo restores the spine; make check and mac-check.
@@ -461,3 +461,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-19 · 0.3 plan · accepted · 5sn6awbkq9ae: D5–D11, board T15–T24 (48 tasks).
 - 2026-11-19 · 0.3 · T15–T24 · 608dcd8…7198c69 · 44 of 48 tasks done. Gates: make check 150 tests ~7 s; mac-check green. Evals: 65/66 at ed81d09, code mode −11% tokens overall.
 - 2026-11-19 · defects · ed81d09, 115bd8c, f0c3848, 7198c69 · Found by 0.3 evals and tests: keys restarted on split pieces; stills could not be imported; mask.set rejected schema params; six sibling compounds failed to render; use-after-free with an image overlay over a dissolve; P3 passed through unconverted; resume with a marker never resumed; open/close cost 4.8 ms (now 30 µs).
+- 2026-11-19 · T23.5 · cb53017, 9c0f164 · code.run frame previews and sessionless export: 24 + 6 eval runs all pass; code mode cheaper on every re-run task except hand-off (+7%).
