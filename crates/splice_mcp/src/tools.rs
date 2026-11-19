@@ -212,7 +212,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "view.frames",
-        description: "Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count.",
+        description: "Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM.",
         read_only: true,
         input: &[
             ("projectId", "string"),
@@ -371,7 +371,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "export.start",
-        description: "Start an MP4 export job. Use overwrite:true to replace an existing output file.",
+        description: "Start an MP4 export job. Use overwrite:true to replace an existing output file. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM.",
         read_only: false,
         input: &[
             ("projectId", "string"),

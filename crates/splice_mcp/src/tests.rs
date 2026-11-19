@@ -570,3 +570,27 @@ fn code_run_collapses_repeated_calls_in_the_trace() {
         ]
     );
 }
+
+/// An absent revision says "Missing" and names the value to pass; a malformed one says "Invalid".
+#[test]
+fn write_arguments_distinguish_missing_from_invalid() {
+    use super::wire::Args;
+    let missing = splice_json::parse("{}")
+        .unwrap()
+        .revision("ifRevision")
+        .unwrap_err();
+    assert_eq!(missing.message, "Missing ifRevision.");
+    assert!(missing.fix.contains("current revision"), "{}", missing.fix);
+    let invalid = splice_json::parse(r#"{"ifRevision":"rx"}"#)
+        .unwrap()
+        .revision("ifRevision")
+        .unwrap_err();
+    assert_eq!(invalid.message, "Invalid ifRevision.");
+    assert_eq!(
+        splice_json::parse(r#"{"ifRevision":"r7"}"#)
+            .unwrap()
+            .revision("ifRevision")
+            .unwrap(),
+        7
+    );
+}

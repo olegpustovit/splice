@@ -16,6 +16,15 @@ pub(super) fn bad(field: &str, expected: &str) -> StoreError {
     )
 }
 
+/// A required field is absent (as opposed to present with the wrong shape).
+pub(super) fn missing(field: &str, expected: &str) -> StoreError {
+    failure(
+        "BAD_ARGS",
+        &format!("Missing {field}."),
+        &format!("Pass {field} as {expected}."),
+    )
+}
+
 pub(super) fn count(value: usize) -> Json {
     Json::Unsigned(value as u64)
 }
@@ -75,7 +84,7 @@ impl Args for Json {
 
     fn string(&self, name: &str) -> Result<&str, StoreError> {
         self.optional_string(name)?
-            .ok_or_else(|| bad(name, "a string"))
+            .ok_or_else(|| missing(name, "a string"))
     }
 
     fn flag(&self, name: &str) -> Result<bool, StoreError> {
@@ -96,13 +105,16 @@ impl Args for Json {
     }
 
     fn revision(&self, name: &str) -> Result<u64, StoreError> {
-        self.field(name)
+        let expected =
+            "the current revision (project.info, or the revision the last edit returned)";
+        let value = self.field(name).ok_or_else(|| missing(name, expected))?;
+        Some(value)
             .and_then(|value| {
                 value
                     .as_u64()
                     .or_else(|| unsigned(value.as_str()?.strip_prefix('r')?))
             })
-            .ok_or_else(|| bad(name, "a revision from project.info or history.list"))
+            .ok_or_else(|| bad(name, expected))
     }
 
     fn limit(&self, default: usize) -> Result<usize, StoreError> {

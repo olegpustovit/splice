@@ -616,7 +616,7 @@ declare const splice: {
     summary(args: { projectId?: string; clip: string; }): { revision: Splice.Revision; clip: string; components: unknown[]; silences: unknown[]; };
   };
   view: {
-    /** Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count. */
+    /** Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */
     frames(args?: { projectId?: string; at?: number[]; count?: number; }): { revision: Splice.Revision; frames: unknown[]; };
   };
   commands: {
@@ -642,7 +642,7 @@ declare const splice: {
     show(args?: { projectId?: string; at?: number | Record<string, unknown>; select?: string[]; range?: Record<string, unknown>; expand?: string; view?: string; viewer?: Record<string, unknown>; }): { applied: boolean; reason?: string; revision?: Splice.Revision; playhead?: number; selection?: string[]; };
   };
   export: {
-    /** Start an MP4 export job. Use overwrite:true to replace an existing output file. */
+    /** Start an MP4 export job. Use overwrite:true to replace an existing output file. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */
     start(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; preset?: "social-h264" | "social-hevc"; path?: string; overwrite?: boolean; }): { jobId: string; state: string; settings?: Record<string, unknown>; };
   };
   jobs: {
