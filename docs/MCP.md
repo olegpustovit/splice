@@ -154,12 +154,16 @@ inline image and a `sheet` file URI.
 
 ## Inputs edit.apply fills
 
-Some 0.3 commands need inputs the core cannot read (it never opens media). `edit.apply` fills them
-before the batch applies, so the journal records plain ops that replay without media:
+Some 0.3 commands need inputs the core cannot read (it never opens media). `edit.apply`, `splice apply`
+and viewer edits fill them the same way before the batch applies, so the journal records plain ops
+that replay without media. A `$ref` to an object the same batch creates (`"item":"$cut.right"`,
+`"mask":"$mask"`) is read from the batch staged up to that op; an item the fill cannot read (an
+overlay for clicks or a cursor crop) is refused with `WRONG_KIND` and `param:"item"`. The fills:
 `intent.autoZoom` (clicks and typing bursts from the take's events; it writes `zoom` items on a
 camera lane), `crop.keys {follow:"cursor"|"face",
-aspect}` (keys every half second), `media.consolidate` (copies
-files into `media/`), `mask.track` (Vision object tracking), `audio.sync` (envelope
+aspect}` (keys every half second), `media.consolidate` (copies files into `media/` only when
+the batch commits, never on a dry run or a stale or failing batch; an existing copy is reused only
+when its bytes match the source), `mask.track` (Vision object tracking), `audio.sync` (envelope
 cross-correlation offset) and `captions.translate` without `texts` (on-device Translation).
 Pass the inputs yourself to skip the native step.
 

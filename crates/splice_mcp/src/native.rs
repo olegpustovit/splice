@@ -4,7 +4,7 @@ use super::analyze::{
 };
 use super::{Json, object, wire::*};
 use apple_sys::vision::{self, Finding};
-use splice_core::history::{Store, StoreError};
+use splice_core::history::StoreError;
 use splice_model::*;
 use std::path::Path;
 
@@ -318,8 +318,11 @@ fn field(fields: &[(String, Json)], key: &str) -> Option<String> {
 }
 
 /// Tracks a mask's region through its owner's media and returns mask centers per owner frame.
-pub(super) fn track_mask(store: &Store, fields: &[(String, Json)]) -> Result<Json, StoreError> {
-    let p = store.project();
+pub(super) fn track_mask(
+    dir: &Path,
+    p: &Project,
+    fields: &[(String, Json)],
+) -> Result<Json, StoreError> {
     let mask: EffectId = field(fields, "mask")
         .and_then(|id| id.parse().ok())
         .ok_or_else(|| bad("mask", "a mask effect ID (fx_…)"))?;
@@ -375,8 +378,7 @@ pub(super) fn track_mask(store: &Store, fields: &[(String, Json)]) -> Result<Jso
         fps: media.probe.fps,
     };
     let (from, to) = window.seconds();
-    let found =
-        vision::track(&component(store.path(), media, false), from, to, rect).map_err(native)?;
+    let found = vision::track(&component(dir, media, false), from, to, rect).map_err(native)?;
     let keys: Vec<Json> = found
         .iter()
         .filter_map(|f| match f {
@@ -403,8 +405,11 @@ pub(super) fn track_mask(store: &Store, fields: &[(String, Json)]) -> Result<Jso
 
 /// Source frames of `item` that line up with the first source frame of `to`, by envelope
 /// cross-correlation over ±30 s.
-pub(super) fn sync_offset(store: &Store, fields: &[(String, Json)]) -> Result<Frame, StoreError> {
-    let p = store.project();
+pub(super) fn sync_offset(
+    dir: &Path,
+    p: &Project,
+    fields: &[(String, Json)],
+) -> Result<Frame, StoreError> {
     let item: ItemId = field(fields, "item")
         .and_then(|id| id.parse().ok())
         .ok_or_else(|| bad("item", "a sound or overlay ID"))?;
@@ -436,10 +441,7 @@ pub(super) fn sync_offset(store: &Store, fields: &[(String, Json)]) -> Result<Fr
             .ok_or_else(|| bad("media", "a known media"))
     };
     let (a_media, b_media) = (find(item_media)?, find(clip_media)?);
-    let (a, b) = (
-        envelope(store.path(), a_media)?,
-        envelope(store.path(), b_media)?,
-    );
+    let (a, b) = (envelope(dir, a_media)?, envelope(dir, b_media)?);
     let lag = super::analyze::best_lag(&a, &b, ENVELOPE_RATE);
     // Item time = clip media time + lag.
     let start = f64::from(p.clips.timing(clip_slot).expect("live clip").source) / b_media.probe.fps;
@@ -449,10 +451,9 @@ pub(super) fn sync_offset(store: &Store, fields: &[(String, Json)]) -> Result<Fr
 
 /// Translates a captions lane on device; the language pack must be installed.
 pub(super) fn translate_captions(
-    store: &Store,
+    p: &Project,
     fields: &[(String, Json)],
 ) -> Result<Json, StoreError> {
-    let p = store.project();
     let lane = field(fields, "lane").ok_or_else(|| bad("lane", "a captions lane ID"))?;
     let target = field(fields, "language").ok_or_else(|| bad("language", "a BCP 47 tag"))?;
     let cues = super::media::captions(
@@ -485,11 +486,11 @@ pub(super) fn translate_captions(
 
 /// Crop keys every second centered on the largest face (cached `media.analyze` faces).
 pub(super) fn follow_face(
-    store: &Store,
+    dir: &Path,
+    p: &Project,
     item: &str,
     aspect: Option<&str>,
 ) -> Result<Json, StoreError> {
-    let p = store.project();
     let id: ClipId = item.parse().map_err(|_| bad("item", "a clip"))?;
     let slot = p.clips.find(id).ok_or_else(|| bad("item", "a clip"))?;
     let timing = p.clips.timing(slot).expect("live clip");
@@ -501,7 +502,7 @@ pub(super) fn follow_face(
         .ok_or_else(|| bad("item", "a clip with video"))?;
     let (w, h) = super::enrich::crop_size(
         [media.probe.width, media.probe.height],
-        super::enrich::aspect_ratio(store, aspect)?,
+        super::enrich::aspect_ratio(p, aspect)?,
     );
     let window = Window {
         start: 0,
@@ -511,7 +512,7 @@ pub(super) fn follow_face(
         fps: media.probe.fps,
     };
     let found = findings(
-        store.path(),
+        dir,
         media,
         vision::TEXT | vision::FACES | vision::PEOPLE,
         1.0,

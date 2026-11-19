@@ -474,8 +474,7 @@ pub(super) fn audio(store: &Store, args: &Json) -> Result<Json, StoreError> {
     ]))
 }
 
-pub(super) fn events(store: &Store, args: &Json) -> Result<Json, StoreError> {
-    let p = store.project();
+pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, StoreError> {
     let (id, slot) = clip(p, args)?;
     let media = clip_media(p, slot)
         .filter(|media| media.kind == MediaKind::Take)
@@ -493,7 +492,7 @@ pub(super) fn events(store: &Store, args: &Json) -> Result<Json, StoreError> {
     let mut keys = Vec::new();
     let mut key_index = 0;
     if let Some(events_name) = media.take.as_ref().and_then(|take| take.events.as_deref()) {
-        let dir = store.path().join("takes").join(media.id.to_string());
+        let dir = dir.join("takes").join(media.id.to_string());
         for_each_event(&dir, events_name, &mut |event| {
             let kind = event
                 .field("k")

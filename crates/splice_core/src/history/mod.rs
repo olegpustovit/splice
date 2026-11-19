@@ -287,6 +287,22 @@ impl Store {
         })
     }
 
+    /// Stages a batch without committing it (no revision or session checks): the project it
+    /// would produce and the target each `$name` in `refs` resolves to. An empty `ops` with
+    /// no refs is the current project.
+    pub fn preview(
+        &self,
+        ops: &[Json],
+        refs: &[&str],
+        load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
+    ) -> Result<(Project, Vec<crate::commands::Target>), StoreError> {
+        if ops.is_empty() && refs.is_empty() {
+            return Ok((self.project().clone(), Vec::new()));
+        }
+        edit::preview(self.project(), ops, self.versions.serial_floor, refs, load)
+            .map_err(Into::into)
+    }
+
     /// Appends a session revert or a restore to a retained revision.
     pub fn undo(
         &mut self,

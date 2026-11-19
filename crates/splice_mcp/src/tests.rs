@@ -777,9 +777,13 @@ fn edit_apply_fills_cursor_crops_and_typing_zooms() {
             {"cmd":"intent.autoZoom","item":"clp_take"}]"#,
     )
     .unwrap();
-    let filled = super::enrich::ops(&store, ops.as_array().unwrap())
-        .unwrap()
-        .unwrap();
+    let filled = super::enrich::ops(
+        &store,
+        ops.as_array().unwrap(),
+        &mut splice_core::edit::missing_media,
+    )
+    .unwrap()
+    .unwrap();
     let keys = filled[0].field("keys").unwrap().as_array().unwrap();
     assert!(keys.len() > 20 && filled[0].field("follow").is_none());
     let x = |k: &Json| k.field("x").unwrap().as_f64().unwrap();
@@ -801,6 +805,117 @@ fn edit_apply_fills_cursor_crops_and_typing_zooms() {
         false,
     )
     .unwrap();
+}
+
+#[test]
+fn m10_enrich_resolves_refs_and_refuses_overlays() {
+    let root = TestDirectory::new("enrich-refs");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    let take = sample.join("takes/med_screen");
+    fs::create_dir_all(&take).unwrap();
+    fs::write(
+        take.join("events.json"),
+        r#"{"events":[{"t":0.4,"k":"down","b":0,"x":0.9,"y":0.1},{"t":4.0,"k":"move","x":0.1,"y":0.9},{"t":5.0,"k":"key","ch":"a","keyCode":4}]}"#,
+    )
+    .unwrap();
+    let mut store = splice_core::history::Store::open(&sample).unwrap();
+    let session = store.start_session("test", 1).unwrap().id;
+    // The right half exists only inside the batch: its clicks come from the staged split.
+    let ops = splice_json::parse(
+        r#"[{"cmd":"item.split","item":"clp_take","at":210,"ref":"cut"},
+            {"cmd":"intent.autoZoom","item":"$cut.right"},
+            {"cmd":"crop.keys","item":"$cut","follow":"cursor","aspect":"9:16"}]"#,
+    )
+    .unwrap();
+    let ops = ops.as_array().unwrap();
+    let filled = super::enrich::ops(&store, ops, &mut splice_core::edit::missing_media)
+        .unwrap()
+        .unwrap();
+    let clicks = filled[1].field("clicks").unwrap().as_array().unwrap();
+    // Only the typing burst at 5 s lies in the right half (source frames 90 on).
+    assert_eq!(clicks.len(), 1, "{clicks:?}");
+    assert_eq!(
+        filled[1].field("item").and_then(Json::as_str),
+        Some("$cut.right")
+    );
+    assert!(filled[2].field("keys").is_some());
+    // `splice apply`, the viewer and MCP share one path: the batch commits enriched.
+    let options = splice_core::history::WriteOptions {
+        source: splice_core::history::Source::Agent,
+        session: Some(session),
+        if_revision: Some(store.project().rev),
+        ..Default::default()
+    };
+    super::history::apply_batch(&mut store, ops, &options).unwrap();
+    // An overlay has no take events: refused with the rule, not silently skipped.
+    let error = super::enrich::ops(
+        &store,
+        &[splice_json::parse(r#"{"cmd":"intent.autoZoom","item":"ovl_hook"}"#).unwrap()],
+        &mut splice_core::edit::missing_media,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "WRONG_KIND");
+    assert_eq!(error.rule.unwrap().param, "item");
+    store.close().unwrap();
+}
+
+#[test]
+fn m13_consolidate_copies_only_on_commit_and_verifies_existing_files() {
+    use splice_core::history::{Source, Store, WriteOptions};
+    let root = TestDirectory::new("consolidate");
+    let source = root.0.join("external.mov");
+    fs::write(&source, b"the real media bytes").unwrap();
+    let mut project = splice_model::Project::default();
+    project.media.push(splice_model::Media {
+        id: "med_1".parse().unwrap(),
+        kind: splice_model::MediaKind::Video,
+        path: source.to_str().unwrap().into(),
+        bookmark: None,
+        size: 20,
+        mtime: 1,
+        probe: splice_model::Probe {
+            fps: 30.0,
+            frames: 30,
+            width: 96,
+            height: 64,
+            audio: Vec::new(),
+            codec: None,
+            loudness: None,
+        },
+        take: None,
+    });
+    project.serial = 1;
+    let package = root.0.join("consolidate.splice");
+    let mut store = Store::create(&package, &project).unwrap();
+    let session = store.start_session("test", 1).unwrap().id;
+    let copy = package.join("media/med_1.mov");
+    let options = |rev: u64, dry_run: bool| WriteOptions {
+        source: Source::Agent,
+        session: Some(session),
+        if_revision: Some(rev),
+        dry_run,
+        ..Default::default()
+    };
+    let consolidate = [splice_json::parse(r#"{"cmd":"media.consolidate"}"#).unwrap()];
+    let failing = [
+        consolidate[0].clone(),
+        splice_json::parse(r#"{"cmd":"item.delete","items":"clp_missing"}"#).unwrap(),
+    ];
+    super::history::apply_batch(&mut store, &consolidate, &options(0, true)).unwrap();
+    assert!(super::history::apply_batch(&mut store, &consolidate, &options(7, false)).is_err());
+    assert!(super::history::apply_batch(&mut store, &failing, &options(0, false)).is_err());
+    assert!(
+        !copy.exists(),
+        "dry-run, stale and failed batches copy nothing"
+    );
+    // A stale file at the destination is not trusted.
+    fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    fs::write(&copy, b"something else entirely").unwrap();
+    super::history::apply_batch(&mut store, &consolidate, &options(0, false)).unwrap();
+    assert_eq!(fs::read(&copy).unwrap(), b"the real media bytes");
+    assert_eq!(store.project().media[0].path, "media/med_1.mov");
+    store.close().unwrap();
 }
 
 #[test]
@@ -859,7 +974,8 @@ fn takes_events_stream_logs_past_the_old_16_mib_cap() {
     drop(log);
     let store = splice_core::history::Store::open(&sample).unwrap();
     let events = super::media::events(
-        &store,
+        store.path(),
+        store.project(),
         &splice_json::parse(r#"{"clip":"clp_take","from":120,"to":240}"#).unwrap(),
     )
     .unwrap();

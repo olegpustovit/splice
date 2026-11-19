@@ -633,7 +633,11 @@ pub(super) fn analyze(
 
 /// Tracked mask centers for mask.track.
 #[cfg(not(target_os = "macos"))]
-pub(super) fn track_mask(_: &Store, _: &[(String, Json)]) -> Result<Json, StoreError> {
+pub(super) fn track_mask(
+    _: &Path,
+    _: &splice_model::Project,
+    _: &[(String, Json)],
+) -> Result<Json, StoreError> {
     Err(failure(
         "UNSUPPORTED_PLATFORM",
         "Region tracking needs the native Vision backend.",
@@ -643,7 +647,12 @@ pub(super) fn track_mask(_: &Store, _: &[(String, Json)]) -> Result<Json, StoreE
 
 /// Crop keys that keep a face in frame.
 #[cfg(not(target_os = "macos"))]
-pub(super) fn follow_face(_: &Store, _: &str, _: Option<&str>) -> Result<Json, StoreError> {
+pub(super) fn follow_face(
+    _: &Path,
+    _: &splice_model::Project,
+    _: &str,
+    _: Option<&str>,
+) -> Result<Json, StoreError> {
     Err(failure(
         "UNSUPPORTED_PLATFORM",
         "Face following needs the native Vision backend.",
@@ -654,7 +663,8 @@ pub(super) fn follow_face(_: &Store, _: &str, _: Option<&str>) -> Result<Json, S
 /// Audio offset for audio.sync, measured by envelope cross-correlation.
 #[cfg(not(target_os = "macos"))]
 pub(super) fn sync_offset(
-    _: &Store,
+    _: &Path,
+    _: &splice_model::Project,
     _: &[(String, Json)],
 ) -> Result<splice_model::Frame, StoreError> {
     Err(failure(
@@ -666,7 +676,10 @@ pub(super) fn sync_offset(
 
 /// On-device translation of a captions lane, one text per cue.
 #[cfg(not(target_os = "macos"))]
-pub(super) fn translate_captions(_: &Store, _: &[(String, Json)]) -> Result<Json, StoreError> {
+pub(super) fn translate_captions(
+    _: &splice_model::Project,
+    _: &[(String, Json)],
+) -> Result<Json, StoreError> {
     Err(failure(
         "NEEDS_TEXT",
         "On-device translation needs the macOS Translation framework.",

@@ -35,33 +35,49 @@ pub(super) fn apply(store: &mut Store, args: &Json) -> Result<Json, StoreError> 
                 "a nonempty array of operations from commands.describe",
             )
         })?;
-    let filled = super::enrich::ops(store, ops)?;
-    let ops = filled.as_deref().unwrap_or(ops);
     Ok(edit_result_json(apply_batch(store, ops, &options)?))
 }
 
-/// Applies a client edit, resolving unknown local media paths on macOS.
+/// Applies a client edit; MCP, `splice apply` and the viewer all come through here. It fills
+/// the inputs the core cannot read (M10), copies consolidated media only for a batch that will
+/// commit (M13), and probes local media paths on macOS.
 pub fn apply_batch(
     store: &mut Store,
     ops: &[Json],
     options: &WriteOptions,
 ) -> Result<EditResult, StoreError> {
     #[cfg(target_os = "macos")]
-    {
-        let package = store.path().to_path_buf();
-        let fps = store.project().fps;
-        store.apply_with_media(ops, options, &mut |path| {
-            splice_media::probe(&package, std::path::Path::new(path), fps).map_err(|failure| {
-                splice_core::commands::CommandError::new(
-                    failure.code,
-                    failure.message,
-                    failure.fix.into(),
-                )
-            })
+    let (package, fps) = (store.path().to_path_buf(), store.project().fps);
+    #[cfg(target_os = "macos")]
+    let mut load = |path: &str| {
+        splice_media::probe(&package, std::path::Path::new(path), fps).map_err(|failure| {
+            splice_core::commands::CommandError::new(
+                failure.code,
+                failure.message,
+                failure.fix.into(),
+            )
         })
-    }
+    };
     #[cfg(not(target_os = "macos"))]
-    store.apply(ops, options)
+    let mut load = edit::missing_media;
+    let filled = super::enrich::ops(store, ops, &mut load)?;
+    let ops = filled.as_deref().unwrap_or(ops);
+    if !options.dry_run
+        && ops
+            .iter()
+            .any(|op| op.field("cmd").and_then(Json::as_str) == Some("media.consolidate"))
+    {
+        // Files are copied only for a batch that commits: a failing, stale or refused batch
+        // copies nothing. A keyed retry of a committed batch replays; its copies exist.
+        let check = WriteOptions {
+            dry_run: true,
+            ..options.clone()
+        };
+        if store.apply_with_media(ops, &check, &mut load).is_ok() {
+            super::enrich::consolidate(store, ops, &mut load)?;
+        }
+    }
+    store.apply_with_media(ops, options, &mut load)
 }
 
 /// Checkpoints a CLI edit and includes any checkpoint failure in the durable receipt.
@@ -285,7 +301,7 @@ pub(super) fn undo(store: &mut Store, args: &Json) -> Result<Json, StoreError> {
     Ok(object(fields))
 }
 
-fn target(target: &Target) -> Json {
+pub(super) fn target(target: &Target) -> Json {
     match target {
         Target::Timeline(id) => display(id),
         Target::Lane(id) => display(id),

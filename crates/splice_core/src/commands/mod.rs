@@ -3,7 +3,7 @@ use splice_model::{EffectParam, EffectValue};
 use std::fmt;
 
 mod args;
-pub(crate) use args::frame_arg;
+pub(crate) use args::{frame_arg, reference};
 mod decode;
 mod op;
 mod table;

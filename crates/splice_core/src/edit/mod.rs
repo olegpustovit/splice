@@ -213,12 +213,36 @@ pub(crate) fn stage_above(
 /// `missing_media`'s message: no media backend probed the path (see `Editor::relink`).
 pub(crate) const UNPROBED: &str = "The path has no registered media descriptor.";
 
-pub(crate) fn missing_media(_: &str) -> Result<Media, CommandError> {
+/// The media loader without a native backend: every path is unknown.
+pub fn missing_media(_: &str) -> Result<Media, CommandError> {
     Err(error(
         "MEDIA_OFFLINE",
         UNPROBED,
         "Import the file through the native media backend or pass a media ID from project.info.",
     ))
+}
+
+/// Stages `ops` without publishing them and resolves each batch reference in `refs` (`$cut`,
+/// `$cut.right`) the way an op appended to the batch would see it. `splice mcp` reads the inputs
+/// of objects a batch creates from this staged project (M10).
+pub(crate) fn preview(
+    base: &Project,
+    ops: &[Json],
+    serial_floor: u64,
+    refs: &[&str],
+    load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
+) -> Result<(Project, Vec<Target>), ApplyError> {
+    let mut work = ApplyWorkspace::default();
+    work.stage(base, ops, Source::Human, None, serial_floor, load)?;
+    let targets = refs
+        .iter()
+        .map(|name| {
+            let reference = commands::reference(name, "ref")?;
+            work.edit.resolve(&Target::Ref(reference))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(batch_error)?;
+    Ok((work.edit.project, targets))
 }
 
 /// Reusable in-memory storage for repeated batches on a project.

@@ -144,7 +144,7 @@ fn shape(value: &Json, key: &str, allowed: &[&str]) -> Result<(), Error> {
     Ok(())
 }
 
-fn reference(id: &str, key: &str) -> Result<Reference, Error> {
+pub(crate) fn reference(id: &str, key: &str) -> Result<Reference, Error> {
     let (name, part) = match id.split_once('.') {
         None => (id, RefPart::Primary),
         Some((name, "primary")) => (name, RefPart::Primary),
