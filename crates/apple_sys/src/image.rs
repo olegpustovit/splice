@@ -17,6 +17,15 @@ unsafe extern "C" {
         error: *mut *mut c_char,
     ) -> *mut c_void;
     fn splice_image_release(data: *mut c_void);
+    fn splice_image_gif(
+        path: *const c_char,
+        frames: *const u8,
+        count: usize,
+        width: u32,
+        height: u32,
+        delay: f64,
+        error: *mut *mut c_char,
+    ) -> bool;
     fn splice_image_rgba(
         path: *const c_char,
         width: *mut u32,
@@ -155,4 +164,34 @@ pub(crate) unsafe fn take_bytes(owner: *mut c_void, data: *const u8, length: usi
     // SAFETY: the copy owns its data and the caller transferred the native reference.
     unsafe { splice_image_release(owner) };
     bytes
+}
+
+/// Writes `frames` (RGBA8, `size` each, concatenated) as a looping GIF, `delay` seconds per frame.
+pub fn gif(path: &std::path::Path, frames: &[u8], size: [u32; 2], delay: f64) -> Result<(), Error> {
+    use std::os::unix::ffi::OsStrExt;
+    let frame = size[0] as usize * size[1] as usize * 4;
+    if frame == 0 || frames.len() % frame != 0 {
+        return Err(Error::message("GIF frames must be whole RGBA images."));
+    }
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| Error::message("The GIF path contains NUL."))?;
+    let mut error = std::ptr::null_mut();
+    // SAFETY: the buffers live through the call and match the declared sizes.
+    let ok = unsafe {
+        splice_image_gif(
+            path.as_ptr(),
+            frames.as_ptr(),
+            frames.len() / frame,
+            size[0],
+            size[1],
+            delay,
+            &mut error,
+        )
+    };
+    if ok {
+        Ok(())
+    } else {
+        // SAFETY: the bridge transferred its diagnostic.
+        Err(unsafe { Error::from_native(error, "Could not write the GIF.") })
+    }
 }

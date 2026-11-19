@@ -84,3 +84,41 @@ void *splice_image_png(const uint8_t *pixels, size_t length, uint32_t width, uin
 void splice_image_release(void *data) {
     CFRelease(data);
 }
+
+// Animated GIF (PLAN.md T21.1): `count` RGBA frames of width×height, `delay` seconds each,
+// looping forever.
+bool splice_image_gif(const char *path, const uint8_t *frames, size_t count, uint32_t width, uint32_t height,
+                      double delay, char **error) {
+    @autoreleasepool {
+        if (count == 0 || width == 0 || height == 0) {
+            splice_set_error(error, "A GIF needs frames.");
+            return false;
+        }
+        NSURL *url = [NSURL fileURLWithFileSystemRepresentation:path isDirectory:NO relativeToURL:nil];
+        CGImageDestinationRef out = CGImageDestinationCreateWithURL((__bridge CFURLRef)url, CFSTR("com.compuserve.gif"),
+                                                                   count, NULL);
+        if (out == NULL) {
+            splice_set_error(error, "Could not create the GIF.");
+            return false;
+        }
+        NSDictionary *file = @{(id)kCGImagePropertyGIFDictionary: @{(id)kCGImagePropertyGIFLoopCount: @0}};
+        CGImageDestinationSetProperties(out, (__bridge CFDictionaryRef)file);
+        NSDictionary *frame = @{(id)kCGImagePropertyGIFDictionary: @{(id)kCGImagePropertyGIFDelayTime: @(delay)}};
+        size_t stride = (size_t)width * 4;
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        for (size_t i = 0; i < count; i++) {
+            CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, frames + i * stride * height, stride * height, NULL);
+            CGImageRef image = CGImageCreate(width, height, 8, 32, stride, space,
+                                             kCGBitmapByteOrder32Big | kCGImageAlphaNoneSkipLast, provider, NULL,
+                                             true, kCGRenderingIntentDefault);
+            CGImageDestinationAddImage(out, image, (__bridge CFDictionaryRef)frame);
+            CGImageRelease(image);
+            CGDataProviderRelease(provider);
+        }
+        CGColorSpaceRelease(space);
+        bool ok = CGImageDestinationFinalize(out);
+        CFRelease(out);
+        if (!ok) splice_set_error(error, "Could not write the GIF.");
+        return ok;
+    }
+}

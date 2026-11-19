@@ -220,7 +220,9 @@ mod native {
             Output(std::env::temp_dir().join(format!("splice-av-test-{}", std::process::id())));
         fs::create_dir(&scratch.0).unwrap();
         let file = scratch.0.join("title.mp4");
-        let mut job = composition.start_export(&file, false).unwrap();
+        let mut job = composition
+            .start_export(&file, &Encoding::new(Codec::H264))
+            .unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             match job.step(Duration::from_millis(16)).unwrap() {
@@ -492,7 +494,9 @@ mod native {
             Output(std::env::temp_dir().join(format!("splice-av-music-{}", std::process::id())));
         fs::create_dir(&scratch.0).unwrap();
         let file = scratch.0.join("music.mp4");
-        let mut job = composition.start_export(&file, false).unwrap();
+        let mut job = composition
+            .start_export(&file, &Encoding::new(Codec::H264))
+            .unwrap();
         while let ExportState::Running(_) = job.step(Duration::from_millis(16)).unwrap() {}
         assert_eq!(job.status(), ExportState::Complete);
         let exported = apple_sys::media::probe(&file).unwrap();

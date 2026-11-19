@@ -7,6 +7,72 @@ use std::{
     ptr::{self, NonNull},
 };
 
+/// Output codec (the container follows: MP4, QuickTime, M4A or WAV).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Codec {
+    /// H.264 in MP4.
+    H264 = 0,
+    /// HEVC in MP4.
+    Hevc = 1,
+    /// ProRes 422 HQ in QuickTime.
+    ProRes422 = 2,
+    /// ProRes 4444 with alpha in QuickTime.
+    ProRes4444 = 3,
+    /// HEVC with alpha in QuickTime.
+    HevcAlpha = 4,
+    /// Audio only, AAC in M4A.
+    Aac = 5,
+    /// Audio only, 16-bit PCM WAV.
+    Wav = 6,
+}
+
+impl Codec {
+    /// Whether the codec carries video.
+    pub fn video(self) -> bool {
+        (self as u32) <= Codec::HevcAlpha as u32
+    }
+
+    /// Whether the codec keeps transparency.
+    pub fn alpha(self) -> bool {
+        matches!(self, Codec::ProRes4444 | Codec::HevcAlpha)
+    }
+}
+
+/// How an export encodes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Encoding {
+    /// Codec and container.
+    pub codec: Codec,
+    /// Timeline frames written, half-open.
+    pub range: [i32; 2],
+    /// Video bits per second; `None` for the default rate.
+    pub bitrate: Option<f64>,
+    /// Chapter starts (timeline frames) and names.
+    pub chapters: Vec<(i32, String)>,
+}
+
+impl Encoding {
+    /// The whole timeline in `codec` at the default rate, without chapters.
+    pub fn new(codec: Codec) -> Self {
+        Self {
+            codec,
+            range: [0, i32::MAX],
+            bitrate: None,
+            chapters: Vec::new(),
+        }
+    }
+}
+
+#[repr(C)]
+struct RawExportSettings {
+    codec: u32,
+    from: i32,
+    to: i32,
+    pad: u32,
+    bitrate: f64,
+    chapters: *const c_char,
+}
+
 /// Native track kinds and their underlying inputs.
 #[derive(Clone, Debug)]
 pub enum Source {
@@ -334,7 +400,12 @@ unsafe extern "C" {
         count: *mut usize,
         error: *mut *mut c_char,
     ) -> i32;
-    fn splice_av_reader(composition: *mut c_void, error: *mut *mut c_char) -> *mut c_void;
+    fn splice_av_reader(
+        composition: *mut c_void,
+        from: i32,
+        to: i32,
+        error: *mut *mut c_char,
+    ) -> *mut c_void;
     fn splice_av_reader_next(
         reader: *mut c_void,
         device: *mut c_void,
@@ -348,7 +419,7 @@ unsafe extern "C" {
     fn splice_av_writer(
         reader: *mut c_void,
         file: *const c_char,
-        hevc: bool,
+        settings: *const RawExportSettings,
         error: *mut *mut c_char,
     ) -> *mut c_void;
     fn splice_av_writer_target(
@@ -517,10 +588,11 @@ impl Composition {
     }
 
     /// Starts decoding the whole composition in order, for export.
-    pub fn reader(&self) -> Result<Reader, Error> {
+    pub fn reader(&self, range: Option<[i32; 2]>) -> Result<Reader, Error> {
         let mut error = ptr::null_mut();
+        let [from, to] = range.unwrap_or([0, 0]);
         // SAFETY: the reader retains the composition; the diagnostic storage outlives the call.
-        let reader = unsafe { splice_av_reader(self.0.as_ptr(), &mut error) };
+        let reader = unsafe { splice_av_reader(self.0.as_ptr(), from, to, &mut error) };
         NonNull::new(reader)
             .map(Reader)
             .ok_or_else(|| diagnostic(error))
@@ -643,13 +715,31 @@ unsafe impl Send for Writer {}
 
 impl Writer {
     /// Opens `file` (which must not exist) for H.264 or HEVC, pumping the reader's audio.
-    pub fn new(reader: &Reader, file: &Path, hevc: bool) -> Result<Self, Error> {
+    pub fn new(reader: &Reader, file: &Path, settings: &Encoding) -> Result<Self, Error> {
         let path = CString::new(file.as_os_str().as_bytes())
             .map_err(|_| Error::message("The export path contains NUL."))?;
+        let chapters = CString::new(
+            settings
+                .chapters
+                .iter()
+                .map(|(at, name)| format!("{at}\t{}", name.replace(['\t', '\n', '\0'], " ")))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .expect("NUL removed");
+        let raw = RawExportSettings {
+            codec: settings.codec as u32,
+            from: settings.range[0],
+            to: settings.range[1],
+            pad: 0,
+            bitrate: settings.bitrate.unwrap_or(0.0),
+            chapters: chapters.as_ptr(),
+        };
         let mut error = ptr::null_mut();
-        // SAFETY: the path and diagnostic storage live through the call; the writer retains the reader.
+        // SAFETY: the path, settings and diagnostic storage live through the call; the writer
+        // retains the reader.
         let writer =
-            unsafe { splice_av_writer(reader.0.as_ptr(), path.as_ptr(), hevc, &mut error) };
+            unsafe { splice_av_writer(reader.0.as_ptr(), path.as_ptr(), &raw, &mut error) };
         NonNull::new(writer)
             .map(Self)
             .ok_or_else(|| diagnostic(error))

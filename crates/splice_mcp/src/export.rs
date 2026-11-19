@@ -1,13 +1,18 @@
+use super::presets::{Kind, Output as Request, reframed};
 use super::{
     Json,
     export_file::{Output, path_error},
-    object, platform, text, timeline,
+    object, text, timeline,
     wire::*,
 };
-use splice_av::{Composition, Export, ExportState};
+use splice_av::{Codec, Composition, Encoding, Export, ExportState};
 use splice_core::history::{Store, StoreError};
-use splice_model::{JobId, SessionId};
-use std::{fs, io, path::PathBuf, time::Duration};
+use splice_model::{Frame, JobId, Project, SessionId};
+use std::{
+    fs, io,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 enum State {
     Running(f32),
@@ -28,20 +33,153 @@ pub(super) struct Job {
     output: Option<Output>,
     export: Option<Export>,
     state: State,
+    started: Instant,
+    frames: Frame,
 }
 
-/// Exports a snapshot of the current project and waits until the MP4 is published.
+/// Exports a snapshot of the current project and waits until the file is published (the CLI).
 pub fn export_project(
     store: Store,
     preset: Option<&str>,
     path: Option<&str>,
     overwrite: bool,
 ) -> Result<Json, StoreError> {
-    let hevc = platform::export_options(preset, path)?;
-    let mut job = Job::start(&store, JobId::from_serial(1), None, hevc, path, overwrite)?;
+    let end = timeline::duration(store.project())?;
+    let mut args = vec![];
+    if let Some(preset) = preset {
+        args.push(("preset".to_owned(), Json::String(preset.into())));
+    }
+    let request = super::presets::resolve(store.project(), end, &Json::Object(args))?
+        .pop()
+        .expect("one output");
+    if matches!(request.kind, Kind::Poster | Kind::Gif) {
+        return still(&store, &request, path, overwrite);
+    }
+    let mut job = Job::start(
+        &store,
+        JobId::from_serial(1),
+        None,
+        &request,
+        path,
+        overwrite,
+    )?;
     drop(store);
     job.wait();
-    job.status()
+    job.status(false)
+}
+
+fn codec(kind: Kind) -> Codec {
+    match kind {
+        Kind::Hevc => Codec::Hevc,
+        Kind::ProRes422 => Codec::ProRes422,
+        Kind::ProRes4444 => Codec::ProRes4444,
+        Kind::HevcAlpha => Codec::HevcAlpha,
+        Kind::Aac => Codec::Aac,
+        Kind::Wav => Codec::Wav,
+        _ => Codec::H264,
+    }
+}
+
+/// The project to render for a request: reframed when its canvas changes.
+fn rendered(store: &Store, request: &Request) -> Result<Option<Project>, StoreError> {
+    reframed(store.project(), request.size)
+}
+
+/// Refuses an export that would not fit on the destination volume.
+fn check_space(dir: &std::path::Path, bytes: f64) -> Result<(), StoreError> {
+    let free = apple_sys::media::free_space(dir).unwrap_or(u64::MAX) as f64;
+    if bytes * 1.2 > free {
+        return Err(failure(
+            "DISK_FULL",
+            &format!(
+                "The export needs about {:.0} MB; {:.0} MB are free.",
+                bytes / 1e6,
+                free / 1e6
+            ),
+            "Free disk space, export a shorter range, or pick a smaller preset.",
+        ));
+    }
+    Ok(())
+}
+
+/// Posters and GIFs render synchronously from the frame reader.
+pub(super) fn still(
+    store: &Store,
+    request: &Request,
+    path: Option<&str>,
+    overwrite: bool,
+) -> Result<Json, StoreError> {
+    let copy;
+    let project = match rendered(store, request)? {
+        Some(p) => {
+            copy = p;
+            &copy
+        }
+        None => store.project(),
+    };
+    // GIFs render at most 480 px wide.
+    let gif = request.kind == Kind::Gif;
+    let shrunk;
+    let project = if gif && project.size[0] > 480 {
+        let mut small = project.clone();
+        small.size = [480, (project.size[1] * 480 / project.size[0]) & !1];
+        shrunk = small;
+        &shrunk
+    } else {
+        project
+    };
+    let composition = Composition::prepare(project, store.path())
+        .map_err(|error| super::frames::prepare_error(&error, export_failure))?;
+    let output = Output::prepare(destination(store, path, request)?, overwrite)?;
+    let [w, h] = project.size;
+    let frame_bytes = (w * h * 4) as usize;
+    let mut rgba = vec![0u8; frame_bytes];
+    if gif {
+        // 15 fps, at most 10 s.
+        let step = (project.fps / 15).max(1) as Frame;
+        let frames: Vec<Frame> = (request.range[0]..request.range[1])
+            .step_by(step as usize)
+            .take(150)
+            .collect();
+        let mut all = Vec::with_capacity(frames.len() * frame_bytes);
+        for at in frames {
+            composition
+                .read_frame(at, &mut rgba)
+                .map_err(|e| export_failure(&e))?;
+            all.extend_from_slice(&rgba);
+        }
+        apple_sys::image::gif(
+            output.staged(),
+            &all,
+            [w, h],
+            f64::from(step as u32) / f64::from(project.fps),
+        )
+        .map_err(|e| export_failure(&e))?;
+    } else {
+        let at = request.range[0];
+        composition
+            .read_frame(at, &mut rgba)
+            .map_err(|e| export_failure(&e))?;
+        let png =
+            splice_av::encode_frame_png(&rgba, [w, h], w.max(h)).map_err(|e| export_failure(&e))?;
+        fs::write(output.staged(), png).map_err(|e| path_error(output.staged(), &e))?;
+    }
+    output.publish()?;
+    Ok(object(vec![
+        ("state", text("done")),
+        (
+            "output",
+            Json::String(output.file().to_string_lossy().into_owned()),
+        ),
+        (
+            "settings",
+            object(vec![
+                ("preset", text(request.preset)),
+                ("width", Json::Unsigned(u64::from(w))),
+                ("height", Json::Unsigned(u64::from(h))),
+            ]),
+        ),
+    ]))
 }
 
 impl Job {
@@ -49,13 +187,12 @@ impl Job {
         store: &Store,
         id: JobId,
         owner: Option<(String, SessionId)>,
-        hevc: bool,
+        request: &Request,
         path: Option<&str>,
         overwrite: bool,
     ) -> Result<Self, StoreError> {
-        let project = store.project();
-        let revision = project.rev;
-        let end = timeline::duration(project)?;
+        let revision = store.project().rev;
+        let end = timeline::duration(store.project())?;
         if end == 0 {
             return Err(failure(
                 "OUT_OF_RANGE",
@@ -63,22 +200,65 @@ impl Job {
                 "Add a clip or overlay before exporting.",
             ));
         }
-        let output = Output::prepare(destination(store, path)?, overwrite)?;
+        let copy = rendered(store, request)?;
+        let project = copy.as_ref().unwrap_or(store.project());
+        let codec = codec(request.kind);
+        let frames = request.range[1] - request.range[0];
+        let seconds = f64::from(frames) / f64::from(project.fps);
+        let pixels = f64::from(project.size[0]) * f64::from(project.size[1]);
+        let video_bits = match codec {
+            Codec::ProRes422 | Codec::ProRes4444 => pixels * f64::from(project.fps) * 4.0,
+            Codec::Aac | Codec::Wav => 0.0,
+            _ => request
+                .bitrate
+                .unwrap_or(pixels * f64::from(project.fps) * 0.35),
+        };
+        let audio_bits = if codec == Codec::Wav {
+            1_536_000.0
+        } else {
+            256_000.0
+        };
+        let target = destination(store, path, request)?;
+        check_space(
+            target.parent().unwrap_or(store.path()),
+            (video_bits + audio_bits) * seconds / 8.0,
+        )?;
+        let output = Output::prepare(target, overwrite)?;
         let path = output.file().to_path_buf();
+        if let Some(format) = request.sidecar {
+            let cues = super::media::captions(store.project(), &Json::Object(vec![]), format)?;
+            let sidecar = path.with_extension(format);
+            fs::write(
+                &sidecar,
+                cues.field("text")
+                    .and_then(Json::as_str)
+                    .unwrap_or_default(),
+            )
+            .map_err(|e| path_error(&sidecar, &e))?;
+        }
         let settings = object(vec![
+            ("preset", text(request.preset)),
             ("width", Json::Unsigned(u64::from(project.size[0]))),
             ("height", Json::Unsigned(u64::from(project.size[1]))),
             ("fps", Json::Unsigned(u64::from(project.fps))),
-            ("codec", text(if hevc { "HEVC" } else { "H.264" })),
-            ("container", text("MP4")),
+            ("codec", text(&format!("{codec:?}"))),
+            ("container", text(&request.extension.to_uppercase())),
             ("encoder", text("AVFoundation")),
             ("path", Json::String(path.to_string_lossy().into_owned())),
-            ("durationFrames", frame(end)),
+            ("from", frame(request.range[0])),
+            ("durationFrames", frame(frames)),
+            ("chapters", Json::Unsigned(request.chapters.len() as u64)),
         ]);
         let composition = Composition::prepare(project, store.path())
             .map_err(|error| super::frames::prepare_error(&error, export_failure))?;
+        let encoding = Encoding {
+            codec,
+            range: request.range,
+            bitrate: request.bitrate,
+            chapters: request.chapters.clone(),
+        };
         let export = composition
-            .start_export(output.staged(), hevc)
+            .start_export(output.staged(), &encoding)
             .map_err(|error| export_failure(&error))?;
         Ok(Self {
             id,
@@ -89,6 +269,8 @@ impl Job {
             output: Some(output),
             export: Some(export),
             state: State::Running(0.0),
+            started: Instant::now(),
+            frames,
         })
     }
 
@@ -138,8 +320,10 @@ impl Job {
         }
     }
 
-    pub(super) fn status(&self) -> Result<Json, StoreError> {
+    /// The job's state; `queued` while two earlier exports are encoding.
+    pub(super) fn status(&self, queued: bool) -> Result<Json, StoreError> {
         let (name, progress) = match &self.state {
+            State::Running(progress) if queued => ("queued", *progress),
             State::Running(progress) => ("running", *progress),
             State::Cancelling(progress) => ("cancelling", *progress),
             State::Done => ("done", 1.0),
@@ -154,6 +338,15 @@ impl Job {
             ("revision", rev(self.revision)),
             ("settings", self.settings.clone()),
         ];
+        if matches!(name, "running" | "cancelling") && progress > 0.0 {
+            let elapsed = self.started.elapsed().as_secs_f64().max(1e-3);
+            let done = f64::from(progress) * f64::from(self.frames);
+            fields.push(("fps", Json::Float((done / elapsed * 10.0).round() / 10.0)));
+            fields.push((
+                "eta",
+                Json::Float(((f64::from(self.frames) - done) / (done / elapsed)).round()),
+            ));
+        }
         if name == "done" {
             fields.push((
                 "output",
@@ -180,7 +373,11 @@ impl Drop for Job {
     }
 }
 
-fn destination(store: &Store, path: Option<&str>) -> Result<PathBuf, StoreError> {
+fn destination(
+    store: &Store,
+    path: Option<&str>,
+    request: &Request,
+) -> Result<PathBuf, StoreError> {
     if let Some(path) = path {
         return Ok(store.path().join(path));
     }
@@ -203,7 +400,16 @@ fn destination(store: &Store, path: Option<&str>) -> Result<PathBuf, StoreError>
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy();
-    Ok(dir.join(format!("{name}-r{}.mp4", store.project().rev)))
+    let suffix = if request.size == store.project().size {
+        String::new()
+    } else {
+        format!("-{}x{}", request.size[0], request.size[1])
+    };
+    Ok(dir.join(format!(
+        "{name}-r{}{suffix}.{}",
+        store.project().rev,
+        request.extension
+    )))
 }
 
 fn export_failure(error: &dyn std::fmt::Display) -> StoreError {

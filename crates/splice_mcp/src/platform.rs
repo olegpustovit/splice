@@ -100,62 +100,119 @@ pub(super) fn frames(
     }
 }
 
-pub(super) fn export_options(preset: Option<&str>, path: Option<&str>) -> Result<bool, StoreError> {
-    let hevc = match preset {
-        None | Some("social-hevc") => true,
-        // "social" is the name tasks and people use; H.264 plays everywhere.
-        Some("social-h264" | "social") => false,
-        _ => return Err(bad("preset", "social (H.264), social-h264 or social-hevc")),
-    };
+fn check_path(path: Option<&str>, extension: &str) -> Result<(), StoreError> {
     if path.is_some_and(|path| {
         path.contains('\0')
             || !Path::new(path)
                 .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
+                .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
     }) {
-        return Err(bad("path", "an output path ending in .mp4"));
+        return Err(bad(
+            "path",
+            &format!("an output path ending in .{extension}"),
+        ));
     }
-    Ok(hevc)
+    Ok(())
+}
+
+fn io_error(path: &Path, error: &std::io::Error) -> StoreError {
+    failure(
+        "IO",
+        &format!("Could not write {}: {error}.", path.display()),
+        "Check the destination exists and is writable.",
+    )
+}
+
+/// `export.start {format:"fcpxml"}`: writes the timeline for Final Cut Pro (every platform).
+fn export_fcpxml(store: &Store, path: Option<&str>) -> Result<Json, StoreError> {
+    check_path(path, "fcpxml")?;
+    let name = store
+        .path()
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let file = match path {
+        Some(path) => store.path().join(path),
+        None => {
+            let dir = store.path().join("exports");
+            std::fs::create_dir_all(&dir).map_err(|e| io_error(&dir, &e))?;
+            dir.join(format!("{name}-r{}.fcpxml", store.project().rev))
+        }
+    };
+    let xml = super::fcpxml::write(store.project(), store.path(), &name);
+    std::fs::write(&file, xml).map_err(|e| io_error(&file, &e))?;
+    Ok(super::object(vec![
+        ("state", super::text("done")),
+        ("output", Json::String(file.to_string_lossy().into_owned())),
+        (
+            "settings",
+            super::object(vec![("format", super::text("FCPXML 1.10"))]),
+        ),
+    ]))
 }
 
 pub(super) fn export(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
     let owner = args.string("projectId")?;
     let store = projects.lookup_id(owner)?;
     let path = args.optional_string("path")?;
-    let hevc = export_options(args.optional_string("preset")?, path)?;
     let overwrite = args.flag("overwrite")?;
     let options = write_options(args)?;
     if options.dry_run {
         return Err(bad("dryRun", "false or omitted for export.start"));
     }
     store.check_write(&options)?;
+    match args.optional_string("format")? {
+        None | Some("video") => {}
+        Some("fcpxml") => return export_fcpxml(store, path),
+        Some(_) => return Err(bad("format", "video (default) or fcpxml")),
+    }
+    let end = super::timeline::duration(store.project())?;
+    let outputs = super::presets::resolve(store.project(), end, args)?;
+    if outputs.len() == 1 {
+        check_path(path, outputs[0].extension)?;
+    } else if path.is_some() {
+        return Err(bad(
+            "path",
+            "omitted with variants (each lands in exports/)",
+        ));
+    }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (hevc, overwrite);
+        let _ = overwrite;
         Err(unavailable("Export"))
     }
     #[cfg(target_os = "macos")]
     {
-        if projects.exports.iter().any(super::export::Job::active) {
-            return Err(failure(
-                "BUSY",
-                "An export is already running.",
-                "Check jobs.status or cancel the active export.",
-            ));
+        let mut receipts = Vec::with_capacity(outputs.len());
+        for output in outputs {
+            let id = JobId::from_serial(projects.exports.len() as u64 + 1);
+            let store = projects.lookup_id(owner)?;
+            match output.kind {
+                super::presets::Kind::Poster | super::presets::Kind::Gif => {
+                    receipts.push(super::export::still(store, &output, path, overwrite)?);
+                }
+                _ => {
+                    let job = super::export::Job::start(
+                        store,
+                        id,
+                        Some((owner.to_owned(), options.session.expect("agent session"))),
+                        &output,
+                        path,
+                        overwrite,
+                    )?;
+                    receipts.push(job.started());
+                    projects.exports.push(job);
+                }
+            }
         }
-        let id = JobId::from_serial(projects.exports.len() as u64 + 1);
-        let store = projects.lookup_id(owner)?;
-        let job = super::export::Job::start(
-            store,
-            id,
-            Some((owner.to_owned(), options.session.expect("agent session"))),
-            hevc,
-            path,
-            overwrite,
-        )?;
-        let receipt = job.started();
-        projects.exports.push(job);
-        Ok(receipt)
+        Ok(match receipts.len() {
+            1 => receipts.pop().expect("one receipt"),
+            _ => super::object(vec![
+                ("state", super::text("running")),
+                ("jobs", Json::Array(receipts)),
+            ]),
+        })
     }
 }
 
@@ -212,9 +269,17 @@ pub(super) fn job(projects: &mut Projects, name: &str, args: &Json) -> Result<Js
             job.cancel();
         }
         // Polling advances the job: a code.run program that loops on jobs.status blocks the
-        // serve loop that otherwise steps exports between requests.
-        job.step(super::rpc::EXPORT_SLICE);
-        return job.status();
+        // serve loop that otherwise steps exports between requests. Two encode at once; the
+        // rest wait their turn.
+        let ahead = projects.exports[..index]
+            .iter()
+            .filter(|j| j.active())
+            .count();
+        let job = &mut projects.exports[index];
+        if ahead < super::project::CONCURRENT_EXPORTS {
+            job.step(super::rpc::EXPORT_SLICE);
+        }
+        return job.status(ahead >= super::project::CONCURRENT_EXPORTS);
     }
     Err(missing_job(id))
 }

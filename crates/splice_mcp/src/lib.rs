@@ -13,6 +13,7 @@ mod enrich;
 mod export;
 #[cfg(any(target_os = "macos", test))]
 mod export_file;
+mod fcpxml;
 #[cfg(target_os = "macos")]
 mod frames;
 /// Persistent MCP friction records and their CLI commands.
@@ -29,6 +30,7 @@ mod native;
 /// Locations shared by the CLI, the viewer and the MCP server.
 pub mod paths;
 mod platform;
+mod presets;
 mod project;
 #[cfg(target_os = "macos")]
 mod record;

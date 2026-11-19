@@ -747,3 +747,14 @@ fn code_run_adopts_the_first_opened_project_and_session() {
     );
     assert_eq!(seen[1].1, Some(text("prj_4")));
 }
+
+/// The sample project, loaded through the package reader.
+pub(crate) fn sample_project() -> splice_model::Project {
+    let root = TestDirectory::new("sample-project");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    splice_core::history::Store::open(&sample)
+        .unwrap()
+        .project()
+        .clone()
+}

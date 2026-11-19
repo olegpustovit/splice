@@ -157,12 +157,23 @@ impl Projects {
 
     /// Advances running exports for up to `budget` in total. True while any is running.
     #[cfg(target_os = "macos")]
+    /// Steps the first `CONCURRENT_EXPORTS` active exports; later ones queue.
     pub(super) fn tick_exports(&mut self, budget: std::time::Duration) -> bool {
-        let running = self.exports.iter().filter(|job| job.active()).count() as u32;
+        let running = self
+            .exports
+            .iter()
+            .filter(|job| job.active())
+            .count()
+            .min(CONCURRENT_EXPORTS) as u32;
         if running == 0 {
             return false;
         }
-        for job in self.exports.iter_mut().filter(|job| job.active()) {
+        for job in self
+            .exports
+            .iter_mut()
+            .filter(|job| job.active())
+            .take(CONCURRENT_EXPORTS)
+        {
             job.step(budget / running);
         }
         self.exports.iter().any(|job| job.active())
@@ -352,6 +363,10 @@ pub(super) fn lane_kind(kind: LaneKind) -> &'static str {
         LaneKind::Audio => "audio",
     }
 }
+
+/// Exports that encode at once (T21.5).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(super) const CONCURRENT_EXPORTS: usize = 2;
 
 pub(super) fn media_path(store: &Store, media: &Media) -> PathBuf {
     store.path().join(&media.path)

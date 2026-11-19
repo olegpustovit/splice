@@ -21,7 +21,7 @@ use std::{
 };
 
 pub use apple_sys::image::{png as encode_png, png_video as encode_frame_png};
-pub use composition::Player;
+pub use composition::{Codec, Encoding, Player};
 
 /// A prepared timeline and its native composition for playback and delivery.
 pub struct Composition {
@@ -56,6 +56,7 @@ pub(crate) fn offscreen_device() -> Result<ogpu_core::backend::Device, Error> {
 pub(crate) fn offscreen_target(
     device: &ogpu_core::backend::Device,
     [width, height]: [u32; 2],
+    alpha: f64,
 ) -> Result<
     (
         ogpu_core::backend::Texture,
@@ -84,7 +85,7 @@ pub(crate) fn offscreen_target(
     )
     .map_err(gpu)?;
     let target =
-        splice_gpu::Compositor::target(device, &texture, [0.0, 0.0, 0.0, 1.0]).map_err(gpu)?;
+        splice_gpu::Compositor::target(device, &texture, [0.0, 0.0, 0.0, alpha]).map_err(gpu)?;
     Ok((texture, target))
 }
 
@@ -217,7 +218,7 @@ impl Composition {
         let mut slot = self.offscreen.borrow_mut();
         if slot.is_none() {
             let device = offscreen_device()?;
-            let (texture, target) = offscreen_target(&device, self.size)?;
+            let (texture, target) = offscreen_target(&device, self.size, 1.0)?;
             *slot = Some(Offscreen {
                 queue: b::create_queue(&device).map_err(gpu)?,
                 program: GpuProgram::with_plan(&device, &self.plan, &self.text)?,
@@ -255,18 +256,30 @@ impl Composition {
         Ok(())
     }
 
-    /// Starts encoding the composition and its audio mix into a new MP4. Advance the returned
-    /// export with `step` on the main thread.
-    pub fn start_export(&self, file: &Path, hevc: bool) -> Result<Export, Error> {
-        let reader = self.native.reader()?;
-        let writer = composition::Writer::new(&reader, file, hevc)?;
+    /// Starts encoding the composition and its audio mix with `encoding` (its range clamped to
+    /// the timeline). Advance the returned export with `step` on the main thread.
+    pub fn start_export(
+        &self,
+        file: &Path,
+        encoding: &composition::Encoding,
+    ) -> Result<Export, Error> {
+        let mut encoding = encoding.clone();
+        encoding.range = [
+            encoding.range[0].clamp(0, self.end),
+            encoding.range[1].clamp(0, self.end),
+        ];
+        if encoding.range[1] <= encoding.range[0] {
+            encoding.range = [0, self.end];
+        }
+        let reader = self.native.reader(Some(encoding.range))?;
+        let writer = composition::Writer::new(&reader, file, &encoding)?;
         Export::start(
             reader,
             writer,
             self.plan.clone(),
             &self.text,
             self.size,
-            self.end,
+            &encoding,
         )
     }
 }

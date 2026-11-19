@@ -961,7 +961,7 @@ uint8_t *splice_image_rgba(const char *path, uint32_t *width, uint32_t *height, 
 @implementation SpliceAVReader
 @end
 
-void *splice_av_reader(void *raw, char **error) {
+void *splice_av_reader(void *raw, int32_t from, int32_t to, char **error) {
     @autoreleasepool {
         SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
         NSError *failure = nil;
@@ -969,6 +969,9 @@ void *splice_av_reader(void *raw, char **error) {
         if (reader == nil) {
             fail(error, failure, "AVFoundation could not read the composition.");
             return NULL;
+        }
+        if (to > from && from >= 0) {
+            reader.timeRange = CMTimeRangeFromTimeToTime(time_for(assembly, from), time_for(assembly, to));
         }
         NSArray *videoTracks = [assembly.asset tracksWithMediaType:AVMediaTypeVideo];
         AVAssetReaderVideoCompositionOutput *video =
@@ -1057,6 +1060,7 @@ void splice_av_reader_release(void *raw) {
 @property(nonatomic, strong) NSMutableDictionary *surfaces;
 @property(nonatomic, strong) NSURL *url;
 @property(nonatomic) CVPixelBufferRef pending;
+@property(nonatomic) int32_t origin;
 @end
 @implementation SpliceAVWriter
 - (void)dealloc {
@@ -1064,56 +1068,170 @@ void splice_av_reader_release(void *raw) {
 }
 @end
 
-void *splice_av_writer(void *reader_raw, const char *file, bool hevc, char **error) {
+// A 3GPP text format with the extensions writers require (font table, default style and box).
+static CMFormatDescriptionRef text_format(void) {
+    NSDictionary *clear = @{(id)kCMTextFormatDescriptionColor_Red: @0, (id)kCMTextFormatDescriptionColor_Green: @0,
+                            (id)kCMTextFormatDescriptionColor_Blue: @0, (id)kCMTextFormatDescriptionColor_Alpha: @255};
+    NSDictionary *extensions = @{
+        (id)kCMTextFormatDescriptionExtension_DisplayFlags: @0,
+        (id)kCMTextFormatDescriptionExtension_BackgroundColor: clear,
+        (id)kCMTextFormatDescriptionExtension_DefaultTextBox: @{
+            (id)kCMTextFormatDescriptionRect_Top: @0, (id)kCMTextFormatDescriptionRect_Left: @0,
+            (id)kCMTextFormatDescriptionRect_Bottom: @0, (id)kCMTextFormatDescriptionRect_Right: @0},
+        (id)kCMTextFormatDescriptionExtension_DefaultStyle: @{
+            (id)kCMTextFormatDescriptionStyle_StartChar: @0, (id)kCMTextFormatDescriptionStyle_EndChar: @0,
+            (id)kCMTextFormatDescriptionStyle_Font: @1, (id)kCMTextFormatDescriptionStyle_FontFace: @0,
+            (id)kCMTextFormatDescriptionStyle_FontSize: @12,
+            (id)kCMTextFormatDescriptionStyle_ForegroundColor: @{
+                (id)kCMTextFormatDescriptionColor_Red: @255, (id)kCMTextFormatDescriptionColor_Green: @255,
+                (id)kCMTextFormatDescriptionColor_Blue: @255, (id)kCMTextFormatDescriptionColor_Alpha: @255}},
+        (id)kCMTextFormatDescriptionExtension_HorizontalJustification: @0,
+        (id)kCMTextFormatDescriptionExtension_VerticalJustification: @0,
+        (id)kCMTextFormatDescriptionExtension_FontTable: @{@"1": @"Sans-Serif"},
+    };
+    CMFormatDescriptionRef format = NULL;
+    CMFormatDescriptionCreate(NULL, kCMMediaType_Text, kCMTextFormatType_3GText,
+                              (__bridge CFDictionaryRef)extensions, &format);
+    return format;
+}
+
+// A 3GPP text sample: 16-bit big-endian length, then UTF-8.
+static CMSampleBufferRef text_sample(CMFormatDescriptionRef format, NSString *text, CMTime start, CMTime duration) {
+    NSData *utf8 = [text dataUsingEncoding:NSUTF8StringEncoding];
+    size_t length = 2 + utf8.length;
+    uint8_t *bytes = malloc(length);
+    bytes[0] = (uint8_t)(utf8.length >> 8);
+    bytes[1] = (uint8_t)(utf8.length & 0xff);
+    memcpy(bytes + 2, utf8.bytes, utf8.length);
+    CMBlockBufferRef block = NULL;
+    CMBlockBufferCreateWithMemoryBlock(NULL, bytes, length, kCFAllocatorMalloc, NULL, 0, length, 0, &block);
+    CMSampleTimingInfo timing = {duration, start, kCMTimeInvalid};
+    CMSampleBufferRef sample = NULL;
+    CMSampleBufferCreate(NULL, block, true, NULL, NULL, format, 1, 1, &timing, 1, &length, &sample);
+    CFRelease(block);
+    return sample;
+}
+
+void *splice_av_writer(void *reader_raw, const char *file, const SpliceExportSettings *settings, char **error) {
     @autoreleasepool {
         SpliceAVReader *reader = (__bridge SpliceAVReader *)reader_raw;
         SpliceAVAssembly *assembly = reader.assembly;
         NSURL *url = [NSURL fileURLWithFileSystemRepresentation:file isDirectory:NO relativeToURL:nil];
+        uint32_t codec = settings->codec;
+        bool video_out = codec <= SpliceCodecHEVCAlpha;
+        AVFileType type = codec == SpliceCodecAAC ? AVFileTypeAppleM4A
+                        : codec == SpliceCodecWAV ? AVFileTypeWAVE
+                        : (codec >= SpliceCodecProRes422 ? AVFileTypeQuickTimeMovie : AVFileTypeMPEG4);
         NSError *failure = nil;
-        AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:url fileType:AVFileTypeMPEG4 error:&failure];
+        AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:url fileType:type error:&failure];
         if (writer == nil) {
             fail(error, failure, "AVFoundation could not create the export file.");
             return NULL;
         }
-        double pixels = assembly.size.width * assembly.size.height;
-        AVAssetWriterInput *video = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:@{
-            AVVideoCodecKey: hevc ? AVVideoCodecTypeHEVC : AVVideoCodecTypeH264,
-            AVVideoColorPropertiesKey: @{AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
-                                         AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-                                         AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2},
-            AVVideoWidthKey: @(assembly.size.width), AVVideoHeightKey: @(assembly.size.height),
-            AVVideoCompressionPropertiesKey: @{
+        AVAssetWriterInput *video = nil;
+        AVAssetWriterInputPixelBufferAdaptor *adaptor = nil;
+        if (video_out) {
+            double pixels = assembly.size.width * assembly.size.height;
+            bool hevc = codec == SpliceCodecHEVC || codec == SpliceCodecHEVCAlpha;
+            AVVideoCodecType name = codec == SpliceCodecHEVC ? AVVideoCodecTypeHEVC
+                                  : codec == SpliceCodecProRes422 ? AVVideoCodecTypeAppleProRes422HQ
+                                  : codec == SpliceCodecProRes4444 ? AVVideoCodecTypeAppleProRes4444
+                                  : codec == SpliceCodecHEVCAlpha ? AVVideoCodecTypeHEVCWithAlpha
+                                  : AVVideoCodecTypeH264;
+            NSMutableDictionary *output = [@{
+                AVVideoCodecKey: name,
+                AVVideoColorPropertiesKey: @{AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                                             AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                                             AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2},
+                AVVideoWidthKey: @(assembly.size.width), AVVideoHeightKey: @(assembly.size.height),
+            } mutableCopy];
+            if (codec <= SpliceCodecHEVC || codec == SpliceCodecHEVCAlpha) {
                 // About the "highest quality" export preset's rate: 22 Mbps H.264, 16 Mbps HEVC at 1080p30.
-                AVVideoAverageBitRateKey: @((long long)(pixels * assembly.fps * (hevc ? 0.25 : 0.35))),
-                AVVideoExpectedSourceFrameRateKey: @(assembly.fps)}}];
-        video.expectsMediaDataInRealTime = NO;
-        AVAssetWriterInputPixelBufferAdaptor *adaptor = [AVAssetWriterInputPixelBufferAdaptor
-            assetWriterInputPixelBufferAdaptorWithAssetWriterInput:video sourcePixelBufferAttributes:@{
-                (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
-                (id)kCVPixelBufferWidthKey: @(assembly.size.width), (id)kCVPixelBufferHeightKey: @(assembly.size.height),
-                (id)kCVPixelBufferIOSurfacePropertiesKey: @{}}];
-        if (![writer canAddInput:video]) {
-            splice_set_error(error, "The export cannot take this video format.");
-            return NULL;
+                double rate = settings->bitrate > 0 ? settings->bitrate : pixels * assembly.fps * (hevc ? 0.25 : 0.35);
+                output[AVVideoCompressionPropertiesKey] = @{AVVideoAverageBitRateKey: @((long long)rate),
+                                                            AVVideoExpectedSourceFrameRateKey: @(assembly.fps)};
+            }
+            video = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:output];
+            video.expectsMediaDataInRealTime = NO;
+            adaptor = [AVAssetWriterInputPixelBufferAdaptor
+                assetWriterInputPixelBufferAdaptorWithAssetWriterInput:video sourcePixelBufferAttributes:@{
+                    (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+                    (id)kCVPixelBufferWidthKey: @(assembly.size.width), (id)kCVPixelBufferHeightKey: @(assembly.size.height),
+                    (id)kCVPixelBufferIOSurfacePropertiesKey: @{}}];
+            if (![writer canAddInput:video]) {
+                splice_set_error(error, "The export cannot take this video format.");
+                return NULL;
+            }
+            [writer addInput:video];
         }
-        [writer addInput:video];
         AVAssetWriterInput *audio = nil;
         if (reader.audio != nil) {
-            audio = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:@{
-                AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2,
-                AVEncoderBitRateKey: @192000}];
+            NSDictionary *audioSettings = codec == SpliceCodecWAV
+                ? @{AVFormatIDKey: @(kAudioFormatLinearPCM), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2,
+                    AVLinearPCMBitDepthKey: @16, AVLinearPCMIsFloatKey: @NO, AVLinearPCMIsBigEndianKey: @NO,
+                    AVLinearPCMIsNonInterleaved: @NO}
+                : (codec >= SpliceCodecProRes422 && codec <= SpliceCodecProRes4444
+                    ? @{AVFormatIDKey: @(kAudioFormatLinearPCM), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2,
+                        AVLinearPCMBitDepthKey: @24, AVLinearPCMIsFloatKey: @NO, AVLinearPCMIsBigEndianKey: @NO,
+                        AVLinearPCMIsNonInterleaved: @NO}
+                    : @{AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2,
+                        AVEncoderBitRateKey: @(codec == SpliceCodecAAC ? 256000 : 192000)});
+            audio = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:audioSettings];
             audio.expectsMediaDataInRealTime = NO;
             if (![writer canAddInput:audio]) {
                 splice_set_error(error, "The export cannot take this audio format.");
                 return NULL;
             }
             [writer addInput:audio];
+        } else if (!video_out) {
+            splice_set_error(error, "The timeline has no audio to export.");
+            return NULL;
+        }
+        // Chapters: a 3GPP text track the video names as its chapter list (QuickTime and AVAsset
+        // read chapters from it).
+        AVAssetWriterInput *chapters = nil;
+        NSMutableArray<NSArray *> *marks = [NSMutableArray array];
+        if (video_out && settings->chapters != NULL && settings->chapters[0] != 0) {
+            for (NSString *line in [[NSString stringWithUTF8String:settings->chapters] componentsSeparatedByString:@"\n"]) {
+                NSArray *parts = [line componentsSeparatedByString:@"\t"];
+                if (parts.count == 2) [marks addObject:@[@([parts[0] intValue]), parts[1]]];
+            }
+            CMFormatDescriptionRef format = text_format();
+            chapters = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeText outputSettings:nil
+                                                        sourceFormatHint:format];
+            if (format != NULL) CFRelease(format);
+            chapters.languageCode = @"eng";
+            chapters.extendedLanguageTag = @"en";
+            if (marks.count > 0 && [writer canAddInput:chapters]) {
+                [writer addInput:chapters];
+                [video addTrackAssociationWithTrackOfInput:chapters type:AVTrackAssociationTypeChapterList];
+            } else {
+                chapters = nil;
+            }
         }
         if (![writer startWriting]) {
             fail(error, writer.error, "AVFoundation could not start writing the export.");
             return NULL;
         }
         [writer startSessionAtSourceTime:kCMTimeZero];
+        if (chapters != nil) {
+            int32_t from = settings->from, to = settings->to;
+            CMFormatDescriptionRef format = text_format();
+            for (NSUInteger i = 0; i < marks.count; i++) {
+                int32_t at = MAX([marks[i][0] intValue], from) - from;
+                int32_t next = (i + 1 < marks.count ? [marks[i + 1][0] intValue] : to) - from;
+                if (next <= at) continue;
+                CMSampleBufferRef sample = text_sample(format, marks[i][1], CMTimeMake(at, assembly.fps),
+                                                       CMTimeMake(next - at, assembly.fps));
+                while (!chapters.readyForMoreMediaData) usleep(1000);
+                if (sample != NULL) {
+                    [chapters appendSampleBuffer:sample];
+                    CFRelease(sample);
+                }
+            }
+            if (format != NULL) CFRelease(format);
+            [chapters markAsFinished];
+        }
         SpliceAVWriter *out = [SpliceAVWriter new];
         out.reader = reader;
         out.writer = writer;
@@ -1121,22 +1239,34 @@ void *splice_av_writer(void *reader_raw, const char *file, bool hevc, char **err
         out.adaptor = adaptor;
         out.audio = audio;
         out.url = url;
+        out.origin = settings->from;
         out.surfaces = [NSMutableDictionary dictionary];
         out.audioDone = dispatch_semaphore_create(0);
         out.queue = dispatch_queue_create("splice.export.audio", DISPATCH_QUEUE_SERIAL);
         if (audio != nil) {
             AVAssetReaderAudioMixOutput *source = reader.audio;
             dispatch_semaphore_t done = out.audioDone;
+            CMTime shift = CMTimeMake(settings->from, assembly.fps);
             [audio requestMediaDataWhenReadyOnQueue:out.queue usingBlock:^{
                 while (audio.readyForMoreMediaData) {
                     CMSampleBufferRef sample = [source copyNextSampleBuffer];
-                    if (sample == NULL || ![audio appendSampleBuffer:sample]) {
+                    CMSampleBufferRef shifted = NULL;
+                    if (sample != NULL && CMTimeCompare(shift, kCMTimeZero) != 0) {
+                        CMSampleTimingInfo timing;
+                        CMSampleBufferGetSampleTimingInfo(sample, 0, &timing);
+                        timing.presentationTimeStamp = CMTimeSubtract(timing.presentationTimeStamp, shift);
+                        CMSampleBufferCreateCopyWithNewTiming(NULL, sample, 1, &timing, &shifted);
+                    }
+                    CMSampleBufferRef append = shifted != NULL ? shifted : sample;
+                    if (append == NULL || ![audio appendSampleBuffer:append]) {
                         if (sample != NULL) CFRelease(sample);
+                        if (shifted != NULL) CFRelease(shifted);
                         [audio markAsFinished];
                         dispatch_semaphore_signal(done);
                         return;
                     }
                     CFRelease(sample);
+                    if (shifted != NULL) CFRelease(shifted);
                 }
             }];
         } else {
@@ -1196,7 +1326,7 @@ bool splice_av_writer_append(void *raw, int32_t frame, char **error) {
             }
             usleep(1000);
         }
-        CMTime at = CMTimeMake(frame, writer.reader.assembly.fps);
+        CMTime at = CMTimeMake(frame - writer.origin, writer.reader.assembly.fps);
         if (![writer.adaptor appendPixelBuffer:writer.pending withPresentationTime:at]) {
             fail(error, writer.writer.error, "The encoder rejected a frame.");
             return false;
@@ -1217,6 +1347,7 @@ int32_t splice_av_writer_finish(void *raw, bool cancel, char **error) {
             return 0;
         }
         [writer.video markAsFinished];
+        if (writer.video == nil) [writer.reader.reader cancelReading];
         if (dispatch_semaphore_wait(writer.audioDone, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC)) != 0) {
             [writer.writer cancelWriting];
             splice_set_error(error, "The export's audio did not finish.");

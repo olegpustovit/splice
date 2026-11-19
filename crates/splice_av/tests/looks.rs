@@ -355,7 +355,9 @@ mod looks {
         let export = |project: &Project, name: &str| {
             let composition = Composition::prepare(project, &dir.0).unwrap();
             let file = dir.0.join(name);
-            let mut job = composition.start_export(&file, false).unwrap();
+            let mut job = composition
+                .start_export(&file, &Encoding::new(Codec::H264))
+                .unwrap();
             while let ExportState::Running(_) = job.step(Duration::from_millis(16)).unwrap() {}
             assert_eq!(job.status(), ExportState::Complete);
             apple_sys::vision::analyze(&file, apple_sys::vision::TEXT, 2.0)
@@ -393,6 +395,61 @@ mod looks {
         let hidden = export(&project, "redacted.mp4");
         assert!(!hidden.contains("4821"), "still readable: {hidden:?}");
     }
+
+    pub(super) fn exports_alpha_audio_ranges_and_chapters() {
+        let dir = scratch("exports");
+        let red = still(&dir.0, 1, [220, 30, 30]);
+        let mut project = project(
+            vec![red],
+            vec![(1, 60, vec![fx(1, "transform", vec![("scale", n(0.5))])])],
+        );
+        project.markers = vec![
+            Marker {
+                id: MarkerId::from_serial(1),
+                at: 10,
+                name: "Intro".into(),
+                color: None,
+            },
+            Marker {
+                id: MarkerId::from_serial(2),
+                at: 40,
+                name: "Demo".into(),
+                color: None,
+            },
+        ];
+        let composition = Composition::prepare(&project, &dir.0).unwrap();
+        let export = |name: &str, encoding: Encoding| {
+            let file = dir.0.join(name);
+            let mut job = composition.start_export(&file, &encoding).unwrap();
+            while let ExportState::Running(_) = job
+                .step(Duration::from_millis(16))
+                .unwrap_or_else(|e| panic!("{name}: {e}"))
+            {}
+            assert_eq!(job.status(), ExportState::Complete, "{name}");
+            file
+        };
+        // ProRes 4444 keeps transparency outside the half-size picture.
+        let master = export("master.mov", Encoding::new(Codec::ProRes4444));
+        let (pixels, [w, _]) = apple_sys::media::first_frame(&master).unwrap();
+        assert_eq!(pixels[3], 0, "corner is transparent");
+        let center = ((32 * w + 48) * 4) as usize;
+        assert_eq!(pixels[center + 3], 255, "picture is opaque");
+        // A range with chapters from markers.
+        let mut ranged = Encoding::new(Codec::H264);
+        ranged.range = [5, 50];
+        ranged.chapters = vec![(10, "Intro".into()), (40, "Demo".into())];
+        let cut = export("cut.mp4", ranged);
+        let probe = apple_sys::media::probe(&cut).unwrap();
+        assert!(
+            (probe.duration_seconds - 45.0 / 30.0).abs() < 0.05,
+            "{}",
+            probe.duration_seconds
+        );
+        let chapters = apple_sys::media::chapters(&cut).unwrap();
+        let names: Vec<_> = chapters.iter().map(|c| c.1.as_str()).collect();
+        assert_eq!(names, ["Intro", "Demo"]);
+        assert!((chapters[1].0 - 35.0 / 30.0).abs() < 0.05, "{chapters:?}");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -413,6 +470,10 @@ fn main() {
         (
             "looks_ocr_reads_text_and_a_blur_mask_hides_it",
             looks::ocr_reads_text_and_a_blur_mask_hides_it,
+        ),
+        (
+            "looks_exports_alpha_audio_ranges_and_chapters",
+            looks::exports_alpha_audio_ranges_and_chapters,
         ),
     ]);
 }

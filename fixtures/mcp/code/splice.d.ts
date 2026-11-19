@@ -1089,12 +1089,12 @@ declare const splice: {
     show(args?: { projectId?: string; at?: number | Record<string, unknown>; select?: string[]; range?: Record<string, unknown>; expand?: string; view?: string; viewer?: Record<string, unknown>; }): { applied: boolean; reason?: string; revision?: Splice.Revision; playhead?: number; selection?: string[]; };
   };
   export: {
-    /** Start an MP4 export job. Use overwrite:true to replace an existing output file. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */
-    start(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; preset?: "social" | "social-h264" | "social-hevc"; path?: string; overwrite?: boolean; }): { jobId: string; state: string; settings?: Record<string, unknown>; };
+    /** Export the timeline: presets for social (youtube-1080/4k, shorts, reels, tiktok, linkedin), masters (prores-422, prores-4444 and hevc-alpha keep transparency), audio (audio-m4a, audio-wav), gif and poster (done at once). from/to or marker limit the range; markers become chapters; captions:"srt" writes a sidecar; variants:[{aspect, preset}] renders several aspects, each reframed to fill; format:"fcpxml" writes the cut for Final Cut Pro (every platform). Video and audio need macOS and run as jobs (two at a time). */
+    start(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; preset?: "social" | "social-h264" | "social-hevc" | "youtube-1080" | "youtube-4k" | "shorts" | "reels" | "tiktok" | "linkedin" | "prores-422" | "prores-4444" | "hevc-alpha" | "audio-m4a" | "audio-wav" | "gif" | "poster"; format?: "video" | "fcpxml"; from?: number; to?: number; marker?: string; bitrate?: number; captions?: "srt" | "vtt"; chapters?: boolean; variants?: Record<string, unknown>[]; path?: string; overwrite?: boolean; }): { jobId: string; state: string; settings?: Record<string, unknown>; output?: string; jobs?: unknown[]; };
   };
   jobs: {
     /** Check the progress and result of an export, transcription or recording job. Each call advances a running export by up to 50 ms; poll until state is done. Inside code.run (2 s limit) return the jobId and poll from later calls. */
-    status(args: { projectId?: string; jobId: string; }): { jobId: string; id?: string; kind?: string; state: string; progress?: number; settings?: Record<string, unknown>; output?: string; elapsed?: number; bytes?: number; droppedFrames?: number; revision?: Splice.Revision; };
+    status(args: { projectId?: string; jobId: string; }): { jobId: string; id?: string; kind?: string; state: string; progress?: number; settings?: Record<string, unknown>; output?: string; elapsed?: number; bytes?: number; droppedFrames?: number; fps?: number; eta?: number; revision?: Splice.Revision; };
     /** Cancel a running or pending job. */
     cancel(args: { projectId?: string; jobId: string; sessionId?: string; ifRevision?: Splice.Revision; }): { jobId: string; id?: string; state: string; };
   };

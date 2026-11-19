@@ -52,6 +52,8 @@ pub(crate) struct Plan {
     pub luts: Vec<PathBuf>,
     /// The prepared timeline, evaluated per frame for keyed looks and shapes.
     pub evaluator: Option<Arc<Evaluator>>,
+    /// The black base track under every interval (left out of transparent exports).
+    pub base: i32,
 }
 
 struct Lowering {
@@ -92,6 +94,7 @@ pub(super) fn build(
         zooms: Vec::new(),
     };
     let black = state.fill(usize::MAX, 0, 0)?;
+    state.plan.base = black;
     let [width, height] = project.size.map(f64::from);
     let mut first = evaluator.buffer();
     let mut last = evaluator.buffer();

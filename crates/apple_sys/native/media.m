@@ -261,3 +261,68 @@ void splice_media_dispose(SpliceMediaProbe *probe) {
     free(probe->audio);
     *probe = (SpliceMediaProbe){0};
 }
+
+// Free bytes on the volume holding `path` (export disk checks, PLAN.md T21.5).
+bool splice_free_space(const char *path, uint64_t *bytes) {
+    @autoreleasepool {
+        NSDictionary *attributes = [[NSFileManager defaultManager]
+            attributesOfFileSystemForPath:[NSString stringWithUTF8String:path] error:nil];
+        NSNumber *free = attributes[NSFileSystemFreeSize];
+        if (free == nil) return false;
+        *bytes = free.unsignedLongLongValue;
+        return true;
+    }
+}
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+// The first video frame of a file as straight RGBA (alpha kept), for export checks.
+uint8_t *splice_media_first_frame(const char *path, uint32_t *width, uint32_t *height, char **error) {
+    @autoreleasepool {
+        NSURL *url = [NSURL fileURLWithFileSystemRepresentation:path isDirectory:NO relativeToURL:nil];
+        AVAssetImageGenerator *generator = [AVAssetImageGenerator assetImageGeneratorWithAsset:[AVURLAsset assetWithURL:url]];
+        generator.requestedTimeToleranceBefore = kCMTimeZero;
+        generator.requestedTimeToleranceAfter = kCMTimeZero;
+        NSError *failure = nil;
+        CGImageRef image = [generator copyCGImageAtTime:kCMTimeZero actualTime:NULL error:&failure];
+        if (image == NULL) {
+            splice_set_error(error, failure.localizedDescription.UTF8String ?: "No frame.");
+            return NULL;
+        }
+        size_t w = CGImageGetWidth(image), h = CGImageGetHeight(image);
+        uint8_t *pixels = calloc(w * h, 4);
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGContextRef context = CGBitmapContextCreate(pixels, w, h, 8, w * 4, space,
+                                                     kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+        CGColorSpaceRelease(space);
+        CGContextDrawImage(context, CGRectMake(0, 0, w, h), image);
+        CGContextRelease(context);
+        CGImageRelease(image);
+        *width = (uint32_t)w;
+        *height = (uint32_t)h;
+        return pixels;
+    }
+}
+
+// Chapter titles and start seconds ("start\ttitle" lines) as AVAsset reads them.
+char *splice_media_chapters(const char *path, char **error) {
+    @autoreleasepool {
+        NSURL *url = [NSURL fileURLWithFileSystemRepresentation:path isDirectory:NO relativeToURL:nil];
+        AVAsset *asset = [AVURLAsset assetWithURL:url];
+        NSMutableArray<NSString *> *languages = [NSMutableArray arrayWithObject:@"en"];
+        for (NSLocale *locale in asset.availableChapterLocales) [languages addObject:locale.localeIdentifier];
+        NSArray<AVTimedMetadataGroup *> *groups =
+            [asset chapterMetadataGroupsBestMatchingPreferredLanguages:languages];
+        NSMutableString *out = [NSMutableString string];
+        for (AVTimedMetadataGroup *group in groups) {
+            NSString *title = @"";
+            for (AVMetadataItem *item in group.items) {
+                if ([item.commonKey isEqualToString:AVMetadataCommonKeyTitle]) title = item.stringValue ?: @"";
+            }
+            [out appendFormat:@"%.3f\t%@\n", CMTimeGetSeconds(group.timeRange.start), title];
+        }
+        (void)error;
+        return strdup(out.UTF8String);
+    }
+}
+#pragma clang diagnostic pop

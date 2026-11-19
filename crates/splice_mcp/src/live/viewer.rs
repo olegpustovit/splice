@@ -1,6 +1,6 @@
 use crate::{
-    Json, export::Job, friction::Recorder, object, platform, project::Projects, text, timeline,
-    tools, wire::*,
+    Json, export::Job, friction::Recorder, object, project::Projects, text, timeline, tools,
+    wire::*,
 };
 use splice_core::{
     history::{Store, StoreError, WriteOptions},
@@ -238,13 +238,21 @@ impl Viewer {
             ),
             "export" => {
                 let path = request.optional_string("output")?;
-                let hevc = platform::export_options(request.optional_string("preset")?, path)?;
+                let mut args = Vec::new();
+                if let Some(preset) = request.optional_string("preset")? {
+                    args.push(("preset".to_owned(), Json::String(preset.into())));
+                }
+                let end = timeline::duration(self.store().project())?;
+                let output =
+                    crate::presets::resolve(self.store().project(), end, &Json::Object(args))?
+                        .pop()
+                        .expect("one output");
                 let id = JobId::from_serial(self.projects.exports.len() as u64 + 1);
                 let job = Job::start(
                     self.store(),
                     id,
                     None,
-                    hevc,
+                    &output,
                     path,
                     request.flag("overwrite")?,
                 )?;
@@ -268,7 +276,7 @@ impl Viewer {
                             "Start export again.",
                         )
                     })?
-                    .status()
+                    .status(false)
             }
             _ => Err(bad("command", "a supported viewer command")),
         }

@@ -25,13 +25,16 @@ pub struct Export {
     writer: Writer,
     plan: Plan,
     size: [u32; 2],
-    end: Frame,
     program: GpuProgram,
     queue: Queue,
     texture: Texture,
     target: PreparedRenderTarget,
     state: ExportState,
     cancel: bool,
+    /// Frames written, half-open.
+    range: [Frame; 2],
+    /// Video goes through the GPU; audio-only exports just drain the reader.
+    video: bool,
     /// Keeps the device that owns these resources alive.
     _device: Device,
 }
@@ -47,24 +50,27 @@ impl Export {
         plan: Plan,
         text: &[TimedText],
         size: [u32; 2],
-        end: Frame,
+        encoding: &apple_sys::composition::Encoding,
     ) -> Result<Self, Error> {
         let device = offscreen_device()?;
         let queue = b::create_queue(&device).map_err(gpu)?;
-        let program = GpuProgram::with_plan(&device, &plan, text)?;
-        let (texture, target) = offscreen_target(&device, size)?;
+        let mut program = GpuProgram::with_plan(&device, &plan, text)?;
+        program.transparent = encoding.codec.alpha();
+        let clear = if program.transparent { 0.0 } else { 1.0 };
+        let (texture, target) = offscreen_target(&device, size, clear)?;
         Ok(Self {
             reader,
             writer,
             plan,
             size,
-            end,
             program,
             queue,
             texture,
             target,
             state: ExportState::Running(0.0),
             cancel: false,
+            range: encoding.range,
+            video: encoding.codec.video(),
             _device: device,
         })
     }
@@ -111,6 +117,13 @@ impl Export {
         let Some((at, count)) = self.reader.next(device, self.program.sources_mut())? else {
             return Ok(false);
         };
+        let [from, to] = self.range;
+        let span = (to - from).max(1) as f32;
+        if !self.video {
+            // Audio-only: drain the video so the mix keeps flowing.
+            self.state = ExportState::Running(((at - from + 1) as f32 / span).clamp(0.0, 1.0));
+            return Ok(true);
+        }
         let out = self.writer.target(device)?;
         let drawn = b::native_texture(&self.texture).map_err(gpu)?.mtl_texture;
         let commands = b::begin_commands(&self.queue).map_err(gpu)?;
@@ -138,7 +151,7 @@ impl Export {
         let receipt = b::commit(&commands).map_err(gpu)?;
         b::complete_through(&self.queue, receipt.epoch).map_err(gpu)?;
         self.writer.append(at)?;
-        self.state = ExportState::Running(((at + 1) as f32 / self.end.max(1) as f32).min(1.0));
+        self.state = ExportState::Running(((at - from + 1) as f32 / span).clamp(0.0, 1.0));
         Ok(true)
     }
 }

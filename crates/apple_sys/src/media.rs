@@ -179,3 +179,72 @@ fn native_path(path: &Path) -> Result<CString, Error> {
 fn fourcc(value: u32) -> Option<[u8; 4]> {
     (value != 0).then_some(value.to_be_bytes())
 }
+
+unsafe extern "C" {
+    fn splice_free_space(path: *const std::ffi::c_char, bytes: *mut u64) -> bool;
+    fn splice_media_first_frame(
+        path: *const std::ffi::c_char,
+        width: *mut u32,
+        height: *mut u32,
+        error: *mut *mut std::ffi::c_char,
+    ) -> *mut u8;
+    fn splice_media_chapters(
+        path: *const std::ffi::c_char,
+        error: *mut *mut std::ffi::c_char,
+    ) -> *mut std::ffi::c_char;
+    fn free(pointer: *mut std::ffi::c_void);
+}
+
+/// The first frame of a movie as straight RGBA with its size (alpha preserved).
+pub fn first_frame(path: &Path) -> Result<(Vec<u8>, [u32; 2]), Error> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| Error::message("The path contains NUL."))?;
+    let (mut w, mut h, mut error) = (0, 0, std::ptr::null_mut());
+    // SAFETY: out pointers are valid; native returns calloc'd w*h*4 bytes or null.
+    let pixels = unsafe { splice_media_first_frame(path.as_ptr(), &mut w, &mut h, &mut error) };
+    if pixels.is_null() {
+        // SAFETY: the bridge transferred its diagnostic.
+        return Err(unsafe { Error::from_native(error, "No frame.") });
+    }
+    // SAFETY: w*h*4 initialized bytes until freed below.
+    let out = unsafe { std::slice::from_raw_parts(pixels, (w * h * 4) as usize) }.to_vec();
+    // SAFETY: calloc allocation, not used again.
+    unsafe { free(pixels.cast()) };
+    Ok((out, [w, h]))
+}
+
+/// Chapter starts (seconds) and titles as AVFoundation reads them.
+pub fn chapters(path: &Path) -> Result<Vec<(f64, String)>, Error> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| Error::message("The path contains NUL."))?;
+    let mut error = std::ptr::null_mut();
+    // SAFETY: native returns a strdup'd string.
+    let text = unsafe { splice_media_chapters(path.as_ptr(), &mut error) };
+    if text.is_null() {
+        // SAFETY: the bridge transferred its diagnostic.
+        return Err(unsafe { Error::from_native(error, "No chapters.") });
+    }
+    // SAFETY: NUL-terminated strdup allocation, freed once here.
+    let lines = unsafe { std::ffi::CStr::from_ptr(text) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { free(text.cast()) };
+    Ok(lines
+        .lines()
+        .filter_map(|l| {
+            let (t, name) = l.split_once('\t')?;
+            Some((t.parse().ok()?, name.to_owned()))
+        })
+        .collect())
+}
+
+/// Free bytes on the volume holding `path`, when the system reports it.
+pub fn free_space(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut bytes = 0;
+    // SAFETY: the path lives for the call; `bytes` is a valid out pointer.
+    unsafe { splice_free_space(path.as_ptr(), &mut bytes) }.then_some(bytes)
+}

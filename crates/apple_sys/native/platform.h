@@ -197,12 +197,29 @@ int32_t splice_av_player_sources(void *player, void *device, uint32_t slot, Spli
                                  size_t capacity, size_t *count, int32_t *frame, char **error);
 
 // Export: a reader decodes through the broker; the caller draws each frame and a writer encodes it.
-void *splice_av_reader(void *composition, char **error);
+void *splice_av_reader(void *raw, int32_t from, int32_t to, char **error);
 // Next frame in order: 1 with *frame and sources (valid until the next call), 0 at the end, -1 on error.
 int32_t splice_av_reader_next(void *reader, void *device, SpliceAVFrameSource *sources, size_t capacity,
                               size_t *count, int32_t *frame, char **error);
 void splice_av_reader_release(void *reader);
-void *splice_av_writer(void *reader, const char *file, bool hevc, char **error);
+enum {
+    SpliceCodecH264 = 0,
+    SpliceCodecHEVC = 1,
+    SpliceCodecProRes422 = 2,
+    SpliceCodecProRes4444 = 3,
+    SpliceCodecHEVCAlpha = 4,
+    SpliceCodecAAC = 5,
+    SpliceCodecWAV = 6,
+};
+typedef struct SpliceExportSettings {
+    uint32_t codec;
+    int32_t from;
+    int32_t to;
+    uint32_t pad;
+    double bitrate;
+    const char *chapters;
+} SpliceExportSettings;
+void *splice_av_writer(void *reader, const char *file, const SpliceExportSettings *settings, char **error);
 // An RGBA8 view (BGRA bytes) of a fresh encoder buffer to draw the next frame into.
 void *splice_av_writer_target(void *writer, void *device, char **error);
 bool splice_av_writer_append(void *writer, int32_t frame, char **error);
@@ -289,5 +306,13 @@ char *splice_vision_track(const char *path, double from, double to, double x, do
 bool splice_vision_matte(const char *path, const char *output, char **error);
 // Translation (translate.swift): texts joined by U+001E.
 bool splice_translate(const char *joined, const char *source, const char *target, char **out, char **error);
+
+bool splice_image_gif(const char *path, const uint8_t *frames, size_t count, uint32_t width, uint32_t height,
+                      double delay, char **error);
+
+bool splice_free_space(const char *path, uint64_t *bytes);
+
+uint8_t *splice_media_first_frame(const char *path, uint32_t *width, uint32_t *height, char **error);
+char *splice_media_chapters(const char *path, char **error);
 
 #endif

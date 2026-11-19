@@ -386,7 +386,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "export.start",
-        description: "Start an MP4 export job. Use overwrite:true to replace an existing output file. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM.",
+        description: "Export the timeline: presets for social (youtube-1080/4k, shorts, reels, tiktok, linkedin), masters (prores-422, prores-4444 and hevc-alpha keep transparency), audio (audio-m4a, audio-wav), gif and poster (done at once). from/to or marker limit the range; markers become chapters; captions:\"srt\" writes a sidecar; variants:[{aspect, preset}] renders several aspects, each reframed to fill; format:\"fcpxml\" writes the cut for Final Cut Pro (every platform). Video and audio need macOS and run as jobs (two at a time).",
         read_only: false,
         input: &[
             ("projectId", "string"),
@@ -394,7 +394,18 @@ pub(super) const TOOLS: &[Tool] = &[
             ("ifRevision", REVISION),
             (
                 "preset",
-                r#"{"enum":["social","social-h264","social-hevc"]}"#,
+                r#"{"enum":["social","social-h264","social-hevc","youtube-1080","youtube-4k","shorts","reels","tiktok","linkedin","prores-422","prores-4444","hevc-alpha","audio-m4a","audio-wav","gif","poster"]}"#,
+            ),
+            ("format", r#"{"enum":["video","fcpxml"]}"#),
+            ("from", FRAME),
+            ("to", FRAME),
+            ("marker", "string"),
+            ("bitrate", "number"),
+            ("captions", r#"{"enum":["srt","vtt"]}"#),
+            ("chapters", "boolean"),
+            (
+                "variants",
+                r#"{"type":"array","items":{"type":"object","properties":{"aspect":{"enum":["9:16","4:5","1:1","4:3","16:9"]},"preset":{"type":"string"}},"required":["aspect"]},"minItems":1,"maxItems":6}"#,
             ),
             ("path", "string"),
             ("overwrite", "boolean"),
@@ -404,8 +415,14 @@ pub(super) const TOOLS: &[Tool] = &[
             ("jobId", "string"),
             ("state", "string"),
             ("settings", "object"),
+            ("output", "string"),
+            ("jobs", "array"),
         ],
-        success: &[&["jobId", "state"]],
+        success: &[
+            &["jobId", "state"],
+            &["state", "output"],
+            &["state", "jobs"],
+        ],
     },
     Tool {
         name: "jobs.status",
@@ -424,6 +441,8 @@ pub(super) const TOOLS: &[Tool] = &[
             ("elapsed", "number"),
             ("bytes", "integer"),
             ("droppedFrames", "integer"),
+            ("fps", "number"),
+            ("eta", "number"),
             ("revision", REVISION),
         ],
         success: &[&["state", "jobId"], &["state", "id"]],

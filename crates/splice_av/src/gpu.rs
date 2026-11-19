@@ -39,6 +39,8 @@ pub struct GpuProgram {
     frame: FramePlan,
     /// Matte textures bound this frame, by owner.
     mattes: Vec<(TimelineId, Texture)>,
+    /// Leave out the black base (alpha exports).
+    pub(crate) transparent: bool,
 }
 
 fn gpu(error: ogpu_core::error::Error) -> Error {
@@ -129,6 +131,7 @@ impl GpuProgram {
                 .map(|e| e.buffer())
                 .unwrap_or_default(),
             mattes: Vec::with_capacity(4),
+            transparent: false,
         })
     }
 
@@ -259,6 +262,9 @@ impl GpuProgram {
                 }
                 _ => None,
             };
+            if self.transparent && role == Role::Plain && layer.track == plan.base && i == 0 {
+                continue;
+            }
             if let Role::Matte(owner) = role {
                 if let Some(texture) = texture {
                     self.mattes.push((owner, texture));
