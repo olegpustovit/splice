@@ -231,6 +231,41 @@ pub(super) fn export(projects: &mut Projects, args: &Json) -> Result<Json, Store
 }
 
 pub(super) fn job(projects: &mut Projects, name: &str, args: &Json) -> Result<Json, StoreError> {
+    // `wait` (seconds, at most 120) holds jobs.status until the job stops running, encoding
+    // exports meanwhile (they advance on this thread), so one call or one code.run sees it done.
+    let wait = match args.field("wait") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_f64()
+                .filter(|seconds| (0.0..=120.0).contains(seconds))
+                .ok_or_else(|| bad("wait", "seconds from 0 to 120"))?,
+        ),
+    };
+    let Some(wait) = wait.filter(|_| name == "jobs.status") else {
+        return job_once(projects, name, args);
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(wait);
+    loop {
+        let status = job_once(projects, name, args)?;
+        let running = matches!(
+            status.field("state").and_then(Json::as_str),
+            Some("queued" | "pending" | "running" | "recording" | "paused" | "cancelling")
+        );
+        if !running || std::time::Instant::now() >= deadline {
+            return Ok(status);
+        }
+        #[cfg(target_os = "macos")]
+        let encoding = projects.tick_exports(super::rpc::EXPORT_SLICE);
+        #[cfg(not(target_os = "macos"))]
+        let encoding = false;
+        if !encoding {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+}
+
+fn job_once(projects: &mut Projects, name: &str, args: &Json) -> Result<Json, StoreError> {
     let id = job_id(args)?;
     let project = args.optional_string("projectId")?;
     let cancel = name == "jobs.cancel";

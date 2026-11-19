@@ -2,3 +2,7 @@
 < {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"projectId":"prj_1","revision":"r0","fps":30,"durationFrames":660,"offlineMedia":"…"},"isError":false}}
 > {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"jobs.status","arguments":{"projectId":"prj_1","jobId":"job_1"}}}
 < {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"error":{"code":"NOT_FOUND","fix":"…"}},"isError":true}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"jobs.status","arguments":{"projectId":"prj_1","jobId":"job_1","wait":500}}}
+< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"error":{"code":"BAD_ARGS","fix":"…"}},"isError":true}}
+> {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"jobs.status","arguments":{"projectId":"prj_1","jobId":"job_1","wait":5}}}
+< {"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"error":{"code":"NOT_FOUND","fix":"…"}},"isError":true}}

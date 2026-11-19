@@ -433,9 +433,13 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "jobs.status",
-        description: "Check the progress and result of an export, transcription or recording job. Each call advances a running export by up to 50 ms; poll until state is done. Inside code.run (2 s limit) return the jobId and poll from later calls.",
+        description: "Check the progress and result of an export, transcription or recording job. wait (seconds, up to 120) returns once the job stops running, so one call (or one code.run: waiting is not counted against its 2 s) sees it done; without wait, each call advances a running export by up to 50 ms.",
         read_only: true,
-        input: &[("projectId", "string"), ("jobId", "string")],
+        input: &[
+            ("projectId", "string"),
+            ("jobId", "string"),
+            ("wait", "number"),
+        ],
         required: &["jobId"],
         output: &[
             ("jobId", "string"),
