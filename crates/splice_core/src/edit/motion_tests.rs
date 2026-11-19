@@ -361,3 +361,106 @@ fn motion_presets_write_ordinary_keys() {
         );
     }
 }
+
+/// T42.6: templates fill with the brand kit, keep text readable on light fills, and sit inside
+/// the safe zone (TikTok's on portrait, 5% on landscape), text boxes included.
+#[test]
+fn templates_use_brand_colors_and_safe_zones() {
+    let text_param = |project: &Project, item: &str, kind: &str, name: &str| {
+        let effect = effect(project, item, kind).unwrap();
+        effect
+            .params
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.value.clone())
+            .unwrap()
+    };
+    let members = |report: &ApplyReport| -> Vec<String> {
+        report.changes[report.changes.len() - 1]
+            .created
+            .iter()
+            .map(|target| match target {
+                Target::Timeline(id) => id.to_string(),
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    };
+    let rect = |project: &Project, item: &str| {
+        let slot = project.items.find(item.parse().unwrap()).unwrap();
+        match &project.items.data(slot).unwrap().kind {
+            ItemKind::Shape { rect, .. } => [rect.x, rect.y, rect.w, rect.h],
+            other => panic!("{other:?}"),
+        }
+    };
+    let text_box = |project: &Project, item: &str| {
+        ["x", "y", "w", "h"].map(|name| match text_param(project, item, "layout", name) {
+            EffectValue::Number(n) => n,
+            other => panic!("{other:?}"),
+        })
+    };
+    // Portrait (the sample is 1080×1920): TikTok's zone keeps 20% clear at the bottom.
+    let mut project = sample();
+    let report = run(
+        &mut project,
+        r##"[{"cmd":"style.set","color":"#f4f1ea","color2":"#14213d","accent":"#fca311","textColor":"#ffffff"},
+            {"cmd":"template.add","name":"cta","at":150,"fields":{"title":"Follow"}}]"##,
+    )
+    .unwrap();
+    let ids = members(&report);
+    let panel = rect(&project, &ids[0]);
+    assert!(
+        panel[1] + panel[3] <= 0.8 + 1e-9 && panel[1] >= 0.1,
+        "{panel:?}"
+    );
+    assert_eq!(
+        text_param(&project, &ids[0], "shape", "fill"),
+        EffectValue::Text("#fca311".into())
+    );
+    // White text on the light accent would vanish: the brand's dark swatch reads instead.
+    assert_eq!(
+        text_param(&project, &ids[1], "text", "color"),
+        EffectValue::Text("#14213d".into())
+    );
+    let [x, y, w, h] = text_box(&project, &ids[1]);
+    assert!(x >= panel[0] && x + w <= panel[0] + panel[2] + 1e-9);
+    assert!(y >= panel[1] && y + h <= panel[1] + panel[3] + 1e-9);
+    // A lower third on the dark secondary keeps the brand text color.
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"template.add","name":"lower-third","at":300,"fields":{"title":"Ada"}}]"#,
+    )
+    .unwrap();
+    let ids = members(&report);
+    assert_eq!(
+        text_param(&project, &ids[0], "shape", "fill"),
+        EffectValue::Text("#14213d".into())
+    );
+    assert_eq!(
+        text_param(&project, &ids[1], "text", "color"),
+        EffectValue::Text("#ffffff".into())
+    );
+    // Landscape: 5% margins; a full-canvas card keeps its text inside them.
+    let mut project = sample();
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"project.set","aspect":"16:9"},
+            {"cmd":"template.add","name":"title-card","at":0,"fields":{"title":"Intro"}}]"#,
+    )
+    .unwrap();
+    let ids = members(&report);
+    assert_eq!(rect(&project, &ids[0]), [0.0, 0.0, 1.0, 1.0]);
+    let [x, _, w, _] = text_box(&project, &ids[1]);
+    assert!((x - 0.05).abs() < 1e-9 && (w - 0.9).abs() < 1e-9);
+    // Without a brand kit, the brand effect's defaults (not black).
+    let mut project = sample();
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"template.add","name":"chapter-card","at":0}]"#,
+    )
+    .unwrap();
+    let ids = members(&report);
+    assert_eq!(
+        text_param(&project, &ids[0], "shape", "fill2"),
+        EffectValue::Text("#1d2420".into())
+    );
+}

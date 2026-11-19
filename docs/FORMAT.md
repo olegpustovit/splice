@@ -191,6 +191,10 @@ Rules:
   never truncating (`fit:"fill"` starts from the box height instead of the style size). Without
   one, titles keep the 0.3 band layout. `title.add`/`title.set` `box`, `style` and `in` write the
   `layout`, `text` and `animate` effects; `out` and `loop` write ordinary `transform` keys.
+  `template.add` writes boxed titles too (T42.6): fills from the `brand` effect (its defaults
+  without one), text in the brand text color unless it would not read on the fill, and panels and
+  text inside the safe zone (the project's `captions.safe`, else TikTok's on portrait canvases
+  and 5% elsewhere).
 - **Paint order (T42.4).** An item may carry `"z": n` (written only when not 0). Pictures, shapes,
   titles and captions paint in one order: higher `z` in front; equal `z` keeps the 0.3 order
   (overlays, shapes, titles, captions, each by lane stack). A `transform` on a lane, the spine or

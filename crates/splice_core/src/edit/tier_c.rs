@@ -2107,24 +2107,74 @@ impl Editor {
             .find(|template| template.name == name)
             .ok_or_else(|| CommandError::bad("name", "a template from commands.describe"))?;
         let length = length.unwrap_or(4 * self.project.fps as Frame);
-        let brand =
-            |key: &str, default: &str| self.brand_value(key).unwrap_or_else(|| default.to_owned());
+        // Brand kit colors (T42.6), falling back to the brand effect's own defaults.
+        let brand = |key: &str| {
+            self.brand_value(key).unwrap_or_else(|| {
+                crate::commands::effect_schemas()
+                    .field("brand")
+                    .and_then(|schema| schema.field("params"))
+                    .and_then(|params| params.field(key))
+                    .and_then(|param| param.field("def"))
+                    .and_then(Json::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+        };
         let swatch = |role: &str| match role {
-            "primary" => brand("color", "#ffffff"),
-            "accent" => brand("accent", "#ffd23f"),
-            _ => brand("color2", "#111111"),
+            "primary" => brand("color"),
+            "accent" => brand("accent"),
+            _ => brand("color2"),
         };
         let (fill, fill2) = (swatch(layout.fill[0]), swatch(layout.fill[1]));
-        let (ink, font) = (
-            brand("textColor", "#ffffff"),
-            brand("font", "SF Pro Display"),
-        );
+        // Text in the brand text color unless it would vanish on the fill: then the brand's
+        // dark or light swatch, whichever reads better.
+        let text = brand("textColor");
+        let ink = if contrast(&text, &fill) >= 3.0 {
+            text
+        } else {
+            let (dark, light) = (brand("color2"), brand("color"));
+            if contrast(&dark, &fill) >= contrast(&light, &fill) {
+                dark
+            } else {
+                light
+            }
+        };
+        let font = brand("font");
+        // Inside the safe zone (T42.6): panels keep their size and move in; text boxes sit in
+        // the panel, or in the safe area on full-canvas cards.
+        let [top, bottom, left, right] = safe_zone(&self.project);
+        let full = layout.rect.w >= 1.0 && layout.rect.h >= 1.0;
+        let rect = if full {
+            layout.rect
+        } else {
+            Rect {
+                x: layout
+                    .rect
+                    .x
+                    .clamp(left, (1.0 - right - layout.rect.w).max(left)),
+                y: layout
+                    .rect
+                    .y
+                    .clamp(top, (1.0 - bottom - layout.rect.h).max(top)),
+                ..layout.rect
+            }
+        };
+        let area = if full {
+            Rect {
+                x: left,
+                y: top,
+                w: 1.0 - left - right,
+                h: 1.0 - top - bottom,
+            }
+        } else {
+            rect
+        };
         let at_arg = FrameArg::Frame(at);
         let lane = self.new_lane(LaneKind::Graphics, Some(format!("Template: {name}")))?;
         let panel = self.add_item(
             OverlayContent::Shape {
                 shape: layout.shape,
-                rect: layout.rect,
+                rect,
             },
             Some(&at_arg),
             None,
@@ -2183,22 +2233,25 @@ impl Editor {
                 vec![
                     text_param("font", &font),
                     text_param("color", &ink),
-                    text_param("position", line.position),
                     text_param("align", line.align),
                     number("size", line.size),
                 ],
                 None,
                 &mut scratch,
             )?;
-            if line.dy != 0.0 {
-                self.upsert(
-                    owner,
-                    "transform",
-                    vec![number("y", line.dy)],
-                    None,
-                    &mut scratch,
-                )?;
-            }
+            let [x, y, w, h] = line.text_box;
+            self.upsert(
+                owner,
+                "layout",
+                vec![
+                    number("x", round4(area.x + x * area.w)),
+                    number("y", round4(area.y + y * area.h)),
+                    number("w", round4(w * area.w)),
+                    number("h", round4(h * area.h)),
+                ],
+                None,
+                &mut scratch,
+            )?;
             created.push(title);
         }
         let group = match &panel {
@@ -2724,11 +2777,58 @@ pub fn parse_cues(text: &str) -> Option<Vec<(u64, u64, String)>> {
 struct TemplateLine {
     role: &'static str,
     default: &'static str,
-    position: &'static str,
+    /// Text box as fractions of the panel (or of the safe area on full-canvas cards).
+    text_box: [f64; 4],
     size: f64,
     align: &'static str,
-    /// Vertical offset as a fraction of the canvas height.
-    dy: f64,
+}
+
+/// The safe-zone margins (top, bottom, left, right) templates keep inside: the project's
+/// caption safe zone when it sets one, else TikTok's on portrait canvases and 5% elsewhere.
+fn safe_zone(project: &Project) -> [f64; 4] {
+    let named = project
+        .effects
+        .iter()
+        .filter(|e| e.kind == "captions" && e.enabled != Some(false))
+        .flat_map(|e| e.params.iter())
+        .find_map(|p| match &p.value {
+            EffectValue::Text(name) if p.name == "safe" => Some(name.as_str()),
+            _ => None,
+        });
+    let portrait = project.size[1] > project.size[0];
+    match named {
+        Some("reels") => [0.14, 0.2, 0.05, 0.12],
+        Some("shorts") => [0.12, 0.18, 0.05, 0.14],
+        Some("none") => [0.04; 4],
+        Some(_) => [0.1, 0.2, 0.05, 0.15],
+        None if portrait => [0.1, 0.2, 0.05, 0.15],
+        None => [0.05; 4],
+    }
+}
+
+/// A layout number at the precision a file needs (1/10,000 of the canvas).
+fn round4(value: f64) -> f64 {
+    (value * 1e4).round() / 1e4
+}
+
+/// WCAG contrast ratio of two `#rrggbb` colors (1–21); unreadable input counts as 1.
+fn contrast(a: &str, b: &str) -> f64 {
+    let luminance = |hex: &str| {
+        let value = u32::from_str_radix(hex.trim_start_matches('#'), 16).ok()?;
+        let channel = |shift: u32| {
+            let c = f64::from((value >> shift) & 0xff) / 255.0;
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        Some(0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0))
+    };
+    match (luminance(a), luminance(b)) {
+        (Some(a), Some(b)) => (a.max(b) + 0.05) / (a.min(b) + 0.05),
+        _ => 1.0,
+    }
 }
 
 /// A template: a backing shape in brand colors plus text lines (T18.5).
@@ -2745,18 +2845,16 @@ struct Template {
 const fn line(
     role: &'static str,
     default: &'static str,
-    position: &'static str,
+    text_box: [f64; 4],
     size: f64,
     align: &'static str,
-    dy: f64,
 ) -> TemplateLine {
     TemplateLine {
         role,
         default,
-        position,
+        text_box,
         size,
         align,
-        dy,
     }
 }
 
@@ -2772,8 +2870,8 @@ const TEMPLATES: &[Template] = &[
         fill: ["secondary", "secondary"],
         corner: 0.15,
         lines: &[
-            line("title", "Name", "lowerThird", 0.05, "left", 0.0),
-            line("subtitle", "Title", "lowerThird", 0.032, "left", 0.055),
+            line("title", "Name", [0.05, 0.08, 0.9, 0.5], 0.05, "left"),
+            line("subtitle", "Title", [0.05, 0.58, 0.9, 0.34], 0.032, "left"),
         ],
     },
     Template {
@@ -2782,7 +2880,13 @@ const TEMPLATES: &[Template] = &[
         rect: rect(0.3, 0.38, 0.4, 0.16),
         fill: ["primary", "primary"],
         corner: 0.2,
-        lines: &[line("title", "Look here", "middle", 0.045, "center", 0.0)],
+        lines: &[line(
+            "title",
+            "Look here",
+            [0.08, 0.15, 0.84, 0.7],
+            0.045,
+            "center",
+        )],
     },
     Template {
         name: "cta",
@@ -2793,10 +2897,9 @@ const TEMPLATES: &[Template] = &[
         lines: &[line(
             "title",
             "Follow for more",
-            "bottom",
+            [0.05, 0.1, 0.9, 0.8],
             0.045,
             "center",
-            0.0,
         )],
     },
     Template {
@@ -2806,8 +2909,8 @@ const TEMPLATES: &[Template] = &[
         fill: ["secondary", "secondary"],
         corner: 0.0,
         lines: &[
-            line("title", "Title", "middle", 0.08, "center", 0.0),
-            line("subtitle", "", "middle", 0.04, "center", 0.08),
+            line("title", "Title", [0.0, 0.3, 1.0, 0.22], 0.08, "center"),
+            line("subtitle", "", [0.0, 0.54, 1.0, 0.12], 0.04, "center"),
         ],
     },
     Template {
@@ -2816,7 +2919,13 @@ const TEMPLATES: &[Template] = &[
         rect: rect(0.0, 0.0, 1.0, 1.0),
         fill: ["primary", "secondary"],
         corner: 0.0,
-        lines: &[line("title", "Chapter", "middle", 0.07, "center", 0.0)],
+        lines: &[line(
+            "title",
+            "Chapter",
+            [0.0, 0.38, 1.0, 0.24],
+            0.07,
+            "center",
+        )],
     },
 ];
 
