@@ -214,18 +214,19 @@ is available only with an apply test; visual features ship a frame golden from a
 cut logs one "try it as a user" line.
 
 ### T10 · 0.1.1: opening always works [M]
-- [ ] T10.1 Writer handoff. A headless MCP writer serves the per-project live socket. A viewer that
+- [x] T10.1 (a706ba9) Writer handoff. A headless MCP writer serves the per-project live socket. A viewer that
   gets `LOCKED` asks the holder to hand off; the holder releases the lock and forwards to the
   viewer. Accept: MCP `project.info`, then open → a window, and the next `edit.apply` on the same
   MCP connection lands in the viewer.
-- [ ] T10.2 The capture agent never keeps a document: it relaunches a new viewer instance with the
+- [x] T10.2 (a706ba9) The capture agent never keeps a document: it relaunches a new viewer instance with the
   path. Accept: `record --dry-run`, then `open x.splice` → a viewer process with the path.
-- [ ] T10.3 Offline media is not fatal: the viewer opens and shows an offline slate; export refuses
+- [x] T10.3 (a706ba9) Offline media is not fatal: the viewer opens and shows an offline slate; export refuses
   with `OFFLINE_MEDIA`. Accept: the sample fixture without assets opens.
-- [ ] T10.4 No silent failures: a viewer error shows an alert with code, message and fix and is
+- [x] T10.4 (a706ba9) No silent failures: a viewer error shows an alert with code, message and fix and is
   appended to the global friction log.
-- [ ] T10.5 Human-path matrix in `mac-check`: Launch Services open × {clean, MCP holding, agent
-  alive, offline media} checks a live viewer process and no error.
+- [x] T10.5 (a706ba9) Human-path matrix in `mac-check`: Launch Services open × {clean, MCP holding, agent
+  alive, offline media} checks a live viewer process and no error. The agent-alive case needs the
+  installed app and is checked by hand after `make install`.
 
 ### T11 · Headless-complete editing (0.2) [L]
 - [ ] T11.1 `clip.crop` (eval and AV already render it).
@@ -320,3 +321,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T8.5 · HUMAN · Signed release check from SSH took 63.07 s including the idle exit. Both CLI and MCP returned the same `TCC_DENIED` with `needsHuman:true` for Screen & System Audio Recording and left both requested project paths absent. MCP preflight still listed the main display. `make check` passed in 3.34 s (83 tests, slowest: seeded history replay 1.607 s). The 0.1 release budget check passed in 6.37 s at 236 µs p99 over 300 samples on 2,000 items, with zero warm allocations.
 - 2026-11-18 · T8.2 · `--request all` starts every missing permission request and opens one Settings pane. `make check` passed in 3.69 s (83 tests, slowest: seeded history replay 1.666 s). `make mac-check` passed in 25.90 s (33 tests and bundle checks, slowest: offscreen viewer snapshots 1.533 s). The batch permission fixture verified one Settings launch and skipped granted permissions in 0.031 s.
 - 2026-11-18 · T8.2–T8.5 · done · 8fe23f0 · Live acceptance from SSH took 25.80 s including `make dev` and `make install`. All four grants persisted across the signed installs. The release CLI, debug CLI and release MCP captures each published one 90-frame take in one verified journal batch (3.005 s, 3.012 s and 3.005 s). Each HEVC probe passed, microphone audio opened with `afinfo` and the event logs parsed. The installed release reports 0.1.0 and the capture agent exited. Final `make check` passed in 3.40 s (83 tests, slowest: seeded history replay 1.606 s). Final `make mac-check` passed in 35.12 s (33 tests and bundle checks, slowest: native title and audio composition 4.356 s).
+- 2026-11-19 · T10.1–T10.5 · done · a706ba9 · Reproduced the 0.1 blink on the Mini: a project held by an agent's `splice mcp` exited with `LOCKED`, and a document opened within 60 s of a recording went to the windowless capture agent. Both now open, as do projects with offline media. `cargo t -p splice_cli native_viewer_takes_over` 0.446 s on the Mini (handoff keeps the agent's session; its next edit lands in the viewer at r2). `make check` 3.04 s (83 tests, slowest: seeded history replay 1.727 s); `make mac-check` 22.05 s (19 native tests plus the 3-case Finder matrix). On the installed release: MCP held → window and forwarded `timeline.snapshot`; capture agent alive → new viewer with the path; offline sample → window; corrupt package → alert plus a `viewer` friction entry. A person can now double-click any project an agent made, at any time, and see it.
