@@ -395,22 +395,7 @@ impl Editor {
     }
 
     fn add_marker(&mut self, at: Frame, name: Option<String>) -> Result<Outcome, CommandError> {
-        if at < 0 {
-            return Err(CommandError::bad("at", "a nonnegative frame"));
-        }
-        if let Some(existing) = self.project.markers.iter().find(|m| m.at == at) {
-            return Err(error(
-                "MARKER_EXISTS",
-                &format!(
-                    "{} \"{}\" is already at frame {at}.",
-                    existing.id, existing.name
-                ),
-                &format!(
-                    "Rename it with marker.set {{marker:\"{}\", name}}, or add the marker at another frame.",
-                    existing.id
-                ),
-            ));
-        }
+        self.check_marker_frame(at)?;
         let id = MarkerId::from_serial(self.mint("mrk")?);
         let name = name
             .filter(|s| !s.is_empty())
@@ -426,6 +411,37 @@ impl Editor {
             format!("Added marker {id} at frame {at}"),
             Target::Timeline(TimelineId::Marker(id)),
         ))
+    }
+
+    /// A new marker frame lies on the timeline (at most the spine end) and is free.
+    pub(super) fn check_marker_frame(&self, at: Frame) -> Result<(), CommandError> {
+        if at < 0 {
+            return Err(CommandError::bad("at", "a nonnegative frame"));
+        }
+        let end = self.spine_end()?;
+        if !self.project.clips.order().is_empty() && at > end {
+            return Err(CommandError::rule(
+                "PAST_END",
+                "at",
+                Some(Json::Signed(i64::from(at))),
+                &format!("a frame at or before the spine end, frame {end}"),
+                "The timeline ends with its last clip; mark a frame on it.",
+            ));
+        }
+        if let Some(existing) = self.project.markers.iter().find(|m| m.at == at) {
+            return Err(error(
+                "MARKER_EXISTS",
+                &format!(
+                    "{} \"{}\" is already at frame {at}.",
+                    existing.id, existing.name
+                ),
+                &format!(
+                    "Rename it with marker.set {{marker:\"{}\", name}}, or add the marker at another frame.",
+                    existing.id
+                ),
+            ));
+        }
+        Ok(())
     }
 
     pub(super) fn delete(

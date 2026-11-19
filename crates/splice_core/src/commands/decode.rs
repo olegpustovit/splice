@@ -979,7 +979,20 @@ pub(super) fn intent_auto_zoom(a: &Json, _scratch: &mut DecodeScratch) -> Decode
         let at = click
             .opt_int("at")?
             .ok_or_else(|| Error::bad("clicks.at", "a source frame"))?;
-        clicks.push((at, click.number("x")?, click.number("y")?));
+        let (x, y) = (click.number("x")?, click.number("y")?);
+        // Refused, not clamped: an off-screen click means the caller mixed up coordinates.
+        for (name, value) in [("clicks.x", x), ("clicks.y", y)] {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(Error::rule(
+                    "BAD_ARGS",
+                    name,
+                    Some(Json::Float(value)),
+                    "a position from 0 to 1 in the source frame",
+                    "Pass normalized click positions, as takes.events reports them.",
+                ));
+            }
+        }
+        clicks.push((at, x, y));
     }
     if clicks.is_empty() {
         return Err(Error::bad(

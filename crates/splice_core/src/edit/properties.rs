@@ -39,7 +39,7 @@ impl Editor {
                         .data_mut(slot)
                         .expect("live clip")
                         .appearance;
-                    set_appearance(appearance, length, name, color, fade_in, fade_out);
+                    set_appearance(appearance, length, name, color, fade_in, fade_out)?;
                 }
                 TimelineId::Item(id) => {
                     let slot = item_slot(&self.project, id)?;
@@ -50,7 +50,7 @@ impl Editor {
                         .data_mut(slot)
                         .expect("live item")
                         .appearance;
-                    set_appearance(appearance, length, name, color, fade_in, fade_out);
+                    set_appearance(appearance, length, name, color, fade_in, fade_out)?;
                 }
                 TimelineId::Marker(id) => {
                     if fade_in.is_some() || fade_out.is_some() {
@@ -429,6 +429,7 @@ impl Editor {
                     Some(at) => at,
                     None => frame_add(marker.at, 30)?,
                 };
+                self.check_marker_frame(marker.at)?;
                 created.push(Target::Timeline(TimelineId::Marker(marker.id)));
                 self.project.markers.push(marker);
             }
@@ -585,7 +586,25 @@ fn set_appearance(
     color: &Option<Option<String>>,
     fade_in: Option<Frame>,
     fade_out: Option<Frame>,
-) {
+) -> Result<(), CommandError> {
+    // Fades are refused, not clamped, when they don't fit the item (Low list).
+    let (fade_in_to, fade_out_to) = (
+        fade_in.unwrap_or(appearance.fade_in),
+        fade_out.unwrap_or(appearance.fade_out),
+    );
+    for (param, value) in [("fadeIn", fade_in), ("fadeOut", fade_out)] {
+        if let Some(value) = value
+            && (value < 0 || fade_in_to + fade_out_to > length)
+        {
+            return Err(CommandError::rule(
+                "BAD_ARGS",
+                param,
+                Some(Json::Signed(i64::from(value))),
+                &format!("0 or more frames, with fadeIn + fadeOut at most the length, {length}"),
+                "Shorten the fades or lengthen the item first.",
+            ));
+        }
+    }
     if let Some(name) = name {
         if let Some(name) = name.as_ref().filter(|name| !name.is_empty()) {
             appearance
@@ -599,11 +618,7 @@ fn set_appearance(
     if let Some(color) = color {
         appearance.color.clone_from(color);
     }
-    if let Some(fade_in) = fade_in {
-        let reserved = fade_out.unwrap_or(appearance.fade_out).clamp(0, length);
-        appearance.fade_in = fade_in.clamp(0, length - reserved);
-    }
-    if let Some(fade_out) = fade_out {
-        appearance.fade_out = fade_out.clamp(0, length - appearance.fade_in);
-    }
+    appearance.fade_in = fade_in_to;
+    appearance.fade_out = fade_out_to;
+    Ok(())
 }

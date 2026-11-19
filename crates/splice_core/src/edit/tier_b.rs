@@ -1296,7 +1296,7 @@ impl Editor {
                 ));
             }
             let framing = data.framing;
-            let name = data.appearance.name.clone();
+            let appearance = data.appearance.clone();
             let kids = self.children(&[TimelineId::Clip(id)])?;
             self.project.clips.remove(slot);
             self.shift_after(timing.start + timing.length, -timing.length, None)?;
@@ -1317,13 +1317,27 @@ impl Editor {
                 Some(timing.length),
             )?;
             if let Some(Target::Timeline(TimelineId::Item(item))) = outcome.created.first() {
+                // The overlay keeps the clip's look: name, color, fades and every effect an
+                // overlay can carry (Low list: lift dropped them).
                 let slot = item_slot(&self.project, *item)?;
-                self.project
+                let mut kept = Vec::with_capacity(appearance.effects.len());
+                for effect in &appearance.effects {
+                    if self.fits(applies(&effect.kind)?.0, Owner::Item(slot)) {
+                        kept.push(effect.clone());
+                    }
+                }
+                let target = &mut self
+                    .project
                     .items
                     .data_mut(slot)
                     .expect("live item")
-                    .appearance
-                    .name = name;
+                    .appearance;
+                target.name.clone_from(&appearance.name);
+                target.color.clone_from(&appearance.color);
+                target.fade_in = appearance.fade_in;
+                target.fade_out = appearance.fade_out;
+                target.effects = kept;
+                edits::clamp_fades(target, timing.length);
             }
             created.extend(outcome.created);
         }

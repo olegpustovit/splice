@@ -283,7 +283,7 @@ pub const COMMANDS: &[Command] = &[
         id: "keys.set", title: "Keystroke Chip Settings", group: "Take components",
         risk: "edit", shortcut: "", tier: Tier::Second,
         params: &[("clip", "!clp_…"),
-            ("size", "0.5–3")],
+            ("size", "!0.5–3")],
         ui: &["Inspector Chip size"],
         example: r#"{"cmd":"keys.set","clip":"clp_take","size":1.4}"#, decoder: decode::keys_set,
     },

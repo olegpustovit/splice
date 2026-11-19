@@ -670,6 +670,15 @@ impl Editor {
         timing.start += by;
         timing.length -= by;
         timing.source = rounded(source_n)?;
+        // The next clip now starts `by` frames into its content: its keys follow (Low list).
+        let effects = &mut self
+            .project
+            .clips
+            .data_mut(next)
+            .expect("live clip")
+            .appearance
+            .effects;
+        super::edits::shift_keys(effects, by);
         self.say(format_args!("Slid {id} by {by} frames"));
         Ok(Outcome::noted(Target::Timeline(TimelineId::Clip(id))))
     }
@@ -2463,11 +2472,16 @@ pub fn parse_cues(text: &str) -> Option<Vec<(u64, u64, String)>> {
         }
         let (h, m) = (parts[0].parse::<u64>().ok()?, parts[1].parse::<u64>().ok()?);
         let (s, ms) = parts[2].split_once('.').unwrap_or((parts[2], "0"));
+        let s = s.parse::<u64>().ok()?;
         let ms = format!("{ms:0<3}");
-        Some(
-            ((h * 60 + m) * 60 + s.parse::<u64>().ok()?) * 1000
-                + ms.get(..3)?.parse::<u64>().ok()?,
-        )
+        if m >= 60 || s >= 60 {
+            return None;
+        }
+        // A huge hour field is a malformed file, not an overflow panic.
+        h.checked_mul(3600)?
+            .checked_add(m * 60 + s)?
+            .checked_mul(1000)?
+            .checked_add(ms.get(..3)?.parse::<u64>().ok()?)
     };
     let mut cues = Vec::new();
     let mut lines = text.lines().map(str::trim).peekable();

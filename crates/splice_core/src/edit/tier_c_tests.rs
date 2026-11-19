@@ -538,3 +538,94 @@ fn m7_keep_shots_needs_a_range() {
     assert_eq!(error.error.code, "BAD_ARGS");
     assert_eq!(project.clips.order().len(), 3);
 }
+
+/// T37 Low (edit side): out-of-range values are refused with the rule instead of clamped.
+#[test]
+fn low_out_of_range_edits_are_refused() {
+    let mut project = sample();
+    let refused = |project: &mut Project, ops: &str| {
+        let error = run(project, ops).unwrap_err();
+        assert!(error.error.rule.is_some(), "{ops}: {:?}", error.error);
+        error.error.code
+    };
+    // clp_open is 120 frames long.
+    for ops in [
+        r#"[{"cmd":"item.set","items":["clp_open"],"fadeIn":200}]"#,
+        r#"[{"cmd":"item.set","items":["clp_open"],"fadeIn":-1}]"#,
+        r#"[{"cmd":"cut.range","from":-10,"to":20}]"#,
+        r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":1.7,"y":0.3}]}]"#,
+    ] {
+        assert_eq!(refused(&mut project, ops), "BAD_ARGS", "{ops}");
+    }
+    assert_eq!(
+        refused(&mut project, r#"[{"cmd":"marker.add","at":700}]"#),
+        "PAST_END"
+    );
+    // Duplicating a marker onto another marker's frame is the same refusal as marker.add.
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"item.duplicate","items":["mrk_1"],"at":372}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "MARKER_EXISTS");
+    // keys.set's schema says size is required, as apply does.
+    let described = commands::describe(Some("keys.set"), None).unwrap();
+    let mut text = String::new();
+    splice_json::write(&described, &mut text).unwrap();
+    assert!(text.contains("!0.5"), "{text}");
+    // SRT with an absurd hour field is malformed, not an overflow.
+    assert_eq!(
+        parse_cues("1\n99999999999999999:00:00,000 --> 99999999999999999:00:01,000\nhi\n"),
+        None
+    );
+}
+
+/// T37 Low (edit side): slide and speed keep keys on their content; lift keeps the clip's look.
+#[test]
+fn low_slide_speed_and_lift_keep_keys_and_looks() {
+    let mut project = sample();
+    run(
+        &mut project,
+        r#"[{"cmd":"item.trim","item":"clp_end","edge":"in","delta":12},
+            {"cmd":"param.keys","target":"clp_end","path":"transform.scale","keys":[{"at":0,"value":1},{"at":60,"value":2}]},
+            {"cmd":"param.keys","target":"clp_open","path":"transform.scale","keys":[{"at":0,"value":1},{"at":60,"value":2}]}]"#,
+    )
+    .unwrap();
+    let keys = |project: &Project, clip: &str| -> Vec<Frame> {
+        let slot = project.clips.find(clip.parse().unwrap()).unwrap();
+        let effects = &project.clips.data(slot).unwrap().appearance.effects;
+        let transform = effects.iter().find(|e| e.kind == "transform").unwrap();
+        match &transform
+            .params
+            .iter()
+            .find(|p| p.name == "scale")
+            .unwrap()
+            .value
+        {
+            EffectValue::Keys(keys) => keys.iter().map(|k| k.at).collect(),
+            other => panic!("{other:?}"),
+        }
+    };
+    run(
+        &mut project,
+        r#"[{"cmd":"item.slide","item":"clp_take","by":-6}]"#,
+    )
+    .unwrap();
+    assert_eq!(keys(&project, "clp_end"), [6, 66]);
+    run(
+        &mut project,
+        r#"[{"cmd":"clip.speed","items":["clp_open"],"speed":2}]"#,
+    )
+    .unwrap();
+    assert_eq!(keys(&project, "clp_open"), [0, 30]);
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"clip.speed","items":["clp_open"],"speed":1},{"cmd":"clip.lift","items":["clp_open"]}]"#,
+    )
+    .unwrap();
+    let lifted = created(&report, 1);
+    let slot = project.items.find(lifted.parse().unwrap()).unwrap();
+    let appearance = &project.items.data(slot).unwrap().appearance;
+    assert_eq!(appearance.fade_in, 15);
+    assert!(appearance.effects.iter().any(|e| e.kind == "transform"));
+}

@@ -298,7 +298,7 @@ declare namespace Splice {
       /** clp_… */
       clip: string;
       /** 0.5–3 */
-      size?: number;
+      size: number;
     }
     /** Hide Keystrokes (edit, 0.2). */
     interface KeysHide extends Base {

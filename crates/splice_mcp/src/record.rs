@@ -147,6 +147,15 @@ pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreE
     capture_agent::request("take.check", args)?;
     let project = projects.info(args)?.string("projectId")?.to_owned();
     let store = projects.lookup_id(&project)?;
+    // A retake of a clip that is gone would silently append at the end: refuse before capture.
+    if let Some(clip) = placement.retake_of
+        && store.project().clips.find(clip).is_none()
+    {
+        return Err(bad(
+            "retakeOf",
+            "a clip on the timeline (timeline.snapshot lists clip IDs)",
+        ));
+    }
     let session = match explicit {
         Some(options) => {
             store.check_write(&options)?;
