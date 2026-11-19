@@ -324,6 +324,10 @@ pub(super) fn audio_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
             "a take clip with component, or sound items",
         ));
     }
+    let bake = a
+        .field("duck")
+        .and_then(|duck| duck.field("bake"))
+        .is_some_and(|bake| bake.as_bool() == Some(true));
     let duck = match a.field("duck") {
         None => None,
         Some(Json::Null) => Some(None),
@@ -367,6 +371,7 @@ pub(super) fn audio_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         volume,
         duck,
         normalize,
+        bake,
     })
 }
 
@@ -713,7 +718,12 @@ pub(super) fn crop_keys(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     for key in a
         .field("keys")
         .and_then(Json::as_array)
-        .ok_or_else(|| Error::bad("keys", "an array of {at, x, y, w, h, ease}"))?
+        .ok_or_else(|| {
+            Error::bad(
+                "keys",
+                "an array of {at, x, y, w, h, ease}, or follow:\"cursor\" | \"face\" through splice mcp",
+            )
+        })?
     {
         let at = key
             .opt_int("at")?

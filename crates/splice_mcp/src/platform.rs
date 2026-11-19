@@ -516,7 +516,7 @@ pub(super) fn transcribe(store: &mut Store, args: &Json) -> Result<Json, StoreEr
 
 #[cfg(target_os = "macos")]
 pub(super) use super::native::{
-    analyze, probe_frames, sync_offset, track_mask, translate_captions,
+    analyze, follow_face, probe_frames, sync_offset, track_mask, translate_captions,
 };
 
 /// Peaks, beats, sounds, shots, text, faces, people and mattes need native analysis.
@@ -550,6 +550,16 @@ pub(super) fn track_mask(_: &Store, _: &[(String, Json)]) -> Result<Json, StoreE
         "UNSUPPORTED_PLATFORM",
         "Region tracking needs the native Vision backend.",
         "Pass keys: [{at, x, y}] mask centers explicitly.",
+    ))
+}
+
+/// Crop keys that keep a face in frame.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn follow_face(_: &Store, _: &str, _: Option<&str>) -> Result<Json, StoreError> {
+    Err(failure(
+        "UNSUPPORTED_PLATFORM",
+        "Face following needs the native Vision backend.",
+        "Use follow:\"cursor\" or pass keys.",
     ))
 }
 

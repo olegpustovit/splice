@@ -481,7 +481,11 @@ declare namespace Splice {
       /** clp_… | ovl_… · clip or media overlay */
       item: string;
       /** [{at, x, y, w, h, ease}] · owner frames; crop normalized to the source; ease linear, hold, in, out, inOut or [x1,y1,x2,y2] */
-      keys: { at: number; x: number; y: number; w: number; h: number; ease?: Ease }[];
+      keys?: { at: number; x: number; y: number; w: number; h: number; ease?: Ease }[];
+      /** splice mcp computes keys that keep it in frame */
+      follow?: "cursor" | "face";
+      /** crop shape when following = canvas */
+      aspect?: "9:16" | "4:5" | "1:1" | "4:3" | "16:9";
     }
     /** Add Transition (edit, 0.3). */
     interface TransitionAdd extends Base {
@@ -1038,7 +1042,7 @@ declare const splice: {
   };
   project: {
     /** Open a .splice project by path or inspect an open project by ID. Use create:true to make a new project. */
-    info(args?: { projectId?: string; path?: string; create?: boolean; }): { projectId: string; revision: Splice.Revision; fps: number; size?: unknown[]; aspect?: string; durationFrames: number; access: string; lanes: unknown[]; media: unknown[]; offlineMedia?: unknown[]; transcript?: Record<string, unknown>; effects?: Record<string, unknown>; openSession?: string | null; };
+    info(args?: { projectId?: string; path?: string; create?: boolean; saveAs?: string; }): { projectId: string; revision: Splice.Revision; fps: number; size?: unknown[]; aspect?: string; durationFrames: number; access: string; lanes: unknown[]; media: unknown[]; offlineMedia?: unknown[]; transcript?: Record<string, unknown>; effects?: Record<string, unknown>; openSession?: string | null; };
   };
   timeline: {
     /** List the spine, drawing lanes and markers with resolved frame ranges. detail:full adds every item field and is large; prefer concise, then items.inspect for the IDs you need. */

@@ -758,3 +758,77 @@ pub(crate) fn sample_project() -> splice_model::Project {
         .project()
         .clone()
 }
+
+#[test]
+fn edit_apply_fills_cursor_crops_and_typing_zooms() {
+    let root = TestDirectory::new("enrich");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    let take = sample.join("takes/med_screen");
+    fs::create_dir_all(&take).unwrap();
+    fs::write(
+        take.join("events.json"),
+        r#"{"events":[{"t":0.2,"k":"move","x":0.9,"y":0.1},{"t":0.4,"k":"down","b":0,"x":0.9,"y":0.1},{"t":4.0,"k":"move","x":0.1,"y":0.9},{"t":5.0,"k":"key","ch":"a","keyCode":4}]}"#,
+    )
+    .unwrap();
+    let store = splice_core::history::Store::open(&sample).unwrap();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"crop.keys","item":"clp_take","follow":"cursor","aspect":"9:16"},
+            {"cmd":"intent.autoZoom","item":"clp_take"}]"#,
+    )
+    .unwrap();
+    let filled = super::enrich::ops(&store, ops.as_array().unwrap())
+        .unwrap()
+        .unwrap();
+    let keys = filled[0].field("keys").unwrap().as_array().unwrap();
+    assert!(keys.len() > 20 && filled[0].field("follow").is_none());
+    let x = |k: &Json| k.field("x").unwrap().as_f64().unwrap();
+    // The crop starts centered, moves right toward the early pointer, then left later.
+    assert!(x(&keys[5]) > x(&keys[0]));
+    assert!(x(keys.last().unwrap()) < x(&keys[5]));
+    let clicks = filled[1].field("clicks").unwrap().as_array().unwrap();
+    assert_eq!(
+        clicks.len(),
+        2,
+        "one click and one typing burst: {clicks:?}"
+    );
+    // Applying the filled batch works.
+    let mut project = store.project().clone();
+    splice_core::edit::apply(
+        &mut project,
+        &filled,
+        splice_core::package::journal::Source::Human,
+        false,
+    )
+    .unwrap();
+}
+
+#[test]
+fn save_as_copies_the_package_and_opens_the_copy() {
+    let root = TestDirectory::new("save-as");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    let copy = root.0.join("copy.splice");
+    let request = |id: u32, args: String| {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"project.info","arguments":{args}}}}}"#
+        )
+    };
+    let input = [
+        r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#.to_owned(),
+        request(1, format!(r#"{{"path":"{}"}}"#, sample.display())),
+        request(2, format!(r#"{{"projectId":"prj_1","saveAs":"{}"}}"#, copy.display())),
+        request(3, format!(r#"{{"projectId":"prj_1","saveAs":"{}"}}"#, copy.display())),
+    ]
+    .join("\n")
+        + "\n";
+    let output = String::from_utf8(replay_headless(input.as_bytes()).unwrap()).unwrap();
+    let lines: Vec<_> = output.lines().collect();
+    assert!(lines[2].contains(r#""projectId":"prj_2""#), "{}", lines[2]);
+    assert!(lines[3].contains("EXISTS"), "{}", lines[3]);
+    assert!(copy.join("project.json").is_file() && !copy.join("cache").exists());
+    let reopened = splice_core::history::Store::open(&sample).unwrap();
+    let copied = splice_core::history::Store::open(&copy);
+    // The copy is held open by the closed server no longer; both packages load.
+    assert!(copied.is_ok() && reopened.project().clips.order().len() == 3);
+}

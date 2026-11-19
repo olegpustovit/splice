@@ -6,6 +6,7 @@ use super::{Json, object, wire::*};
 use splice_core::history::{Store, StoreError};
 
 const FILLED: &[&str] = &[
+    "crop.keys",
     "intent.autoZoom",
     "media.relink",
     "media.consolidate",
@@ -49,7 +50,7 @@ pub(super) fn ops(store: &Store, ops: &[Json]) -> Result<Option<Vec<Json>>, Stor
                     store,
                     &Json::Object(vec![("clip".into(), Json::String(item))]),
                 )?;
-                let clicks: Vec<Json> = events
+                let mut clicks: Vec<Json> = events
                     .field("clicks")
                     .and_then(Json::as_array)
                     .into_iter()
@@ -62,6 +63,9 @@ pub(super) fn ops(store: &Store, ops: &[Json]) -> Result<Option<Vec<Json>>, Stor
                         ]))
                     })
                     .collect();
+                // Typing bursts zoom too, where the pointer last was (T12.3 open item).
+                clicks.extend(typing_bursts(&events));
+                clicks.sort_by_key(|c| c.field("at").and_then(Json::as_i64).unwrap_or(0));
                 if clicks.is_empty() {
                     return Err(failure(
                         "NO_CLICKS",
@@ -70,6 +74,20 @@ pub(super) fn ops(store: &Store, ops: &[Json]) -> Result<Option<Vec<Json>>, Stor
                     ));
                 }
                 fields.push(("clicks".into(), Json::Array(clicks)));
+            }
+            "crop.keys" if !has("keys") => {
+                let Some(item) = get("item").filter(|id| id.starts_with("clp_")) else {
+                    continue;
+                };
+                let keys = match get("follow").as_deref() {
+                    Some("cursor") => follow_cursor(store, &item, get("aspect").as_deref())?,
+                    Some("face") => {
+                        super::platform::follow_face(store, &item, get("aspect").as_deref())?
+                    }
+                    _ => continue,
+                };
+                fields.retain(|(name, _)| name != "follow" && name != "aspect");
+                fields.push(("keys".into(), keys));
             }
             "media.relink" if !has("frames") => {
                 if let Some(path) = get("path")
@@ -131,4 +149,142 @@ fn io_failure(path: &std::path::Path, error: &std::io::Error) -> StoreError {
         &format!("Could not copy media to {}: {error}.", path.display()),
         "Check that the source file is readable and the disk has room.",
     )
+}
+
+/// Key presses that start after a 0.6 s lull, as clicks at the pointer's last position.
+fn typing_bursts(events: &Json) -> Vec<Json> {
+    let list = |key: &str| -> &[Json] { events.field(key).and_then(Json::as_array).unwrap_or(&[]) };
+    let mut out = Vec::new();
+    let mut last_key: Option<i64> = None;
+    for key in list("keys") {
+        let Some(at) = key.field("sourceFrame").and_then(Json::as_i64) else {
+            continue;
+        };
+        let lull = last_key.is_none_or(|previous| at - previous > 36);
+        last_key = Some(at);
+        if !lull {
+            continue;
+        }
+        let pointer = list("cursor")
+            .iter()
+            .chain(list("clicks"))
+            .filter(|c| {
+                c.field("sourceFrame")
+                    .and_then(Json::as_i64)
+                    .is_some_and(|f| f <= at)
+            })
+            .max_by_key(|c| c.field("sourceFrame").and_then(Json::as_i64));
+        if let Some(pointer) = pointer
+            && let (Some(x), Some(y)) = (pointer.field("x"), pointer.field("y"))
+        {
+            out.push(object(vec![
+                ("at", Json::Signed(at)),
+                ("x", x.clone()),
+                ("y", y.clone()),
+            ]));
+        }
+    }
+    out
+}
+
+/// The crop's normalized size inside a `source` of the given shape for a target `aspect`.
+pub(super) fn crop_size(source: [u32; 2], aspect: f64) -> (f64, f64) {
+    let ratio = f64::from(source[0]) / f64::from(source[1].max(1));
+    if ratio > aspect {
+        (aspect / ratio, 1.0)
+    } else {
+        (1.0, ratio / aspect)
+    }
+}
+
+pub(super) fn aspect_ratio(store: &Store, aspect: Option<&str>) -> Result<f64, StoreError> {
+    Ok(match aspect {
+        None => {
+            let [w, h] = store.project().size;
+            f64::from(w) / f64::from(h)
+        }
+        Some(name) => {
+            let size = super::presets::canvas([1000, 1000], name)?;
+            f64::from(size[0]) / f64::from(size[1])
+        }
+    })
+}
+
+/// Crop keys every half second that keep a smoothed pointer inside the frame (T20.2).
+fn follow_cursor(store: &Store, item: &str, aspect: Option<&str>) -> Result<Json, StoreError> {
+    let p = store.project();
+    let id: splice_model::ClipId = item.parse().map_err(|_| bad("item", "a take clip"))?;
+    let slot = p.clips.find(id).ok_or_else(|| bad("item", "a take clip"))?;
+    let media = p
+        .clips
+        .data(slot)
+        .and_then(|d| d.media)
+        .and_then(|m| p.media.iter().find(|x| x.id == m))
+        .ok_or_else(|| bad("item", "a take clip"))?;
+    let (w, h) = crop_size(
+        [media.probe.width, media.probe.height],
+        aspect_ratio(store, aspect)?,
+    );
+    let events = super::media::events(
+        store,
+        &Json::Object(vec![("clip".into(), Json::String(item.into()))]),
+    )?;
+    let start = p.clips.timing(slot).expect("live clip").start;
+    let length = p.clips.timing(slot).expect("live clip").length;
+    let mut points: Vec<(i64, f64, f64)> = events
+        .field("cursor")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .chain(
+            events
+                .field("clicks")
+                .and_then(Json::as_array)
+                .into_iter()
+                .flatten(),
+        )
+        .filter_map(|c| {
+            Some((
+                c.field("frame")?.as_i64()? - i64::from(start),
+                c.field("x")?.as_f64()?,
+                c.field("y")?.as_f64()?,
+            ))
+        })
+        .collect();
+    points.sort_by_key(|p| p.0);
+    let mut keys = Vec::new();
+    let (mut cx, mut cy) = (0.5, 0.5);
+    let mut index = 0;
+    let step = (p.fps / 2).max(1) as i64;
+    let mut at = 0i64;
+    while at < i64::from(length) {
+        while index + 1 < points.len() && points[index + 1].0 <= at {
+            index += 1;
+        }
+        if let Some(&(_, x, y)) = points.get(index).filter(|p| p.0 <= at) {
+            // Move only when the pointer nears the crop edge; then glide halfway there.
+            if (x - cx).abs() > w * 0.3 {
+                cx += (x - cx) * 0.5;
+            }
+            if (y - cy).abs() > h * 0.3 {
+                cy += (y - cy) * 0.5;
+            }
+        }
+        keys.push(object(vec![
+            ("at", Json::Signed(at)),
+            (
+                "x",
+                Json::Float(((cx - w / 2.0).clamp(0.0, 1.0 - w) * 1e4).round() / 1e4),
+            ),
+            (
+                "y",
+                Json::Float(((cy - h / 2.0).clamp(0.0, 1.0 - h) * 1e4).round() / 1e4),
+            ),
+            ("w", Json::Float((w * 1e4).floor() / 1e4)),
+            ("h", Json::Float((h * 1e4).floor() / 1e4)),
+            ("ease", Json::String("inOut".into())),
+        ]));
+        at += step;
+    }
+    Ok(Json::Array(keys))
 }

@@ -224,6 +224,8 @@ pub enum Op {
         duck: Option<Option<Duck>>,
         /// LUFS target for sound items.
         normalize: Option<f64>,
+        /// Write the ducking as visible volume keys instead of keeping it computed.
+        bake: bool,
     },
     /// Cursor Settings.
     CursorSet {

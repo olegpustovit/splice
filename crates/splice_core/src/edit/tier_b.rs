@@ -99,7 +99,14 @@ impl Editor {
                 volume,
                 duck,
                 normalize,
-            } => self.set_volume(clip, &items, volume, duck, normalize),
+                bake,
+            } => {
+                let outcome = self.set_volume(clip, &items, volume, duck, normalize)?;
+                if bake && let Some(Some(duck)) = duck {
+                    self.bake_duck(&items, duck)?;
+                }
+                Ok(outcome)
+            }
             Op::CursorSet {
                 clip,
                 size,

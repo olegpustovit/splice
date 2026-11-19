@@ -8,8 +8,60 @@ use super::time::{anchor_at, clip_slot, item_slot, media, rounded, source_rate};
 use super::*;
 use crate::commands::{EffectSelection, FrameArg, OverlayContent};
 
-/// Filler words cut by intent.fitDuration (lowercase, without punctuation).
+/// Filler words (lowercase, without punctuation).
 const FILLERS: &[&str] = &["um", "uh", "er", "erm", "ah", "hmm", "mm", "uhm"];
+
+/// Whether a transcript word is a filler ("um", "uh", …).
+pub fn is_filler(text: &str) -> bool {
+    let word: String = text
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    FILLERS.contains(&word.as_str())
+}
+
+/// Abandoned attempts (T19.3): word index ranges of phrases a later phrase restarts with the
+/// same opening words. `words` are (text, from, to) in source frames; a pause over `gap`
+/// frames ends a phrase.
+pub fn retakes(words: &[(&str, Frame, Frame)], gap: Frame) -> Vec<(usize, usize)> {
+    let key = |text: &str| -> String {
+        text.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let mut phrases: Vec<(usize, usize)> = Vec::new();
+    for (index, word) in words.iter().enumerate() {
+        match phrases.last_mut() {
+            Some(last) if word.1 - words[last.1 - 1].2 <= gap => last.1 = index + 1,
+            _ => phrases.push((index, index + 1)),
+        }
+    }
+    let opening = |(from, to): (usize, usize)| -> Vec<String> {
+        words[from..to]
+            .iter()
+            .map(|w| key(w.0))
+            .filter(|w| !w.is_empty() && !FILLERS.contains(&w.as_str()))
+            .take(3)
+            .collect()
+    };
+    let mut out = Vec::new();
+    for (index, &phrase) in phrases.iter().enumerate() {
+        let first = opening(phrase);
+        if first.len() < 2 {
+            continue;
+        }
+        let restarted = phrases[index + 1..].iter().take(3).any(|&later| {
+            let next = opening(later);
+            next.len() >= first.len() && next[..first.len()] == first[..]
+        });
+        if restarted {
+            out.push(phrase);
+        }
+    }
+    out
+}
 
 fn number(name: &str, value: f64) -> EffectParam {
     EffectParam {
@@ -997,17 +1049,11 @@ impl Editor {
             for word in &transcript.words {
                 if let Some(span) = time::word_span(&self.project, word.id, Some(transcript.hash))?
                 {
-                    let lower: String = word
-                        .text
-                        .chars()
-                        .filter(|c| c.is_alphanumeric())
-                        .flat_map(char::to_lowercase)
-                        .collect();
                     words.push(Spoken {
                         start: span.start,
                         end: span.end,
                         clip: span.clip,
-                        filler: FILLERS.contains(&lower.as_str()),
+                        filler: is_filler(&word.text),
                         id: word.id,
                     });
                 }
@@ -1654,6 +1700,58 @@ impl Editor {
         ))
     }
 
+    /// Replaces computed ducking with visible `volume.gain` keys on each sound (T19.1): down by
+    /// `attack` before each speech span, back up over `release` after it.
+    pub(super) fn bake_duck(&mut self, items: &[Target], duck: Duck) -> Result<(), CommandError> {
+        let mut speech: Vec<(Frame, Frame)> = Vec::new();
+        for word in self.spoken()? {
+            match speech.last_mut() {
+                Some(last) if word.start - last.1 <= 12 => last.1 = last.1.max(word.end),
+                _ => speech.push((word.start, word.end)),
+            }
+        }
+        for target in items {
+            let TimelineId::Item(id) = self.timeline(target)? else {
+                continue;
+            };
+            let slot = item_slot(&self.project, id)?;
+            let span = time::item_span(&self.project, slot)?;
+            let mut keys: Vec<Key> = Vec::new();
+            let mut push = |at: Frame, value: f64| {
+                let at = (at - span.start).clamp(0, span.end - span.start - 1);
+                match keys.last_mut() {
+                    Some(last) if last.at >= at => last.value = last.value.min(value),
+                    _ => keys.push(Key {
+                        at,
+                        value,
+                        ease: Ease::Linear,
+                    }),
+                }
+            };
+            push(span.start, 1.0);
+            for &(from, to) in speech.iter().filter(|s| s.1 > span.start && s.0 < span.end) {
+                push(from - duck.attack, 1.0);
+                push(from, duck.amount);
+                push(to, duck.amount);
+                push(to + duck.release, 1.0);
+            }
+            if let ItemKind::Sound(sound) =
+                &mut self.project.items.data_mut(slot).expect("live item").kind
+            {
+                sound.duck = None;
+            }
+            let mut created = Vec::new();
+            self.upsert(
+                Owner::Item(slot),
+                "volume",
+                vec![keyed("gain", keys)],
+                None,
+                &mut created,
+            )?;
+        }
+        Ok(())
+    }
+
     // ── Templates ──
 
     fn brand_value(&self, name: &str) -> Option<String> {
@@ -2228,3 +2326,26 @@ const TEMPLATES: &[Template] = &[
         lines: &[line("title", "Chapter", "middle", 0.07, "center", 0.0)],
     },
 ];
+
+#[cfg(test)]
+mod retake_tests {
+    use super::*;
+
+    #[test]
+    fn restarted_phrases_are_retakes_and_fillers_are_found() {
+        let words = [
+            ("So", 0, 5),
+            ("today", 6, 12),
+            ("we", 13, 15),
+            // pause, then a restart
+            ("So", 40, 45),
+            ("today", 46, 52),
+            ("we", 53, 55),
+            ("build", 56, 60),
+            ("um", 80, 84),
+            ("Next", 100, 106),
+        ];
+        assert_eq!(retakes(&words, 12), [(0, 3)]);
+        assert!(is_filler("Um,") && is_filler("uh") && !is_filler("umbrella"));
+    }
+}

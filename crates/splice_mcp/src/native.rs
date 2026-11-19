@@ -489,3 +489,82 @@ pub(super) fn translate_captions(
         translated.into_iter().map(Json::String).collect(),
     ))
 }
+
+/// Crop keys every second centered on the largest face (cached `media.analyze` faces).
+pub(super) fn follow_face(
+    store: &Store,
+    item: &str,
+    aspect: Option<&str>,
+) -> Result<Json, StoreError> {
+    let p = store.project();
+    let id: ClipId = item.parse().map_err(|_| bad("item", "a clip"))?;
+    let slot = p.clips.find(id).ok_or_else(|| bad("item", "a clip"))?;
+    let timing = p.clips.timing(slot).expect("live clip");
+    let media = p
+        .clips
+        .data(slot)
+        .and_then(|d| d.media)
+        .and_then(|m| p.media.iter().find(|x| x.id == m))
+        .ok_or_else(|| bad("item", "a clip with video"))?;
+    let (w, h) = super::enrich::crop_size(
+        [media.probe.width, media.probe.height],
+        super::enrich::aspect_ratio(store, aspect)?,
+    );
+    let window = Window {
+        start: 0,
+        length: timing.length,
+        source: f64::from(timing.source),
+        rate: timing::source_rate(p, slot).unwrap_or(1.0),
+        fps: media.probe.fps,
+    };
+    let found = findings(
+        store,
+        media,
+        vision::TEXT | vision::FACES | vision::PEOPLE,
+        1.0,
+        "frames.txt",
+    )?;
+    let mut keys = Vec::new();
+    for finding in &found {
+        let Finding::Face { t, rect } = finding else {
+            continue;
+        };
+        let Some(at) = window.frame(*t) else {
+            continue;
+        };
+        let larger = found.iter().any(|other| {
+            matches!(other, Finding::Face { t: t2, rect: r2 } if t2 == t && r2[2] * r2[3] > rect[2] * rect[3])
+        });
+        if larger || keys.iter().any(|k: &(Frame, f64, f64)| k.0 == at) {
+            continue;
+        }
+        let (cx, cy) = (rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0);
+        keys.push((
+            at,
+            (cx - w / 2.0).clamp(0.0, 1.0 - w),
+            (cy - h / 2.0).clamp(0.0, 1.0 - h),
+        ));
+    }
+    keys.sort_by_key(|k| k.0);
+    if keys.is_empty() {
+        return Err(failure(
+            "NO_FACES",
+            "No face was found in this clip.",
+            "Use follow:\"cursor\" or pass keys.",
+        ));
+    }
+    Ok(Json::Array(
+        keys.into_iter()
+            .map(|(at, x, y)| {
+                object(vec![
+                    ("at", frame(at)),
+                    ("x", Json::Float((x * 1e4).round() / 1e4)),
+                    ("y", Json::Float((y * 1e4).round() / 1e4)),
+                    ("w", Json::Float((w * 1e4).floor() / 1e4)),
+                    ("h", Json::Float((h * 1e4).floor() / 1e4)),
+                    ("ease", Json::String("inOut".into())),
+                ])
+            })
+            .collect(),
+    ))
+}

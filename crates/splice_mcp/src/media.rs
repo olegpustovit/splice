@@ -133,6 +133,24 @@ pub(super) fn transcript(p: &Project, args: &Json) -> Result<Json, StoreError> {
         .filter(|word| filler(&word.text))
         .map(|word| display(&word.id))
         .collect();
+    // Abandoned attempts a later phrase restarts (T19.3): their word IDs, ready for cut.words.
+    let spoken: Vec<(&str, Frame, Frame)> = transcript
+        .words
+        .iter()
+        .map(|w| (w.text.as_str(), w.from, w.to))
+        .collect();
+    let gap = (media_fps(p, slot) * 0.4).round() as Frame;
+    let retakes = splice_core::edit::retakes(&spoken, gap)
+        .into_iter()
+        .map(|(from, to)| {
+            Json::Array(
+                transcript.words[from..to]
+                    .iter()
+                    .map(|w| display(&w.id))
+                    .collect(),
+            )
+        })
+        .collect();
     Ok(object(vec![
         ("revision", rev(p.rev)),
         ("hash", hash(transcript.hash)),
@@ -140,13 +158,15 @@ pub(super) fn transcript(p: &Project, args: &Json) -> Result<Json, StoreError> {
         ("language", text(&transcript.language)),
         ("words", Json::Array(words)),
         ("fillers", Json::Array(fillers)),
+        ("retakes", Json::Array(retakes)),
         ("nextCursor", next_cursor('w', end, total)),
     ]))
 }
 
-fn filler(text: &str) -> bool {
-    let word = text.trim_matches(|ch: char| ch.is_ascii_punctuation());
-    word.eq_ignore_ascii_case("um") || word.eq_ignore_ascii_case("uh")
+use splice_core::edit::is_filler as filler;
+
+fn media_fps(p: &Project, slot: Slot) -> f64 {
+    clip_media(p, slot).map_or(f64::from(p.fps), |m| m.probe.fps)
 }
 
 fn no_transcript() -> StoreError {

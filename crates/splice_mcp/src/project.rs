@@ -207,6 +207,25 @@ impl Projects {
     pub(super) fn info(&mut self, args: &Json) -> Result<Json, StoreError> {
         let create = args.flag("create")?;
         let id = args.optional_string("projectId")?;
+        // project.info {projectId, saveAs}: copies the package (T21.4) and opens the copy.
+        if let Some(target) = args.optional_string("saveAs")? {
+            let id = id.ok_or_else(|| bad("projectId", "the project to save as"))?;
+            let source = self.lookup_id(id)?.path().to_path_buf();
+            let target = package_path(target)?;
+            if target.exists() {
+                return Err(failure(
+                    "EXISTS",
+                    &format!("{} already exists.", target.display()),
+                    "Pick a new .splice path.",
+                ));
+            }
+            copy_package(&source, &target).map_err(|error| path_error(&target, &error))?;
+            let open = Json::Object(vec![(
+                "path".into(),
+                Json::String(target.to_string_lossy().into_owned()),
+            )]);
+            return self.info(&open);
+        }
         if let Some(path) = args.optional_string("path")? {
             if id.is_some() {
                 return Err(bad("path", "the only project selector, or pass projectId"));
@@ -382,6 +401,25 @@ pub(super) fn media_name(p: &Project, id: MediaId) -> String {
                 .and_then(|name| name.to_str())
         })
         .map_or_else(|| id.to_string(), str::to_owned)
+}
+
+/// Copies a package directory, leaving out its writer lock and render caches.
+fn copy_package(from: &Path, to: &Path) -> io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == "lock" || name == "cache" {
+            continue;
+        }
+        let (source, target) = (entry.path(), to.join(&name));
+        if entry.file_type()?.is_dir() {
+            copy_package(&source, &target)?;
+        } else {
+            fs::copy(&source, &target)?;
+        }
+    }
+    Ok(())
 }
 
 fn info(store: &Store, id: &str) -> Result<Json, StoreError> {

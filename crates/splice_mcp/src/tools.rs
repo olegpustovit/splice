@@ -56,6 +56,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ("projectId", "string"),
             ("path", "string"),
             ("create", "boolean"),
+            ("saveAs", "string"),
         ],
         required: &[],
         output: &[

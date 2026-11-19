@@ -75,3 +75,33 @@ fn tier_c_described_examples_apply_replay_undo_and_match_goldens() {
         golden(command.id, &project);
     }
 }
+
+#[test]
+fn baked_ducking_becomes_visible_volume_keys() {
+    let mut project = sample();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"audio.unlink","item":"clp_take","ref":"voice"},
+            {"cmd":"audio.set","items":["$voice"],"duck":{"amount":0.3,"attack":6,"release":10,"bake":true}}]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let slot = *project.items.order().last().unwrap();
+    let data = project.items.data(slot).unwrap();
+    let ItemKind::Sound(sound) = &data.kind else {
+        panic!()
+    };
+    assert!(sound.duck.is_none());
+    let volume = data
+        .appearance
+        .effects
+        .iter()
+        .find(|e| e.kind == "volume")
+        .unwrap();
+    let EffectValue::Keys(keys) = &volume.params[0].value else {
+        panic!()
+    };
+    assert!(keys.len() >= 5, "{keys:?}");
+    assert_eq!(keys[0].value, 1.0);
+    assert!(keys.iter().any(|k| k.value == 0.3));
+    assert!(keys.windows(2).all(|w| w[0].at < w[1].at));
+}
