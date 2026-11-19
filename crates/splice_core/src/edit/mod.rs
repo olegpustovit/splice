@@ -61,6 +61,8 @@ pub enum SideEffect {
         id: ItemId,
         /// Deleted timeline object that triggered the cascade, if present.
         cascade_from: Option<TimelineId>,
+        /// Why it went.
+        cause: Cause,
     },
     /// An item followed a split or a trimmed edge.
     Reanchored {
@@ -70,6 +72,8 @@ pub enum SideEffect {
         from: Anchor,
         /// New anchor.
         to: Anchor,
+        /// Why it moved.
+        cause: Cause,
     },
     /// An occupied lane caused an implicit lane move.
     Bumped {
@@ -79,7 +83,47 @@ pub enum SideEffect {
         from: LaneId,
         /// New lane.
         to: LaneId,
+        /// Why it moved.
+        cause: Cause,
     },
+}
+
+/// Why a side effect happened (D21: results say what moved and why).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cause {
+    /// The object it was anchored to was deleted, or a cut removed its whole parent clip.
+    Cascade,
+    /// It follows its content through a split, trim, join or edit of its parent.
+    Follow,
+    /// A cut removed the piece of its clip it was anchored to; it moved to the nearest surviving
+    /// clip (`connected:"reparent"`).
+    Reparent,
+    /// A cut removed the frames it covered (`connected:"delete"` or `"trim"`).
+    Cut,
+    /// It ran past the end of the spine, which is the end of the timeline.
+    SpineEnd,
+    /// Its caption words are no longer on the timeline.
+    Words,
+    /// Its lane was busy where it landed: this item was there first.
+    Overlap(ItemId),
+    /// Its lane was deleted.
+    LaneDeleted,
+}
+
+impl Cause {
+    /// Wire name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Cascade => "cascade",
+            Self::Follow => "follow",
+            Self::Reparent => "reparent",
+            Self::Cut => "cut",
+            Self::SpineEnd => "spineEnd",
+            Self::Words => "words",
+            Self::Overlap(_) => "overlap",
+            Self::LaneDeleted => "laneDeleted",
+        }
+    }
 }
 
 /// Timeline ranges and properties changed by an atomic batch.
@@ -561,6 +605,9 @@ fn wrong_kind(fix: &str) -> CommandError {
         fix,
     )
 }
+
+/// The shortest clip or item any edit may leave (M1).
+const MIN_LENGTH: Frame = 3;
 
 fn frame_add(frame: Frame, delta: Frame) -> Result<Frame, CommandError> {
     frame.checked_add(delta).ok_or_else(frame_range)

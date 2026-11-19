@@ -194,20 +194,31 @@ impl Editor {
         for index in 0..self.project.items.order().len() {
             let item = self.project.items.order()[index];
             let anchor = self.project.items.timing(item).expect("live item").anchor;
-            if let Anchor::ClipSource {
-                clip,
-                source: frame,
-            } = anchor
-                && clip == id
-                && frame >= source
-            {
-                self.reanchor(
+            match anchor {
+                Anchor::ClipSource {
+                    clip,
+                    source: frame,
+                } if clip == id && frame >= source => self.reanchor(
                     item,
                     Anchor::ClipSource {
                         clip: right,
                         source: frame,
                     },
-                );
+                ),
+                // The clip's end is now the right piece's end (M6).
+                Anchor::Item {
+                    item: TimelineId::Clip(clip),
+                    edge: Edge::End,
+                    offset,
+                } if clip == id => self.reanchor(
+                    item,
+                    Anchor::Item {
+                        item: TimelineId::Clip(right),
+                        edge: Edge::End,
+                        offset,
+                    },
+                ),
+                _ => {}
             }
         }
         Ok(right)
@@ -523,6 +534,7 @@ impl Editor {
                         self.report.side_effects.push(SideEffect::Removed {
                             id,
                             cascade_from: Some(parent),
+                            cause: Cause::Cascade,
                         });
                     }
                 });
@@ -530,15 +542,23 @@ impl Editor {
         }
     }
 
+    /// Moves an item's anchor so it follows its content.
     pub(super) fn reanchor(&mut self, slot: Slot, to: Anchor) {
+        self.reanchor_because(slot, to, Cause::Follow);
+    }
+
+    pub(super) fn reanchor_because(&mut self, slot: Slot, to: Anchor, cause: Cause) {
         let timing = self.project.items.timing_mut(slot).expect("live item");
         let from = timing.anchor;
         if from != to {
             timing.anchor = to;
             let id = self.project.items.id(slot).expect("live item");
-            self.report
-                .side_effects
-                .push(SideEffect::Reanchored { id, from, to });
+            self.report.side_effects.push(SideEffect::Reanchored {
+                id,
+                from,
+                to,
+                cause,
+            });
         }
     }
 

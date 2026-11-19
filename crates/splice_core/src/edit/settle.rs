@@ -18,27 +18,26 @@ struct OrderedItem {
 
 struct LaneIntervals {
     id: LaneId,
-    spans: Vec<Span>,
+    /// Placed spans in order, with the item that holds each.
+    spans: Vec<(Span, ItemId)>,
 }
 
 impl LaneIntervals {
-    fn insertion(&self, span: Span) -> Option<usize> {
+    /// Where `span` fits, or the item in the way.
+    fn insertion(&self, span: Span) -> Result<usize, ItemId> {
         if self
             .spans
             .last()
-            .is_none_or(|prior| prior.end <= span.start)
+            .is_none_or(|(prior, _)| prior.end <= span.start)
         {
-            return Some(self.spans.len());
+            return Ok(self.spans.len());
         }
-        let index = self.spans.partition_point(|prior| prior.end <= span.start);
-        if self
+        let index = self
             .spans
-            .get(index)
-            .is_none_or(|prior| prior.start >= span.end)
-        {
-            Some(index)
-        } else {
-            None
+            .partition_point(|(prior, _)| prior.end <= span.start);
+        match self.spans.get(index) {
+            Some(&(prior, holder)) if prior.start < span.end => Err(holder),
+            _ => Ok(index),
         }
     }
 }
@@ -48,8 +47,67 @@ impl Editor {
         self.project.clips.sort_by_start();
         self.sync_captions()?;
         self.fix_source_anchors()?;
+        self.fit_spine(base)?;
         self.settle_lanes(base)?;
         self.rekey_effects(base)?;
+        Ok(())
+    }
+
+    /// The timeline ends where the spine ends (H2): an item running past it is trimmed, and one
+    /// left with fewer than three frames is removed, unless this batch put it there, which is an
+    /// error. A project without clips has no spine end to keep.
+    fn fit_spine(&mut self, base: &Project) -> Result<(), CommandError> {
+        if self.project.clips.order().is_empty() {
+            return Ok(());
+        }
+        let end = self.spine_end()?;
+        let mut index = 0;
+        while let Some(&slot) = self.project.items.order().get(index) {
+            index += 1;
+            let span = time::item_span(&self.project, slot)?;
+            if span.end <= end {
+                continue;
+            }
+            let id = self.project.items.id(slot).expect("live item");
+            if end - span.start >= MIN_LENGTH {
+                self.project
+                    .items
+                    .timing_mut(slot)
+                    .expect("live item")
+                    .length = end - span.start;
+                let data = self.project.items.data_mut(slot).expect("live item");
+                edits::clamp_fades(&mut data.appearance, end - span.start);
+                continue;
+            }
+            let placed = time::find_item(&base.items, id, slot)
+                .and_then(|old| time::item_span(base, old).ok())
+                .is_none_or(|old| old.start != span.start);
+            if placed {
+                return Err(CommandError::rule(
+                    "PAST_END",
+                    "at",
+                    Some(Json::Signed(i64::from(span.start))),
+                    &format!(
+                        "a start at least {MIN_LENGTH} frames before the spine end, frame {end}"
+                    ),
+                    &format!(
+                        "{id} would start at frame {}. The timeline ends with its last clip: \
+                         place items before frame {}, or extend the spine first.",
+                        span.start,
+                        end - MIN_LENGTH
+                    ),
+                ));
+            }
+            self.project.items.remove(slot);
+            self.report.side_effects.push(SideEffect::Removed {
+                id,
+                cascade_from: None,
+                cause: Cause::SpineEnd,
+            });
+            self.cascade(TimelineId::Item(id));
+            // Removal reorders the arena: look again from the top (trimmed items now fit).
+            index = 0;
+        }
         Ok(())
     }
 
@@ -171,6 +229,7 @@ impl Editor {
                 self.report.side_effects.push(SideEffect::Removed {
                     id,
                     cascade_from: None,
+                    cause: Cause::Words,
                 });
                 self.cascade(TimelineId::Item(id));
             }
@@ -274,14 +333,20 @@ impl Editor {
                 self.project.items.data_mut(slot).expect("live item").lane = lane;
             }
             let index = interval_index(lanes, lane);
-            if let Some(at) = lanes[index].insertion(span) {
-                lanes[index].spans.insert(at, span);
-                continue;
-            }
+            let holder = match lanes[index].insertion(span) {
+                Ok(at) => {
+                    lanes[index].spans.insert(at, (span, id));
+                    continue;
+                }
+                Err(holder) => holder,
+            };
             if self.explicit_lanes.contains(&id) {
                 return Err(error(
                     "LANE_CONFLICT",
-                    &format!("{lane} is already occupied at frame {}.", span.start),
+                    &format!(
+                        "{lane} is already occupied by {holder} at frame {}.",
+                        span.start
+                    ),
                     "Omit lane to choose a free lane or select another lane.",
                 ));
             }
@@ -299,7 +364,7 @@ impl Editor {
                         return None;
                     }
                     let index = lanes.iter().position(|entry| entry.id == candidate.id)?;
-                    lanes[index].insertion(span).map(|at| (index, at))
+                    lanes[index].insertion(span).ok().map(|at| (index, at))
                 });
             let (index, at) = match available {
                 Some(pair) => pair,
@@ -309,11 +374,14 @@ impl Editor {
                 }
             };
             let to = lanes[index].id;
-            lanes[index].spans.insert(at, span);
+            lanes[index].spans.insert(at, (span, id));
             self.project.items.data_mut(slot).expect("live item").lane = to;
-            self.report
-                .side_effects
-                .push(SideEffect::Bumped { id, from: lane, to });
+            self.report.side_effects.push(SideEffect::Bumped {
+                id,
+                from: lane,
+                to,
+                cause: Cause::Overlap(holder),
+            });
         }
         Ok(())
     }

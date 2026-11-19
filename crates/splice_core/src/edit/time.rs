@@ -199,26 +199,30 @@ pub(super) fn anchor_at(project: &Project, at: Frame) -> Result<Anchor, CommandE
             preceding = Some((slot, timing.start));
         }
     }
-    let nearest = preceding.map(|(slot, _)| slot).or_else(|| {
-        project
+    // In a gap or past the spine end (H2): keep the exact frame, following the clip before it
+    // (its end edge) or, before the first clip, the clip after it (its start edge).
+    let (slot, edge) = match preceding {
+        Some((slot, _)) => (slot, Edge::End),
+        None => match project
             .clips
             .order()
             .iter()
             .copied()
             .min_by_key(|&slot| project.clips.timing(slot).expect("live clip").start)
-    });
-    let Some(slot) = nearest else {
-        return Ok(Anchor::Pinned(at.max(0)));
+        {
+            Some(slot) => (slot, Edge::Start),
+            None => return Ok(Anchor::Pinned(at.max(0))),
+        },
     };
     let timing = project.clips.timing(slot).expect("live clip");
-    let source = if preceding.is_some() {
-        last_source(project, slot)?
-    } else {
-        timing.source
+    let base = match edge {
+        Edge::End => timing.end().ok_or_else(frame_range)?,
+        Edge::Start => timing.start,
     };
-    Ok(Anchor::ClipSource {
-        clip: project.clips.id(slot).expect("live clip"),
-        source,
+    Ok(Anchor::Item {
+        item: TimelineId::Clip(project.clips.id(slot).expect("live clip")),
+        edge,
+        offset: at.checked_sub(base).ok_or_else(frame_range)?,
     })
 }
 

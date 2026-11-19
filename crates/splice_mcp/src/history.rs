@@ -1,7 +1,7 @@
 use super::{Json, object, project::access, text, wire::*};
 use splice_core::{
     commands::Target,
-    edit::{self, SideEffect, Span},
+    edit::{self, Cause, SideEffect, Span},
     history::{EditResult, Scope, Store, StoreError, WriteOptions},
     package::{
         self,
@@ -335,26 +335,54 @@ fn span(span: Span) -> Json {
 }
 
 fn effect(effect: SideEffect) -> Json {
-    object(match effect {
-        SideEffect::Removed { id, cascade_from } => vec![
-            ("type", text("removed")),
-            ("id", display(&id)),
-            (
-                "cascadeFrom",
-                cascade_from.map_or(Json::Null, |id| display(&id)),
-            ),
-        ],
-        SideEffect::Reanchored { id, from, to } => vec![
-            ("type", text("reanchored")),
-            ("id", display(&id)),
-            ("from", package::anchor(from)),
-            ("to", package::anchor(to)),
-        ],
-        SideEffect::Bumped { id, from, to } => vec![
-            ("type", text("bumped")),
-            ("id", display(&id)),
-            ("from", display(&from)),
-            ("to", display(&to)),
-        ],
-    })
+    let (mut fields, cause) = match effect {
+        SideEffect::Removed {
+            id,
+            cascade_from,
+            cause,
+        } => (
+            vec![
+                ("type", text("removed")),
+                ("id", display(&id)),
+                (
+                    "cascadeFrom",
+                    cascade_from.map_or(Json::Null, |id| display(&id)),
+                ),
+            ],
+            cause,
+        ),
+        SideEffect::Reanchored {
+            id,
+            from,
+            to,
+            cause,
+        } => (
+            vec![
+                ("type", text("reanchored")),
+                ("id", display(&id)),
+                ("from", package::anchor(from)),
+                ("to", package::anchor(to)),
+            ],
+            cause,
+        ),
+        SideEffect::Bumped {
+            id,
+            from,
+            to,
+            cause,
+        } => (
+            vec![
+                ("type", text("bumped")),
+                ("id", display(&id)),
+                ("from", display(&from)),
+                ("to", display(&to)),
+            ],
+            cause,
+        ),
+    };
+    fields.push(("cause", text(cause.name())));
+    if let Cause::Overlap(holder) = cause {
+        fields.push(("with", display(&holder)));
+    }
+    object(fields)
 }

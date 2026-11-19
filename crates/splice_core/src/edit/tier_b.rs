@@ -1399,6 +1399,7 @@ impl Editor {
                 self.report.side_effects.push(SideEffect::Removed {
                     id,
                     cascade_from: None,
+                    cause: Cause::Words,
                 });
             }
         }

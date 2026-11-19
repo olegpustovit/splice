@@ -292,6 +292,7 @@ impl Editor {
                     id: item,
                     from: id,
                     to,
+                    cause: Cause::LaneDeleted,
                 });
             }
         }

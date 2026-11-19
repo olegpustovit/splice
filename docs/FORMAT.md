@@ -118,6 +118,9 @@ Rules:
   main spec (`{item, edge, offset}`, `{marker, offset}`, `{word, transcriptHash}`), plus fixed frames
   (`{pinned:true, frame}`) and clip-source frames (`{clip, sourceFrame}`). Resolved frames are derived
   on load. A gap has `media:null`.
+- The timeline is as long as the spine: every item ends at or before the end of the last clip
+  (0.4; edits trim or remove items the spine no longer covers). Every clip and item is at least
+  three frames long.
 - IDs are `<prefix>_<base36 serial>`; `serial` is the next value. Deterministic minting means a
   replay of the journal mints the same IDs.
 - Arrays are in model order (spine order, lane stack order, creation order). Unknown keys are an error

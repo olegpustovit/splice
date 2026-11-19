@@ -128,9 +128,19 @@ after timeline ranges. An operation error includes its zero-based index when the
 be identified. A dry run uses the same validation, resolves references, and previews the IDs that
 would be minted. It leaves the project and its next ID serial untouched.
 
+Every side effect carries a `cause`: `cascade` (its parent was deleted), `follow` (it followed
+its content through a split, trim or join), `reparent`, `cut`, `spineEnd`, `words` (its caption
+words left the timeline or were re-captioned), `laneDeleted`, or `overlap` with `with` naming the
+item that held the lane.
+
 Use `at` for a placement calculated from a frame or anchor. Use `anchor` to retain an explicit
-item, marker, or transcript relation. Overlapping items can move to a free lane during settle.
-Passing an explicit lane turns an overlap into `LANE_CONFLICT`.
+item, marker, or transcript relation. A frame in a gap between clips keeps its position, anchored
+to the end of the clip before it (or the start of the first clip). Overlapping items can move to a
+free lane during settle. Passing an explicit lane turns an overlap into `LANE_CONFLICT`.
+
+The timeline ends where the spine ends. An item that would run past the last clip is trimmed
+there; one placed at or past the end (fewer than three frames before it) is refused with
+`PAST_END`; one an edit leaves past the end is removed (`cause:"spineEnd"`).
 
 A committed edit advances the revision after the journal is synced. A stale write returns the
 current revision and up to eight intervening changes. A retry of the original operation batch

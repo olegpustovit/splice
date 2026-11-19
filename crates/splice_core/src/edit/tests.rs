@@ -137,19 +137,21 @@ fn parity(project: &Project, report: &ApplyReport) -> Json {
         .side_effects
         .iter()
         .map(|effect| match effect {
-            SideEffect::Removed { id, cascade_from } => object(vec![
+            SideEffect::Removed {
+                id, cascade_from, ..
+            } => object(vec![
                 ("id", str_json(id)),
                 ("deleted", Json::Bool(true)),
                 ("cascadeFrom", str_json(&cascade_from.expect("cascade"))),
             ]),
-            SideEffect::Bumped { id, from, to } => object(vec![
+            SideEffect::Bumped { id, from, to, .. } => object(vec![
                 ("id", str_json(id)),
                 (
                     "bumped",
                     object(vec![("from", str_json(from)), ("to", str_json(to))]),
                 ),
             ]),
-            SideEffect::Reanchored { id, from, to } => {
+            SideEffect::Reanchored { id, from, to, .. } => {
                 let (Anchor::ClipSource { clip: from, .. }, Anchor::ClipSource { clip: to, .. }) =
                     (from, to)
                 else {
@@ -567,6 +569,20 @@ fn budget_project() -> Project {
         kind: LaneKind::Graphics,
         effects: Vec::new(),
     });
+    // A long gap keeps the spine (the timeline) running under all 2,000 items.
+    project
+        .clips
+        .insert(Clip {
+            id: ClipId::from_serial(9_999),
+            timing: ClipTiming {
+                start: 660,
+                length: 50_000,
+                source: 0,
+                speed: 1.0,
+            },
+            data: ClipData::default(),
+        })
+        .unwrap();
     let clip = "clp_take".parse().unwrap();
     for index in 0..2000 - project.items.order().len() {
         let start = 800 + i32::try_from(index).unwrap() * 20;
@@ -774,4 +790,115 @@ fn budget_warm_tier_c_edits_allocate_nothing() {
         counts.push((cmd, mem_sys::local_alloc_count()));
     }
     assert!(counts.iter().all(|(_, n)| *n == 0), "{counts:?}");
+}
+
+pub(super) fn run(project: &mut Project, ops: &str) -> Result<ApplyReport, ApplyError> {
+    let ops = splice_json::parse(ops).unwrap();
+    apply(project, ops.as_array().unwrap(), Source::Agent, false)
+}
+
+pub(super) fn start_of(project: &Project, id: &str) -> Frame {
+    let id = match id.parse::<ItemId>() {
+        Ok(item) => TimelineId::Item(item),
+        Err(_) => TimelineId::Clip(id.parse().unwrap()),
+    };
+    span(project, id).unwrap().start
+}
+
+/// The created item of op `index`.
+pub(super) fn created(report: &ApplyReport, index: usize) -> String {
+    match &report.changes[index].created[0] {
+        Target::Timeline(id) => id.to_string(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The end of the last item, which must not pass the end of the spine.
+pub(super) fn timeline_end(project: &Project) -> (Frame, Frame) {
+    let spine = project
+        .clips
+        .order()
+        .iter()
+        .map(|&s| project.clips.timing(s).unwrap().end().unwrap())
+        .max()
+        .unwrap_or(0);
+    let items = project
+        .items
+        .order()
+        .iter()
+        .map(|&s| {
+            span(project, TimelineId::Item(project.items.id(s).unwrap()))
+                .unwrap()
+                .end
+        })
+        .max()
+        .unwrap_or(0);
+    (spine, items)
+}
+
+/// T37.2 H1: a clip and an overlay anchored to it, moved together, move once.
+#[test]
+fn h1_overlay_moved_with_its_clip_moves_once() {
+    let mut project = sample();
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"title.add","at":560,"length":30,"text":"End"}]"#,
+    )
+    .unwrap();
+    let title = created(&report, 0);
+    run(
+        &mut project,
+        &format!(
+            r#"[{{"cmd":"item.move","items":["clp_end","{title}"],"delta":50,"ripple":false}}]"#
+        ),
+    )
+    .unwrap();
+    assert_eq!(start_of(&project, "clp_end"), 590);
+    assert_eq!(start_of(&project, &title), 610);
+}
+
+/// T37.2 H2: the timeline ends with the spine. A gap keeps an item's frame; past the end is
+/// refused; an item running past the end is trimmed.
+#[test]
+fn h2_gap_and_past_end_placement_keep_the_timeline_at_the_spine() {
+    let mut project = sample();
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"title.add","at":670,"length":90,"text":"Late"}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "PAST_END");
+    assert!(error.error.rule.is_some());
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"title.add","at":600,"length":90,"text":"Tail"}]"#,
+    )
+    .unwrap();
+    let tail = created(&report, 0);
+    assert_eq!(
+        span(&project, tail.parse().map(TimelineId::Item).unwrap())
+            .unwrap()
+            .end,
+        660
+    );
+    assert_eq!(timeline_end(&project), (660, 660));
+    // A title placed in a gap stays on its frame instead of snapping to the clip before it.
+    run(
+        &mut project,
+        r#"[{"cmd":"item.delete","items":["clp_take"],"ripple":false}]"#,
+    )
+    .unwrap();
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"cut.range","from":600,"to":660},{"cmd":"title.add","at":300,"length":30}]"#,
+    )
+    .unwrap();
+    let mid = created(&report, 1);
+    assert_eq!(start_of(&project, &mid), 300);
+    let (spine, items) = timeline_end(&project);
+    assert_eq!(spine, 600);
+    assert!(
+        items <= spine,
+        "items end at {items}, past the spine end {spine}"
+    );
 }

@@ -10,6 +10,7 @@ pub(super) struct MoveScratch {
     ordered: Vec<(Slot, i64)>,
     gaps: Vec<Frame>,
     markers: Vec<(Frame, usize)>,
+    items: Vec<(Slot, Frame)>,
 }
 
 impl Editor {
@@ -352,7 +353,18 @@ impl Editor {
             ordered,
             gaps,
             markers,
+            items,
         } = scratch;
+        // Selected items land `delta` from where they start now, even when a selected clip they
+        // are anchored to moves first (H1: they moved twice).
+        items.clear();
+        for &id in ids {
+            if let TimelineId::Item(id) = id {
+                let slot = item_slot(&self.project, id)?;
+                let start = time::item_span(&self.project, slot)?.start;
+                items.push((slot, frame_add(start, delta)?));
+            }
+        }
         clips.clear();
         clips.extend(ids.iter().filter_map(|id| match id {
             TimelineId::Clip(id) => self.project.clips.find(*id),
@@ -363,9 +375,11 @@ impl Editor {
             if !carry_overlays {
                 for &slot in self.project.items.order() {
                     let timing = self.project.items.timing(slot).expect("live item");
-                    if anchor_parent(timing.anchor).is_some_and(|parent| {
-                        ids.contains(&parent) && matches!(parent, TimelineId::Clip(_))
-                    }) {
+                    if !items.iter().any(|&(selected, _)| selected == slot)
+                        && anchor_parent(timing.anchor).is_some_and(|parent| {
+                            ids.contains(&parent) && matches!(parent, TimelineId::Clip(_))
+                        })
+                    {
                         kept.push((slot, time::anchor_start(&self.project, timing.anchor)?));
                     }
                 }
@@ -396,16 +410,13 @@ impl Editor {
                 self.reanchor_if_parent_changed(slot, anchor);
             }
         }
+        for &(slot, at) in items.iter() {
+            let anchor = self.anchor_at_move(slot, at)?;
+            self.reanchor_if_parent_changed(slot, anchor);
+        }
         for &id in ids {
             match id {
-                TimelineId::Clip(_) => {}
-                TimelineId::Item(id) => {
-                    let slot = item_slot(&self.project, id)?;
-                    let start = time::span(&self.project, TimelineId::Item(id))?.start;
-                    let at = frame_add(start, delta)?;
-                    let anchor = self.anchor_at_move(slot, at)?;
-                    self.reanchor_if_parent_changed(slot, anchor);
-                }
+                TimelineId::Clip(_) | TimelineId::Item(_) => {}
                 TimelineId::Marker(id) => {
                     let marker = self
                         .project

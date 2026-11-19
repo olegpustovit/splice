@@ -106,7 +106,7 @@ pub const COMMANDS: &[Command] = &[
             ("lane", "lan_… (default: lowest free overlay lane)")],
         ui: &["Shortcut ⌥⌘↑",
             "Clip menu ▸ Lift to Overlay"],
-        example: r#"{"cmd":"clip.lift","items":["clp_end"]}"#, decoder: decode::clip_lift,
+        example: r#"{"cmd":"clip.lift","items":["clp_open"]}"#, decoder: decode::clip_lift,
     },
     Command {
         id: "overlay.replaceSpine", title: "Replace Spine Clip", group: "Lanes and anchoring",
