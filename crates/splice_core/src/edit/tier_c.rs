@@ -1070,8 +1070,26 @@ impl Editor {
         if let Some(color2) = &color2 {
             window.push(text_param("color2", color2));
         }
+        // Recolor the project's window, or the windows below it when it has none; never create
+        // one (M17: a new project window instance turns the frame on for every clip).
         if !window.is_empty() {
-            self.upsert(Owner::Project, "window", window, None, &mut created)?;
+            let has = |project: &Project, owner| {
+                effects(project, owner).iter().any(|e| e.kind == "window")
+            };
+            let owners: Vec<Owner> = if has(&self.project, Owner::Project) {
+                vec![Owner::Project]
+            } else {
+                [Owner::Spine]
+                    .into_iter()
+                    .chain((0..self.project.lanes.len()).map(Owner::Lane))
+                    .chain(self.project.clips.order().iter().copied().map(Owner::Clip))
+                    .chain(self.project.items.order().iter().copied().map(Owner::Item))
+                    .filter(|&owner| has(&self.project, owner))
+                    .collect()
+            };
+            for owner in owners {
+                self.upsert(owner, "window", window.clone(), None, &mut created)?;
+            }
         }
         if let Some(accent) = &accent {
             self.upsert(

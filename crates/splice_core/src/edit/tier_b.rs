@@ -738,6 +738,40 @@ impl Editor {
                 .unwrap_or("its owners");
             return Err(wrong_kind(&format!("{kind} applies to {to}.")));
         }
+        // M21: the evaluator moves each clip and item by its own transform only; a lane or
+        // project transform would be stored and never drawn.
+        // ponytail: refuse until T42.4 applies lane/project transforms as parents.
+        if kind == "transform" && matches!(owner, Owner::Project | Owner::Spine | Owner::Lane(_)) {
+            return Err(CommandError::rule(
+                "WRONG_KIND",
+                "target",
+                None,
+                "a clip (clp_…) or item (ovl_…): lane and project transforms are not drawn yet",
+                "Put the transform on each clip or item, or effect.paste it across them.",
+            ));
+        }
+        // A take's camera, cursor and keystroke looks need that component (M18).
+        if let Owner::Clip(slot) = owner {
+            let component = match kind {
+                "camera" => Some(Component::Camera),
+                "cursor" => Some(Component::Pointer),
+                "keystrokes" => Some(Component::Keys),
+                _ => None,
+            };
+            if let Some(component) = component {
+                let mut states = self
+                    .project
+                    .clips
+                    .data(slot)
+                    .expect("live clip")
+                    .enabled
+                    .clone();
+                if component_state(&mut states, component).is_none() {
+                    let id = self.project.clips.id(slot).expect("live clip");
+                    return Err(no_component(id, component));
+                }
+            }
+        }
         check_params(kind, &params)?;
         let existing = if multiple {
             None

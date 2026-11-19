@@ -887,3 +887,81 @@ fn h5_duplicate_keeps_captions_on_the_copy() {
     assert_eq!(on(take), 10);
     assert_eq!(on(copy), 10);
 }
+
+/// T37.6 M17: a brand color recolors windows but never turns one on.
+#[test]
+fn m17_style_color_does_not_enable_windows() {
+    let mut project = sample();
+    project.effects.retain(|e| e.kind != "window");
+    run(&mut project, r##"[{"cmd":"style.set","color":"#1e3a8a"}]"##).unwrap();
+    assert!(!project.effects.iter().any(|e| e.kind == "window"));
+    let take = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    let window = project
+        .clips
+        .data(take)
+        .unwrap()
+        .appearance
+        .effects
+        .iter()
+        .find(|e| e.kind == "window")
+        .unwrap();
+    assert!(
+        window
+            .params
+            .iter()
+            .any(|p| p.name == "color" && p.value == EffectValue::Text("#1e3a8a".into()))
+    );
+}
+
+/// T37.6 M18: a take's camera look needs a camera.
+#[test]
+fn m18_effect_add_checks_take_components() {
+    let mut project = sample();
+    run(
+        &mut project,
+        r#"[{"cmd":"clip.insert","media":"med_webcam"}]"#,
+    )
+    .unwrap();
+    let webcam = project.clips.order().last().copied().unwrap();
+    let id = project.clips.id(webcam).unwrap();
+    // med_webcam records a camera and a mic, no screen events: no cursor, no keystrokes.
+    run(
+        &mut project,
+        &format!(r#"[{{"cmd":"effect.add","target":"{id}","type":"camera"}}]"#),
+    )
+    .unwrap();
+    let error = run(
+        &mut project,
+        &format!(r#"[{{"cmd":"effect.add","target":"{id}","type":"cursor"}}]"#),
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "WRONG_KIND");
+    let take = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    project.clips.data_mut(take).unwrap().enabled.camera = None;
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"effect.add","target":"clp_take","type":"camera"}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "WRONG_KIND");
+}
+
+/// T37.6 M21: lane and project transforms are refused until the evaluator draws them.
+#[test]
+fn m21_lane_and_project_transforms_are_refused() {
+    let mut project = sample();
+    for target in ["lan_gfx", "project"] {
+        let error = run(
+            &mut project,
+            &format!(r#"[{{"cmd":"effect.add","target":"{target}","type":"transform","params":{{"x":0.1}}}}]"#),
+        )
+        .unwrap_err();
+        assert_eq!(error.error.code, "WRONG_KIND");
+        assert!(error.error.rule.is_some());
+    }
+    run(
+        &mut project,
+        r#"[{"cmd":"effect.add","target":"ovl_label","type":"transform","params":{"x":0.1}}]"#,
+    )
+    .unwrap();
+}

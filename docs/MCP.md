@@ -146,6 +146,11 @@ whole takes its items with it (`cause:"cascade"`). `delete` removes the items on
 A ripple cut also shortens any item that runs into the cut, so the items after it close up
 instead of bumping to new lanes. `cut.range` refuses a negative `from`.
 
+`style.set` colors recolor the project's window (or, without one, the windows that exist) and
+never turn a window on. `effect.add` of `camera`, `cursor` or `keystrokes` on a clip needs that
+take component (`WRONG_KIND` names it). A `transform` goes on clips and items; lane and project
+transforms are refused until the evaluator draws them as parents.
+
 The timeline ends where the spine ends. An item that would run past the last clip is trimmed
 there; one placed at or past the end (fewer than three frames before it) is refused with
 `PAST_END`; one an edit leaves past the end is removed (`cause:"spineEnd"`).
