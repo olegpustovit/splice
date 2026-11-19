@@ -419,7 +419,7 @@ eight places; the board below already carries the changes.
 - [x] T36.5 [M] Captions: stroke under fill (H8); second line not clipped; active color rendered. (two-pass outline under fill; shrink-to-fit instead of dropped lines; active word range in the active color; looks_caption_stroke… pixel test)
 - [x] T36.6 [L] Motion items hold `to` after they end; `MOTION_ENDS_ZOOMED` warning when `to ≠ 1`. (superseded by D12: motion items are camera segments, 48cf147)
 - [x] T36.7 [L] Errors carry the rule: `{param, got, expected, fix}` on every BAD_ARGS; `UNKNOWN_PARAM` with `didYouMean`. (Rule {param, got, expected, didYouMean} on every BAD_ARGS/UNKNOWN_PARAM/UNKNOWN_COMMAND; apply fills got from the op)
-- [ ] T36.8 [L] Docs, TS types and ranges generated from `effects.json` and validators; test fails on any mismatch (M8).
+- [x] T36.8 [L] Docs, TS types and ranges generated from `effects.json` and validators; test fails on any mismatch (M8). (Splice.Effects generated from effects.json incl. keyability; documented_ranges_match_the_validators sweeps every documented command range; structured hints never type as string; union arrays parenthesized; out-of-range audio volume, cursor and keys size refused instead of clamped)
 - [ ] T36.9 [L] Build identity: `serverInfo.version = <crate>+<sha>[-dirty]`.
 - [ ] T36.10 [M] Recording discoverability: `window:{app}` in descriptions and fixes; dryRun omits titles unless `titles:true`.
 

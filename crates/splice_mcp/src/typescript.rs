@@ -1,6 +1,6 @@
 //! TypeScript declarations for code mode, generated from `COMMANDS` and the tool schemas.
 use super::{Json, tools};
-use splice_core::commands::{COMMANDS, Command, Tier};
+use splice_core::commands::{COMMANDS, Command, Tier, effect_schemas, keyable};
 use std::fmt::Write;
 
 const HEADER: &str = r#"// Splice code mode: the global `splice` inside code.run. Generated from the command registry
@@ -76,6 +76,12 @@ pub(super) fn declarations(filter: Option<&str>) -> String {
             command(&mut out, row);
         }
         out.push_str("  }\n");
+        if ids
+            .iter()
+            .any(|id| id.starts_with("effect.") || id.starts_with("param."))
+        {
+            effects(&mut out);
+        }
         if filter.is_empty() {
             out.push_str("  /** Any registry command, for edit.apply's ops. */\n  type Op =\n");
             for id in &ids {
@@ -196,6 +202,61 @@ fn command(out: &mut String, row: &Command) {
     out.push_str("    }\n");
 }
 
+/// Every effect type and parameter, straight from `effects.json` (the validator's schema): types,
+/// ranges, defaults and which numbers accept keys (T36.8).
+fn effects(out: &mut String) {
+    out.push_str("  /** Effect types and parameters (effects.json, the validator's own schema). */\n  interface Effects {\n");
+    let schemas = effect_schemas()
+        .as_object()
+        .map_or(&[][..], |fields| fields);
+    for (kind, schema) in schemas {
+        let title = schema.field("title").and_then(Json::as_str).unwrap_or(kind);
+        let applies = schema
+            .field("appliesTo")
+            .and_then(Json::as_str)
+            .unwrap_or("");
+        let _ = writeln!(out, "    /** {title}: {applies}. */\n    {kind}: {{");
+        let params = schema.field("params").and_then(Json::as_object);
+        for (name, spec) in params.into_iter().flatten() {
+            let text = |key: &str| {
+                let mut value = String::new();
+                if let Some(field) = spec.field(key) {
+                    splice_json::write(field, &mut value).expect("finite schema");
+                }
+                value
+            };
+            let ts = match spec.field("type").and_then(Json::as_str) {
+                Some("number") if keyable(spec) => "number | { keys: Key[] }".to_string(),
+                Some("number") => "number".into(),
+                Some("bool") => "boolean".into(),
+                Some("enum") => spec
+                    .field("options")
+                    .and_then(Json::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Json::as_str)
+                    .map(|option| format!("\"{option}\""))
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+                _ => "string".into(),
+            };
+            let mut doc = text("label").trim_matches('"').to_string();
+            if spec.field("min").is_some() {
+                let _ = write!(doc, " · {}–{}", text("min"), text("max"));
+            }
+            if spec.field("type").and_then(Json::as_str) == Some("color") {
+                doc.push_str(" · #rrggbb");
+            }
+            if spec.field("def").is_some() {
+                let _ = write!(doc, " · @default {}", text("def"));
+            }
+            let _ = writeln!(out, "      /** {doc} */\n      {name}?: {ts};");
+        }
+        out.push_str("    };\n");
+    }
+    out.push_str("  }\n  type EffectType = keyof Effects;\n");
+}
+
 /// Maps the registry's parameter mini-spec (`type = default · doc`) to a TypeScript type.
 fn param_type(kind: &str, doc: &str) -> String {
     let words = |text: &str| -> Option<String> {
@@ -257,6 +318,9 @@ fn param_type(kind: &str, doc: &str) -> String {
     if kind.starts_with("number | {keys}") {
         return "number | { keys: Key[] }".into();
     }
+    if kind.starts_with("effect type") {
+        return "EffectType".into();
+    }
     if kind.starts_with("{wordId") {
         return "Record<string, { text?: string; emph?: boolean; emoji?: string; hidden?: boolean } | null>".into();
     }
@@ -287,6 +351,27 @@ fn param_type(kind: &str, doc: &str) -> String {
     }
     if kind.starts_with("frame") {
         return "At".into();
+    }
+    // Any other `{a, b}` / `[{a, b}]` shape: text-like fields are strings, the rest numbers.
+    if let Some(inner) = kind.strip_prefix('{').or_else(|| kind.strip_prefix("[{"))
+        && let Some((fields, _)) = inner.split_once('}')
+    {
+        let fields = fields
+            .split(',')
+            .map(|field| field.trim().trim_end_matches('?'))
+            .filter(|field| !field.is_empty())
+            .map(|field| {
+                let text = matches!(field, "text" | "name" | "id" | "label" | "action" | "app");
+                format!("{field}: {}", if text { "string" } else { "number" })
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let shape = format!("{{ {fields} }}");
+        return if kind.starts_with('[') {
+            format!("{shape}[]")
+        } else {
+            shape
+        };
     }
     // `preset · bold|karaoke|…`: the choices follow the word.
     if !kind.contains(' ')
@@ -355,7 +440,11 @@ fn json_type(schema: &Json) -> String {
     }
     match schema.field("type") {
         Some(Json::String(kind)) if kind == "array" => match schema.field("items") {
-            Some(items) => format!("{}[]", json_type(items)),
+            // A union element type needs parentheses: ("a" | "b")[].
+            Some(items) => match json_type(items) {
+                item if item.contains('|') => format!("({item})[]"),
+                item => format!("{item}[]"),
+            },
             None => "unknown[]".into(),
         },
         Some(Json::String(kind)) => primitive(kind).into(),
@@ -410,4 +499,41 @@ fn pascal(id: &str) -> String {
                 .chain(chars)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// T36.8 (M8): a structured argument (`[…]`, `{…}`) never degrades to `string` in the
+    /// declarations, and every effects.json type and parameter is declared.
+    #[test]
+    fn structured_hints_get_structured_types_and_effects_are_complete() {
+        for row in COMMANDS {
+            for (name, hint) in row.params {
+                let hint = hint.trim_start_matches('!');
+                let (kind, doc) = hint.split_once(" · ").unwrap_or((hint, ""));
+                let kind = kind.split_once(" = ").map_or(kind, |(kind, _)| kind);
+                if kind.starts_with(['[', '{']) {
+                    let ts = param_type(kind, doc);
+                    assert!(ts != "string", "{} {name}: {kind} typed as string", row.id);
+                }
+            }
+        }
+        let mut out = String::new();
+        effects(&mut out);
+        for (kind, schema) in effect_schemas().as_object().unwrap() {
+            assert!(out.contains(&format!("\n    {kind}: {{")), "{kind}");
+            for (name, _) in schema.field("params").and_then(Json::as_object).unwrap() {
+                assert!(out.contains(&format!("{name}?:")), "{kind}.{name}");
+            }
+        }
+        assert!(out.contains("scale?: number | { keys: Key[] }"));
+        assert_eq!(
+            json_type(
+                &splice_json::parse(r#"{"type":"array","items":{"enum":["a","b"]}}"#).unwrap()
+            ),
+            "(\"a\" | \"b\")[]"
+        );
+    }
 }

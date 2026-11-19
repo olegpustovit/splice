@@ -391,7 +391,7 @@ pub(super) fn audio_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     if normalize.is_some_and(|lufs| !(-40.0..=-5.0).contains(&lufs)) {
         return Err(Error::bad("normalize", "a LUFS target from -40 to -5"));
     }
-    let volume = a.opt_number("volume")?;
+    let volume = a.opt_within("volume", 0.0, 2.0)?;
     if clip.is_some() && volume.is_none() {
         return Err(Error::bad("volume", "a gain from 0 to 2"));
     }
@@ -414,7 +414,7 @@ pub(super) fn audio_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
 pub(super) fn cursor_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::CursorSet {
         clip: a.target("clip")?,
-        size: a.opt_number("size")?,
+        size: a.opt_within("size", 0.5, 4.0)?,
         click_rings: a.opt_flag("clickRings")?,
     })
 }
@@ -422,7 +422,7 @@ pub(super) fn cursor_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
 pub(super) fn keys_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::KeysSet {
         clip: a.target("clip")?,
-        size: a.opt_number("size")?,
+        size: a.opt_within("size", 0.5, 3.0)?,
     })
 }
 

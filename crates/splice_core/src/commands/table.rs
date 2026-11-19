@@ -364,7 +364,7 @@ pub const COMMANDS: &[Command] = &[
         id: "effect.add", title: "Add Effect", group: "Effects",
         risk: "edit", shortcut: "", tier: Tier::Second,
         params: &[("target", "!clp_… | ovl_… | lan_… | lan_spine | project"),
-            ("type", "!window|cursor|camera|captions|keystrokes"),
+            ("type", "!effect type · any key of Splice.Effects (effects.json): window, cursor, camera, captions, transform, color, mask, …"),
             ("params", "object · only the values you want to set; the rest inherit"),
             ("enabled", "bool = true · false turns an inherited effect off at this scope")],
         ui: &["Effects browser ▸ drag onto a clip, lane header or the viewer",

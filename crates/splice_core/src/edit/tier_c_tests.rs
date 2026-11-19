@@ -311,3 +311,72 @@ fn transitions_are_validated_on_every_path() {
     let error = refused(r#"[{"cmd":"transition.add","item":"clp_end","length":200}]"#);
     assert_eq!(error.error.code, "TOO_LONG");
 }
+
+/// T36.8 (M8): every scalar range a command documents (`0.5–4`, `int 1–8`, `!number 0.25–16`)
+/// is the validator's range: the bounds apply, and just outside them is refused naming the
+/// argument. Docs and validator cannot drift apart silently.
+#[test]
+fn documented_ranges_match_the_validators() {
+    let mut checked = 0;
+    let mut drift = Vec::new();
+    for row in crate::commands::COMMANDS {
+        for (name, hint) in row.params {
+            let spec = hint.trim_start_matches('!');
+            let spec = spec
+                .strip_prefix("number ")
+                .or_else(|| spec.strip_prefix("int "))
+                .unwrap_or(spec);
+            let range = spec.split([' ', '=']).next().unwrap_or("");
+            let Some((low, high)) = range.split_once('–') else {
+                continue;
+            };
+            let (Ok(low), Ok(high)) = (low.parse::<f64>(), high.parse::<f64>()) else {
+                continue;
+            };
+            let step = if hint.contains("int ") { 1.0 } else { 0.001 };
+            let run = |value: f64| {
+                let mut op = splice_json::parse(row.example).unwrap();
+                let splice_json::Value::Object(fields) = &mut op else {
+                    unreachable!()
+                };
+                let number = if step == 1.0 {
+                    splice_json::Value::Signed(value as i64)
+                } else {
+                    splice_json::Value::Float(value)
+                };
+                match fields.iter_mut().find(|(key, _)| key == name) {
+                    Some(field) => field.1 = number,
+                    None => fields.push(((*name).into(), number)),
+                }
+                let mut project = sample();
+                apply(&mut project, &[op], Source::Agent, false)
+            };
+            let names_it = |result: Result<_, crate::edit::ApplyError>| match result {
+                Err(error) => error
+                    .error
+                    .rule
+                    .is_some_and(|rule| rule.param == *name || rule.param.ends_with(name)),
+                Ok(_) => false,
+            };
+            for inside in [low, high] {
+                if names_it(run(inside)) {
+                    drift.push(format!(
+                        "{} {name}: documented bound {inside} is refused",
+                        row.id
+                    ));
+                }
+            }
+            for outside in [low - step, high + step] {
+                if !names_it(run(outside)) {
+                    drift.push(format!(
+                        "{} {name}: {outside} is outside the documented {low}–{high} but accepted",
+                        row.id
+                    ));
+                }
+            }
+            checked += 1;
+        }
+    }
+    assert!(drift.is_empty(), "{}", drift.join("\n"));
+    assert!(checked >= 8, "{checked} ranges checked");
+}

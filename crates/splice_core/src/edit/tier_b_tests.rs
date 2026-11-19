@@ -149,7 +149,7 @@ fn tier_b_components_crop_and_keys() {
     run(
         &mut project,
         r#"[{"cmd":"component.set","clip":"clp_take","component":"camera","enabled":false},
-            {"cmd":"audio.set","clip":"clp_take","component":"mic","volume":3},
+            {"cmd":"audio.set","clip":"clp_take","component":"mic","volume":1.5},
             {"cmd":"keys.hide","clip":"clp_take","events":[4,2,4],"hidden":true},
             {"cmd":"clip.crop","items":["clp_take"],"rect":null,"fit":"fill"}]"#,
     )
@@ -157,7 +157,7 @@ fn tier_b_components_crop_and_keys() {
     let take = project.clips.find("clp_take".parse().unwrap()).unwrap();
     let data = project.clips.data(take).unwrap();
     assert_eq!(data.enabled.camera, Some(false));
-    assert_eq!(data.volume.mic, 2.0);
+    assert_eq!(data.volume.mic, 1.5);
     assert_eq!(data.hidden_keys, [2, 4]);
     assert_eq!(
         data.framing,
@@ -167,6 +167,11 @@ fn tier_b_components_crop_and_keys() {
         }
     );
     for (op, code) in [
+        // Out of range is refused, never clamped (Low list).
+        (
+            r#"{"cmd":"audio.set","clip":"clp_take","component":"mic","volume":3}"#,
+            "BAD_ARGS",
+        ),
         (
             r#"{"cmd":"component.set","clip":"clp_open","component":"mic","enabled":true}"#,
             "WRONG_KIND",

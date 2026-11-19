@@ -363,7 +363,8 @@ declare namespace Splice {
       cmd: "effect.add";
       /** clp_… | ovl_… | lan_… | lan_spine | project */
       target: string;
-      type: "window" | "cursor" | "camera" | "captions" | "keystrokes";
+      /** effect type · any key of Splice.Effects (effects.json): window, cursor, camera, captions, transform, color, mask, … */
+      type: EffectType;
       /** only the values you want to set; the rest inherit */
       params?: Record<string, unknown>;
       /** false turns an inherited effect off at this scope · @default true */
@@ -377,7 +378,7 @@ declare namespace Splice {
       /** owner id (creates the instance when missing) */
       target?: string;
       /** effect type with target */
-      type?: string;
+      type?: EffectType;
       params?: Record<string, unknown>;
       enabled?: boolean;
       /** string[] · parameter names to drop so they inherit again */
@@ -391,7 +392,7 @@ declare namespace Splice {
       /** owner id · with type, or alone to remove all its effects */
       target?: string;
       /** effect type */
-      type?: string;
+      type?: EffectType;
     }
     /** Paste Effects (edit, 0.2). */
     interface EffectPaste extends Base {
@@ -644,7 +645,7 @@ declare namespace Splice {
       /** [{at, x, y}] · source frames; splice mcp reads them from the take when omitted */
       clicks?: { at: number; x: number; y: number }[];
       /** [{from, to}] · source frames; typing extends a zoom and never moves it (read from the take when omitted) */
-      typing?: string;
+      typing?: { from: number; to: number }[];
       /** 1–5 · @default 1.5 */
       amount?: number;
     }
@@ -654,7 +655,7 @@ declare namespace Splice {
       /** med_… the recorded or imported source */
       media: string;
       /** [{text, from, to}] source frames, in order · from transcription (transcript.get {transcribe:true} does this) */
-      words: string;
+      words: { text: string; from: number; to: number }[];
       /** BCP 47 tag · @default en-US */
       language?: string;
     }
@@ -810,6 +811,305 @@ declare namespace Splice {
       media?: string[];
     }
   }
+  /** Effect types and parameters (effects.json, the validator's own schema). */
+  interface Effects {
+    /** Window: spine clips and media overlays. */
+    window: {
+      /** Padding · 0–0.3 · @default 0.07 */
+      padding?: number;
+      /** Corners · 0–0.12 · @default 0.03 */
+      corner?: number;
+      /** Shadow · 0–1 · @default 0.6 */
+      shadow?: number;
+      /** Inset · 0–0.02 · @default 0 */
+      inset?: number;
+      /** Background · @default "gradient" */
+      background?: "gradient" | "color" | "none";
+      /** Color · #rrggbb · @default "#5b6f63" */
+      color?: string;
+      /** Color 2 · #rrggbb · @default "#1d2420" */
+      color2?: string;
+    };
+    /** Cursor: screen takes. */
+    cursor: {
+      /** Size · 0.5–4 · @default 1.5 */
+      size?: number;
+      /** Click rings · @default true */
+      clickRings?: boolean;
+      /** Hide cursor · @default false */
+      hidden?: boolean;
+    };
+    /** Camera Layout: screen takes. */
+    camera: {
+      /** Corner · @default "br" */
+      corner?: "br" | "bl" | "tr" | "tl";
+      /** Size · 0.12–0.45 · @default 0.24 */
+      size?: number;
+      /** Roundness · 0–1 · @default 0.2 */
+      roundness?: number;
+      /** Shadow · 0–1 · @default 0.5 */
+      shadow?: number;
+      /** Background · @default "keep" */
+      background?: "keep" | "blur" | "remove";
+    };
+    /** Caption Style: captions lanes, caption cues and the project. */
+    captions: {
+      /** Preset · @default "bold" */
+      preset?: "bold" | "karaoke" | "pop" | "box" | "clean" | "typewriter" | "neon" | "comic" | "minimal" | "subtitle" | "highlight" | "outline" | "shadow" | "bubble" | "gaming" | "news" | "podcast" | "cinematic" | "glow" | "retro" | "elegant" | "hype";
+      /** Size · 0.03–0.14 · @default 0.075 */
+      size?: number;
+      /** Position · 0.1–0.9 · @default 0.68 */
+      position?: number;
+      /** Text · #rrggbb · @default "#ffffff" */
+      color?: string;
+      /** Highlight · #rrggbb · @default "#ffd23f" */
+      active?: string;
+      /** Stroke · 0–0.3 · @default 0.14 */
+      stroke?: number;
+      /** Uppercase · @default true */
+      uppercase?: boolean;
+      /** Safe zone · @default "tiktok" */
+      safe?: "tiktok" | "reels" | "shorts" | "none";
+    };
+    /** Keystroke Chips: screen takes. */
+    keystrokes: {
+      /** Size · 0.5–3 · @default 1 */
+      size?: number;
+      /** Position · @default "bottom-left" */
+      position?: "bottom-left" | "bottom-center" | "top-left";
+    };
+    /** Transform: spine clips, media overlays, titles, shapes and captions. */
+    transform: {
+      /** X · -2–2 · @default 0 */
+      x?: number | { keys: Key[] };
+      /** Y · -2–2 · @default 0 */
+      y?: number | { keys: Key[] };
+      /** Scale · 0.05–10 · @default 1 */
+      scale?: number | { keys: Key[] };
+      /** Rotation · -720–720 · @default 0 */
+      rotation?: number | { keys: Key[] };
+      /** Opacity · 0–1 · @default 1 */
+      opacity?: number | { keys: Key[] };
+      /** Anchor X · 0–1 · @default 0.5 */
+      anchorX?: number | { keys: Key[] };
+      /** Anchor Y · 0–1 · @default 0.5 */
+      anchorY?: number | { keys: Key[] };
+      /** Blend · @default "normal" */
+      blend?: "normal" | "multiply" | "screen" | "overlay" | "add" | "darken" | "lighten";
+    };
+    /** Animated Crop: spine clips and media overlays. */
+    crop: {
+      /** Left · 0–1 · @default 0 */
+      x?: number | { keys: Key[] };
+      /** Top · 0–1 · @default 0 */
+      y?: number | { keys: Key[] };
+      /** Width · 0.01–1 · @default 1 */
+      w?: number | { keys: Key[] };
+      /** Height · 0.01–1 · @default 1 */
+      h?: number | { keys: Key[] };
+    };
+    /** Color: spine clips, media overlays, lanes and the project. */
+    color: {
+      /** Exposure · -3–3 · @default 0 */
+      exposure?: number | { keys: Key[] };
+      /** Contrast · 0–2 · @default 1 */
+      contrast?: number | { keys: Key[] };
+      /** Saturation · 0–2 · @default 1 */
+      saturation?: number | { keys: Key[] };
+      /** Vibrance · -1–1 · @default 0 */
+      vibrance?: number | { keys: Key[] };
+      /** Temperature · -1–1 · @default 0 */
+      temperature?: number | { keys: Key[] };
+      /** Tint · -1–1 · @default 0 */
+      tint?: number | { keys: Key[] };
+      /** Highlights · -1–1 · @default 0 */
+      highlights?: number | { keys: Key[] };
+      /** Shadows · -1–1 · @default 0 */
+      shadows?: number | { keys: Key[] };
+      /** LUT (.cube) · @default "" */
+      lut?: string;
+      /** LUT amount · 0–1 · @default 1 */
+      lutAmount?: number | { keys: Key[] };
+    };
+    /** Mask: spine clips and media overlays. */
+    mask: {
+      /** Shape · @default "rect" */
+      shape?: "rect" | "roundRect" | "ellipse";
+      /** Left · -1–2 · @default 0.25 */
+      x?: number | { keys: Key[] };
+      /** Top · -1–2 · @default 0.25 */
+      y?: number | { keys: Key[] };
+      /** Width · 0–2 · @default 0.5 */
+      w?: number | { keys: Key[] };
+      /** Height · 0–2 · @default 0.5 */
+      h?: number | { keys: Key[] };
+      /** Mode · @default "blur" */
+      mode?: "blur" | "pixelate" | "cover" | "spotlight";
+      /** Amount · 0–1 · @default 0.6 */
+      amount?: number | { keys: Key[] };
+      /** Feather · 0–0.2 · @default 0.01 */
+      feather?: number | { keys: Key[] };
+      /** Invert · @default false */
+      invert?: boolean;
+      /** Cover color · #rrggbb · @default "#000000" */
+      color?: string;
+    };
+    /** Chroma Key: spine clips and media overlays. */
+    key: {
+      /** Key color · #rrggbb · @default "#00ff00" */
+      color?: string;
+      /** Tolerance · 0–1 · @default 0.3 */
+      tolerance?: number | { keys: Key[] };
+      /** Softness · 0–1 · @default 0.1 */
+      softness?: number | { keys: Key[] };
+      /** Spill · 0–1 · @default 0.5 */
+      spill?: number | { keys: Key[] };
+    };
+    /** Background Removal: spine clips and media overlays with people. */
+    cutout: {
+      /** Background · @default "remove" */
+      background?: "remove" | "blur";
+      /** Amount · 0–1 · @default 1 */
+      amount?: number | { keys: Key[] };
+    };
+    /** Transition: spine clips (into the clip from the one before). */
+    transition: {
+      /** Kind · @default "dissolve" */
+      kind?: "dissolve" | "dip" | "wipe" | "push" | "slide" | "zoom";
+      /** Length · 2–240 · @default 15 */
+      length?: number;
+      /** Direction · @default "left" */
+      direction?: "left" | "right" | "up" | "down";
+      /** Dip color · #rrggbb · @default "#000000" */
+      color?: string;
+    };
+    /** Speed Ramp: spine clips. */
+    speed: {
+      /** Rate (0 holds the frame) · 0–16 · @default 1 */
+      rate?: number | { keys: Key[] };
+      /** Keep pitch · @default true */
+      pitch?: boolean;
+    };
+    /** Volume: clips with audio, sounds, audio lanes, the spine and the project. */
+    volume: {
+      /** Gain · 0–4 · @default 1 */
+      gain?: number | { keys: Key[] };
+      /** Pan · -1–1 · @default 0 */
+      pan?: number | { keys: Key[] };
+      /** Mute · @default false */
+      mute?: boolean;
+      /** Solo · @default false */
+      solo?: boolean;
+    };
+    /** EQ: clips with audio, sounds and audio lanes. */
+    eq: {
+      /** Low cut · 20–400 · @default 20 */
+      lowCut?: number;
+      /** Low · -12–12 · @default 0 */
+      low?: number;
+      /** Mid · -12–12 · @default 0 */
+      mid?: number;
+      /** Mid frequency · 200–5000 · @default 1000 */
+      midFrequency?: number;
+      /** High · -12–12 · @default 0 */
+      high?: number;
+    };
+    /** Compressor: clips with audio, sounds and audio lanes. */
+    compressor: {
+      /** Threshold · -60–0 · @default -20 */
+      threshold?: number;
+      /** Ratio · 1–20 · @default 3 */
+      ratio?: number;
+      /** Makeup gain · 0–24 · @default 0 */
+      gain?: number;
+    };
+    /** Noise Gate: clips with audio, sounds and audio lanes. */
+    gate: {
+      /** Threshold · -80–0 · @default -50 */
+      threshold?: number;
+    };
+    /** Voice Isolation: clips with audio and sounds. */
+    voiceIsolation: {
+      /** Amount · 0–1 · @default 1 */
+      amount?: number;
+    };
+    /** Text Style: titles, captions lanes, caption cues and the project. */
+    text: {
+      /** Font · @default "SF Pro Display" */
+      font?: string;
+      /** Weight · @default "bold" */
+      weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black";
+      /** Size · 0.02–0.3 · @default 0.06 */
+      size?: number;
+      /** Color · #rrggbb · @default "#ffffff" */
+      color?: string;
+      /** Stroke · #rrggbb · @default "#000000" */
+      stroke?: string;
+      /** Stroke width · 0–0.3 · @default 0 */
+      strokeWidth?: number;
+      /** Shadow · 0–1 · @default 0.3 */
+      shadow?: number;
+      /** Box · @default "none" */
+      box?: "none" | "solid" | "rounded";
+      /** Box color · #rrggbb · @default "#000000" */
+      boxColor?: string;
+      /** Align · @default "center" */
+      align?: "left" | "center" | "right";
+      /** Line height · 0.8–2 · @default 1.15 */
+      lineHeight?: number;
+      /** Position · @default "top" */
+      position?: "top" | "middle" | "bottom" | "lowerThird";
+    };
+    /** Text Animation: titles, captions lanes, caption cues and the project. */
+    animate: {
+      /** Preset · @default "fade" */
+      preset?: "none" | "fade" | "rise" | "pop" | "typewriter" | "highlight" | "bounce" | "slide";
+      /** Unit · @default "word" */
+      unit?: "word" | "character" | "line";
+      /** Duration · 1–60 · @default 8 */
+      duration?: number;
+      /** Stagger · 0–30 · @default 3 */
+      stagger?: number;
+    };
+    /** Shape Style: shapes. */
+    shape: {
+      /** Fill · #rrggbb · @default "#ffffff" */
+      fill?: string;
+      /** Fill 2 · #rrggbb · @default "#ffffff" */
+      fill2?: string;
+      /** Stroke · #rrggbb · @default "#000000" */
+      stroke?: string;
+      /** Stroke width · 0–0.05 · @default 0 */
+      strokeWidth?: number;
+      /** Corner · 0–0.5 · @default 0 */
+      corner?: number;
+    };
+    /** Template: items made by template.add. */
+    template: {
+      /** Template · @default "lower-third" */
+      name?: "lower-third" | "callout" | "cta" | "title-card" | "chapter-card";
+      /** Group · @default "" */
+      group?: string;
+    };
+    /** Brand Kit: the project. */
+    brand: {
+      /** Font · @default "SF Pro Display" */
+      font?: string;
+      /** Primary · #rrggbb · @default "#ffffff" */
+      color?: string;
+      /** Secondary · #rrggbb · @default "#1d2420" */
+      color2?: string;
+      /** Accent · #rrggbb · @default "#ffd23f" */
+      accent?: string;
+      /** Text · #rrggbb · @default "#ffffff" */
+      textColor?: string;
+      /** Logo · @default "" */
+      logo?: string;
+      /** Logo position · @default "topRight" */
+      logoPosition?: "none" | "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+    };
+  }
+  type EffectType = keyof Effects;
   /** Any registry command, for edit.apply's ops. */
   type Op =
     | op.ItemSplit
@@ -1056,7 +1356,7 @@ declare const splice: {
   };
   media: {
     /** Analyze a clip's media, in timeline frames: loudness and pauses (default); peaks, beats and sound labels (speech, music, laughter); shot cuts, on-screen text with boxes, faces and people every second; matte builds the person matte for a cutout effect. Results are cached per file. Native kinds need macOS. */
-    analyze(args: { projectId?: string; clip: string; kinds?: "loudness" | "pauses" | "peaks" | "beats" | "sounds" | "shots" | "text" | "faces" | "people" | "matte"[]; }): { revision: Splice.Revision; clip: string; components?: unknown[]; pauses?: unknown[]; peaks?: Record<string, unknown>; beats?: unknown[]; sounds?: unknown[]; shots?: unknown[]; text?: unknown[]; faces?: unknown[]; people?: unknown[]; matte?: string; };
+    analyze(args: { projectId?: string; clip: string; kinds?: ("loudness" | "pauses" | "peaks" | "beats" | "sounds" | "shots" | "text" | "faces" | "people" | "matte")[]; }): { revision: Splice.Revision; clip: string; components?: unknown[]; pauses?: unknown[]; peaks?: Record<string, unknown>; beats?: unknown[]; sounds?: unknown[]; shots?: unknown[]; text?: unknown[]; faces?: unknown[]; people?: unknown[]; matte?: string; };
   };
   view: {
     /** Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count; sheet:true returns one contact-sheet image of them all. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */

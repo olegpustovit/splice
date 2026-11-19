@@ -119,7 +119,7 @@ impl Editor {
             } => {
                 let mut params = Vec::new();
                 if let Some(size) = size {
-                    params.push(number("size", size.clamp(0.5, 4.0)));
+                    params.push(number("size", size));
                 }
                 if let Some(rings) = click_rings {
                     params.push(EffectParam {
@@ -132,7 +132,7 @@ impl Editor {
             Op::KeysSet { clip, size } => {
                 let size =
                     size.ok_or_else(|| CommandError::bad("size", "a scale from 0.5 to 3"))?;
-                let params = vec![number("size", size.clamp(0.5, 3.0))];
+                let params = vec![number("size", size)];
                 self.clip_effect(&clip, "keystrokes", params, "Keystroke chips")
             }
             Op::KeysHide {
@@ -400,7 +400,7 @@ impl Editor {
         if let Some((clip, component)) = clip {
             let (id, slot) = self.take_clip(&clip)?;
             let data = self.project.clips.data_mut(slot).expect("live clip");
-            let volume = volume.expect("decoded volume").clamp(0.0, 2.0);
+            let volume = volume.expect("decoded volume");
             let gain = match component {
                 Component::Mic if data.enabled.mic.is_some() => &mut data.volume.mic,
                 Component::System if data.enabled.system.is_some() => &mut data.volume.system,
@@ -428,7 +428,7 @@ impl Editor {
             };
             let mut next = sound;
             if let Some(volume) = volume {
-                next.volume = volume.clamp(0.0, 2.0);
+                next.volume = volume;
             }
             if let Some(target) = normalize {
                 let loudness = media(&self.project, sound.media)?

@@ -26,6 +26,8 @@ pub(super) trait Args {
     fn opt_flag(&self, key: &str) -> Result<Option<bool>, Error>;
     fn number(&self, key: &str) -> Result<f64, Error>;
     fn opt_number(&self, key: &str) -> Result<Option<f64>, Error>;
+    /// An optional number within `[low, high]`, refused with the rule otherwise (never clamped).
+    fn opt_within(&self, key: &str, low: f64, high: f64) -> Result<Option<f64>, Error>;
     fn opt_int(&self, key: &str) -> Result<Option<Frame>, Error>;
     fn target(&self, key: &str) -> Result<Target, Error>;
     fn opt_target(&self, key: &str) -> Result<Option<Target>, Error>;
@@ -80,6 +82,19 @@ impl Args for Json {
 
     fn opt_number(&self, key: &str) -> Result<Option<f64>, Error> {
         self.field(key).map(|_| self.number(key)).transpose()
+    }
+
+    fn opt_within(&self, key: &str, low: f64, high: f64) -> Result<Option<f64>, Error> {
+        match self.opt_number(key)? {
+            Some(n) if !(low..=high).contains(&n) => Err(Error::rule(
+                "BAD_ARGS",
+                key,
+                self.field(key).cloned(),
+                &format!("a number from {low} to {high}"),
+                &format!("Pass {key} between {low} and {high}."),
+            )),
+            value => Ok(value),
+        }
     }
 
     fn opt_int(&self, key: &str) -> Result<Option<Frame>, Error> {
