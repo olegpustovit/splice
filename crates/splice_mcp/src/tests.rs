@@ -183,7 +183,7 @@ fn tool_transcripts_run_against_live_store() {
         }
         transcript::run(&case, LEGACY_PRELUDE, &paths, &mut |input| {
             let output = replay_headless(input)?;
-            if name == "takes.events" {
+            if name == "takes.events" || name == "media.analyze" {
                 let wire = std::str::from_utf8(&output).map_err(io::Error::other)?;
                 assert!(!wire.contains("private"), "{name} disclosed key text");
             }

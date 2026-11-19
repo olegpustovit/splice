@@ -4,3 +4,5 @@
 < {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"clip":"clp_take","components":[{"component":"mic","volume":1,"integratedLufs":null},{"component":"system","volume":0.8}],"pauses":"…"},"isError":false}}
 > {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"media.analyze","arguments":{"projectId":"prj_1","clip":"clp_take","kinds":["text"]}}}
 < {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"error":{"code":"MEDIA_OFFLINE","message":"…","fix":"…"}},"isError":true}}
+> {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"media.analyze","arguments":{"projectId":"prj_1","clip":"clp_take","kinds":["activity"]}}}
+< {"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"clip":"clp_take","activity":{"idle":[],"typing":[{"from":135,"to":138}],"clicks":[{"from":132,"to":135}],"scroll":[],"busy":[{"from":126,"to":195},{"from":217,"to":354},{"from":376,"to":393},{"from":415,"to":540}]}},"isError":false}}

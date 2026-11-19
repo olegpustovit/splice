@@ -57,7 +57,7 @@ result, is logged to the friction log, and the server keeps serving.
 | 4 | `timeline.find` | read | Query by kind, text, lane, range, word |
 | 5 | `takes.events` | read | Cursor, clicks and keys of a take, in timeline frames (keys redacted by policy) |
 | 6 | `transcript.get` | read | Words with IDs and timing; `captions: json\|srt\|vtt` |
-| 7 | `media.analyze` | read | Per clip or media, by `kinds`: loudness, pauses, peaks, beats, sounds, shots, text, faces, people, matte. Cached by file stamp; long media runs as a job. `audio.summary` stays an alias |
+| 7 | `media.analyze` | read | Per clip or media, by `kinds`: loudness, pauses, activity, peaks, beats, sounds, shots, text, faces, people, matte. Cached by file stamp; long media runs as a job. `audio.summary` stays an alias |
 | 8 | `view.frames` | read | PNG frames at frames N from the export composition (what the agent sees = what export makes); `sheet:true` returns one contact sheet; `strip:true` adds a heatmap of what changed between consecutive frames |
 | 9 | `view.check` | read | Problems a few frames miss, with spans and fixes: camera jumps and off-canvas pictures (every platform), black or frozen spans and backdrop bleed in transitions (macOS, rendered at 5/s, with a contact sheet) |
 | 10 | `commands.describe` | read | The command registry: params, examples, status (built or planned) |
@@ -170,7 +170,12 @@ indexes, visibility and categories. Captured characters and raw key codes stay i
 `media.analyze {clip|media, kinds}` returns track settings and transcript-derived pauses, plus the
 requested native kinds: `loudness`, `peaks`, `beats` (onsets and tempo), `sounds` (SoundAnalysis
 labels as runs), `shots`, `text` (Vision OCR with boxes), `faces`, `people` and `matte` (a person
-matte movie for `cutout`). Results are cached in `<package>/analysis/<media>/`, valid while the
+matte movie for `cutout`). `activity` (portable, D15) reads a screen take's event log and transcript
+and returns `{idle, typing, clicks, scroll, busy}` as `{from, to}` timeline ranges: `busy` merges
+every input event and spoken word within 0.5 s; `idle` is a stretch with no input and no speech for
+at least 2 s, inset 0.25 s at each end so its head and tail stay visible; typing runs join keys
+within 1 s (command, control and option keys are shortcuts, not typing). Typed characters are never
+read or returned (D19). A clip that is not a take is `WRONG_KIND`. Results are cached in `<package>/analysis/<media>/`, valid while the
 file's size and mtime match. Media over 10 minutes (or `async:true`) analyze as a job; poll
 `jobs.status`. A missing file is `MEDIA_OFFLINE`. `audio.summary` is an alias with no kinds.
 `transcript.get` also lists `fillers` and `retakes` (repeated phrases) for `cut.words`. Pass `item` (a sound item or media overlay: voice-overs, podcast tracks) instead of `clip` to transcribe or read that item's media; its words map to the timeline through the item's start.

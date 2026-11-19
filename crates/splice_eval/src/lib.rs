@@ -3,6 +3,7 @@
 
 use splice_model::{ClipId, Frame, ItemId, MediaId, Rect, ShapeKind, TimelineId, WordId};
 
+pub mod activity;
 mod camera;
 mod compound;
 mod cube;

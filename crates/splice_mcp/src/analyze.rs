@@ -4,13 +4,17 @@
 //! them onto the clip's timeline frames.
 // The native half (native.rs) is macOS-only; Linux builds keep the portable helpers for tests.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
-use super::{Json, object, text, wire::*};
+use super::{
+    Json, object, text,
+    wire::{range as range_json, *},
+};
 use splice_core::history::StoreError;
 use splice_model::*;
 use std::path::{Path, PathBuf};
 
 pub(super) const KINDS: &[&str] = &[
-    "loudness", "pauses", "peaks", "beats", "sounds", "shots", "text", "faces", "people", "matte",
+    "loudness", "pauses", "activity", "peaks", "beats", "sounds", "shots", "text", "faces",
+    "people", "matte",
 ];
 
 /// A clip's source window on its media clock.
@@ -29,6 +33,17 @@ impl Window {
         let offset = (seconds * self.fps - self.source) / self.rate;
         (offset >= 0.0 && offset < f64::from(self.length))
             .then(|| self.start + offset.round() as Frame)
+    }
+
+    /// Timeline frames `[from, to)` of a media-seconds range, clipped to the clip; `None` when
+    /// nothing of it shows.
+    pub fn frames(&self, [from, to]: [f64; 2]) -> Option<(Frame, Frame)> {
+        let at = |seconds: f64| {
+            let offset = ((seconds * self.fps - self.source) / self.rate).round();
+            self.start + offset.clamp(0.0, f64::from(self.length)) as Frame
+        };
+        let (from, to) = (at(from), at(to));
+        (to > from).then_some((from, to))
     }
 
     /// Media seconds the clip covers.
@@ -141,28 +156,53 @@ pub(super) fn analyze(
     let native: Vec<&str> = kinds
         .iter()
         .map(String::as_str)
-        .filter(|k| !matches!(*k, "loudness" | "pauses"))
+        .filter(|k| !matches!(*k, "loudness" | "pauses" | "activity"))
         .collect();
-    if !native.is_empty() {
-        let media = p
-            .clips
-            .data(slot)
-            .and_then(|d| d.media)
-            .and_then(|m| p.media.iter().find(|x| x.id == m))
-            .ok_or_else(|| {
-                failure(
-                    "NO_MEDIA",
-                    "A gap has nothing to analyze.",
-                    "Pass a clip with media.",
-                )
-            })?;
-        let window = Window {
-            start: p.clips.timing(slot).expect("live clip").start,
-            length: p.clips.timing(slot).expect("live clip").length,
-            source: f64::from(p.clips.timing(slot).expect("live clip").source),
-            rate: timing::source_rate(p, slot).unwrap_or(1.0),
-            fps: media.probe.fps,
+    if native.is_empty() && !kinds.iter().any(|k| k == "activity") {
+        return Ok(object(fields));
+    }
+    let media = p
+        .clips
+        .data(slot)
+        .and_then(|d| d.media)
+        .and_then(|m| p.media.iter().find(|x| x.id == m))
+        .ok_or_else(|| {
+            failure(
+                "NO_MEDIA",
+                "A gap has nothing to analyze.",
+                "Pass a clip with media.",
+            )
+        })?;
+    let window = Window {
+        start: p.clips.timing(slot).expect("live clip").start,
+        length: p.clips.timing(slot).expect("live clip").length,
+        source: f64::from(p.clips.timing(slot).expect("live clip").source),
+        rate: timing::source_rate(p, slot).unwrap_or(1.0),
+        fps: media.probe.fps,
+    };
+    if kinds.iter().any(|k| k == "activity") {
+        let (from, to) = window.seconds();
+        let found = super::media::activity(store.path(), p, media, [from, to])?;
+        let ranges = |list: &[[f64; 2]]| {
+            Json::Array(
+                list.iter()
+                    .filter_map(|&range| window.frames(range))
+                    .map(|(from, to)| range_json(from, to))
+                    .collect(),
+            )
         };
+        fields.push((
+            "activity",
+            object(vec![
+                ("idle", ranges(&found.idle)),
+                ("typing", ranges(&found.typing)),
+                ("clicks", ranges(&found.clicks)),
+                ("scroll", ranges(&found.scroll)),
+                ("busy", ranges(&found.busy)),
+            ]),
+        ));
+    }
+    if !native.is_empty() {
         if !store.path().join(&media.path).exists() {
             return Err(failure(
                 "MEDIA_OFFLINE",

@@ -490,13 +490,7 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
     let (id, slot) = clip(p, args)?;
     let media = clip_media(p, slot)
         .filter(|media| media.kind == MediaKind::Take)
-        .ok_or_else(|| {
-            failure(
-                "WRONG_KIND",
-                "The clip is not a recorded take.",
-                "Use a take clip ID from timeline.snapshot.",
-            )
-        })?;
+        .ok_or_else(not_a_take)?;
     let clock = ClipClock::new(p, slot)?;
     let (from, to) = timeline::window(args, clock.timing.end().unwrap())?;
     let mut cursor = Vec::new();
@@ -548,7 +542,7 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
                 "key" => {
                     let data = p.clips.data(slot).unwrap();
                     let mods = event.field("mods").and_then(Json::as_u64).unwrap_or(0);
-                    let category = if mods & ((1 << 18) | (1 << 19) | (1 << 20)) != 0 {
+                    let category = if mods & COMMAND_MODIFIERS != 0 {
                         "shortcut"
                     } else {
                         "typing"
@@ -693,4 +687,72 @@ fn for_each_event(
             return Ok(());
         }
     }
+}
+
+/// A take's activity over `window` (media seconds), from its event log and transcript words
+/// (T41.1). Only event kinds, times and modifier flags are read; typed characters never are.
+pub(super) fn activity(
+    dir: &Path,
+    p: &Project,
+    media: &Media,
+    window: [f64; 2],
+) -> Result<splice_eval::activity::Activity, StoreError> {
+    use splice_eval::activity::{Event, Input};
+    if media.kind != MediaKind::Take {
+        return Err(not_a_take());
+    }
+    let mut events = Vec::new();
+    if let Some(name) = media.take.as_ref().and_then(|take| take.events.as_deref()) {
+        let dir = dir.join("takes").join(media.id.to_string());
+        for_each_event(&dir, name, &mut |event| {
+            let kind = event
+                .field("k")
+                .and_then(Json::as_str)
+                .ok_or_else(events_format)?;
+            let t = event
+                .field("t")
+                .and_then(Json::as_f64)
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .ok_or_else(events_format)?;
+            let input = match kind {
+                "move" | "drag" => Input::Pointer,
+                "down" => Input::Press,
+                "up" => Input::Release,
+                "scroll" => Input::Scroll,
+                "flags" => Input::Shortcut,
+                "key" => {
+                    let mods = event.field("mods").and_then(Json::as_u64).unwrap_or(0);
+                    if mods & COMMAND_MODIFIERS != 0 {
+                        Input::Shortcut
+                    } else {
+                        Input::Typing
+                    }
+                }
+                // Cursor image changes are not the person doing anything.
+                _ => return Ok(()),
+            };
+            events.push(Event { t, input });
+            Ok(())
+        })?;
+    }
+    let fps = media.probe.fps.max(1.0);
+    let speech: Vec<[f64; 2]> = p
+        .transcripts
+        .iter()
+        .filter(|transcript| transcript.media == media.id)
+        .flat_map(|transcript| &transcript.words)
+        .map(|word| [f64::from(word.from) / fps, f64::from(word.to) / fps])
+        .collect();
+    Ok(splice_eval::activity::activity(&events, &speech, window))
+}
+
+/// Command, control and option (NSEvent modifier flags): a key with one is a shortcut.
+const COMMAND_MODIFIERS: u64 = (1 << 18) | (1 << 19) | (1 << 20);
+
+fn not_a_take() -> StoreError {
+    failure(
+        "WRONG_KIND",
+        "The clip is not a recorded take.",
+        "Use a take clip ID from timeline.snapshot.",
+    )
 }

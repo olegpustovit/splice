@@ -11,7 +11,7 @@ const FRAME: &str = r#"{"type":"integer","minimum":0}"#;
 const FRAMES: &str =
     r#"{"type":"array","items":{"type":"integer","minimum":0},"minItems":1,"maxItems":16}"#;
 const FILMSTRIP: &str = r#"{"type":"integer","minimum":1,"maximum":16}"#;
-const KINDS: &str = r#"{"type":"array","items":{"enum":["loudness","pauses","peaks","beats","sounds","shots","text","faces","people","matte"]},"minItems":1}"#;
+const KINDS: &str = r#"{"type":"array","items":{"enum":["loudness","pauses","activity","peaks","beats","sounds","shots","text","faces","people","matte"]},"minItems":1}"#;
 const LIMIT: &str = r#"{"type":"integer","minimum":1}"#;
 const RANGE: &str = r#"{"type":"object","properties":{"from":{"type":"integer","minimum":0},"to":{"type":"integer","minimum":0}},"required":["from","to"]}"#;
 const ERROR_SCHEMA: &str = r#"{"type":"object","properties":{"code":{"type":"string"},"message":{"type":"string"},"fix":{"type":"string"},"valid":{"type":"array"},"current":{},"changedSince":{"type":"array"},"op":{"type":"integer","minimum":0}},"required":["code","message","fix"]}"#;
@@ -205,7 +205,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "media.analyze",
-        description: "Analyze a clip's media, in timeline frames: loudness and pauses (default); peaks, beats and sound labels (speech, music, laughter); shot cuts, on-screen text with boxes, faces and people every second; matte builds the person matte for a cutout effect. Results are cached per file. Native kinds need macOS.",
+        description: "Analyze a clip's media in timeline frames. Kinds: loudness and pauses (default); activity of a screen take (idle, typing, clicks, scroll and busy ranges from its recorded input and transcript, never the typed characters); peaks, beats and sound labels (speech, music, laughter); shot cuts, on-screen text with boxes, faces and people every second; matte builds the person matte for a cutout effect. Results are cached per file. Native kinds need macOS.",
         read_only: true,
         input: &[
             ("projectId", "string"),
@@ -219,6 +219,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ("clip", "string"),
             ("components", "array"),
             ("pauses", "array"),
+            ("activity", "object"),
             ("peaks", "object"),
             ("beats", "array"),
             ("sounds", "array"),
