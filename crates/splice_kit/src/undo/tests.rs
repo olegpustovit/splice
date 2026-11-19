@@ -129,3 +129,38 @@ fn history_caps_retention_and_reuses_the_ring_without_allocating() {
     disabled.push(entry(1, "Edit", Merge::Step, 1));
     assert_eq!(disabled.undo(), None);
 }
+
+/// T6.3: a drag's phases make one undo step; a cancelled drag restores and leaves no redo.
+#[test]
+fn history_gesture_phases_make_one_step_and_cancel_restores() {
+    let mut stack = UndoStack::new(0, 8, usize::MAX);
+    stack.push(entry(1, "Agent: Add clip", Merge::Step, 0));
+    assert_eq!(
+        stack.gesture(9, Phase::Began, Some(entry(2, "Trim", Merge::Step, 1))),
+        None
+    );
+    for (rev, time) in [(3, 2), (4, 3)] {
+        stack.gesture(
+            9,
+            Phase::Changed,
+            Some(entry(rev, "Trim", Merge::Step, time)),
+        );
+    }
+    stack.gesture(9, Phase::Ended, Some(entry(5, "Trim", Merge::Step, 4)));
+    assert_eq!(stack.titles(), (Some("Trim"), None));
+    stack.push(entry(6, "Move", Merge::Gesture(9), 5));
+    assert_eq!(
+        stack.titles(),
+        (Some("Move"), None),
+        "a sealed gesture ID starts a new step"
+    );
+    assert_eq!(stack.undo(), Some(5));
+    assert_eq!(stack.undo(), Some(1));
+    assert_eq!(stack.redo(), Some(5));
+    stack.push(entry(6, "Move", Merge::Step, 6));
+    stack.gesture(4, Phase::Began, Some(entry(7, "Drag", Merge::Step, 7)));
+    stack.gesture(4, Phase::Changed, Some(entry(8, "Drag", Merge::Step, 8)));
+    assert_eq!(stack.gesture(4, Phase::Cancelled, None), Some(6));
+    assert_eq!(stack.titles(), (Some("Move"), None));
+    assert_eq!(stack.gesture(4, Phase::Cancelled, None), None);
+}

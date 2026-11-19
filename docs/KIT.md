@@ -84,7 +84,9 @@ impl UndoStack {
 `Phase::{Began, Changed, Ended, Cancelled}` describes pointer capture on continuous controls.
 The scrubber previews a playhead until release and restores its original frame if capture is lost.
 A focused keyboard adjustment or accessibility SetValue may commit without an active drag.
-Timeline edit gestures use a `Gesture(id)` merge at `Began` and seal it at `Ended`.
+`UndoStack::gesture(id, phase, entry)` makes a drag one undo step: `Began`/`Changed` merge as
+`Gesture(id)`, `Ended` seals, and `Cancelled` drops the partial step (no redo) and returns the revision
+to restore.
 
 ## Later (only when a Splice task needs it)
 

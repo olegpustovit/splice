@@ -1,3 +1,4 @@
+use crate::Phase;
 use std::{borrow::Cow, collections::VecDeque};
 
 #[cfg(test)]
@@ -116,6 +117,36 @@ impl UndoStack {
         self.present = entry.payload;
         if entry.merge != Merge::Repair {
             self.merge = Some((entry.merge, entry.time_ms));
+        }
+    }
+
+    /// Records one phase of continuous control `id`, so a whole drag is one undo step.
+    /// `Began`/`Changed` merge `entry` into the gesture, `Ended` merges it and seals. `Cancelled`
+    /// drops the gesture's step and returns the revision the caller restores (no redo entry).
+    pub fn gesture(&mut self, id: u64, phase: Phase, entry: Option<Entry>) -> Option<u64> {
+        if let Some(entry) = entry.filter(|_| phase != Phase::Cancelled) {
+            self.push(Entry {
+                merge: Merge::Gesture(id),
+                ..entry
+            });
+        }
+        let open = self
+            .merge
+            .is_some_and(|(merge, _)| merge == Merge::Gesture(id));
+        match phase {
+            Phase::Began | Phase::Changed => None,
+            Phase::Ended => {
+                self.seal();
+                None
+            }
+            Phase::Cancelled if open => {
+                let restored = self.undo();
+                while self.slots.len() > self.cursor {
+                    self.bytes -= self.slots.pop_back().expect("redo slot").bytes();
+                }
+                restored
+            }
+            Phase::Cancelled => None,
         }
     }
 

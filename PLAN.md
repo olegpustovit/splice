@@ -99,7 +99,7 @@ SHA.
 ### T6 · `splice_kit`: commands and undo, PXUI-shaped (docs/KIT.md)
 - [x] T6.1 [L] Command table, responder chain resolution, validation (enabled, checked, title), `Invoked {id, source, target}`, keymap file with overrides and a conflict test (b84e72c). Unit tests verify zero allocations on warm resolution with default and user shortcuts.
 - [x] T6.2 [L] Undo manager (4554bf1): preallocated ring, `Merge::{Step, Gesture(u64), Burst{key, window}, Repair}`, `seal`, count and byte caps, revision payloads, and owned or borrowed titles. The rays merge-policy tests pass and verify zero warm allocations across eviction, undo, and redo.
-- [ ] T6.3 [L] (0.2) Gesture phases (`Began/Changed/Ended/Cancelled`) for continuous controls; one gesture = one undo step.
+- [x] T6.3 [L] (0.2) Gesture phases (`Began/Changed/Ended/Cancelled`) for continuous controls; one gesture = one undo step.
 
 ### T7 · Install, locate, sign (LocalWave model) [M]
 - [x] T7.1 Bundle metadata (a670c56): `com.olegpustovit.splice`, macOS 15.0 minimum, camera and microphone usage strings, and the `.splice` package and editor declarations. The entitlements grant audio input and camera access for the Hardened Runtime signing in T7.2.
