@@ -396,3 +396,46 @@ fn history_media_import_is_atomic_and_replays_without_a_loader() {
     reopened.close().unwrap();
     assert!(Store::open(&temp.0).unwrap().project().media.is_empty());
 }
+
+#[test]
+fn history_memory_stays_bounded_and_old_revisions_rebuild_exactly() {
+    let temp = Temp::new("bounded");
+    let mut store = Store::create(&temp.0, &Project::default()).unwrap();
+    let mut rng = Xorshift::new(20261119);
+    let mut hashes = vec![store.project().hash];
+    let total = 1_500u64;
+    for rev in 1..=total {
+        let command = if rev % 7 == 0 {
+            op(&format!(
+                r#"{{"cmd":"marker.add","at":{rev},"name":"Beat {rev}"}}"#
+            ))
+        } else {
+            let aspect = ["9:16", "4:5", "1:1", "4:3", "16:9"][(rng.next_u64() % 5) as usize];
+            op(&format!(r#"{{"cmd":"project.set","aspect":"{aspect}"}}"#))
+        };
+        store.apply(&[command], &human(rev)).unwrap();
+        hashes.push(store.project().hash);
+    }
+    // Kept projects: the recent window plus one per stride (not one per revision).
+    let kept = store.versions.materialized();
+    assert!(kept <= 32 + total as usize / 64 + 2, "{kept} projects kept");
+    // Evicted revisions rebuild to their recorded hashes and contents.
+    for _ in 0..40 {
+        let rev = rng.next_u64() % total;
+        let project = store.at(rev).unwrap();
+        assert_eq!(project.hash, hashes[rev as usize]);
+        assert_eq!(project.markers.len() as u64, rev / 7);
+    }
+    // Undo to an old revision still works.
+    let target = 100;
+    store
+        .undo(
+            Scope::To(target),
+            &WriteOptions {
+                time: total + 1,
+                ..WriteOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(store.project().markers.len() as u64, target / 7);
+}

@@ -188,7 +188,8 @@ pub(super) fn list(store: &Store, args: &Json) -> Result<Json, StoreError> {
             Change::Undo(_) => ("undo", Json::Array(Vec::new())),
             Change::Redo(_) => ("redo", Json::Array(Vec::new())),
         };
-        let changes = edit::diff(store.at(record.rev - 1)?, store.at(record.rev)?)?;
+        let (before, after) = (store.at(record.rev - 1)?, store.at(record.rev)?);
+        let changes = edit::diff(&before, &after)?;
         batches.push(object(vec![
             ("revision", rev(record.rev)),
             ("summary", text(&record.batch.label)),

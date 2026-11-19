@@ -6,10 +6,23 @@ pub(super) struct Version {
     pub active: Vec<u64>,
 }
 
+/// A retained revision: its active edits always, its project only when kept materialized.
+struct Entry {
+    project: Option<Project>,
+    active: Vec<u64>,
+    rev: u64,
+    hash: u64,
+}
+
+/// Recent revisions stay materialized for fast undo.
+const RECENT: usize = 32;
+/// Every so many revisions stay materialized as rebuild bases.
+const STRIDE: usize = 64;
+
 pub(super) struct Versions {
-    // ponytail: keep materialized revisions while the project is open. Index and
-    // evict old states when large project history exceeds the open-time memory budget.
-    all: Vec<Version>,
+    // Memory stays bounded over long sessions (T15.4): older revisions keep only their active
+    // edit list and rebuild from the nearest kept base when read.
+    all: Vec<Entry>,
     pub undo: Vec<u64>,
     pub redo: Vec<u64>,
     pub serial_floor: u64,
@@ -19,8 +32,10 @@ impl Versions {
     pub fn new(project: Project) -> Self {
         let serial_floor = project.serial;
         Self {
-            all: vec![Version {
-                project,
+            all: vec![Entry {
+                rev: project.rev,
+                hash: project.hash,
+                project: Some(project),
                 active: Vec::new(),
             }],
             undo: Vec::new(),
@@ -30,17 +45,46 @@ impl Versions {
     }
 
     pub fn origin(&self) -> &Project {
-        &self.all[0].project
+        self.all[0]
+            .project
+            .as_ref()
+            .expect("origin stays materialized")
     }
 
-    pub fn tip(&self) -> &Version {
-        self.all.last().expect("origin")
+    pub fn tip(&self) -> Version {
+        let entry = self.all.last().expect("origin");
+        Version {
+            project: entry.project.clone().expect("tip stays materialized"),
+            active: entry.active.clone(),
+        }
     }
 
-    pub fn read(&self, rev: u64) -> Result<&Version, StoreError> {
-        rev.checked_sub(self.origin().rev)
+    /// The tip's project (always materialized).
+    pub fn tip_project(&self) -> &Project {
+        self.all
+            .last()
+            .and_then(|entry| entry.project.as_ref())
+            .expect("tip stays materialized")
+    }
+
+    /// Revisions kept materialized (bounded by RECENT plus one per STRIDE).
+    #[cfg(test)]
+    pub fn materialized(&self) -> usize {
+        self.all
+            .iter()
+            .filter(|entry| entry.project.is_some())
+            .count()
+    }
+
+    /// The tip's active edits.
+    pub fn tip_active(&self) -> &[u64] {
+        &self.all.last().expect("origin").active
+    }
+
+    fn index(&self, rev: u64) -> Result<usize, StoreError> {
+        rev.checked_sub(self.all[0].rev)
             .and_then(|index| usize::try_from(index).ok())
-            .and_then(|index| self.all.get(index))
+            .filter(|&index| index < self.all.len())
             .ok_or_else(|| {
                 StoreError::new(
                     "NOT_FOUND",
@@ -50,13 +94,55 @@ impl Versions {
             })
     }
 
+    /// A retained revision's project, borrowed when materialized, else rebuilt from `records`.
+    pub fn read(
+        &self,
+        rev: u64,
+        records: &[Record],
+    ) -> Result<std::borrow::Cow<'_, Project>, StoreError> {
+        let index = self.index(rev)?;
+        let entry = &self.all[index];
+        if let Some(project) = &entry.project {
+            return Ok(std::borrow::Cow::Borrowed(project));
+        }
+        // The nearest kept revision whose active edits prefix this one's.
+        let (base, done) = self.all[..index]
+            .iter()
+            .rev()
+            .filter_map(|other| {
+                let project = other.project.as_ref()?;
+                entry
+                    .active
+                    .starts_with(&other.active)
+                    .then_some((project, other.active.len()))
+            })
+            .next()
+            .unwrap_or((self.origin(), 0));
+        let mut project = base.clone();
+        for &edit in &entry.active[done..] {
+            let record = at(records, self.origin().rev, edit).ok_or_else(invalid_revert)?;
+            let Change::Edit {
+                ops,
+                mints,
+                imports,
+            } = &record.batch.change
+            else {
+                return Err(invalid_revert());
+            };
+            project = edit::stage_recorded(&project, ops, record.batch.source, mints, imports)?.0;
+        }
+        project.rev = entry.rev;
+        project.hash = entry.hash;
+        Ok(std::borrow::Cow::Owned(project))
+    }
+
     pub fn edit(&self, project: Project, rev: u64) -> Version {
-        let mut active = self.tip().active.clone();
+        let mut active = self.tip_active().to_vec();
         active.push(rev);
         Version { project, active }
     }
 
-    pub fn restore(&self, action: &Change) -> Result<Version, StoreError> {
+    pub fn restore(&self, action: &Change, records: &[Record]) -> Result<Version, StoreError> {
         let target = match *action {
             Change::Undo(rev) if self.undo.last() == Some(&rev) => rev,
             Change::Redo(rev) if self.redo.last() == Some(&rev) => rev,
@@ -69,11 +155,15 @@ impl Versions {
                 ));
             }
         };
-        Ok(self.read(target)?.clone())
+        let index = self.index(target)?;
+        Ok(Version {
+            project: self.read(target, records)?.into_owned(),
+            active: self.all[index].active.clone(),
+        })
     }
 
     pub fn push(&mut self, version: Version, change: &Change) {
-        let previous = self.tip().project.rev;
+        let previous = self.tip_project().rev;
         match change {
             Change::Undo(_) => {
                 self.undo.pop();
@@ -89,7 +179,18 @@ impl Versions {
             }
         }
         self.serial_floor = self.serial_floor.max(version.project.serial);
-        self.all.push(version);
+        self.all.push(Entry {
+            rev: version.project.rev,
+            hash: version.project.hash,
+            project: Some(version.project),
+            active: version.active,
+        });
+        // Leaving the recent window: keep every STRIDE-th revision as a rebuild base.
+        if let Some(index) = self.all.len().checked_sub(RECENT + 1)
+            && index % STRIDE != 0
+        {
+            self.all[index].project = None;
+        }
     }
 
     pub fn replay(&mut self, records: &[Record]) -> Result<Project, StoreError> {
@@ -102,7 +203,7 @@ impl Versions {
                 imports,
             } => {
                 let (candidate, _) = edit::stage_recorded(
-                    &self.tip().project,
+                    self.tip_project(),
                     ops,
                     record.batch.source,
                     mints,
@@ -121,9 +222,9 @@ impl Versions {
                 }
                 rebuilt.version
             }
-            _ => self.restore(action)?,
+            _ => self.restore(action, records)?,
         };
-        let access = self.tip().project.access;
+        let access = self.tip_project().access;
         if record.batch.source == Source::Agent
             && (access != Access::Live || next.project.access != access)
         {
@@ -141,7 +242,7 @@ impl Versions {
     }
 
     pub fn rebuild(&self, records: &[Record], removed: &[u64]) -> Result<Rebuilt, StoreError> {
-        let current = &self.tip().active;
+        let current = self.tip_active();
         let first = removed.iter().copied().min().ok_or_else(invalid_revert)?;
         if removed.iter().any(|rev| !current.contains(rev)) {
             return Err(invalid_revert());

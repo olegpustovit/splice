@@ -38,8 +38,9 @@ pub struct Journal {
     file: File,
     path: PathBuf,
     origin: Project,
-    // ponytail: keep verified records in memory until journal compaction or open-time
-    // memory measurements justify indexing older segments on disk.
+    // ponytail: verified records stay in memory (a batch's ops run ~200 bytes, so 10,000 batches
+    // hold about 2 MB; revisions themselves are bounded in history::versions). Index older
+    // segments on disk if a measured journal passes 50 MB.
     records: Vec<Record>,
     problem: Option<PackageError>,
 }

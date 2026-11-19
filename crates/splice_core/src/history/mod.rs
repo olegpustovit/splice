@@ -56,12 +56,13 @@ impl Store {
 
     /// Current timeline state, including its revision and journal hash.
     pub fn project(&self) -> &Project {
-        &self.versions.tip().project
+        self.versions.tip_project()
     }
 
-    /// An immutable retained revision.
-    pub fn at(&self, rev: u64) -> Result<&Project, StoreError> {
-        Ok(&self.versions.read(rev)?.project)
+    /// A retained revision: borrowed while it is kept in memory, rebuilt from the journal when
+    /// it is older (T15.4).
+    pub fn at(&self, rev: u64) -> Result<std::borrow::Cow<'_, Project>, StoreError> {
+        self.versions.read(rev, self.journal.records())
     }
 
     /// Journal records in chronological order.
@@ -71,7 +72,7 @@ impl Store {
 
     /// Whether an edit revision still contributes to the active timeline.
     pub fn is_active(&self, revision: u64) -> bool {
-        self.versions.tip().active.contains(&revision)
+        self.versions.tip_active().contains(&revision)
     }
 
     /// Open and closed sessions, in creation order.
@@ -104,7 +105,7 @@ impl Store {
                 .position(|entry| entry.media == transcript.media)
                 .unwrap_or(usize::MAX)
         });
-        let verified = state_hash(retained)?;
+        let verified = state_hash(&retained)?;
         if checkpoint.hash != retained.hash || state_hash(&checkpoint)? != verified {
             return Err(StoreError::new(
                 "JOURNAL_CORRUPT",
@@ -125,14 +126,14 @@ impl Store {
     /// Saves the current revision as a checkpoint.
     pub fn checkpoint(&mut self) -> Result<(), StoreError> {
         self.journal
-            .checkpoint(&self.versions.tip().project)
+            .checkpoint(self.versions.tip_project())
             .map_err(Into::into)
     }
 
     /// Saves the current revision and releases the package writer lock.
     pub fn close(self) -> Result<(), StoreError> {
         self.journal
-            .close(&self.versions.tip().project)
+            .close(self.versions.tip_project())
             .map_err(Into::into)
     }
 
@@ -404,7 +405,7 @@ impl Store {
             Change::Restore(rev) => (rev, "Restore"),
             _ => unreachable!("restore action"),
         };
-        let next = self.versions.restore(&action)?;
+        let next = self.versions.restore(&action, self.journal.records())?;
         self.preserve_agent_access(&next, options.source)?;
         if options.dry_run {
             return Ok(self.history_result(Some(revision), None));
@@ -509,7 +510,7 @@ impl Store {
         }
         let previous = self.at(record.rev - 1)?;
         let (_, report) =
-            edit::stage_recorded(previous, original, record.batch.source, mints, imports)?;
+            edit::stage_recorded(&previous, original, record.batch.source, mints, imports)?;
         Ok(Some(EditResult {
             revision: record.rev,
             hash: record.hash,
