@@ -401,8 +401,9 @@ impl Evaluator {
                 }
             }
         }
+        // Keyed looks are sampled per frame by the renderer; only audio ramps and stack
+        // changes need cuts.
         for clip in &self.clips {
-            clip.rig.breakpoints(clip.interval.start, &mut cuts);
             if let Some(mix) = &clip.mix {
                 mix.breakpoints(clip.interval.start, &mut cuts);
             }
@@ -414,13 +415,8 @@ impl Evaluator {
                     start + transition.length,
                 ]);
             }
-            if clip.input.as_ref().is_some_and(|input| input.map.is_some()) {
-                // Speed ramps lower as piecewise-constant rates.
-                cuts.extend((clip.interval.start..clip.interval.end).step_by(2));
-            }
         }
         for overlay in &self.overlays {
-            overlay.rig.breakpoints(overlay.interval.start, &mut cuts);
             if let Some(mix) = &overlay.mix {
                 mix.breakpoints(overlay.interval.start, &mut cuts);
             }
@@ -430,15 +426,8 @@ impl Evaluator {
                 mix.breakpoints(sound.interval.start, &mut cuts);
             }
         }
-        for title in &self.titles {
-            title.rig.breakpoints(title.interval.start, &mut cuts);
-        }
         for shape in &self.shapes {
             shape.interval.add_breakpoints(&mut cuts);
-            shape.rig.breakpoints(shape.interval.start, &mut cuts);
-        }
-        for caption in &self.captions {
-            caption.rig.breakpoints(caption.interval.start, &mut cuts);
         }
         for motion in &self.motions {
             motion.interval.add_breakpoints(&mut cuts);
@@ -468,6 +457,44 @@ impl Evaluator {
     /// Items with a person cutout and their media (the matte comes from the analysis store).
     pub fn cutouts(&self) -> &[(TimelineId, MediaId)] {
         &self.cutouts
+    }
+
+    /// Timeline frames an item is drawn in, including transition overlap past a clip's edges.
+    pub fn extent(&self, item: TimelineId) -> Option<[Frame; 2]> {
+        let TimelineId::Clip(id) = item else {
+            let TimelineId::Item(id) = item else {
+                return None;
+            };
+            let interval = self
+                .titles
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| t.interval)
+                .or_else(|| {
+                    self.captions
+                        .iter()
+                        .find(|c| c.id == id)
+                        .map(|c| c.interval)
+                })
+                .or_else(|| self.source(item).map(|(interval, _)| interval))?;
+            return Some([interval.start, interval.end]);
+        };
+        let index = self.clips.iter().position(|clip| clip.id == id)?;
+        let clip = &self.clips[index];
+        let mut extent = [clip.interval.start, clip.interval.end];
+        if let Some(t) = clip.transition
+            && index > 0
+            && self.clips[index - 1].interval.end == clip.interval.start
+        {
+            extent[0] -= t.length / 2;
+        }
+        if let Some(next) = self.clips.get(index + 1)
+            && let Some(t) = next.transition
+            && next.interval.start == clip.interval.end
+        {
+            extent[1] += t.length - t.length / 2;
+        }
+        Some(extent)
     }
 
     /// The transition into a clip, if it has one.

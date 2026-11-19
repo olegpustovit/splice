@@ -157,7 +157,7 @@ fn no_transcript() -> StoreError {
     )
 }
 
-fn captions(p: &Project, args: &Json, format: &str) -> Result<Json, StoreError> {
+pub(super) fn captions(p: &Project, args: &Json, format: &str) -> Result<Json, StoreError> {
     if !matches!(format, "json" | "srt" | "vtt") {
         return Err(bad("captions", "json, srt or vtt"));
     }

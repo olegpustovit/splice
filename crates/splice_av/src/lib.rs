@@ -2,9 +2,11 @@
 #![cfg(target_os = "macos")]
 #![deny(missing_docs)]
 
+mod audio;
 mod export;
 mod gpu;
 mod lower;
+mod lut;
 mod takes;
 
 pub use export::{Export, ExportState};
@@ -24,7 +26,7 @@ pub use composition::Player;
 /// A prepared timeline and its native composition for playback and delivery.
 pub struct Composition {
     native: composition::Composition,
-    evaluator: Evaluator,
+    evaluator: std::sync::Arc<Evaluator>,
     size: [u32; 2],
     end: Frame,
     text: Vec<TimedText>,
@@ -92,6 +94,18 @@ pub struct TimedText {
     range: [Frame; 2],
     /// Resolved text, placement, color and opacity ramp.
     pub layer: composition::TextLayer,
+    /// The title or caption it draws; its per-frame opacity and look come from the evaluator.
+    item: Option<splice_model::ItemId>,
+    /// Animator: start frame, frames to come in, preset.
+    reveal: Option<(Frame, f64, splice_eval::Animate)>,
+}
+
+/// Where `media.analyze {kinds:["people"]}` writes a media's person matte.
+pub fn matte_path(package: &Path, media: splice_model::MediaId) -> PathBuf {
+    package
+        .join("analysis")
+        .join(media.to_string())
+        .join("matte.mov")
 }
 
 impl TimedText {
@@ -138,7 +152,7 @@ impl From<apple_sys::Error> for Error {
 impl Composition {
     /// Builds the program from a read-only project revision and its package directory.
     pub fn prepare(project: &Project, package: &Path) -> Result<Self, Error> {
-        let evaluator = Evaluator::prepare(project).map_err(Error::Plan)?;
+        let evaluator = std::sync::Arc::new(Evaluator::prepare(project).map_err(Error::Plan)?);
         let cuts = evaluator.breakpoints();
         let end = *cuts.last().unwrap_or(&0);
         let (native, text, plan) = lower::build(project, package, &evaluator, &cuts, end)?;

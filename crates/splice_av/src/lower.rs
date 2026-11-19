@@ -6,16 +6,33 @@ use apple_sys::composition::{
     AudioRamp, Builder, Composition, CursorImage, CursorSample, Source, TextLayer, Timing,
     VideoLayer,
 };
-use splice_eval::{Audio, Background, CaptionPreset, Evaluator, Keys, Layer, Picture, Track};
-use splice_model::{ClipId, Frame, Media, MediaId, MediaKind, Project, Rect, TimelineId};
+use splice_eval::{
+    Animate, Audio, Background, CaptionPreset, Evaluator, Keys, Layer, Picture, TextStyle, Track,
+};
+use splice_model::{ClipId, Frame, ItemId, Media, MediaId, MediaKind, Project, Rect, TimelineId};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
     Picture(TimelineId),
+    Matte(TimelineId),
     Camera(ClipId),
     Audio(TimelineId, Track, bool),
     Fill(usize, u32, u32),
+}
+
+/// What a lowered video layer is for, so the GPU can apply the owner's per-frame look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Role {
+    /// Drawn as is.
+    Plain,
+    /// A clip or overlay picture.
+    Picture(TimelineId),
+    /// The window backing of a picture.
+    Backing(TimelineId),
+    /// The person matte of a picture: bound to it, never drawn.
+    Matte(TimelineId),
 }
 
 /// The lowered layer plan, kept for the OGPU compositor (T12.7).
@@ -23,10 +40,18 @@ enum Key {
 pub(crate) struct Plan {
     /// Instruction intervals in order, each with its layers back to front.
     pub intervals: Vec<([Frame; 2], Vec<VideoLayer>)>,
+    /// Per interval, what each layer is for.
+    pub roles: Vec<Vec<Role>>,
     /// Fill tracks and their top-left and bottom-right colors.
     pub fills: Vec<(i32, [u32; 2])>,
     /// Cursor tables in registration order (`VideoLayer::cursor` indexes them).
     pub cursors: Vec<(Vec<CursorSample>, Vec<CursorImage>, f64)>,
+    /// Display orientation per video track (0 none … 3 270°).
+    pub orients: Vec<(i32, u32)>,
+    /// LUT files by `Grade::lut` index.
+    pub luts: Vec<PathBuf>,
+    /// The prepared timeline, evaluated per frame for keyed looks and shapes.
+    pub evaluator: Option<Arc<Evaluator>>,
 }
 
 struct Lowering {
@@ -44,12 +69,21 @@ struct Lowering {
 pub(super) fn build(
     project: &Project,
     package: &Path,
-    evaluator: &Evaluator,
+    shared: &Arc<Evaluator>,
     cuts: &[Frame],
     end: Frame,
 ) -> Result<(Composition, Vec<TimedText>, Plan), Error> {
+    let evaluator: &Evaluator = shared;
+    let mut luts = Vec::new();
+    while let Some(path) = evaluator.lut(luts.len() as u16) {
+        luts.push(package.join(path));
+    }
     let mut state = Lowering {
-        plan: Plan::default(),
+        plan: Plan {
+            luts,
+            evaluator: Some(shared.clone()),
+            ..Plan::default()
+        },
         builder: Builder::new(project.size, project.fps, end)?,
         text: Vec::new(),
         end,
@@ -111,6 +145,7 @@ pub(super) fn build(
         }
         video.clear();
         audio.clear();
+        let mut roles = Vec::with_capacity(first.layers.len() + 1);
         // Keep a real video track under blank, audio-only and text-only intervals.
         if !first
             .layers
@@ -118,10 +153,15 @@ pub(super) fn build(
             .any(|layer| matches!(layer, Layer::Fade { .. }))
         {
             video.push(layer(black, bounds, [1.0; 2], [width, height]));
+            roles.push(Role::Plain);
         }
         for (depth, (&a, &b)) in first.layers.iter().zip(&last.layers).enumerate() {
             match (a, b) {
                 (Layer::Picture(a), Layer::Picture(b)) => {
+                    if let Some(matte) = state.matte(a, project, package, evaluator)? {
+                        video.push(layer(matte, bounds, [1.0; 2], [width, height]));
+                        roles.push(Role::Matte(a.item));
+                    }
                     let track = state.picture(a, project, package, evaluator)?;
                     let mut picture = VideoLayer::plain(
                         track,
@@ -133,6 +173,7 @@ pub(super) fn build(
                     picture.opacity = opacity(a.opacity, b.opacity, range);
                     state.dress(&mut picture, a, range, project, package, evaluator)?;
                     video.push(picture);
+                    roles.push(Role::Picture(a.item));
                 }
                 (
                     Layer::Background {
@@ -154,10 +195,23 @@ pub(super) fn build(
                         opacity(a, b, range),
                         [width, height],
                     ));
+                    // A backing belongs to the picture drawn right after it.
+                    let owner = first.layers[depth + 1..].iter().find_map(|l| match l {
+                        Layer::Picture(p) => Some(p.item),
+                        _ => None,
+                    });
+                    roles.push(owner.map_or(Role::Plain, Role::Backing));
                 }
-                (Layer::Fade { opacity: a }, Layer::Fade { opacity: b }) => {
-                    video.push(layer(black, bounds, opacity(a, b, range), [width, height]));
+                (Layer::Fade { opacity: a, color }, Layer::Fade { opacity: b, .. }) => {
+                    let track = if color == 0 {
+                        black
+                    } else {
+                        state.fill(depth, color, color)?
+                    };
+                    video.push(layer(track, bounds, opacity(a, b, range), [width, height]));
+                    roles.push(Role::Plain);
                 }
+                (Layer::Shape { .. }, Layer::Shape { .. }) => {}
                 (
                     Layer::Camera {
                         clip,
@@ -175,36 +229,23 @@ pub(super) fn build(
                     camera.corner = radius;
                     camera.shadow = shadow.clamp(0.0, 1.0);
                     video.push(camera);
+                    roles.push(Role::Plain);
                 }
-                (
-                    Layer::Title {
-                        item,
-                        bounds,
-                        opacity: a,
-                    },
-                    Layer::Title { opacity: b, .. },
-                ) => {
-                    if let Some(text) = evaluator.title(item) {
-                        state.add_text(
-                            range,
-                            TextLayer {
-                                text: text.into(),
-                                bounds: coordinates(bounds),
-                                font: bounds.h * 0.6,
-                                opacity: opacity(a, b, range).map(|v| v as f32),
-                                color: 0xffffff,
-                            },
-                        )?;
+                (Layer::Title { item, bounds, .. }, Layer::Title { .. }) => {
+                    if let Some(text) = evaluator.title(item)
+                        && !state.text.iter().any(|known| known.item == Some(item))
+                    {
+                        let end = evaluator
+                            .extent(TimelineId::Item(item))
+                            .map_or(to, |[_, end]| end);
+                        state.title(item, text, bounds, [from, end], evaluator.text_style(item));
                     }
                 }
                 (
                     Layer::Caption {
-                        item,
-                        word,
-                        opacity: a,
-                        style,
+                        item, word, style, ..
                     },
-                    Layer::Caption { opacity: b, .. },
+                    Layer::Caption { .. },
                 ) => {
                     if let Some(words) = evaluator.caption_words(item) {
                         let count = match style.preset {
@@ -231,8 +272,10 @@ pub(super) fn build(
                                 height * top,
                                 (height * (1.0 - bottom) - content_height).max(height * top),
                             );
+                            let text_style = evaluator.text_style(item);
                             state.add_text(
                                 range,
+                                Some(item),
                                 TextLayer {
                                     text,
                                     bounds: [
@@ -242,10 +285,12 @@ pub(super) fn build(
                                         content_height,
                                     ],
                                     font,
-                                    opacity: opacity(a, b, range).map(|v| v as f32),
-                                    color: style.color,
+                                    opacity: [1.0; 2],
+                                    color: text_style.map_or(style.color, |s| s.color),
+                                    style: native_style(text_style, style.stroke),
+                                    visible: None,
                                 },
-                            )?;
+                            );
                         }
                     }
                 }
@@ -271,6 +316,7 @@ pub(super) fn build(
         }
         state.builder.range(range, &video, &audio)?;
         state.plan.intervals.push((range, video.clone()));
+        state.plan.roles.push(roles);
     }
     for (clip, media, style) in chips {
         state.chips(clip, media, style, project, package, evaluator)?;
@@ -446,22 +492,99 @@ impl Lowering {
             if to - from >= 2 {
                 self.add_text(
                     [from, to],
+                    None,
                     TextLayer {
                         text,
                         bounds: [x, y, width * 0.6, chip_h],
                         font: chip_h * 0.62,
                         opacity: [1.0; 2],
                         color: 0xffffff,
+                        style: apple_sys::composition::TextStyle {
+                            boxed: 2,
+                            box_color: 0x1c1c1e,
+                            ..Default::default()
+                        },
+                        visible: None,
                     },
-                )?;
+                );
             }
         }
         Ok(())
     }
 
-    fn add_text(&mut self, range: [Frame; 2], layer: TextLayer) -> Result<(), Error> {
-        self.text.push(TimedText { range, layer });
-        Ok(())
+    /// Adds timed text, extending the previous cue when it continues unchanged.
+    fn add_text(&mut self, range: [Frame; 2], item: Option<ItemId>, layer: TextLayer) {
+        if let Some(last) = self.text.last_mut()
+            && item.is_some()
+            && last.item == item
+            && last.range[1] == range[0]
+            && last.layer.text == layer.text
+            && last.reveal.is_none()
+        {
+            last.range[1] = range[1];
+            return;
+        }
+        self.text.push(TimedText {
+            range,
+            layer,
+            item,
+            reveal: None,
+        });
+    }
+
+    /// A title: one raster for static text, or one per word/character/line for animators
+    /// (each draws only its own range, so the units stay where the full layout puts them).
+    fn title(
+        &mut self,
+        item: ItemId,
+        text: &str,
+        bounds: Rect,
+        range: [Frame; 2],
+        style: Option<&TextStyle>,
+    ) {
+        let font = style.map_or(bounds.h * 0.6, |_| bounds.h * 0.6);
+        let layer = TextLayer {
+            text: text.into(),
+            bounds: coordinates(bounds),
+            font,
+            opacity: [1.0; 2],
+            color: style.map_or(0xffffff, |s| s.color),
+            style: native_style(style, 0.0),
+            visible: None,
+        };
+        let Some(style) = style.filter(|s| s.animate != Animate::None) else {
+            self.text.push(TimedText {
+                range,
+                layer,
+                item: Some(item),
+                reveal: None,
+            });
+            return;
+        };
+        if style.animate == Animate::Highlight {
+            // The full text stays; each unit lights up over it in the accent color.
+            self.text.push(TimedText {
+                range,
+                layer: layer.clone(),
+                item: Some(item),
+                reveal: None,
+            });
+        }
+        let units = units(text, style.unit);
+        for (index, unit) in units.into_iter().enumerate() {
+            let start = range[0] + (index as f64 * style.stagger).round() as Frame;
+            let mut part = layer.clone();
+            part.visible = Some(unit);
+            if style.animate == Animate::Highlight {
+                part.color = 0xffd23f;
+            }
+            self.text.push(TimedText {
+                range: [start.min(range[1] - 1), range[1]],
+                layer: part,
+                item: Some(item),
+                reveal: Some((start, style.duration, style.animate)),
+            });
+        }
     }
     fn cached(&self, key: Key) -> Option<i32> {
         // ponytail: use linear lookup until it shows up in composition rebuild profiles.
@@ -478,23 +601,113 @@ impl Lowering {
             .ok_or_else(|| Error::Input(format!("Missing media descriptor {id}.")))
     }
 
-    fn timing(
+    /// Track segments for an item: one linear range over its extent (transition overlap
+    /// included), or 2-frame pieces following a speed ramp; a held frame is one source frame
+    /// stretched over its piece.
+    fn timings(
         fps: u32,
         evaluator: &Evaluator,
         item: TimelineId,
         media: &Media,
-    ) -> Result<Timing, Error> {
+    ) -> Result<Vec<Timing>, Error> {
         let span = evaluator
             .source_span(item)
             .ok_or_else(|| Error::Input(format!("Missing source timing for {item}.")))?;
         let source_fps = media.probe.fps;
-        Ok(Timing {
-            timeline: [span.start, span.end],
-            source_start: span.source / source_fps,
-            source_limit: f64::from(media.probe.frames) / source_fps,
-            speed: span.step * f64::from(fps) / source_fps,
-            source_frame_duration: 1.0 / source_fps,
-        })
+        let limit = f64::from(media.probe.frames) / source_fps;
+        let frame = 1.0 / source_fps;
+        let timing = |from: Frame, to: Frame, source: f64, step: f64| {
+            let seconds = f64::from(to - from) / f64::from(fps);
+            let speed = if step * f64::from(to - from) < 0.5 {
+                frame / seconds
+            } else {
+                step * f64::from(fps) / source_fps
+            };
+            Timing {
+                timeline: [from, to],
+                source_start: (source / source_fps).max(0.0),
+                source_limit: limit,
+                speed,
+                source_frame_duration: frame,
+            }
+        };
+        if let TimelineId::Clip(id) = item
+            && let Some(map) = evaluator.speed_map(id)
+        {
+            let mut out = Vec::new();
+            let mut at = span.start;
+            while at < span.end {
+                let next = (at + 2).min(span.end);
+                let a = map[(at - span.start) as usize];
+                let b = map[(next - span.start) as usize];
+                out.push(timing(
+                    at,
+                    next,
+                    span.source + a,
+                    (b - a) / f64::from(next - at),
+                ));
+                at = next;
+            }
+            return Ok(out);
+        }
+        let [mut from, to] = evaluator.extent(item).unwrap_or([span.start, span.end]);
+        let mut source = span.source - f64::from(span.start - from) * span.step;
+        let mut out = Vec::with_capacity(2);
+        if source < 0.0 {
+            // No head handle: a still has every frame; a video holds its first frame.
+            if media.kind == MediaKind::Image {
+                source = 0.0;
+            } else {
+                let skip = ((-source / span.step).ceil() as Frame).min(to - from);
+                out.push(timing(from, from + skip, 0.0, 0.0));
+                from += skip;
+                source += f64::from(skip) * span.step;
+            }
+        }
+        if from < to {
+            out.push(timing(from, to, source, span.step));
+        }
+        Ok(out)
+    }
+
+    /// Adds `source` as a track over `timings`, returning the track.
+    fn insert(&mut self, key: Key, source: Source, timings: &[Timing]) -> Result<i32, Error> {
+        let (first, rest) = timings
+            .split_first()
+            .ok_or_else(|| Error::Input("An item has no frames to render.".into()))?;
+        let track = self.builder.source(source.clone(), first)?;
+        for timing in rest {
+            self.builder.append(track, source.clone(), timing)?;
+        }
+        self.tracks.push((key, track));
+        Ok(track)
+    }
+
+    /// The person matte track for a picture with a cutout, from the analysis store.
+    fn matte(
+        &mut self,
+        picture: Picture,
+        project: &Project,
+        package: &Path,
+        evaluator: &Evaluator,
+    ) -> Result<Option<i32>, Error> {
+        if picture.look.cutout.is_none() {
+            return Ok(None);
+        }
+        let key = Key::Matte(picture.item);
+        if let Some(track) = self.cached(key) {
+            return Ok(Some(track));
+        }
+        let media = Self::media(project, picture.media)?;
+        let path = crate::matte_path(package, media.id);
+        if !path.exists() {
+            return Err(Error::Input(format!(
+                "{} has no person matte. Run media.analyze {{media:\"{}\", kinds:[\"people\"]}} first.",
+                media.id, media.id
+            )));
+        }
+        let timings = Self::timings(project.fps, evaluator, picture.item, media)?;
+        self.insert(key, Source::Video(path), &timings).map(Some)
     }
 
     fn fill(&mut self, depth: usize, a: u32, b: u32) -> Result<i32, Error> {
@@ -527,7 +740,7 @@ impl Lowering {
             return Ok(track);
         }
         let media = Self::media(project, picture.media)?;
-        let timing = Self::timing(project.fps, evaluator, picture.item, media)?;
+        let timings = Self::timings(project.fps, evaluator, picture.item, media)?;
         let path = media_path(
             package,
             media,
@@ -538,8 +751,11 @@ impl Lowering {
         } else {
             Source::Video(path)
         };
-        let track = self.builder.source(source, &timing)?;
-        self.tracks.push((key, track));
+        let track = self.insert(key, source, &timings)?;
+        let orient = self.builder.orientation(track);
+        if orient != 0 {
+            self.plan.orients.push((track, orient));
+        }
         Ok(track)
     }
 
@@ -556,16 +772,14 @@ impl Lowering {
             return Ok(track);
         }
         let media = Self::media(project, id)?;
-        let timing = Self::timing(project.fps, evaluator, TimelineId::Clip(clip), media)?;
+        let timings = Self::timings(project.fps, evaluator, TimelineId::Clip(clip), media)?;
         let component = media
             .take
             .as_ref()
             .and_then(|take| take.camera.as_deref())
             .ok_or_else(|| Error::Input(format!("{id} has no camera component.")))?;
         let path = media_path(package, media, Some(component))?;
-        let track = self.builder.source(Source::Video(path), &timing)?;
-        self.tracks.push((key, track));
-        Ok(track)
+        self.insert(key, Source::Video(path), &timings)
     }
 
     fn audio(
@@ -578,7 +792,7 @@ impl Lowering {
         evaluator: &Evaluator,
     ) -> Result<(), Error> {
         let media = Self::media(project, a.media)?;
-        let timing = Self::timing(project.fps, evaluator, a.item, media)?;
+        let timings = Self::timings(project.fps, evaluator, a.item, media)?;
         let take = media.take.as_ref();
         let (path, index) = match a.track {
             Track::Imported(index) => (media_path(package, media, None)?, index),
@@ -614,12 +828,13 @@ impl Lowering {
         }
         let gain =
             ramp(a.gain, b.gain, range).map(|gain| (gain / peak.max(1.0)).clamp(0.0, 1.0) as f32);
-        let track = self.audio_track(Key::Audio(a.item, a.track, false), &path, index, &timing)?;
+        let (path, index) = crate::audio::processed(package, evaluator, a, &path, index)?;
+        let track = self.audio_track(Key::Audio(a.item, a.track, false), &path, index, &timings)?;
         out.push(AudioRamp { track, gain });
         // AVFoundation supports up to unity per input. A second copy contributes the surplus.
         if peak > 1.0 {
             let track =
-                self.audio_track(Key::Audio(a.item, a.track, true), &path, index, &timing)?;
+                self.audio_track(Key::Audio(a.item, a.track, true), &path, index, &timings)?;
             let gain = gain.map(|gain| gain * (peak - 1.0) as f32);
             out.push(AudioRamp { track, gain });
         }
@@ -631,16 +846,12 @@ impl Lowering {
         key: Key,
         path: &Path,
         index: u32,
-        timing: &Timing,
+        timings: &[Timing],
     ) -> Result<i32, Error> {
         if let Some(track) = self.cached(key) {
             return Ok(track);
         }
-        let track = self
-            .builder
-            .source(Source::Audio(path.to_path_buf(), index), timing)?;
-        self.tracks.push((key, track));
-        Ok(track)
+        self.insert(key, Source::Audio(path.to_path_buf(), index), timings)
     }
 }
 
@@ -655,6 +866,56 @@ fn media_path(package: &Path, media: &Media, component: Option<&str>) -> Result<
         Ok(path)
     } else {
         Err(Error::Offline(path))
+    }
+}
+
+/// UTF-16 ranges of the words, characters or lines of `text`.
+fn units(text: &str, unit: u8) -> Vec<[usize; 2]> {
+    let mut out = Vec::new();
+    let mut start = None;
+    let mut at = 0;
+    for c in text.chars() {
+        let boundary = match unit {
+            1 => !c.is_whitespace(),
+            2 => c != '\n',
+            _ => !c.is_whitespace(),
+        };
+        let width = c.len_utf16();
+        if unit == 1 {
+            if boundary {
+                out.push([at, at + width]);
+            }
+        } else if boundary {
+            start.get_or_insert(at);
+        } else if let Some(s) = start.take() {
+            out.push([s, at]);
+        }
+        at += width;
+    }
+    if let Some(s) = start {
+        out.push([s, at]);
+    }
+    out
+}
+
+/// The native raster style for an eval text style (captions pass their stroke).
+fn native_style(style: Option<&TextStyle>, stroke: f64) -> apple_sys::composition::TextStyle {
+    match style {
+        Some(s) => apple_sys::composition::TextStyle {
+            font: s.font.clone(),
+            weight: u32::from(s.weight),
+            stroke: s.stroke,
+            stroke_width: s.stroke_width.max(stroke),
+            shadow: s.shadow,
+            boxed: u32::from(s.boxed),
+            box_color: s.box_color,
+            align: u32::from(s.align),
+            line_height: s.line_height,
+        },
+        None => apple_sys::composition::TextStyle {
+            stroke_width: stroke,
+            ..Default::default()
+        },
     }
 }
 

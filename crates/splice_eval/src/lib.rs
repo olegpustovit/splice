@@ -4,11 +4,13 @@
 use splice_model::{ClipId, Frame, ItemId, MediaId, Rect, ShapeKind, TimelineId, WordId};
 
 mod compound;
+mod cube;
 mod eval;
 mod layout;
 mod look;
 mod style;
 
+pub use cube::{cube_atlas, parse_cube};
 pub use eval::{EvalError, Evaluator, SourceSpan, caption_tokens};
 pub use look::{
     AudioFx, Blend, ChromaKey, Cutout, Grade, Look, MAX_MASKS, Mask, MaskMode, MaskShape,

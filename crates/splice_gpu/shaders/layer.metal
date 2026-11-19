@@ -1,66 +1,254 @@
-// One quad per layer (PLAN.md T12.7). Straight-alpha output, blended source-over.
+// One quad per layer (PLAN.md T12.7, T16.3, T18). Straight-alpha output. Blending happens in the
+// shader against the framebuffer (`[[color(0)]]`, Apple GPUs), so every blend mode shares one
+// pipeline with hardware blending off.
 #include <metal_stdlib>
 using namespace metal;
 
-// Mirrors splice_gpu::Layer (96 bytes).
+struct Mask {
+    float4 rect;     // x, y, w, h normalized to the layer's destination
+    float4 params;   // shape (0 rect, 1 round, 2 ellipse), mode (0 blur, 1 pixelate, 2 cover, 3 spotlight), amount, feather
+    float4 color;    // cover rgb, invert in w
+};
+
+// Mirrors splice_gpu::Layer (512 bytes).
 struct Layer {
-    float4 dest;     // x, y, w, h in target pixels, top-left origin
-    float4 crop;     // u, v, w, h normalized to the source texture
-    float4 color0;   // fill or ring color (straight alpha)
+    float4 dest;     // x, y, w, h in target pixels, top-left origin (before rotation)
+    float4 crop;     // u, v, w, h normalized to the oriented source
+    float4 color0;   // fill or ring color (straight alpha); shapes: fill
     float4 color1;   // gradient end color
     float2 target;   // target size in pixels
     float opacity;
     float corner;    // radius in pixels
     float shadow;    // 0..1
-    float ring;      // ring width in pixels (kind 3)
-    uint kind;       // 0 texture, 1 solid, 2 gradient, 3 ring
-    uint flags;      // 1: the texture holds BGRA bytes; 2: write BGRA (for an encoder buffer)
+    float ring;      // ring width in pixels (kind 3); stroke width for shapes
+    uint kind;       // 0 texture, 1 solid, 2 gradient, 3 ring, 4 ellipse, 5 line, 6 arrow, 7 callout, 8 box
+    uint flags;      // 1 BGRA source, 2 BGRA output, 4 grade, 8 LUT, 16 key, 32 cutout, 64 cutout blur, 128 clip
+    float2 pivot;    // rotation pivot in target pixels
+    float rotation;  // radians, clockwise
+    uint orient;     // source orientation: 0 none, 1 90°, 2 180°, 3 270°
+    float4 grade0;   // exposure, contrast, saturation, vibrance
+    float4 grade1;   // temperature, tint, highlights, shadows
+    float4 lut;      // amount, cube size, cutout amount, unused
+    float4 key0;     // key rgb, tolerance (shapes: stroke rgb, unused)
+    float4 key1;     // softness, spill, unused, unused
+    float4 clip;     // visible region x, y, w, h in target pixels
+    Mask masks[4];
+    uint blend;      // 0 normal, 1 multiply, 2 screen, 3 overlay, 4 add, 5 darken, 6 lighten
+    uint mask_count;
+    uint pad0;
+    uint pad1;
 };
 
 struct Out {
     float4 position [[position]];
-    float2 px;
+    float2 px;   // unrotated layer-space pixel
     float2 uv;
 };
 
-// Room around the quad for the drop shadow.
 static float margin(constant Layer &l) {
     return l.shadow > 0.0 ? 0.08 * min(l.dest.z, l.dest.w) : 0.0;
 }
 
 vertex Out layer_vertex(uint id [[vertex_id]], constant Layer &l [[buffer(0)]]) {
     const float2 corners[6] = {float2(0, 0), float2(1, 0), float2(0, 1), float2(1, 0), float2(1, 1), float2(0, 1)};
-    float m = margin(l);
+    float m = margin(l) + (l.kind >= 4 ? l.ring : 0.0);
     float2 p = l.dest.xy - m + corners[id] * (l.dest.zw + 2.0 * m);
+    float s = sin(l.rotation), c = cos(l.rotation);
+    float2 d = p - l.pivot;
+    float2 r = l.pivot + float2(d.x * c - d.y * s, d.x * s + d.y * c);
     Out o;
     o.px = p;
     o.uv = l.crop.xy + (p - l.dest.xy) / l.dest.zw * l.crop.zw;
-    o.position = float4(p.x / l.target.x * 2.0 - 1.0, 1.0 - p.y / l.target.y * 2.0, 0.0, 1.0);
+    o.position = float4(r.x / l.target.x * 2.0 - 1.0, 1.0 - r.y / l.target.y * 2.0, 0.0, 1.0);
     return o;
 }
 
-// Signed distance to a rounded box centered at c with half size h.
 static float rounded(float2 p, float2 c, float2 h, float r) {
     float2 q = abs(p - c) - h + r;
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
+static float ellipse(float2 p, float2 c, float2 h) {
+    float2 q = (p - c) / max(h, float2(1e-3));
+    return (length(q) - 1.0) * min(h.x, h.y);
+}
+
+static float segment(float2 p, float2 a, float2 b) {
+    float2 pa = p - a, ba = b - a;
+    float t = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+    return length(pa - ba * t);
+}
+
+// Oriented uv (as displayed) to decoded texture uv.
+static float2 oriented(float2 uv, uint orient) {
+    switch (orient) {
+        case 1: return float2(uv.y, 1.0 - uv.x);
+        case 2: return float2(1.0 - uv.x, 1.0 - uv.y);
+        case 3: return float2(1.0 - uv.y, uv.x);
+        default: return uv;
+    }
+}
+
+static float4 fetch(texture2d<float> source, sampler s, float2 uv, constant Layer &l) {
+    float2 lo = l.crop.xy, hi = l.crop.xy + l.crop.zw;
+    float4 c = source.sample(s, oriented(clamp(uv, lo, hi), l.orient));
+    return (l.flags & 1u) ? c.bgra : c;
+}
+
+static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+
+static float3 grade(float3 c, constant Layer &l) {
+    c *= exp2(l.grade0.x);
+    c += float3(0.1, 0.0, -0.1) * l.grade1.x + float3(0.0, -0.1, 0.0) * l.grade1.y;
+    float y = luma(c);
+    c += l.grade1.z * 0.25 * smoothstep(0.5, 1.0, y) + l.grade1.w * 0.25 * (1.0 - smoothstep(0.0, 0.5, y));
+    c = (c - 0.5) * l.grade0.y + 0.5;
+    y = luma(c);
+    float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+    float amount = l.grade0.z * (1.0 + l.grade0.w * (1.0 - sat));
+    return clamp(mix(float3(y), c, amount), 0.0, 1.0);
+}
+
+// A cube of size n stored as n slices of n×n side by side (width n², height n).
+static float3 lut3d(texture2d<float> table, sampler s, float3 c, float n) {
+    float b = clamp(c.b, 0.0, 1.0) * (n - 1.0);
+    float b0 = floor(b), b1 = min(b0 + 1.0, n - 1.0);
+    float2 rg = (clamp(c.rg, 0.0, 1.0) * (n - 1.0) + 0.5) / float2(n * n, n);
+    float3 a = table.sample(s, rg + float2(b0 / n, 0.0)).rgb;
+    float3 z = table.sample(s, rg + float2(b1 / n, 0.0)).rgb;
+    return mix(a, z, b - b0);
+}
+
+static float2 chroma(float3 c) {
+    return float2(-0.1146 * c.r - 0.3854 * c.g + 0.5 * c.b, 0.5 * c.r - 0.4542 * c.g - 0.0458 * c.b);
+}
+
+static float mask_cover(Mask m, float2 local, float2 size) {
+    float2 h = m.rect.zw * 0.5 * size;
+    float2 c = (m.rect.xy + m.rect.zw * 0.5) * size;
+    float2 p = local * size;
+    float d = m.params.x == 2.0 ? ellipse(p, c, h)
+            : rounded(p, c, h, m.params.x == 1.0 ? 0.25 * min(h.x, h.y) : 0.0);
+    float feather = max(m.params.w * min(size.x, size.y), 0.75);
+    float inside = 1.0 - smoothstep(-feather, feather, d);
+    return m.color.w > 0.5 ? 1.0 - inside : inside;
+}
+
+static float3 blend(float3 dst, float3 src, uint mode) {
+    switch (mode) {
+        case 1: return dst * src;
+        case 2: return 1.0 - (1.0 - dst) * (1.0 - src);
+        case 3: return select(1.0 - 2.0 * (1.0 - dst) * (1.0 - src), 2.0 * dst * src, dst < 0.5);
+        case 4: return min(dst + src, 1.0);
+        case 5: return min(dst, src);
+        case 6: return max(dst, src);
+        default: return src;
+    }
+}
+
 fragment float4 layer_fragment(Out in [[stage_in]], constant Layer &l [[buffer(0)]],
-                               texture2d<float> source [[texture(1)]], sampler linear [[sampler(2)]]) {
+                               texture2d<float> source [[texture(1)]], sampler linear [[sampler(2)]],
+                               texture2d<float> table [[texture(3)]], texture2d<float> matte [[texture(4)]],
+                               float4 framebuffer [[color(0)]]) {
+    float4 dst = (l.flags & 2u) ? framebuffer.bgra : framebuffer;
     float2 h = l.dest.zw * 0.5;
     float2 c = l.dest.xy + h;
+    float2 local = (in.px - l.dest.xy) / l.dest.zw;
     float4 color;
     float coverage;
     if (l.kind == 3) {
         float d = abs(length(in.px - c) - (h.x - l.ring * 0.5)) - l.ring * 0.5;
         coverage = clamp(0.5 - d, 0.0, 1.0);
         color = l.color0;
+    } else if (l.kind >= 4) {
+        // Shapes: fill (color0/color1 gradient) with an optional stroke (key0.rgb, ring px).
+        float d;
+        float2 a = l.dest.xy, b = l.dest.xy + l.dest.zw;
+        if (l.kind == 4) {
+            d = ellipse(in.px, c, h);
+        } else if (l.kind == 5 || l.kind == 6) {
+            d = segment(in.px, a, b) - max(l.ring, 1.0) * 0.5;
+            if (l.kind == 6) {
+                float2 dir = normalize(b - a);
+                float2 n = float2(-dir.y, dir.x);
+                float head = max(l.ring * 4.0, 12.0);
+                float2 base = b - dir * head;
+                d = min(d, min(segment(in.px, b, base + n * head * 0.6), segment(in.px, b, base - n * head * 0.6)) - max(l.ring, 1.0) * 0.5);
+            }
+        } else {
+            d = rounded(in.px, c, h, min(l.corner, min(h.x, h.y)));
+            if (l.kind == 7) {
+                float2 tip = float2(c.x - h.x * 0.4, l.dest.y + l.dest.w + h.y * 0.6);
+                d = min(d, segment(in.px, float2(c.x - h.x * 0.55, c.y + h.y * 0.8), tip) - h.y * 0.12);
+            }
+        }
+        bool stroke_only = l.kind == 5 || l.kind == 6;
+        float t = clamp(dot(in.px - l.dest.xy, l.dest.zw) / dot(l.dest.zw, l.dest.zw), 0.0, 1.0);
+        float4 fill = stroke_only ? float4(l.key0.rgb, 1.0) : mix(l.color0, l.color1, t);
+        float edge = (!stroke_only && l.ring > 0.0) ? clamp(0.5 - abs(d + l.ring * 0.5) + l.ring * 0.5, 0.0, 1.0) : 0.0;
+        coverage = clamp(0.5 - d, 0.0, 1.0);
+        color = float4(mix(fill.rgb, l.key0.rgb, edge), fill.a);
     } else {
         float d = rounded(in.px, c, h, min(l.corner, min(h.x, h.y)));
         coverage = clamp(0.5 - d, 0.0, 1.0);
         if (l.kind == 0) {
-            color = source.sample(linear, clamp(in.uv, l.crop.xy, l.crop.xy + l.crop.zw));
-            if (l.flags & 1u) color = color.bgra;
+            color = fetch(source, linear, in.uv, l);
+            float m = 1.0;
+            if (l.flags & 32u) {
+                float2 lo = l.crop.xy, hi = l.crop.xy + l.crop.zw;
+                m = matte.sample(linear, oriented(clamp(in.uv, lo, hi), l.orient)).r;
+            }
+            for (uint i = 0; i < l.mask_count; i++) {
+                Mask k = l.masks[i];
+                float inside = mask_cover(k, local, l.dest.zw);
+                if (inside <= 0.0) continue;
+                float amount = k.params.z;
+                float4 treated;
+                if (k.params.y == 0.0) {
+                    // 16-tap golden-angle disk blur, radius up to 3% of the picture.
+                    float radius = amount * 0.03;
+                    float4 sum = 0.0;
+                    for (int j = 0; j < 16; j++) {
+                        float r = sqrt((float(j) + 0.5) / 16.0) * radius;
+                        float a = float(j) * 2.39996;
+                        sum += fetch(source, linear, in.uv + float2(cos(a), sin(a)) * r * float2(1.0, l.dest.z / l.dest.w), l);
+                    }
+                    treated = sum / 16.0;
+                } else if (k.params.y == 1.0) {
+                    float cells = mix(120.0, 12.0, amount);
+                    float2 cell = l.crop.zw / cells;
+                    treated = fetch(source, linear, (floor(in.uv / cell) + 0.5) * cell, l);
+                } else if (k.params.y == 2.0) {
+                    treated = float4(k.color.rgb, 1.0);
+                } else {
+                    // Spotlight: darken outside the shape.
+                    inside = 1.0 - inside;
+                    treated = float4(color.rgb * (1.0 - 0.8 * amount), color.a);
+                }
+                color = mix(color, treated, inside);
+            }
+            if (l.flags & 4u) color.rgb = grade(color.rgb, l);
+            if (l.flags & 8u) color.rgb = mix(color.rgb, lut3d(table, linear, color.rgb, l.lut.y), l.lut.x);
+            if (l.flags & 16u) {
+                float dist = distance(chroma(color.rgb), chroma(l.key0.rgb));
+                color.a *= smoothstep(l.key0.w * 0.25, l.key0.w * 0.25 + max(l.key1.x * 0.25, 1e-3), dist);
+                float3 k = l.key0.rgb;
+                if (k.g >= k.r && k.g >= k.b) color.g = mix(color.g, min(color.g, max(color.r, color.b)), l.key1.y);
+                else if (k.b >= k.r) color.b = mix(color.b, min(color.b, max(color.r, color.g)), l.key1.y);
+            }
+            if (l.flags & 32u) {
+                if (l.flags & 64u) {
+                    float4 sum = 0.0;
+                    for (int j = 0; j < 16; j++) {
+                        float r = sqrt((float(j) + 0.5) / 16.0) * 0.02;
+                        float a = float(j) * 2.39996;
+                        sum += fetch(source, linear, in.uv + float2(cos(a), sin(a)) * r, l);
+                    }
+                    color = mix(color, mix(sum / 16.0, color, m), l.lut.z);
+                } else {
+                    color.a *= mix(1.0, m, l.lut.z);
+                }
+            }
         } else if (l.kind == 1) {
             color = l.color0;
         } else {
@@ -68,15 +256,24 @@ fragment float4 layer_fragment(Out in [[stage_in]], constant Layer &l [[buffer(0
             color = mix(l.color0, l.color1, t);
         }
     }
+    if (l.flags & 128u) {
+        float2 p = in.position.xy;
+        if (p.x < l.clip.x || p.y < l.clip.y || p.x >= l.clip.x + l.clip.z || p.y >= l.clip.y + l.clip.w) coverage = 0.0;
+    }
     float alpha = color.a * coverage * l.opacity;
-    float4 result = float4(color.rgb, alpha);
-    if (l.shadow > 0.0 && l.kind != 3) {
+    float3 rgb = blend(dst.rgb, color.rgb, l.blend);
+    float4 result = float4(rgb, alpha);
+    if (l.shadow > 0.0 && l.kind < 3) {
         float blur = 0.03 * min(l.dest.z, l.dest.w);
         float d = rounded(in.px - float2(0.0, blur / 3.0), c, h, min(l.corner, min(h.x, h.y)));
         float shade = l.shadow * 0.55 * (1.0 - smoothstep(-blur, blur, d)) * l.opacity;
         float under = shade * (1.0 - alpha);
         float out_alpha = alpha + under;
-        result = out_alpha > 0.0 ? float4(color.rgb * alpha / out_alpha, out_alpha) : float4(0.0);
+        result = out_alpha > 0.0 ? float4(rgb * alpha / out_alpha, out_alpha) : float4(0.0);
     }
-    return (l.flags & 2u) ? result.bgra : result;
+    // Source-over onto the framebuffer (straight alpha).
+    float a = result.a + dst.a * (1.0 - result.a);
+    float3 over = a > 0.0 ? (result.rgb * result.a + dst.rgb * dst.a * (1.0 - result.a)) / a : float3(0.0);
+    float4 outc = float4(over, a);
+    return (l.flags & 2u) ? outc.bgra : outc;
 }

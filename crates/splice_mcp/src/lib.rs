@@ -3,6 +3,7 @@
 
 use splice_json::Value as Json;
 
+mod analyze;
 #[cfg(target_os = "macos")]
 /// The installed application's private headless capture transport.
 pub mod capture_agent;
@@ -23,6 +24,8 @@ mod ipc;
 /// The private command channel between a project viewer and same-user clients.
 pub mod live;
 mod media;
+#[cfg(target_os = "macos")]
+mod native;
 /// Locations shared by the CLI, the viewer and the MCP server.
 pub mod paths;
 mod platform;

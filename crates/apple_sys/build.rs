@@ -5,7 +5,9 @@ fn main() {
     println!("cargo:rerun-if-changed=native");
     cc::Build::new()
         .files([
+            "native/analysis.m",
             "native/app.m",
+            "native/audio.m",
             "native/capture.m",
             "native/cursor.m",
             "native/error.m",
@@ -26,6 +28,7 @@ fn main() {
     for framework in [
         "Accelerate",
         "AppKit",
+        "AudioToolbox",
         "AVFoundation",
         "Carbon",
         "CoreGraphics",
@@ -37,7 +40,11 @@ fn main() {
         "Metal",
         "QuartzCore",
         "ScreenCaptureKit",
+        "SoundAnalysis",
         "Speech",
+        "Translation",
+        "Vision",
+        "CoreImage",
     ] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
@@ -68,10 +75,10 @@ fn swift() {
         .arg(format!("{arch}-apple-macos15.0"))
         .arg("-o")
         .arg(&library)
-        .arg("native/speech.swift")
+        .args(["native/speech.swift", "native/translate.swift"])
         .status()
         .expect("xcrun swiftc");
-    assert!(status.success(), "swiftc failed for native/speech.swift");
+    assert!(status.success(), "swiftc failed for native/*.swift");
     let path = |args: &[&str]| {
         let output = Command::new("xcrun").args(args).output().expect("xcrun");
         String::from_utf8(output.stdout)

@@ -1,5 +1,6 @@
 #include "platform.h"
 
+#import <AppKit/AppKit.h>
 #import <Accelerate/Accelerate.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreText/CoreText.h>
@@ -393,6 +394,43 @@ static SpliceAVTrack *track_at(SpliceAVAssembly *assembly, int32_t index) {
     return index >= 0 && (NSUInteger)index < assembly.tracks.count ? assembly.tracks[index] : nil;
 }
 
+bool splice_av_append(void *raw, int32_t index, const SpliceAVSource *spec, char **error) {
+    @autoreleasepool {
+        SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
+        SpliceAVTrack *entry = track_at(assembly, index);
+        if (entry == nil || entry.fill || spec->kind >= SourceStill || spec->path == NULL ||
+            spec->timeline[0] < 0 || spec->timeline[0] >= spec->timeline[1] || spec->timeline[1] > assembly.end ||
+            !isfinite(spec->speed) || spec->speed <= 0 || !isfinite(spec->source_start) || spec->source_start < 0) {
+            splice_set_error(error, "The appended range is invalid.");
+            return false;
+        }
+        NSURL *url = [NSURL fileURLWithFileSystemRepresentation:spec->path isDirectory:NO relativeToURL:nil];
+        AVURLAsset *asset = assembly.inputs[url];
+        if (asset == nil) {
+            asset = [AVURLAsset URLAssetWithURL:url options:@{AVURLAssetPreferPreciseDurationAndTimingKey: @YES}];
+            assembly.inputs[url] = asset;
+        }
+        AVMediaType type = spec->kind == SourceAudio ? AVMediaTypeAudio : AVMediaTypeVideo;
+        NSArray<AVAssetTrack *> *inputs = [asset tracksWithMediaType:type];
+        if (spec->index >= inputs.count) {
+            splice_set_error(error, "The appended source track is missing.");
+            return false;
+        }
+        return place(assembly, entry.track, inputs[spec->index], spec, error);
+    }
+}
+
+uint32_t splice_av_orientation(void *raw, int32_t index) {
+    SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
+    SpliceAVTrack *entry = track_at(assembly, index);
+    if (entry == nil || entry.fill) return 0;
+    CGAffineTransform t = entry.orientation;
+    if (t.a == 0 && t.b > 0 && t.c < 0 && t.d == 0) return 1;
+    if (t.a < 0 && t.b == 0 && t.c == 0 && t.d < 0) return 2;
+    if (t.a == 0 && t.b < 0 && t.c > 0 && t.d == 0) return 3;
+    return 0;
+}
+
 // ── Broker compositor (PLAN.md D1, T12.7) ──
 // AVFoundation decodes, times and mixes; OGPU (splice_gpu) draws every pixel. This compositor only
 // pins each frame's decoded buffers for Rust to import. Its output buffer carries just the timing.
@@ -567,27 +605,88 @@ bool splice_av_range(void *raw, int32_t from, int32_t to,
     }
 }
 
-static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, uint32_t rgb_value) {
+static CTFontRef styled_font(const SpliceTextStyle *style, double size) {
+    NSString *name = style->font == NULL ? @"" : [NSString stringWithUTF8String:style->font];
+    static const CGFloat weights[6] = {0.0, 0.23, 0.3, 0.4, 0.56, 0.62};
+    CGFloat weight = weights[MIN(style->weight, 5u)];
+    NSFont *font = nil;
+    if (name.length == 0 || [name hasPrefix:@"SF Pro"] || [name isEqualToString:@"System"]) {
+        font = [NSFont systemFontOfSize:size weight:weight];
+    } else {
+        NSFontDescriptor *descriptor = [NSFontDescriptor fontDescriptorWithFontAttributes:@{
+            NSFontFamilyAttribute: name,
+            NSFontTraitsAttribute: @{NSFontWeightTrait: @(weight)},
+        }];
+        font = [NSFont fontWithDescriptor:descriptor size:size] ?: [NSFont fontWithName:name size:size];
+    }
+    if (font == nil) font = [NSFont systemFontOfSize:size weight:weight];
+    return (CTFontRef)CFBridgingRetain(font);
+}
+
+static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, const SpliceTextStyle *style,
+                              NSRange visible) {
     size_t width = (size_t)ceil(size.width), height = (size_t)ceil(size.height);
     CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, space,
                                                  kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
     CGColorSpaceRelease(space);
     if (context == NULL) return NULL;
-    CGFloat color_components[4];
-    rgb(rgb_value, color_components);
-    CGColorRef color = CGColorCreateGenericRGB(color_components[0], color_components[1], color_components[2], 1);
-    CTFontRef font = CTFontCreateWithName(CFSTR("Helvetica-Bold"), font_size, NULL);
-    CTTextAlignment alignment = kCTTextAlignmentCenter;
-    CTParagraphStyleSetting settings = {kCTParagraphStyleSpecifierAlignment, sizeof(alignment), &alignment};
-    CTParagraphStyleRef paragraph = CTParagraphStyleCreate(&settings, 1);
-    NSAttributedString *styled = [[NSAttributedString alloc] initWithString:text attributes:@{
+    CGFloat components[4];
+    rgb(style->color, components);
+    CGColorRef color = CGColorCreateGenericRGB(components[0], components[1], components[2], 1);
+    CGColorRef clear = CGColorCreateGenericRGB(0, 0, 0, 0);
+    rgb(style->stroke, components);
+    CGColorRef stroke = CGColorCreateGenericRGB(components[0], components[1], components[2], 1);
+    CTFontRef font = styled_font(style, font_size);
+    CTTextAlignment alignment = style->align == 0 ? kCTTextAlignmentLeft
+                              : style->align == 2 ? kCTTextAlignmentRight : kCTTextAlignmentCenter;
+    CGFloat multiple = style->line_height > 0 ? style->line_height / 1.15 : 1.0;
+    CTParagraphStyleSetting settings[2] = {
+        {kCTParagraphStyleSpecifierAlignment, sizeof(alignment), &alignment},
+        {kCTParagraphStyleSpecifierLineHeightMultiple, sizeof(multiple), &multiple},
+    };
+    CTParagraphStyleRef paragraph = CTParagraphStyleCreate(settings, 2);
+    NSMutableDictionary *attributes = [@{
         (__bridge NSString *)kCTFontAttributeName: (__bridge id)font,
         (__bridge NSString *)kCTForegroundColorAttributeName: (__bridge id)color,
         (__bridge NSString *)kCTParagraphStyleAttributeName: (__bridge id)paragraph,
-    }];
+    } mutableCopy];
+    if (style->stroke_width > 0) {
+        // Negative widths fill and stroke; the value is a percentage of the font size.
+        attributes[(__bridge NSString *)kCTStrokeWidthAttributeName] = @(-style->stroke_width * 100.0);
+        attributes[(__bridge NSString *)kCTStrokeColorAttributeName] = (__bridge id)stroke;
+    }
+    NSMutableAttributedString *styled = [[NSMutableAttributedString alloc] initWithString:text attributes:attributes];
+    if (visible.location != NSNotFound) {
+        // Only `visible` draws; the rest keeps its layout but is transparent.
+        NSDictionary *hidden = @{(__bridge NSString *)kCTForegroundColorAttributeName: (__bridge id)clear,
+                                 (__bridge NSString *)kCTStrokeColorAttributeName: (__bridge id)clear};
+        if (visible.location > 0) [styled addAttributes:hidden range:NSMakeRange(0, visible.location)];
+        NSUInteger end = NSMaxRange(visible);
+        if (end < text.length) [styled addAttributes:hidden range:NSMakeRange(end, text.length - end)];
+    }
     CTFramesetterRef setter = CTFramesetterCreateWithAttributedString((__bridge CFAttributedStringRef)styled);
-    CGPathRef path = CGPathCreateWithRect(CGRectMake(0, 0, width, height), NULL);
+    CGFloat pad = style->boxed ? font_size * 0.35 : 0;
+    if (style->boxed && visible.location == NSNotFound) {
+        CGSize fit = CTFramesetterSuggestFrameSizeWithConstraints(setter, CFRangeMake(0, 0), NULL,
+                                                                  CGSizeMake(width - 2 * pad, height), NULL);
+        CGFloat x = style->align == 0 ? 0 : style->align == 2 ? width - fit.width - 2 * pad : (width - fit.width) / 2 - pad;
+        CGRect box = CGRectMake(MAX(x, 0), height - fit.height - 2 * pad, MIN(fit.width + 2 * pad, width),
+                                fit.height + 2 * pad);
+        CGFloat radius = style->boxed == 2 ? MIN(box.size.height / 2, font_size * 0.4) : 0;
+        CGPathRef rounded = CGPathCreateWithRoundedRect(box, radius, radius, NULL);
+        rgb(style->box_color, components);
+        CGContextSetRGBFillColor(context, components[0], components[1], components[2], 1);
+        CGContextAddPath(context, rounded);
+        CGContextFillPath(context);
+        CGPathRelease(rounded);
+    }
+    if (style->shadow > 0) {
+        CGColorRef shade = CGColorCreateGenericRGB(0, 0, 0, MIN(1.0, style->shadow));
+        CGContextSetShadowWithColor(context, CGSizeMake(0, -font_size * 0.05), font_size * 0.15, shade);
+        CGColorRelease(shade);
+    }
+    CGPathRef path = CGPathCreateWithRect(CGRectMake(pad, 0, width - 2 * pad, height - pad), NULL);
     CTFrameRef frame = CTFramesetterCreateFrame(setter, CFRangeMake(0, 0), path, NULL);
     CTFrameDraw(frame, context);
     CGImageRef image = CGBitmapContextCreateImage(context);
@@ -597,20 +696,27 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, uin
     CFRelease(paragraph);
     CFRelease(font);
     CGColorRelease(color);
+    CGColorRelease(clear);
+    CGColorRelease(stroke);
     CGContextRelease(context);
     return image;
 }
 
-uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, double font, uint32_t color,
+uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, double font,
+                          const SpliceTextStyle *style, int64_t visible_from, int64_t visible_to,
                           char **error) {
     @autoreleasepool {
         NSString *string = [NSString stringWithUTF8String:text];
         if (string == nil || width == 0 || height == 0 || width > 16384 || height > 16384 ||
-            !isfinite(font) || font <= 0) {
+            !isfinite(font) || font <= 0 || style == NULL) {
             splice_set_error(error, "Invalid text raster.");
             return NULL;
         }
-        CGImageRef image = text_bitmap(string, CGSizeMake(width, height), font, color);
+        NSRange visible = NSMakeRange(NSNotFound, 0);
+        if (visible_from >= 0 && visible_to >= visible_from && (NSUInteger)visible_to <= string.length) {
+            visible = NSMakeRange((NSUInteger)visible_from, (NSUInteger)(visible_to - visible_from));
+        }
+        CGImageRef image = text_bitmap(string, CGSizeMake(width, height), font, style, visible);
         uint8_t *pixels = image == NULL ? NULL : calloc((size_t)width * height, 4);
         CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         CGContextRef context = pixels == NULL ? NULL : CGBitmapContextCreate(pixels, width, height, 8, width * 4,

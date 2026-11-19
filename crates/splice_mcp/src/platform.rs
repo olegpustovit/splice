@@ -416,7 +416,30 @@ pub(super) fn transcribe(store: &mut Store, args: &Json) -> Result<Json, StoreEr
     super::media::transcript(store.project(), args)
 }
 
-// ── 0.3 inputs filled by `enrich` (macOS implementations in `platform_mac`) ──
+// ── 0.3 native analysis and inputs filled by `enrich` (macOS: `native.rs`) ──
+
+#[cfg(target_os = "macos")]
+pub(super) use super::native::{
+    analyze, probe_frames, sync_offset, track_mask, translate_captions,
+};
+
+/// Peaks, beats, sounds, shots, text, faces, people and mattes need native analysis.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn analyze(
+    _: &Store,
+    _: &splice_model::Media,
+    _: &super::analyze::Window,
+    kinds: &[&str],
+) -> Result<Vec<(&'static str, Json)>, StoreError> {
+    Err(failure(
+        "UNSUPPORTED_PLATFORM",
+        &format!(
+            "{} need the native macOS analysis backend.",
+            kinds.join(", ")
+        ),
+        "Ask for loudness and pauses only, or run on macOS.",
+    ))
+}
 
 /// Probed length of a file for media.relink; `None` when no native prober exists.
 #[cfg(not(target_os = "macos"))]

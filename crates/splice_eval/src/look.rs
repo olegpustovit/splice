@@ -415,25 +415,6 @@ impl Rig {
         }
         look
     }
-
-    /// Owner-relative frames where the look's curves need a linear-ramp cut.
-    pub(crate) fn breakpoints(&self, offset: Frame, out: &mut Vec<Frame>) {
-        let mut add = |num: &Num| keys::breakpoints(num.keys(), offset, 2, out);
-        for num in self.transform.iter().flatten() {
-            add(num);
-        }
-        for num in self.crop.iter().flatten() {
-            add(num);
-        }
-        if let Some((nums, _)) = &self.grade {
-            nums.iter().for_each(&mut add);
-        }
-        for mask in &self.masks {
-            mask.rect.iter().for_each(&mut add);
-            add(&mask.amount);
-            add(&mask.feather);
-        }
-    }
 }
 
 /// Audio treatment of an item after inheritance: keyed gain and pan, and the effect chain.

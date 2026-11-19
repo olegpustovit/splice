@@ -10,6 +10,9 @@ pub use error::Error;
 /// AppKit integration for the viewer.
 pub mod app;
 
+/// Offline audio rendering, envelopes and sound classification.
+pub mod audio;
+
 /// ScreenCaptureKit source discovery and capture targets.
 pub mod capture;
 
@@ -39,3 +42,6 @@ pub mod speech;
 
 #[cfg(test)]
 mod tests;
+
+/// Vision analysis, tracking, person mattes and on-device translation.
+pub mod vision;

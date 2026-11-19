@@ -175,6 +175,8 @@ _Static_assert(sizeof(SpliceAVFrameSource) == 24, "frame source ABI");
 void *splice_av_create(uint32_t width, uint32_t height, uint32_t fps, int32_t end, char **error);
 void splice_av_release(void *composition);
 int32_t splice_av_source(void *composition, const SpliceAVSource *source, char **error);
+bool splice_av_append(void *raw, int32_t track, const SpliceAVSource *spec, char **error);
+uint32_t splice_av_orientation(void *raw, int32_t track);
 bool splice_av_range(void *composition, int32_t from, int32_t to,
                      const SpliceAVLayer *layers, size_t layer_count,
                      const SpliceAVGain *gains, size_t gain_count, char **error);
@@ -217,7 +219,20 @@ bool splice_speech_transcribe(const char *path, const char *locale, char **out, 
 // Decodes an image file to straight RGBA8. Free the pixels with free().
 uint8_t *splice_image_rgba(const char *path, uint32_t *width, uint32_t *height, char **error);
 // Rasterizes centered bold text to straight RGBA8. Free the pixels with free().
-uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, double font, uint32_t color,
+typedef struct SpliceTextStyle {
+    const char *font;
+    uint32_t weight;
+    uint32_t color;
+    uint32_t stroke;
+    uint32_t boxed;
+    uint32_t box_color;
+    uint32_t align;
+    double stroke_width;
+    double shadow;
+    double line_height;
+} SpliceTextStyle;
+uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, double font,
+                          const SpliceTextStyle *style, int64_t visible_from, int64_t visible_to,
                           char **error);
 
 void *splice_image_png(const uint8_t *pixels, size_t length, uint32_t width, uint32_t height,
@@ -248,5 +263,31 @@ bool splice_events_ack(SpliceEventRing *ring, size_t count);
 uint64_t splice_events_dropped(SpliceEventRing *ring);
 size_t splice_recording_read_input(void *recording, SpliceEvent *out, size_t capacity);
 uint64_t splice_recording_dropped_input(void *recording);
+
+
+// Offline audio (audio.m).
+typedef struct SpliceAudioChain {
+    uint32_t eq;
+    uint32_t compressor;
+    uint32_t gate;
+    uint32_t pad;
+    double low_cut, low, mid, high, mid_frequency;
+    double threshold, ratio, makeup;
+    double gate_threshold;
+    double isolation;
+    double pan;
+} SpliceAudioChain;
+bool splice_audio_render(const char *input, uint32_t track, const char *output, const SpliceAudioChain *chain,
+                         char **error);
+float *splice_audio_envelope(const char *input, uint32_t track, double rate, size_t *count, char **error);
+char *splice_audio_classify(const char *input, uint32_t track, const char *scratch, char **error);
+
+// Vision (analysis.m): kinds bit 1 feature prints, 2 text, 4 faces, 8 people.
+char *splice_vision_analyze(const char *path, uint32_t kinds, double every, char **error);
+char *splice_vision_track(const char *path, double from, double to, double x, double y, double w, double h,
+                          char **error);
+bool splice_vision_matte(const char *path, const char *output, char **error);
+// Translation (translate.swift): texts joined by U+001E.
+bool splice_translate(const char *joined, const char *source, const char *target, char **out, char **error);
 
 #endif

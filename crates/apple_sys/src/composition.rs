@@ -8,6 +8,7 @@ use std::{
 };
 
 /// Native track kinds and their underlying inputs.
+#[derive(Clone, Debug)]
 pub enum Source {
     /// Primary picture of a movie.
     Video(PathBuf),
@@ -212,6 +213,63 @@ pub struct TextLayer {
     pub opacity: [f32; 2],
     /// Text RGB.
     pub color: u32,
+    /// Font family, weight and decoration.
+    pub style: TextStyle,
+    /// UTF-16 range that draws; the rest keeps its layout but is transparent (word animators).
+    pub visible: Option<[usize; 2]>,
+}
+
+/// Font, weight and decoration of rasterized text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextStyle {
+    /// Family; empty or "SF Pro…" uses the system font.
+    pub font: String,
+    /// 0 regular … 5 black.
+    pub weight: u32,
+    /// Stroke RGB.
+    pub stroke: u32,
+    /// Stroke width relative to the font size (0 for none).
+    pub stroke_width: f64,
+    /// Drop shadow 0…1.
+    pub shadow: f64,
+    /// Backing box: 0 none, 1 solid, 2 rounded.
+    pub boxed: u32,
+    /// Backing RGB.
+    pub box_color: u32,
+    /// 0 left, 1 center, 2 right.
+    pub align: u32,
+    /// Line height relative to the font size.
+    pub line_height: f64,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            font: String::new(),
+            weight: 3,
+            stroke: 0,
+            stroke_width: 0.0,
+            shadow: 0.0,
+            boxed: 0,
+            box_color: 0,
+            align: 1,
+            line_height: 1.15,
+        }
+    }
+}
+
+#[repr(C)]
+struct RawTextStyle {
+    font: *const c_char,
+    weight: u32,
+    color: u32,
+    stroke: u32,
+    boxed: u32,
+    box_color: u32,
+    align: u32,
+    stroke_width: f64,
+    shadow: f64,
+    line_height: f64,
 }
 
 const _: () = {
@@ -306,9 +364,18 @@ unsafe extern "C" {
         width: u32,
         height: u32,
         font: f64,
-        color: u32,
+        style: *const RawTextStyle,
+        visible_from: i64,
+        visible_to: i64,
         error: *mut *mut c_char,
     ) -> *mut u8;
+    fn splice_av_append(
+        raw: *mut c_void,
+        track: i32,
+        spec: *const RawSource,
+        error: *mut *mut c_char,
+    ) -> bool;
+    fn splice_av_orientation(raw: *mut c_void, track: i32) -> u32;
     fn free(pointer: *mut c_void);
 }
 
@@ -338,29 +405,9 @@ impl Builder {
         Ok(Self(Composition(raw)))
     }
 
-    /// Adds a native track with one contiguous source mapping.
+    /// Adds a composition track for `source` covering `timing`.
     pub fn source(&mut self, source: Source, timing: &Timing) -> Result<i32, Error> {
-        let (path, kind, index, colors) = match source {
-            Source::Video(path) => (Some(path), 0, 0, [0; 2]),
-            Source::Audio(path, index) => (Some(path), 1, index, [0; 2]),
-            Source::Still(path) => (Some(path), 2, 0, [0; 2]),
-            Source::Color(a, b) => (None, 3, 0, [a, b]),
-        };
-        let path = path
-            .map(|p| CString::new(p.as_os_str().as_bytes()))
-            .transpose()
-            .map_err(|_| Error::message("A composition source path contains NUL."))?;
-        let raw = RawSource {
-            path: path.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
-            source_start: timing.source_start,
-            source_limit: timing.source_limit,
-            speed: timing.speed,
-            source_frame_duration: timing.source_frame_duration,
-            timeline: timing.timeline,
-            kind,
-            index,
-            colors,
-        };
+        let (_path, raw) = raw_source(source, timing)?;
         let mut error = ptr::null_mut();
         // SAFETY: the builder is uniquely borrowed and the descriptors live through the call.
         let track = unsafe { splice_av_source(self.0.0.as_ptr(), &raw, &mut error) };
@@ -369,6 +416,24 @@ impl Builder {
         } else {
             Ok(track)
         }
+    }
+
+    /// Inserts another time range of `source` into an existing track (speed-ramp segments).
+    pub fn append(&mut self, track: i32, source: Source, timing: &Timing) -> Result<(), Error> {
+        let (_path, raw) = raw_source(source, timing)?;
+        let mut error = ptr::null_mut();
+        // SAFETY: as in `source`.
+        if unsafe { splice_av_append(self.0.0.as_ptr(), track, &raw, &mut error) } {
+            Ok(())
+        } else {
+            Err(diagnostic(error))
+        }
+    }
+
+    /// The track's display orientation: 0 none, 1 90°, 2 180°, 3 270° clockwise.
+    pub fn orientation(&self, track: i32) -> u32 {
+        // SAFETY: read-only query of a track the builder owns; out-of-range tracks return 0.
+        unsafe { splice_av_orientation(self.0.0.as_ptr(), track) }
     }
 
     /// Appends the ordered video layers and audio ramps for one contiguous interval.
@@ -632,13 +697,64 @@ impl Drop for Writer {
     }
 }
 
-/// Rasterizes centered bold `text` in `color` into straight RGBA8 of `size`.
-pub fn text_rgba(text: &str, size: [u32; 2], font: f64, color: u32) -> Result<Vec<u8>, Error> {
-    let text = CString::new(text.replace('\0', "\u{FFFD}")).expect("NUL replaced");
+/// The native descriptor for `source`; the returned path string must outlive the descriptor.
+fn raw_source(source: Source, timing: &Timing) -> Result<(Option<CString>, RawSource), Error> {
+    let (path, kind, index, colors) = match source {
+        Source::Video(path) => (Some(path), 0, 0, [0; 2]),
+        Source::Audio(path, index) => (Some(path), 1, index, [0; 2]),
+        Source::Still(path) => (Some(path), 2, 0, [0; 2]),
+        Source::Color(a, b) => (None, 3, 0, [a, b]),
+    };
+    let path = path
+        .map(|p| CString::new(p.as_os_str().as_bytes()))
+        .transpose()
+        .map_err(|_| Error::message("A composition source path contains NUL."))?;
+    let raw = RawSource {
+        path: path.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+        source_start: timing.source_start,
+        source_limit: timing.source_limit,
+        speed: timing.speed,
+        source_frame_duration: timing.source_frame_duration,
+        timeline: timing.timeline,
+        kind,
+        index,
+        colors,
+    };
+    Ok((path, raw))
+}
+
+/// Rasterizes a text layer into straight RGBA8 of `size`.
+pub fn text_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, Error> {
+    let text = CString::new(layer.text.replace('\0', "\u{FFFD}")).expect("NUL replaced");
+    let family = CString::new(layer.style.font.replace('\0', "")).expect("NUL removed");
+    let style = RawTextStyle {
+        font: family.as_ptr(),
+        weight: layer.style.weight,
+        color: layer.color,
+        stroke: layer.style.stroke,
+        boxed: layer.style.boxed,
+        box_color: layer.style.box_color,
+        align: layer.style.align,
+        stroke_width: layer.style.stroke_width,
+        shadow: layer.style.shadow,
+        line_height: layer.style.line_height,
+    };
+    let [from, to] = layer.visible.map_or([-1, -1], |r| r.map(|v| v as i64));
     let mut error = ptr::null_mut();
-    // SAFETY: the string lives for the call; native returns a malloc'd width*height*4 buffer.
-    let pixels =
-        unsafe { splice_text_rgba(text.as_ptr(), size[0], size[1], font, color, &mut error) };
+    // SAFETY: the strings and style live for the call; native returns a malloc'd
+    // width*height*4 buffer.
+    let pixels = unsafe {
+        splice_text_rgba(
+            text.as_ptr(),
+            size[0],
+            size[1],
+            layer.font,
+            &style,
+            from,
+            to,
+            &mut error,
+        )
+    };
     if pixels.is_null() {
         return Err(diagnostic(error));
     }

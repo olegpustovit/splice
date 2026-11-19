@@ -18,5 +18,10 @@ name = "native"
 path = "tests/native.rs"
 harness = false
 
+[[test]]
+name = "looks"
+path = "tests/looks.rs"
+harness = false
+
 [lints]
 workspace = true

@@ -1,5 +1,6 @@
 use super::{
-    Json, history, media, object, platform, project::Projects, text, timeline, typescript, wire::*,
+    Json, analyze, history, media, object, platform, project::Projects, text, timeline, typescript,
+    wire::*,
 };
 use splice_core::{commands, history::StoreError};
 
@@ -10,6 +11,7 @@ const FRAME: &str = r#"{"type":"integer","minimum":0}"#;
 const FRAMES: &str =
     r#"{"type":"array","items":{"type":"integer","minimum":0},"minItems":1,"maxItems":16}"#;
 const FILMSTRIP: &str = r#"{"type":"integer","minimum":1,"maximum":16}"#;
+const KINDS: &str = r#"{"type":"array","items":{"enum":["loudness","pauses","peaks","beats","sounds","shots","text","faces","people","matte"]},"minItems":1}"#;
 const LIMIT: &str = r#"{"type":"integer","minimum":1}"#;
 const RANGE: &str = r#"{"type":"object","properties":{"from":{"type":"integer","minimum":0},"to":{"type":"integer","minimum":0}},"required":["from","to"]}"#;
 const ERROR_SCHEMA: &str = r#"{"type":"object","properties":{"code":{"type":"string"},"message":{"type":"string"},"fix":{"type":"string"},"valid":{"type":"array"},"current":{},"changedSince":{"type":"array"},"op":{"type":"integer","minimum":0}},"required":["code","message","fix"]}"#;
@@ -198,18 +200,30 @@ pub(super) const TOOLS: &[Tool] = &[
         ],
     },
     Tool {
-        name: "audio.summary",
-        description: "Read loudness, peaks and silence or pause ranges for a clip's audio components.",
+        name: "media.analyze",
+        description: "Analyze a clip's media, in timeline frames: loudness and pauses (default); peaks, beats and sound labels (speech, music, laughter); shot cuts, on-screen text with boxes, faces and people every second; matte builds the person matte for a cutout effect. Results are cached per file. Native kinds need macOS.",
         read_only: true,
-        input: &[("projectId", "string"), ("clip", "string")],
+        input: &[
+            ("projectId", "string"),
+            ("clip", "string"),
+            ("kinds", KINDS),
+        ],
         required: &["projectId", "clip"],
         output: &[
             ("revision", REVISION),
             ("clip", "string"),
             ("components", "array"),
-            ("silences", "array"),
+            ("pauses", "array"),
+            ("peaks", "object"),
+            ("beats", "array"),
+            ("sounds", "array"),
+            ("shots", "array"),
+            ("text", "array"),
+            ("faces", "array"),
+            ("people", "array"),
+            ("matte", "string"),
         ],
-        success: &[&["revision", "clip", "components", "silences"]],
+        success: &[&["revision", "clip"]],
     },
     Tool {
         name: "view.frames",
@@ -647,6 +661,8 @@ fn execute(
         }
         "transcript.get" => media::transcript(projects.lookup(args)?.project(), args),
         "takes.events" => media::events(projects.lookup(args)?, args),
+        "media.analyze" => analyze::analyze(projects.lookup(args)?, args),
+        // 0.2 name, kept for one cut (D6).
         "audio.summary" => media::audio(projects.lookup(args)?, args),
         "session.start" => history::start(projects.lookup(args)?, args),
         "edit.apply" => history::apply(projects.lookup(args)?, args),
