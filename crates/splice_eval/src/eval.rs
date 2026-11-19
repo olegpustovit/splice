@@ -62,6 +62,22 @@ pub struct Evaluator {
     fx: Vec<(TimelineId, AudioFx)>,
     /// Items that need the person matte (T18.3).
     cutouts: Vec<(TimelineId, MediaId)>,
+    /// One paint order across kinds (T42.4): (z, kind, index) with kind 0 overlays, 1 shapes,
+    /// 2 titles, 3 captions, sorted by z then kind (stable, so lanes keep their order).
+    paint: Vec<(i32, u8, usize)>,
+    /// Lane transforms by lane index, applied as parents of the lane's items (T42.4).
+    lane_parents: Vec<Option<Rig>>,
+    /// The spine's transform, the parent of spine pictures.
+    spine_parent: Option<Rig>,
+    /// The project's transform, the parent of everything drawn but the backdrop.
+    project_parent: Option<Rig>,
+}
+
+/// Where an item paints: its z and lane index (the parent transform).
+#[derive(Clone, Copy)]
+struct Place {
+    z: i32,
+    lane: usize,
 }
 
 struct PreparedSound {
@@ -73,6 +89,7 @@ struct PreparedSound {
 }
 
 struct PreparedShape {
+    place: Place,
     id: ItemId,
     interval: Interval,
     shape: ShapeKind,
@@ -207,6 +224,7 @@ impl Visual {
 }
 
 struct PreparedOverlay {
+    place: Place,
     interval: Interval,
     input: Input,
     visual: Visual,
@@ -216,14 +234,17 @@ struct PreparedOverlay {
 }
 
 struct PreparedTitle {
+    place: Place,
     id: ItemId,
     interval: Interval,
     text: String,
     rig: Rig,
     style: Option<style::TextStyle>,
+    text_box: Option<style::TextBox>,
 }
 
 struct PreparedCaption {
+    place: Place,
     id: ItemId,
     interval: Interval,
     style: CaptionStyle,
@@ -325,6 +346,14 @@ impl Evaluator {
             soloed: false,
             fx: Vec::new(),
             cutouts: Vec::new(),
+            paint: Vec::new(),
+            lane_parents: project
+                .lanes
+                .iter()
+                .map(|l| Rig::parent(&l.effects))
+                .collect(),
+            spine_parent: Rig::parent(&project.spine.effects),
+            project_parent: Rig::parent(&project.effects),
         };
         let mut end = 0;
         for &slot in project.clips.order() {
@@ -350,6 +379,18 @@ impl Evaluator {
         for (rank, slot) in ordered {
             result.prepare_item(project, rank, slot, size)?;
         }
+        let places = [
+            result.overlays.iter().map(|o| o.place).collect::<Vec<_>>(),
+            result.shapes.iter().map(|o| o.place).collect(),
+            result.titles.iter().map(|o| o.place).collect(),
+            result.captions.iter().map(|o| o.place).collect(),
+        ];
+        for (kind, list) in places.iter().enumerate() {
+            result
+                .paint
+                .extend(list.iter().enumerate().map(|(i, p)| (p.z, kind as u8, i)));
+        }
+        result.paint.sort_by_key(|&(z, kind, _)| (z, kind));
         // Where segments overlap, the later start wins (sort is stable for equal starts).
         // No zoom segments: no table (pictures keep View::IDENTITY), nothing solved.
         let mut zooms = std::mem::take(&mut result.zooms);
@@ -649,7 +690,22 @@ impl Evaluator {
                 });
             }
         }
-        self.draw_overlays(at, clip.is_some_and(|clip| clip.take), false, out);
+        // One paint order across kinds (T42.4); equal z keeps overlays, shapes, titles, captions.
+        let on_take = clip.is_some_and(|clip| clip.take);
+        let mut stacked = 0.0;
+        for &(_, kind, index) in &self.paint {
+            match kind {
+                0 => {
+                    let overlay = &self.overlays[index];
+                    if !(overlay.behind && on_take) && overlay.interval.contains(at) {
+                        self.draw_overlay(overlay, at, out);
+                    }
+                }
+                1 => self.draw_shape(&self.shapes[index], at, out),
+                2 => self.draw_title(&self.titles[index], at, &mut stacked, out),
+                _ => self.draw_caption(&self.captions[index], at, out),
+            }
+        }
         for sound in self
             .sounds
             .iter()
@@ -663,69 +719,143 @@ impl Evaluator {
                 .input
                 .audio(source, TimelineId::Item(sound.id), gain, pan, out);
         }
+    }
+
+    /// A media overlay above the spine (behind-presenter ones draw with their take).
+    fn draw_overlay(&self, overlay: &PreparedOverlay, frame: Frame, out: &mut FramePlan) {
+        let opacity = overlay.interval.alpha(frame);
+        let local = f64::from(frame - overlay.interval.start);
+        let source = overlay.input.frame(frame - overlay.interval.start);
+        let look = overlay.rig.look(local, self.size.map(f64::from));
+        let look = self.parented(
+            look,
+            Some(overlay.place.lane),
+            frame,
+            overlay.visual.picture.destination,
+        );
+        overlay.visual.draw(
+            source.min((overlay.input.frames - 1.0).max(0.0)),
+            opacity,
+            look,
+            true,
+            out,
+        );
+        let (gain, pan) = self.mix(overlay.mix.as_ref(), local);
+        overlay.input.audio(
+            source,
+            overlay.visual.picture.item,
+            opacity * gain,
+            pan,
+            out,
+        );
+    }
+
+    fn draw_shape(&self, shape: &PreparedShape, at: Frame, out: &mut FramePlan) {
+        if !shape.interval.contains(at) {
+            return;
+        }
         let canvas = self.size.map(f64::from);
-        for shape in self
-            .shapes
-            .iter()
-            .filter(|shape| shape.interval.contains(at))
-        {
-            out.layers.push(Layer::Shape {
-                item: shape.id,
-                shape: shape.shape,
-                bounds: shape.bounds,
-                fill: shape.fill[0],
-                fill2: shape.fill[1],
-                stroke: shape.stroke,
-                stroke_width: shape.stroke_width,
-                corner: shape.corner,
-                opacity: shape.interval.alpha(at),
-                look: shape.rig.look(f64::from(at - shape.interval.start), canvas),
-            });
+        let look = shape.rig.look(f64::from(at - shape.interval.start), canvas);
+        out.layers.push(Layer::Shape {
+            item: shape.id,
+            shape: shape.shape,
+            bounds: shape.bounds,
+            fill: shape.fill[0],
+            fill2: shape.fill[1],
+            stroke: shape.stroke,
+            stroke_width: shape.stroke_width,
+            corner: shape.corner,
+            opacity: shape.interval.alpha(at),
+            look: self.parented(look, Some(shape.place.lane), at, shape.bounds),
+        });
+    }
+
+    fn draw_title(&self, title: &PreparedTitle, at: Frame, stacked: &mut f64, out: &mut FramePlan) {
+        if !title.interval.contains(at) {
+            return;
         }
-        let [w, h] = self.size.map(f64::from);
-        let mut stacked = 0.0;
-        for title in self
-            .titles
-            .iter()
-            .filter(|title| title.interval.contains(at))
-        {
+        let canvas = self.size.map(f64::from);
+        let [w, h] = canvas;
+        let (bounds, font, wrap) = match title.text_box {
+            // A box (T42.2): the text wraps into it at its style size and shrinks to fit,
+            // or starts at the box height and shrinks (`fill`).
+            Some(text_box) => {
+                let [x, y, bw, bh] = text_box.rect;
+                let bounds = layout::rect(x * w, y * h, bw * w, bh * h);
+                let size = title.style.as_ref().map_or(0.06, |s| s.size) * h.min(w);
+                let font = if text_box.fill { bounds.h } else { size };
+                (bounds, font, text_box.wrap)
+            }
             // Styled titles size by font (bounds hold one line at 1/0.6 of the font size).
-            let (height, position) = title.style.as_ref().map_or((h.min(w) * 0.1, 0), |s| {
-                (s.size * h.min(w) / 0.6 * s.line_height / 1.15, s.position)
-            });
-            let y = match position {
-                1 => (h - height) / 2.0,
-                2 => h * 0.86 - height,
-                3 => h * 0.76,
-                _ => {
-                    let y = h * 0.07 + stacked;
-                    stacked += height * 1.2;
-                    y
-                }
-            };
-            out.layers.push(Layer::Title {
-                item: title.id,
-                bounds: layout::rect(w * 0.06, y, w * 0.88, height),
-                opacity: title.interval.alpha(at),
-                look: title.rig.look(f64::from(at - title.interval.start), canvas),
-            });
+            None => {
+                let (height, position) = title.style.as_ref().map_or((h.min(w) * 0.1, 0), |s| {
+                    (s.size * h.min(w) / 0.6 * s.line_height / 1.15, s.position)
+                });
+                let y = match position {
+                    1 => (h - height) / 2.0,
+                    2 => h * 0.86 - height,
+                    3 => h * 0.76,
+                    _ => {
+                        let y = h * 0.07 + *stacked;
+                        *stacked += height * 1.2;
+                        y
+                    }
+                };
+                (
+                    layout::rect(w * 0.06, y, w * 0.88, height),
+                    height * 0.6,
+                    true,
+                )
+            }
+        };
+        let look = title.rig.look(f64::from(at - title.interval.start), canvas);
+        out.layers.push(Layer::Title {
+            item: title.id,
+            bounds,
+            font,
+            wrap,
+            opacity: title.interval.alpha(at),
+            look: self.parented(look, Some(title.place.lane), at, bounds),
+        });
+    }
+
+    fn draw_caption(&self, caption: &PreparedCaption, at: Frame, out: &mut FramePlan) {
+        if !caption.interval.contains(at) {
+            return;
         }
-        for caption in self
-            .captions
-            .iter()
-            .filter(|caption| caption.interval.contains(at))
-        {
-            let word = caption.words.iter().rposition(|word| at >= word.start);
-            out.layers.push(Layer::Caption {
-                item: caption.id,
-                word,
-                opacity: caption.interval.alpha(at),
-                style: caption.style,
-                look: caption
-                    .rig
-                    .look(f64::from(at - caption.interval.start), canvas),
-            });
+        let canvas = self.size.map(f64::from);
+        let word = caption.words.iter().rposition(|word| at >= word.start);
+        let look = caption
+            .rig
+            .look(f64::from(at - caption.interval.start), canvas);
+        out.layers.push(Layer::Caption {
+            item: caption.id,
+            word,
+            opacity: caption.interval.alpha(at),
+            style: caption.style,
+            look: self.parented(
+                look,
+                Some(caption.place.lane),
+                at,
+                caption_bounds(&caption.style, canvas),
+            ),
+        });
+    }
+
+    /// `look` under its lane's (or, for `None`, the spine's) and the project's transforms
+    /// (T42.4): parents scale and rotate about their anchor on the canvas. Keys on lanes and
+    /// the project are absolute frames. `dest` is the layer's own rectangle.
+    fn parented(&self, look: Look, lane: Option<usize>, at: Frame, dest: Rect) -> Look {
+        let parent = match lane {
+            Some(index) => self.lane_parents.get(index).and_then(Option::as_ref),
+            None => self.spine_parent.as_ref(),
+        };
+        let canvas = self.size.map(f64::from);
+        let mut look = look;
+        for rig in [parent, self.project_parent.as_ref()].into_iter().flatten() {
+            look = look::compose(look, rig.look(f64::from(at), canvas), dest, canvas);
         }
+        look
     }
 
     /// Prepared title text.
@@ -771,9 +901,10 @@ impl Evaluator {
         let local = f64::from(frame - clip.interval.start);
         let source = input.frame(frame - clip.interval.start);
         let opacity = clip.interval.alpha(frame);
-        let look = clip.rig.look(local, self.size.map(f64::from));
+        let mut look = clip.rig.look(local, self.size.map(f64::from));
         let picture_source = source.clamp(0.0, (input.frames - 1.0).max(0.0));
         if let Some(visual) = &clip.visual {
+            look = self.parented(look, None, frame, visual.picture.destination);
             visual.draw(picture_source, 1.0, look, false, out);
             if let Some(Layer::Picture(picture)) = out.layers.last_mut()
                 && let Some(view) = usize::try_from(frame).ok().and_then(|f| self.camera.get(f))
@@ -811,24 +942,7 @@ impl Evaluator {
         for overlay in self.overlays.iter().filter(|overlay| {
             (overlay.behind && on_take) == behind && overlay.interval.contains(frame)
         }) {
-            let opacity = overlay.interval.alpha(frame);
-            let local = f64::from(frame - overlay.interval.start);
-            let source = overlay.input.frame(frame - overlay.interval.start);
-            overlay.visual.draw(
-                source.min((overlay.input.frames - 1.0).max(0.0)),
-                opacity,
-                overlay.rig.look(local, self.size.map(f64::from)),
-                true,
-                out,
-            );
-            let (gain, pan) = self.mix(overlay.mix.as_ref(), local);
-            overlay.input.audio(
-                source,
-                overlay.visual.picture.item,
-                opacity * gain,
-                pan,
-                out,
-            );
+            self.draw_overlay(overlay, frame, out);
         }
     }
 
@@ -1083,22 +1197,29 @@ impl Evaluator {
         let audio_scopes: [&[Effect]; 3] = [&p.effects, lane, local];
         let shifts = [-start, -start, 0];
         let rig = Rig::new(&inherited, &shifts, local, &mut self.luts);
+        let place = Place {
+            z: data.appearance.z,
+            lane: rank,
+        };
         let fx = AudioFx::new(&audio_scopes);
         if fx != AudioFx::default() {
             self.fx.push((TimelineId::Item(id), fx));
         }
         match &data.kind {
             ItemKind::Title { text } => self.titles.push(PreparedTitle {
+                place,
                 id,
                 interval,
                 text: text.clone(),
                 rig,
                 style: style::text(&[&p.effects, lane, local]),
+                text_box: style::text_box(&[&p.effects, lane, local]),
             }),
             ItemKind::Shape { shape, rect } => {
                 let style = look::shape_style(local);
                 let [w, h] = size;
                 self.shapes.push(PreparedShape {
+                    place,
                     id,
                     interval,
                     shape: *shape,
@@ -1175,6 +1296,7 @@ impl Evaluator {
                     self.cutouts.push((TimelineId::Item(id), media.id));
                 }
                 self.overlays.push(PreparedOverlay {
+                    place,
                     interval,
                     input,
                     visual,
@@ -1192,6 +1314,7 @@ impl Evaluator {
                         caption_tokens(p, timing.anchor, words, edits, free, style.uppercase)?;
                     if !words.is_empty() {
                         self.captions.push(PreparedCaption {
+                            place,
                             id,
                             interval,
                             style,
@@ -1577,4 +1700,15 @@ pub fn caption_tokens(
 /// Smoothstep on [0, 1].
 fn smooth(x: f64) -> f64 {
     x * x * (3.0 - 2.0 * x)
+}
+
+/// A caption cue's text rectangle in canvas pixels: the safe-zone band the renderer lays the
+/// cue out in (splice_av lowering uses the same formula).
+fn caption_bounds(style: &CaptionStyle, [w, h]: [f64; 2]) -> Rect {
+    let [top, bottom, left, right] = style.safe;
+    let font = (w * style.size).min(h * 0.15);
+    let height = font * 2.5;
+    let y = (h * style.position - height / 2.0)
+        .clamp(h * top, (h * (1.0 - bottom) - height).max(h * top));
+    layout::rect(w * left, y, w * (1.0 - left - right), height)
 }

@@ -168,6 +168,10 @@ pub struct Appearance {
     pub color: Option<String>,
     /// Local effects in application order.
     pub effects: Vec<Effect>,
+    /// Paint order of a visual item (T42.4): higher draws in front, across every kind; equal
+    /// z keeps the default order (pictures, shapes, titles, captions; then lane stack).
+    /// Spine clips ignore it.
+    pub z: i32,
 }
 
 /// Video crop and fit.
@@ -680,6 +684,7 @@ impl Clone for Appearance {
             name: self.name.clone(),
             color: self.color.clone(),
             effects: self.effects.clone(),
+            z: self.z,
         }
     }
 
@@ -689,6 +694,7 @@ impl Clone for Appearance {
         self.name.clone_from(&source.name);
         self.color.clone_from(&source.color);
         self.effects.clone_from(&source.effects);
+        self.z = source.z;
     }
 }
 

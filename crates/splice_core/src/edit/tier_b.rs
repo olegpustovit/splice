@@ -26,6 +26,8 @@ pub(super) enum Applies {
     Text,
     /// Shape items.
     Shape,
+    /// Title items (their text box).
+    Title,
     /// Items made by template.add.
     Template,
     /// The project only.
@@ -59,6 +61,7 @@ pub(super) fn applies(kind: &str) -> Result<(Applies, bool), CommandError> {
         Some("text") => Applies::Text,
         Some("shape") => Applies::Shape,
         Some("template") => Applies::Template,
+        Some("title") => Applies::Title,
         _ => Applies::Project,
     };
     let multiple = schema.field("multiple").and_then(Json::as_bool) == Some(true);
@@ -701,7 +704,7 @@ impl Editor {
                 (LaneKind::Captions, Caption | Text | Layer)
                     | (LaneKind::Audio, Audio)
                     | (LaneKind::Overlay, Visual | Layer | Audio)
-                    | (LaneKind::Graphics, Text | Layer | Shape)
+                    | (LaneKind::Graphics, Text | Layer | Shape | Title)
             ),
             Owner::Clip(slot) => {
                 let media_id = self.project.clips.data(slot).expect("live clip").media;
@@ -713,7 +716,7 @@ impl Editor {
                     }
                     Audio => descriptor
                         .is_some_and(|m| m.kind == MediaKind::Take || !m.probe.audio.is_empty()),
-                    Caption | Text | Shape | Template | Project => false,
+                    Caption | Text | Shape | Title | Template | Project => false,
                 }
             }
             Owner::Item(slot) => {
@@ -725,6 +728,7 @@ impl Editor {
                     Layer => !matches!(item, ItemKind::Sound(_) | ItemKind::Zoom(_)),
                     Audio => matches!(item, ItemKind::Sound(_) | ItemKind::Media(_)),
                     Shape => matches!(item, ItemKind::Shape { .. }),
+                    Title => matches!(item, ItemKind::Title { .. }),
                     Template => true,
                     Take | Spine | Project => false,
                 }
@@ -750,18 +754,6 @@ impl Editor {
                 .and_then(Json::as_str)
                 .unwrap_or("its owners");
             return Err(wrong_kind(&format!("{kind} applies to {to}.")));
-        }
-        // M21: the evaluator moves each clip and item by its own transform only; a lane or
-        // project transform would be stored and never drawn.
-        // ponytail: refuse until T42.4 applies lane/project transforms as parents.
-        if kind == "transform" && matches!(owner, Owner::Project | Owner::Spine | Owner::Lane(_)) {
-            return Err(CommandError::rule(
-                "WRONG_KIND",
-                "target",
-                None,
-                "a clip (clp_…) or item (ovl_…): lane and project transforms are not drawn yet",
-                "Put the transform on each clip or item, or effect.paste it across them.",
-            ));
         }
         // A take's camera, cursor and keystroke looks need that component (M18).
         if let Owner::Clip(slot) = owner {

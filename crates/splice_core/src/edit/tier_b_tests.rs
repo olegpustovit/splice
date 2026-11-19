@@ -946,24 +946,18 @@ fn m18_effect_add_checks_take_components() {
     assert_eq!(error.error.code, "WRONG_KIND");
 }
 
-/// T37.6 M21: lane and project transforms are refused until the evaluator draws them.
+/// T37.6 M21: lane, spine and project transforms apply as parents (T42.4, drawn by the
+/// evaluator: splice_eval motion_tests), so they are accepted like an item's own.
 #[test]
-fn m21_lane_and_project_transforms_are_refused() {
+fn m21_lane_and_project_transforms_apply() {
     let mut project = sample();
-    for target in ["lan_gfx", "project"] {
-        let error = run(
+    for target in ["lan_gfx", "lan_spine", "project", "ovl_label"] {
+        run(
             &mut project,
             &format!(r#"[{{"cmd":"effect.add","target":"{target}","type":"transform","params":{{"x":0.1}}}}]"#),
         )
-        .unwrap_err();
-        assert_eq!(error.error.code, "WRONG_KIND");
-        assert!(error.error.rule.is_some());
+        .unwrap();
     }
-    run(
-        &mut project,
-        r#"[{"cmd":"effect.add","target":"ovl_label","type":"transform","params":{"x":0.1}}]"#,
-    )
-    .unwrap();
 }
 
 /// Review #15: zoom.remove deletes a camera segment and refuses anything else.

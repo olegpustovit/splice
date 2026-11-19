@@ -132,6 +132,14 @@ its content through a split, trim or join), `reparent`, `cut`, `spineEnd`, `word
 words left the timeline or were re-captioned), `laneDeleted`, `replaced` (a re-run of `intent.autoZoom` replaced its earlier zooms), or `overlap` with `with` naming the
 item that held the lane.
 
+Text and motion changes say what they made (T42). A change that wrote spring keys
+(`param.keys`, `motion.preset`, a title's `out`/`loop`) carries `settle`: the frames the slowest
+spring needs to stay within 0.1% of its target (its summary names a spring the next key cuts
+short). `title.add` and `title.set` carry `bounds: {final, swept, onCanvas}`: the text box
+(normalized canvas `{x, y, w, h}`) at its last fully opaque frame, the box swept over every frame
+by the title's own transform keys and unit animator, and whether the swept box stays on the
+canvas. `item.order` carries the `z` it set (higher paints in front, across every kind).
+
 Use `at` for a placement calculated from a frame or anchor. Use `anchor` to retain an explicit
 item, marker, or transcript relation. A frame in a gap between clips keeps its position, anchored
 to the end of the clip before it (or the start of the first clip). Overlapping items can move to a
@@ -148,8 +156,8 @@ instead of bumping to new lanes. `cut.range` refuses a negative `from`.
 
 `style.set` colors recolor the project's window (or, without one, the windows that exist) and
 never turn a window on. `effect.add` of `camera`, `cursor` or `keystrokes` on a clip needs that
-take component (`WRONG_KIND` names it). A `transform` goes on clips and items; lane and project
-transforms are refused until the evaluator draws them as parents.
+take component (`WRONG_KIND` names it). A `transform` on a lane, the spine or the project is
+the parent of what it holds (T42.4): it moves, scales and fades those items about the canvas.
 
 The timeline ends where the spine ends. An item that would run past the last clip is trimmed
 there; one placed at or past the end (fewer than three frames before it) is refused with

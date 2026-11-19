@@ -137,13 +137,17 @@ pub enum Op {
         text: Option<String>,
         /// Explicit graphics lane.
         lane: Option<Target>,
+        /// Inline box, style and animation (T42.2).
+        look: Option<Box<TitleLook>>,
     },
     /// Edit Title.
     TitleSet {
         /// Title to edit.
         item: Target,
         /// New visible text.
-        text: String,
+        text: Option<String>,
+        /// Inline box, style and animation (T42.2).
+        look: Option<Box<TitleLook>>,
     },
     /// Add Zoom: a camera segment (D12).
     ZoomAdd {
@@ -727,6 +731,24 @@ pub enum Op {
         /// BCP 47 language tag.
         language: String,
     },
+    /// Paint order (T42.4): higher z draws in front, across every kind.
+    ItemOrder {
+        /// Item to move in the stack.
+        item: Target,
+        /// Where it goes.
+        to: Order,
+    },
+    /// Motion preset (T42.5): writes ordinary transform keys.
+    MotionPreset {
+        /// Clips or items to animate.
+        items: Vec<Target>,
+        /// What moves, with its length and strength.
+        motion: Motion,
+        /// First frame, relative to each item's start.
+        at: Frame,
+        /// Whether `length` was given (loops otherwise fill the item).
+        sized: bool,
+    },
 }
 
 /// A typed ID or a reference to a preceding operation.
@@ -935,6 +957,98 @@ pub enum EffectSelection {
         /// Effect type name.
         kind: String,
     },
+}
+
+/// A title's inline look (D16, T42.2); each part compiles to an ordinary effect.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TitleLook {
+    /// `layout` parameters: the text box, when `box` was passed.
+    pub text_box: Option<Vec<EffectParam>>,
+    /// `text` parameters (`style`).
+    pub style: Vec<EffectParam>,
+    /// `animate` parameters (`in`): how units come in.
+    pub enter: Vec<EffectParam>,
+    /// `out`: transform keys over the title's last frames.
+    pub exit: Option<Motion>,
+    /// `loop`: transform keys repeating until the exit.
+    pub repeat: Option<Motion>,
+}
+
+/// A motion preset with its timing; compiles to transform keys (T42.5).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Motion {
+    /// What moves.
+    pub preset: MotionPreset,
+    /// Frames the move lasts, or one period of a loop.
+    pub length: Frame,
+    /// Strength 0–1.
+    pub intensity: f64,
+}
+
+/// Motion presets (T42.5); `out` takes the exit presets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MotionPreset {
+    /// Scale up from small on a bouncy spring.
+    BounceIn,
+    /// Quick decaying side-to-side shake.
+    Shake,
+    /// Gentle repeating scale pulse.
+    Pulse,
+    /// Slow up-and-down drift.
+    Float,
+    /// Small repeating rotation.
+    Wiggle,
+    /// Scale up past the size and back.
+    Pop,
+    /// Exit: fade out.
+    Fade,
+    /// Exit: drop down while fading.
+    Sink,
+    /// Exit: shrink away while fading.
+    Shrink,
+    /// Exit: slide off to the left while fading.
+    Slide,
+}
+
+impl MotionPreset {
+    /// `motion.preset` names.
+    pub const MOTION: [(Self, &'static str); 6] = [
+        (Self::BounceIn, "bounceIn"),
+        (Self::Shake, "shake"),
+        (Self::Pulse, "pulse"),
+        (Self::Float, "float"),
+        (Self::Wiggle, "wiggle"),
+        (Self::Pop, "pop"),
+    ];
+    /// `title.add {out}` names.
+    pub const EXIT: [(Self, &'static str); 4] = [
+        (Self::Fade, "fade"),
+        (Self::Sink, "sink"),
+        (Self::Shrink, "shrink"),
+        (Self::Slide, "slide"),
+    ];
+    /// `title.add {loop}` names.
+    pub const LOOP: [(Self, &'static str); 4] = [
+        (Self::Pulse, "pulse"),
+        (Self::Float, "float"),
+        (Self::Wiggle, "wiggle"),
+        (Self::Shake, "shake"),
+    ];
+}
+
+/// Where `item.order` puts an item in the paint order (higher z = in front).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Order {
+    /// In front of every other item.
+    Front,
+    /// Behind every other item.
+    Back,
+    /// Just in front of this item.
+    Above(Target),
+    /// Just behind this item.
+    Below(Target),
+    /// This exact z.
+    Z(i32),
 }
 
 /// Edit or reset a caption word.

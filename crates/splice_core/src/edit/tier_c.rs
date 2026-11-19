@@ -347,6 +347,7 @@ impl Editor {
                 }
                 Ok(done(format!("Consolidated {count} file(s) into media/")))
             }
+            op @ (Op::ItemOrder { .. } | Op::MotionPreset { .. }) => self.run_motion(op),
             _ => unreachable!("tier C dispatch"),
         }
     }
@@ -875,7 +876,7 @@ impl Editor {
         Ok((owner, index))
     }
 
-    fn set_param(
+    pub(super) fn set_param(
         &mut self,
         target: &Target,
         path: &str,

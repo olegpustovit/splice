@@ -33,6 +33,8 @@ pub use text::{grapheme_len, text_units};
 #[cfg(test)]
 mod look_tests;
 #[cfg(test)]
+mod motion_tests;
+#[cfg(test)]
 mod tests;
 
 /// Reusable output for one frame of video and audio.
@@ -160,8 +162,12 @@ pub enum Layer {
     Title {
         /// Owning item.
         item: ItemId,
-        /// Title card bounds in canvas pixels.
+        /// Title card bounds in canvas pixels: the text wraps and shrinks to fit inside.
         bounds: Rect,
+        /// Starting font size in canvas pixels (the rasterizer shrinks it until the text fits).
+        font: f64,
+        /// Whether lines wrap at the box width (otherwise the font shrinks to fit each line).
+        wrap: bool,
         /// Fade opacity.
         opacity: f64,
         /// Keyed transform.

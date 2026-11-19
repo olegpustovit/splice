@@ -7,6 +7,7 @@ pub(crate) use args::{frame_arg, reference};
 mod decode;
 mod op;
 mod table;
+mod text;
 
 pub use op::*;
 pub use table::COMMANDS;
@@ -49,6 +50,8 @@ pub const EXTENSIONS: &[&str] = &[
     "intent.steps",
     "intent.speedTyping",
     "caption.add",
+    "item.order",
+    "motion.preset",
 ];
 
 #[cfg(test)]

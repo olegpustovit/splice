@@ -46,13 +46,13 @@ fn registry_matches_prototype_ids_order_and_status() {
     );
     // 0.3 built the prototype's planned rows (less its click-zoom settings, now
     // intent.autoZoom's job) and 16 Splice rows; 0.4 adds intent.steps, intent.speedTyping
-    // and caption.add (T41). Nothing stays planned.
+    // and caption.add (T41), item.order and motion.preset (T42). Nothing stays planned.
     assert_eq!(
         COMMANDS
             .iter()
             .filter(|row| row.tier == Tier::Third)
             .count(),
-        38
+        40
     );
     assert!(COMMANDS.iter().all(|row| row.tier != Tier::Planned));
 }
@@ -87,7 +87,8 @@ fn every_command_has_a_documented_decodable_example_and_distinct_variant() {
     let effect = describe(Some("effect.add"), None).unwrap();
     assert_eq!(effect.field("cut").unwrap().as_str(), Some("0.2"));
     let effects = effect.field("effectTypes").unwrap();
-    assert_eq!(effects.as_object().unwrap().len(), 23);
+    // 0.4 adds layout (a title's text box, T42.2).
+    assert_eq!(effects.as_object().unwrap().len(), 24);
     assert!(
         effects
             .field("window")

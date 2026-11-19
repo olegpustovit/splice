@@ -2,7 +2,7 @@
 //! chroma key and cutout. Effects compile once per revision into a `Rig`; `Rig::look` samples it
 //! at a frame without allocating.
 use super::style::Resolution;
-use splice_model::{Effect, Frame, Key, keys};
+use splice_model::{Effect, Frame, Key, Rect, keys};
 
 /// A number that may be keyed. Key frames are relative to the owner's start.
 #[derive(Clone, Debug, PartialEq)]
@@ -585,5 +585,59 @@ pub(crate) fn shape_style(local: &[Effect]) -> (u32, u32, u32, f64, f64) {
             )
         }
         None => (0xffffff, 0xffffff, 0, 0.0, 0.0),
+    }
+}
+
+impl Rig {
+    /// The transform of a lane, the spine or the project as a parent of what it holds (T42.4),
+    /// or `None` without one. Its keys are absolute frames.
+    pub(crate) fn parent(effects: &[Effect]) -> Option<Self> {
+        let own: [&[Effect]; 1] = [effects];
+        let t = Resolution::on(&own, &[], "transform")?;
+        Some(Self {
+            transform: Some([
+                t.num("x", 0.0),
+                t.num("y", 0.0),
+                t.num("scale", 1.0),
+                t.num("rotation", 0.0),
+                t.num("opacity", 1.0),
+                t.num("anchorX", 0.5),
+                t.num("anchorY", 0.5),
+            ]),
+            ..Self::default()
+        })
+    }
+}
+
+/// `child` (pivoting on its anchor in `dest`) under `parent` (pivoting on its anchor across the
+/// canvas): scales multiply, rotations and offsets chain, opacities multiply. The result keeps
+/// the child's pivot, so a renderer applies it like any look.
+pub(crate) fn compose(child: Look, parent: Look, dest: Rect, canvas: [f64; 2]) -> Look {
+    let pivot = [
+        dest.x + child.anchor[0] * dest.w,
+        dest.y + child.anchor[1] * dest.h,
+    ];
+    let origin = [parent.anchor[0] * canvas[0], parent.anchor[1] * canvas[1]];
+    // Where the parent sends the child's moved pivot, minus the pivot itself.
+    let (sin, cos) = parent.rotation.to_radians().sin_cos();
+    let [vx, vy] = [
+        pivot[0] + child.offset[0] - origin[0],
+        pivot[1] + child.offset[1] - origin[1],
+    ];
+    let s = parent.scale;
+    Look {
+        offset: [
+            s * (vx * cos - vy * sin) + origin[0] + parent.offset[0] - pivot[0],
+            s * (vx * sin + vy * cos) + origin[1] + parent.offset[1] - pivot[1],
+        ],
+        scale: child.scale * s,
+        rotation: child.rotation + parent.rotation,
+        opacity: child.opacity * parent.opacity,
+        blend: if child.blend == Blend::Normal {
+            parent.blend
+        } else {
+            child.blend
+        },
+        ..child
     }
 }

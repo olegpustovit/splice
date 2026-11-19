@@ -42,7 +42,9 @@ fn tier_c_described_examples_apply_replay_undo_and_match_goldens() {
         .iter()
         .filter(|row| row.tier == commands::Tier::Third)
         .collect();
-    assert_eq!(rows.len(), 38);
+    // 35 rows of 0.3, then intent.steps, intent.speedTyping, caption.add (T41), item.order and
+    // motion.preset (T42).
+    assert_eq!(rows.len(), 40);
     for command in rows {
         let described = commands::describe(Some(command.id), None).unwrap();
         let example = described.field("example").unwrap().clone();

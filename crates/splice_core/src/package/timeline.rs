@@ -230,6 +230,9 @@ pub(super) fn encode_item(id: ItemId, timing: ItemTiming, data: &ItemData) -> Js
     }
     push_text(&mut fields, "name", &data.appearance.name);
     push_text(&mut fields, "color", &data.appearance.color);
+    if data.appearance.z != 0 {
+        fields.push(("z", Json::Signed(i64::from(data.appearance.z))));
+    }
     object(fields)
 }
 
@@ -238,7 +241,7 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
         value,
         &[
             "id", "kind", "lane", "anchor", "length", "params", "effects", "fadeIn", "fadeOut",
-            "name", "color",
+            "name", "color", "z",
         ],
     )?;
     let params = value.required("params")?;
@@ -503,6 +506,7 @@ fn decode_appearance(value: &Json) -> Result<Appearance, PackageError> {
         name: optional_string(value, "name")?,
         color: optional_string(value, "color")?,
         effects: decode_effects(value)?,
+        z: optional_frame(value, "z")?,
     })
 }
 

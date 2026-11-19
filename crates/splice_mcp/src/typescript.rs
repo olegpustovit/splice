@@ -330,6 +330,25 @@ fn param_type(kind: &str, doc: &str) -> String {
     if kind.starts_with("effect type") {
         return "EffectType".into();
     }
+    // A title's inline look (T42.2): effect parameters without keys, and motion presets.
+    for (fields, effect) in [
+        ("{x, y, w, h, fit, wrap}", "layout"),
+        ("{font, weight, size", "text"),
+        ("{preset, unit, duration, stagger}", "animate"),
+    ] {
+        if kind.starts_with(fields) {
+            return inline_type(effect);
+        }
+    }
+    if kind.starts_with("{preset, duration, intensity}") {
+        return "{ preset: \"fade\" | \"sink\" | \"shrink\" | \"slide\"; duration?: number; intensity?: number }".into();
+    }
+    if kind.starts_with("{preset, period, intensity}") {
+        return "{ preset: \"pulse\" | \"float\" | \"wiggle\" | \"shake\"; period?: number; intensity?: number }".into();
+    }
+    if kind.starts_with("front | back") {
+        return "\"front\" | \"back\" | { above: string } | { below: string } | number".into();
+    }
     if kind.starts_with("{wordId") {
         return "Record<string, { text?: string; emph?: boolean; emoji?: string; hidden?: boolean } | null>".into();
     }
@@ -392,6 +411,35 @@ fn param_type(kind: &str, doc: &str) -> String {
         return union;
     }
     "string".into()
+}
+
+/// The constant parameters of an effect type as an object type (inline, no keys).
+fn inline_type(kind: &str) -> String {
+    let mut fields = Vec::new();
+    for (name, spec) in effect_schemas()
+        .field(kind)
+        .and_then(|schema| schema.field("params"))
+        .and_then(Json::as_object)
+        .into_iter()
+        .flatten()
+    {
+        let ty = match spec.field("type").and_then(Json::as_str) {
+            Some("number") => "number".to_string(),
+            Some("bool") => "boolean".to_string(),
+            Some("enum") => spec
+                .field("options")
+                .and_then(Json::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Json::as_str)
+                .map(|option| format!("\"{option}\""))
+                .collect::<Vec<_>>()
+                .join(" | "),
+            _ => "string".to_string(),
+        };
+        fields.push(format!("{name}?: {ty}"));
+    }
+    format!("{{ {} }}", fields.join("; "))
 }
 
 /// One tool's declaration; `brief` (the index) keeps the description's first sentence.

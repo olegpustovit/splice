@@ -9,7 +9,7 @@ use splice_eval::cursor;
 use splice_eval::{
     Animate, Audio, Background, CaptionPreset, Evaluator, Keys, Layer, Picture, TextStyle, Track,
 };
-use splice_model::{ClipId, Frame, ItemId, Media, MediaId, MediaKind, Project, Rect, TimelineId};
+use splice_model::{ClipId, Frame, ItemId, Media, MediaId, MediaKind, Project, TimelineId};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -194,14 +194,30 @@ pub(super) fn build(
                     let track = state.camera(clip, media, project, package, evaluator)?;
                     video.push(Slot::new(track, Role::Camera(clip), depth));
                 }
-                (Layer::Title { item, bounds, .. }, Layer::Title { .. }) => {
+                (
+                    Layer::Title {
+                        item,
+                        bounds,
+                        font,
+                        wrap,
+                        ..
+                    },
+                    Layer::Title { .. },
+                ) => {
                     if let Some(text) = evaluator.title(item)
                         && !state.text.iter().any(|known| known.item == Some(item))
                     {
                         let end = evaluator
                             .extent(TimelineId::Item(item))
                             .map_or(to, |[_, end]| end);
-                        state.title(item, text, bounds, [from, end], evaluator.text_style(item));
+                        state.title(
+                            item,
+                            text,
+                            [bounds.x, bounds.y, bounds.w, bounds.h, font],
+                            wrap,
+                            [from, end],
+                            evaluator.text_style(item),
+                        );
                     }
                 }
                 (
@@ -482,18 +498,21 @@ impl Lowering {
         &mut self,
         item: ItemId,
         text: &str,
-        bounds: Rect,
+        [x, y, w, h, font]: [f64; 5],
+        wrap: bool,
         range: [Frame; 2],
         style: Option<&TextStyle>,
     ) {
-        let font = style.map_or(bounds.h * 0.6, |_| bounds.h * 0.6);
         let layer = TextLayer {
             text: text.into(),
-            bounds: coordinates(bounds),
+            bounds: [x, y, w, h],
             font,
             opacity: [1.0; 2],
             color: style.map_or(0xffffff, |s| s.color),
-            style: native_style(style, 0.0),
+            style: apple_sys::composition::TextStyle {
+                wrap,
+                ..native_style(style, 0.0)
+            },
             visible: None,
             active: None,
         };
@@ -857,10 +876,6 @@ fn native_style(style: Option<&TextStyle>, stroke: f64) -> apple_sys::compositio
             ..Default::default()
         },
     }
-}
-
-fn coordinates(rect: Rect) -> [f64; 4] {
-    [rect.x, rect.y, rect.w, rect.h]
 }
 
 fn ramp(a: f64, b: f64, [from, to]: [Frame; 2]) -> [f64; 2] {

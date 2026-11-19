@@ -10,7 +10,7 @@ use ogpu_core::backend::{self as b, Commands, Device, PreparedRenderTarget, Text
 use ogpu_core::types::{Extent, Origin, TextureDescriptor, TextureFormat, TextureUsage};
 use splice_eval::{Animate, FramePlan, Look, MaskMode, MaskShape};
 use splice_gpu::{Bound, Compositor, Layer, MAX_LAYERS, rgb};
-use splice_model::{Frame, ShapeKind};
+use splice_model::{Frame, ItemId, ShapeKind};
 
 const RING_SECONDS: f64 = 0.45;
 
@@ -259,7 +259,16 @@ impl GpuProgram {
         self.depths.clear();
         self.mattes.clear();
         let canvas = size.map(f64::from);
+        // Shapes, titles and captions paint between pictures in the evaluator's one order
+        // (T42.4): everything below a slot's layer draws before it.
+        let mut next = 0;
         for (i, slot) in layers.iter().enumerate() {
+            let depth = slot.depth as usize;
+            if depth < self.frame.layers.len() && depth > next {
+                self.depths.resize(self.layers.len(), Slot::NONE);
+                self.items_between([next, depth], at, canvas, text);
+                next = depth;
+            }
             self.depths.resize(self.layers.len(), Slot::NONE);
             let source = self.sources[i];
             let texture = match self.copies.get(i) {
@@ -300,9 +309,10 @@ impl GpuProgram {
             self.depths.resize(self.layers.len(), slot.depth);
         }
         self.depths.resize(self.layers.len(), Slot::NONE);
-        self.shapes(canvas);
+        self.items_between([next, self.frame.layers.len()], at, canvas, text);
         if text {
-            self.text(at, canvas);
+            // Keystroke chips draw last, over everything.
+            self.text(at, canvas, None);
         }
         self.depths.resize(self.layers.len(), Slot::NONE);
         self.transition(size, commands)?;
@@ -628,64 +638,79 @@ impl GpuProgram {
         }
     }
 
-    /// Generated shapes from the evaluated frame.
-    fn shapes(&mut self, [cw, ch]: [f64; 2]) {
-        let target = [cw as f32, ch as f32];
-        for index in 0..self.frame.layers.len() {
-            let splice_eval::Layer::Shape {
-                shape,
-                bounds,
-                fill,
-                fill2,
-                stroke,
-                stroke_width,
-                corner,
-                opacity,
-                look,
-                ..
-            } = self.frame.layers[index]
-            else {
-                continue;
-            };
-            let kind = match shape {
-                ShapeKind::Solid | ShapeKind::Rect => {
-                    if fill == fill2 {
-                        Layer::SOLID
-                    } else {
-                        Layer::GRADIENT
-                    }
+    /// The shapes, titles and captions among evaluated layers `[from, to)`, in that order.
+    fn items_between(&mut self, [from, to]: [usize; 2], at: Frame, canvas: [f64; 2], text: bool) {
+        for index in from..to {
+            match self.frame.layers[index] {
+                splice_eval::Layer::Shape { .. } => self.shape(index, canvas),
+                splice_eval::Layer::Title { item, .. }
+                | splice_eval::Layer::Caption { item, .. }
+                    if text =>
+                {
+                    self.text(at, canvas, Some(item));
                 }
-                ShapeKind::Gradient => Layer::GRADIENT,
-                ShapeKind::Ellipse => Layer::ELLIPSE,
-                ShapeKind::Line => Layer::LINE,
-                ShapeKind::Arrow => Layer::ARROW,
-                ShapeKind::Callout => Layer::CALLOUT,
-            };
-            let (dest, pivot) = transform([bounds.x, bounds.y, bounds.w, bounds.h], &look);
-            let mut out = Layer::new(kind, dest, target);
-            out.color0 = rgb(fill);
-            out.color1 = rgb(fill2);
-            let [r, g, b, _] = rgb(stroke);
-            out.key0 = [r, g, b, 0.0];
-            out.ring = (stroke_width * look.scale) as f32;
-            out.corner = (corner * look.scale) as f32;
-            out.opacity = (opacity * look.opacity) as f32;
-            out.pivot = pivot;
-            out.rotation = look.rotation.to_radians() as f32;
-            out.blend = look.blend.index();
-            if shape == ShapeKind::Rect && stroke_width > 0.0 {
-                out.kind = Layer::BOX;
+                _ => {}
             }
-            self.push(out, Bound::default());
         }
     }
 
-    /// Titles, captions and chips: per-frame fade and look from the evaluator, animators.
-    fn text(&mut self, at: Frame, [cw, ch]: [f64; 2]) {
+    /// A generated shape from the evaluated frame.
+    fn shape(&mut self, index: usize, [cw, ch]: [f64; 2]) {
+        let target = [cw as f32, ch as f32];
+        let splice_eval::Layer::Shape {
+            shape,
+            bounds,
+            fill,
+            fill2,
+            stroke,
+            stroke_width,
+            corner,
+            opacity,
+            look,
+            ..
+        } = self.frame.layers[index]
+        else {
+            return;
+        };
+        let kind = match shape {
+            ShapeKind::Solid | ShapeKind::Rect => {
+                if fill == fill2 {
+                    Layer::SOLID
+                } else {
+                    Layer::GRADIENT
+                }
+            }
+            ShapeKind::Gradient => Layer::GRADIENT,
+            ShapeKind::Ellipse => Layer::ELLIPSE,
+            ShapeKind::Line => Layer::LINE,
+            ShapeKind::Arrow => Layer::ARROW,
+            ShapeKind::Callout => Layer::CALLOUT,
+        };
+        let (dest, pivot) = transform([bounds.x, bounds.y, bounds.w, bounds.h], &look);
+        let mut out = Layer::new(kind, dest, target);
+        out.color0 = rgb(fill);
+        out.color1 = rgb(fill2);
+        let [r, g, b, _] = rgb(stroke);
+        out.key0 = [r, g, b, 0.0];
+        out.ring = (stroke_width * look.scale) as f32;
+        out.corner = (corner * look.scale) as f32;
+        out.opacity = (opacity * look.opacity) as f32;
+        out.pivot = pivot;
+        out.rotation = look.rotation.to_radians() as f32;
+        out.blend = look.blend.index();
+        if shape == ShapeKind::Rect && stroke_width > 0.0 {
+            out.kind = Layer::BOX;
+        }
+        self.push(out, Bound::default());
+    }
+
+    /// One title's or caption's cues (`None`: the keystroke chips): per-frame fade and look
+    /// from the evaluator, animators.
+    fn text(&mut self, at: Frame, [cw, ch]: [f64; 2], only: Option<ItemId>) {
         let target = [cw as f32, ch as f32];
         for index in 0..self.texts.len() {
             let (texture, cue) = &self.texts[index];
-            if at < cue.range[0] || at >= cue.range[1] {
+            if at < cue.range[0] || at >= cue.range[1] || cue.item != only {
                 continue;
             }
             let (fade, look) = match cue.item {

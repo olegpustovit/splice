@@ -233,6 +233,7 @@ typedef struct SpliceTextStyle {
     uint32_t boxed;
     uint32_t box_color;
     uint32_t align;
+    uint32_t wrap;
     double stroke_width;
     double shadow;
     double line_height;

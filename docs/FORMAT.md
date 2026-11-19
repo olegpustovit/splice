@@ -185,6 +185,17 @@ Rules:
   the incoming clip and the rest after the outgoing one. Writers refuse anything else
   (`WRONG_KIND`, `NO_NEIGHBOR`, `TOO_LONG`, `NO_HANDLES`). Files from 0.3 without handles still
   play: edge frames hold.
+- **Text boxes (D16, T42.2).** A `layout` effect (`{x, y, w, h, fit, wrap}`, normalized canvas,
+  on titles, graphics lanes or the project) pins a title's text box: the text wraps at `w`
+  (`wrap:false` keeps lines whole and shrinks them to fit) and shrinks until it fits the box,
+  never truncating (`fit:"fill"` starts from the box height instead of the style size). Without
+  one, titles keep the 0.3 band layout. `title.add`/`title.set` `box`, `style` and `in` write the
+  `layout`, `text` and `animate` effects; `out` and `loop` write ordinary `transform` keys.
+- **Paint order (T42.4).** An item may carry `"z": n` (written only when not 0). Pictures, shapes,
+  titles and captions paint in one order: higher `z` in front; equal `z` keeps the 0.3 order
+  (overlays, shapes, titles, captions, each by lane stack). A `transform` on a lane, the spine or
+  the project is the parent of what it holds (lane items, spine pictures, everything but the
+  backdrop): it scales and rotates about its anchor on the canvas, its keys in absolute frames.
 
 - **Declared pointer marks (T39.4).** A take's `components` may carry
   `"pointer":[{"t":2.0,"x":0.6,"y":0.4,"click":true}]` (source seconds, positions normalized to the

@@ -184,13 +184,23 @@ pub(super) fn title_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         length: a.opt_int("length")?.unwrap_or(90),
         text: a.opt_string("text")?,
         lane: a.opt_target("lane")?,
+        look: super::text::title_look(a)?,
     })
 }
 
 pub(super) fn title_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let text = a.opt_string("text")?;
+    let look = super::text::title_look(a)?;
+    if text.is_none() && look.is_none() {
+        return Err(Error::bad(
+            "text",
+            "a string (or pass box, style, in, out or loop)",
+        ));
+    }
     Ok(Op::TitleSet {
         item: a.target("item")?,
-        text: a.string("text")?.into(),
+        text,
+        look,
     })
 }
 

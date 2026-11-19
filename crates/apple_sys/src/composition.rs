@@ -229,6 +229,8 @@ pub struct TextStyle {
     pub align: u32,
     /// Line height relative to the font size.
     pub line_height: f64,
+    /// Wrap lines at the box width; otherwise the font shrinks until each line fits.
+    pub wrap: bool,
 }
 
 impl Default for TextStyle {
@@ -243,6 +245,7 @@ impl Default for TextStyle {
             box_color: 0,
             align: 1,
             line_height: 1.15,
+            wrap: true,
         }
     }
 }
@@ -256,6 +259,7 @@ struct RawTextStyle {
     boxed: u32,
     box_color: u32,
     align: u32,
+    wrap: u32,
     stroke_width: f64,
     shadow: f64,
     line_height: f64,
@@ -750,6 +754,7 @@ pub fn text_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, Error> {
         boxed: layer.style.boxed,
         box_color: layer.style.box_color,
         align: layer.style.align,
+        wrap: u32::from(layer.style.wrap),
         stroke_width: layer.style.stroke_width,
         shadow: layer.style.shadow,
         line_height: layer.style.line_height,

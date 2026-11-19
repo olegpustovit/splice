@@ -692,12 +692,15 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
         NSAttributedString *probe = styled_text(text, font, paragraph, style, color, stroke, clear, NO,
                                                 NSMakeRange(NSNotFound, 0), NSMakeRange(NSNotFound, 0), color);
         CTFramesetterRef measure = CTFramesetterCreateWithAttributedString((__bridge CFAttributedStringRef)probe);
+        // Without wrapping, each line is measured at its natural width and must fit the box.
+        CGFloat across = style->wrap ? room.width : CGFLOAT_MAX;
         CGSize fit = CTFramesetterSuggestFrameSizeWithConstraints(measure, CFRangeMake(0, 0), NULL,
-                                                                  CGSizeMake(room.width, CGFLOAT_MAX), NULL);
+                                                                  CGSizeMake(across, CGFLOAT_MAX), NULL);
         CFRelease(measure);
-        if (fit.height <= room.height + 0.5) break;
+        if (fit.height <= room.height + 0.5 && fit.width <= room.width + 0.5) break;
         CFRelease(font);
-        font_size *= MAX(0.5, room.height / fit.height * 0.98);
+        CGFloat ratio = MIN(room.height / fit.height, room.width / MAX(fit.width, 1));
+        font_size *= MAX(0.5, ratio * 0.98);
         font = styled_font(style, font_size);
     }
     NSAttributedString *fill = styled_text(text, font, paragraph, style, color, stroke, clear, NO, visible, active,

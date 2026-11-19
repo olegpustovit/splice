@@ -178,16 +178,38 @@ declare namespace Splice {
       at: At;
       /** @default 90 */
       length?: number;
+      /** wraps and shrinks to fit its box; emoji kept */
       text?: string;
       /** lan_… */
       lane?: string;
+      /** the text box in normalized canvas coordinates (layout effect), inside the canvas; fit shrink (default) keeps the style size and shrinks to fit, fill grows to the box; wrap true by default */
+      box?: { x?: number; y?: number; w?: number; h?: number; fit?: "shrink" | "fill"; wrap?: boolean };
+      /** text effect parameters */
+      style?: { font?: string; weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black"; size?: number; color?: string; stroke?: string; strokeWidth?: number; shadow?: number; box?: "none" | "solid" | "rounded"; boxColor?: string; align?: "left" | "center" | "right"; lineHeight?: number; position?: "top" | "middle" | "bottom" | "lowerThird" };
+      /** animate effect: how units come in; character units are grapheme clusters (emoji stay whole) */
+      in?: { preset?: "none" | "fade" | "rise" | "pop" | "typewriter" | "highlight" | "bounce" | "slide"; unit?: "word" | "character" | "line"; duration?: number; stagger?: number };
+      /** preset fade, sink, shrink or slide over the last duration frames (1–120, default 8); transform keys */
+      out?: { preset: "fade" | "sink" | "shrink" | "slide"; duration?: number; intensity?: number };
+      /** preset pulse, float, wiggle or shake repeating every period frames (6–600, default 60) until out; intensity 0–1, default 0.5; transform keys */
+      loop?: { preset: "pulse" | "float" | "wiggle" | "shake"; period?: number; intensity?: number };
     }
     /** Edit Title (edit, 0.1). */
     interface TitleSet extends Base {
       cmd: "title.set";
       /** ovl_… title */
       item: string;
-      text: string;
+      /** text, or any of box, style, in, out, loop */
+      text?: string;
+      /** merged into the text box */
+      box?: { x?: number; y?: number; w?: number; h?: number; fit?: "shrink" | "fill"; wrap?: boolean };
+      /** text effect parameters, merged */
+      style?: { font?: string; weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black"; size?: number; color?: string; stroke?: string; strokeWidth?: number; shadow?: number; box?: "none" | "solid" | "rounded"; boxColor?: string; align?: "left" | "center" | "right"; lineHeight?: number; position?: "top" | "middle" | "bottom" | "lowerThird" };
+      /** animate effect, merged */
+      in?: { preset?: "none" | "fade" | "rise" | "pop" | "typewriter" | "highlight" | "bounce" | "slide"; unit?: "word" | "character" | "line"; duration?: number; stagger?: number };
+      /** replaces the exit keys */
+      out?: { preset: "fade" | "sink" | "shrink" | "slide"; duration?: number; intensity?: number };
+      /** replaces the loop keys */
+      loop?: { preset: "pulse" | "float" | "wiggle" | "shake"; period?: number; intensity?: number };
     }
     /** Add Zoom (edit, 0.2). */
     interface ZoomAdd extends Base {
@@ -887,6 +909,28 @@ declare namespace Splice {
       /** lan_… · captions lane (default: the first, created if missing) */
       lane?: string;
     }
+    /** Arrange (edit, 0.3). */
+    interface ItemOrder extends Base {
+      cmd: "item.order";
+      /** ovl_… · overlay, title, shape or caption */
+      item: string;
+      /** one paint order across kinds, higher z in front */
+      to: "front" | "back" | { above: string } | { below: string } | number;
+    }
+    /** Motion Preset (edit, 0.3). */
+    interface MotionPreset extends Base {
+      cmd: "motion.preset";
+      /** clp_… | ovl_…[] · clips, overlays, titles or shapes */
+      items: string[];
+      /** ordinary transform keys you can edit */
+      preset: "bounceIn" | "shake" | "pulse" | "float" | "wiggle" | "pop";
+      /** from each item's start · @default 0 */
+      at?: number;
+      /** at least 2, within the item; bounceIn 24, pop 14, shake 18, loops fill the item */
+      length?: number;
+      /** 0–1 · @default 0.5 */
+      intensity?: number;
+    }
   }
   /** Effect types and parameters (effects.json, the validator's own schema). */
   interface Effects {
@@ -1160,6 +1204,21 @@ declare namespace Splice {
       /** Stagger · 0–30 · @default 3 */
       stagger?: number;
     };
+    /** Text Box: titles, graphics lanes and the project. */
+    layout: {
+      /** X · 0–0.98 · @default 0.06 */
+      x?: number;
+      /** Y · 0–0.98 · @default 0.07 */
+      y?: number;
+      /** Width · 0.02–1 · @default 0.88 */
+      w?: number;
+      /** Height · 0.02–1 · @default 0.12 */
+      h?: number;
+      /** Fit · @default "shrink" */
+      fit?: "shrink" | "fill";
+      /** Wrap · @default true */
+      wrap?: boolean;
+    };
     /** Shape Style: shapes. */
     shape: {
       /** Fill · #rrggbb · @default "#ffffff" */
@@ -1282,7 +1341,9 @@ declare namespace Splice {
     | op.TakePointer
     | op.IntentSteps
     | op.IntentSpeedTyping
-    | op.CaptionAdd;
+    | op.CaptionAdd
+    | op.ItemOrder
+    | op.MotionPreset;
 }
 
 declare const splice: {
@@ -1308,6 +1369,7 @@ declare const splice: {
       roll(args: Omit<Splice.op.ItemRoll, "cmd">): Splice.op.ItemRoll;
       slip(args: Omit<Splice.op.ItemSlip, "cmd">): Splice.op.ItemSlip;
       slide(args: Omit<Splice.op.ItemSlide, "cmd">): Splice.op.ItemSlide;
+      order(args: Omit<Splice.op.ItemOrder, "cmd">): Splice.op.ItemOrder;
     };
     clip: {
       speed(args: Omit<Splice.op.ClipSpeed, "cmd">): Splice.op.ClipSpeed;
@@ -1431,6 +1493,9 @@ declare const splice: {
     };
     take: {
       pointer(args: Omit<Splice.op.TakePointer, "cmd">): Splice.op.TakePointer;
+    };
+    motion: {
+      preset(args: Omit<Splice.op.MotionPreset, "cmd">): Splice.op.MotionPreset;
     };
   };
   project: {

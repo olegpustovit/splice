@@ -1,4 +1,4 @@
-use super::{Command, Tier, decode};
+use super::{Command, Tier, decode, text};
 
 /// Command rows in the prototype's discovery order.
 #[rustfmt::skip]
@@ -147,8 +147,13 @@ pub const COMMANDS: &[Command] = &[
         risk: "edit", shortcut: "T", tier: Tier::First,
         params: &[("at", "!frame or anchor form"),
             ("length", "frames = 90"),
-            ("text", "string"),
-            ("lane", "lan_…")],
+            ("text", "string · wraps and shrinks to fit its box; emoji kept"),
+            ("lane", "lan_…"),
+            ("box", "{x, y, w, h, fit, wrap} · the text box in normalized canvas coordinates (layout effect), inside the canvas; fit shrink (default) keeps the style size and shrinks to fit, fill grows to the box; wrap true by default"),
+            ("style", "{font, weight, size, color, stroke, strokeWidth, shadow, box, boxColor, align, lineHeight} · text effect parameters"),
+            ("in", "{preset, unit, duration, stagger} · animate effect: how units come in; character units are grapheme clusters (emoji stay whole)"),
+            ("out", "{preset, duration, intensity} · preset fade, sink, shrink or slide over the last duration frames (1–120, default 8); transform keys"),
+            ("loop", "{preset, period, intensity} · preset pulse, float, wiggle or shake repeating every period frames (6–600, default 60) until out; intensity 0–1, default 0.5; transform keys")],
         ui: &["Shortcut T",
             "Toolbar T",
             "Graphics lane menu ▸ Add Title Here"],
@@ -158,7 +163,12 @@ pub const COMMANDS: &[Command] = &[
         id: "title.set", title: "Edit Title", group: "Titles, motion and effects",
         risk: "edit", shortcut: "", tier: Tier::First,
         params: &[("item", "!ovl_… title"),
-            ("text", "!string")],
+            ("text", "string · text, or any of box, style, in, out, loop"),
+            ("box", "{x, y, w, h, fit, wrap} · merged into the text box"),
+            ("style", "{font, weight, size, color, stroke, strokeWidth, shadow, box, boxColor, align, lineHeight} · text effect parameters, merged"),
+            ("in", "{preset, unit, duration, stagger} · animate effect, merged"),
+            ("out", "{preset, duration, intensity} · replaces the exit keys"),
+            ("loop", "{preset, period, intensity} · replaces the loop keys")],
         ui: &["Inspector Text",
             "Double-click title"],
         example: r#"{"cmd":"title.set","item":"ovl_hook","text":"Make it move!"}"#, decoder: decode::title_set,
@@ -845,5 +855,24 @@ pub const COMMANDS: &[Command] = &[
             ("lane", "lan_… · captions lane (default: the first, created if missing)")],
         ui: &["Captions lane ▸ Add Caption"],
         example: r#"{"cmd":"caption.add","text":"Open the settings","from":150,"to":210}"#, decoder: decode::caption_add,
+    },
+    Command {
+        id: "item.order", title: "Arrange", group: "Titles, motion and effects",
+        risk: "edit", shortcut: "", tier: Tier::Third,
+        params: &[("item", "!ovl_… · overlay, title, shape or caption"),
+            ("to", "!front | back | {above: id} | {below: id} | integer z · one paint order across kinds, higher z in front")],
+        ui: &["Arrange ▸ Bring to Front / Send to Back"],
+        example: r#"{"cmd":"item.order","item":"ovl_broll","to":{"above":"ovl_hook"}}"#, decoder: text::item_order,
+    },
+    Command {
+        id: "motion.preset", title: "Motion Preset", group: "Titles, motion and effects",
+        risk: "edit", shortcut: "", tier: Tier::Third,
+        params: &[("items", "!clp_… | ovl_…[] · clips, overlays, titles or shapes"),
+            ("preset", "!bounceIn | shake | pulse | float | wiggle | pop · ordinary transform keys you can edit"),
+            ("at", "frames = 0 · from each item's start"),
+            ("length", "frames · at least 2, within the item; bounceIn 24, pop 14, shake 18, loops fill the item"),
+            ("intensity", "0–1 = 0.5")],
+        ui: &["Inspector ▸ Animation ▸ Presets"],
+        example: r#"{"cmd":"motion.preset","items":["ovl_hook"],"preset":"bounceIn","length":24}"#, decoder: text::motion_preset,
     },
 ];

@@ -39,13 +39,17 @@ impl Editor {
                 length,
                 text,
                 lane,
-            } => self.add_item(
-                OverlayContent::Title(text),
-                Some(&at),
-                None,
-                lane.as_ref(),
-                Some(length),
-            ),
+                look,
+            } => {
+                let outcome = self.add_item(
+                    OverlayContent::Title(text),
+                    Some(&at),
+                    None,
+                    lane.as_ref(),
+                    Some(length),
+                )?;
+                self.title_look(outcome, look.as_deref())
+            }
             Op::LaneCreate { kind, name } => {
                 let lane = self.new_lane(kind, name)?;
                 Ok(Outcome::create(
@@ -113,7 +117,7 @@ impl Editor {
                 behind_presenter,
                 muted,
             } => self.set_overlay(&item, placement, behind_presenter, muted),
-            Op::TitleSet { item, text } => self.set_title(&item, text),
+            Op::TitleSet { item, text, look } => self.edit_title(&item, text, look.as_deref()),
             Op::MarkerSet { marker, name, at } => self.set_marker(&marker, name, at.as_ref()),
             Op::ProjectSet { aspect, access } => self.set_project(aspect, access),
             op => self.run_tier_b(op),

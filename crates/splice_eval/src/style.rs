@@ -663,3 +663,27 @@ pub(super) fn text(scopes: &[&[Effect]]) -> Option<TextStyle> {
         stagger,
     })
 }
+
+/// A title's text box (T42.2): a normalized canvas rectangle the text wraps (or not) and
+/// shrinks into; `fill` grows the font to the largest size that fits instead.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct TextBox {
+    pub(super) rect: [f64; 4],
+    pub(super) fill: bool,
+    pub(super) wrap: bool,
+}
+
+/// The `layout` effect of a title, when the project, its lane or the title set one.
+pub(super) fn text_box(scopes: &[&[Effect]]) -> Option<TextBox> {
+    let b = Resolution::on(scopes, &[], "layout")?;
+    Some(TextBox {
+        rect: [
+            b.number("x", 0.06).clamp(0.0, 1.0),
+            b.number("y", 0.07).clamp(0.0, 1.0),
+            b.number("w", 0.88).clamp(0.02, 1.0),
+            b.number("h", 0.12).clamp(0.02, 1.0),
+        ],
+        fill: b.text("fit") == Some("fill"),
+        wrap: b.boolean("wrap", true),
+    })
+}
