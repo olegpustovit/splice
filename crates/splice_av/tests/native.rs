@@ -280,7 +280,7 @@ mod native {
     }
 
     /// T12.2–T12.3 on a take with recorded events: the cursor draws where the events put it, scaled
-    /// by the Cursor effect, and a click zooms the picture in toward it.
+    /// by the Cursor effect, and a camera segment on the click zooms the picture in toward it.
     pub(super) fn native_take_draws_the_recorded_cursor_and_zooms_on_click() {
         let scratch =
             Output(std::env::temp_dir().join(format!("splice-av-take-{}", std::process::id())));
@@ -332,26 +332,44 @@ mod native {
         let mut project = Project {
             size: [96, 64],
             media: vec![media],
-            effects: vec![
-                effect(
-                    1,
-                    "cursor",
-                    vec![
-                        ("size", EffectValue::Number(1.0)),
-                        ("clickRings", EffectValue::Bool(false)),
-                    ],
-                ),
-                effect(
-                    2,
-                    "clickZoom",
-                    vec![
-                        ("scale", EffectValue::Number(2.0)),
-                        ("hold", EffectValue::Number(30.0)),
-                    ],
-                ),
-            ],
+            effects: vec![effect(
+                1,
+                "cursor",
+                vec![
+                    ("size", EffectValue::Number(1.0)),
+                    ("clickRings", EffectValue::Bool(false)),
+                ],
+            )],
             ..Project::default()
         };
+        // A camera segment on the click (what intent.autoZoom writes): 2× from frame 12, instant
+        // so frame 19 is exactly zoomed.
+        project.lanes.push(Lane {
+            id: LaneId::from_serial(5),
+            name: "Camera".into(),
+            kind: LaneKind::Camera,
+            effects: Vec::new(),
+        });
+        project
+            .items
+            .insert(Item {
+                id: ItemId::from_serial(6),
+                timing: ItemTiming {
+                    anchor: Anchor::Pinned(12),
+                    length: 18,
+                },
+                data: ItemData {
+                    lane: LaneId::from_serial(5),
+                    kind: ItemKind::Zoom(Zoom {
+                        amount: 2.0,
+                        focus: Some([0.75, 0.5]),
+                        mode: CameraMode::Auto,
+                        spring: Spring::Instant,
+                    }),
+                    appearance: Appearance::default(),
+                },
+            })
+            .unwrap();
         project
             .clips
             .insert(Clip {
@@ -405,14 +423,18 @@ mod native {
             (20..=34).contains(&at[0]) && (12..=24).contains(&at[1]),
             "cursor center {at:?}"
         );
-        // Frame 19 (0.63 s, just after the click): zoomed 2× about the click point, so the cursor is
-        // drawn at the click (right half) at about four times the area.
+        // Frame 19 (0.63 s, just after the click): the camera frames the click at 2× (the
+        // viewport is the source's right half), so the cursor sits mid-canvas at about four times
+        // the area.
         let (zoomed, at) = red_at(19);
         assert!(
             zoomed >= before * 3,
             "cursor pixels at the zoomed click: {zoomed} vs {before}"
         );
-        assert!(at[0] >= 60, "cursor center after zoom {at:?}");
+        assert!(
+            (48..=66).contains(&at[0]),
+            "cursor center after zoom {at:?}"
+        );
     }
 
     /// T13.1: a sound item on an audio lane reaches the exported mix.

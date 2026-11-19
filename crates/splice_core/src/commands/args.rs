@@ -560,12 +560,12 @@ pub(super) fn lane_kind(value: &str) -> Result<LaneKind, Error> {
     match value {
         "graphics" => Ok(LaneKind::Graphics),
         "overlay" => Ok(LaneKind::Overlay),
-        "motion" => Ok(LaneKind::Motion),
+        "camera" => Ok(LaneKind::Camera),
         "captions" => Ok(LaneKind::Captions),
         "audio" => Ok(LaneKind::Audio),
         _ => Err(Error::bad(
             "kind",
-            "graphics, overlay, motion, captions, or audio",
+            "graphics, overlay, camera, captions or audio",
         )),
     }
 }

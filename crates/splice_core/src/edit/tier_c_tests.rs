@@ -42,7 +42,7 @@ fn tier_c_described_examples_apply_replay_undo_and_match_goldens() {
         .iter()
         .filter(|row| row.tier == commands::Tier::Third)
         .collect();
-    assert_eq!(rows.len(), 36);
+    assert_eq!(rows.len(), 35);
     for command in rows {
         let described = commands::describe(Some(command.id), None).unwrap();
         let example = described.field("example").unwrap().clone();
@@ -199,7 +199,6 @@ fn schema_backed_rows_list_every_schema_parameter() {
         ("mask.set", "mask", &[]),
         ("transition.add", "transition", &[]),
         ("transition.set", "transition", &[]),
-        ("zoom.set", "clickZoom", &[]),
         ("style.set", "brand", &[]),
         ("generator.add", "shape", &[]),
     ] {

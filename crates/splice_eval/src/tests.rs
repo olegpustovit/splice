@@ -76,7 +76,7 @@ fn render_plan_matches_ten_prototype_frames() {
                         p.source_frame,
                         rect_text(p.source),
                         rect_text(p.destination),
-                        p.scale,
+                        p.view.amount,
                         p.opacity
                     )
                     .unwrap();
@@ -169,7 +169,11 @@ fn render_plan_matches_ten_prototype_frames() {
             .unwrap();
         }
     }
-    assert_eq!(output, include_str!("../../../fixtures/render/sample.txt"));
+    // Began as the JS prototype's frames; 0.4's spring camera differs on purpose, so the golden
+    // is blessed (SPLICE_BLESS=1) and reviewed as a diff.
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/render/sample.txt");
+    splice_testkit::golden(&path, output.as_bytes()).unwrap();
 }
 
 fn rect_text(rect: Rect) -> String {

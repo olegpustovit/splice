@@ -57,8 +57,8 @@ pub enum LaneKind {
     Graphics,
     /// Media overlays.
     Overlay,
-    /// Motion envelopes.
-    Motion,
+    /// Camera zoom segments (D12).
+    Camera,
     /// Caption cues.
     Captions,
     /// Music and sound effects.
@@ -293,17 +293,8 @@ pub enum ItemKind {
     },
     /// Video or still overlay.
     Media(Overlay),
-    /// Animated scale envelope.
-    Motion {
-        /// Starting scale.
-        from: f64,
-        /// Ending scale.
-        to: f64,
-        /// Canvas point (normalized 0…1) the scale holds still; the center when absent.
-        focus: Option<[f64; 2]>,
-        /// Ease in and out instead of a linear ramp.
-        ease: bool,
-    },
+    /// A camera segment: while it lasts the timeline camera springs toward its framing (D12).
+    Zoom(Zoom),
     /// Music or a sound effect on an audio lane.
     Sound(Sound),
     /// Generated graphic: solid, gradient, shape, arrow, line or callout (T17.5).
@@ -329,10 +320,117 @@ impl ItemKind {
         match self {
             Self::Title { .. } => LaneKind::Graphics,
             Self::Media(_) => LaneKind::Overlay,
-            Self::Motion { .. } => LaneKind::Motion,
+            Self::Zoom(_) => LaneKind::Camera,
             Self::Caption { .. } => LaneKind::Captions,
             Self::Sound(_) => LaneKind::Audio,
             Self::Shape { .. } => LaneKind::Graphics,
+        }
+    }
+}
+
+/// One camera segment (PLAN.md D12, D13). The camera springs toward `amount` and `center` while
+/// the segment lasts; outside every segment it springs back to 1× with the last center held.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Zoom {
+    /// Magnification, at least 1.
+    pub amount: f64,
+    /// The content point (normalized 0…1) to frame; the camera centers on it as far as the
+    /// viewport can stay inside the content. `None` keeps the framing the camera already has.
+    pub focus: Option<[f64; 2]>,
+    /// What zooms: the content inside a fixed frame, or the whole framed card.
+    pub mode: CameraMode,
+    /// How the camera moves into the segment.
+    pub spring: Spring,
+}
+
+impl Zoom {
+    /// Magnification range a segment accepts.
+    pub const AMOUNT: [f64; 2] = [1.0, 5.0];
+}
+
+/// What a camera segment zooms (D13).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CameraMode {
+    /// Content on portrait canvases, frame otherwise.
+    #[default]
+    Auto,
+    /// The frame stays put; the content zooms inside it.
+    Content,
+    /// The framed card zooms and may overflow the canvas.
+    Frame,
+}
+
+impl CameraMode {
+    /// Wire names, in order.
+    pub const NAMES: [(Self, &'static str); 3] = [
+        (Self::Auto, "auto"),
+        (Self::Content, "content"),
+        (Self::Frame, "frame"),
+    ];
+
+    /// Wire name.
+    pub fn name(self) -> &'static str {
+        Self::NAMES
+            .iter()
+            .find(|(v, _)| *v == self)
+            .map_or("auto", |(_, n)| n)
+    }
+
+    /// Parses a wire name.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::NAMES
+            .iter()
+            .find(|(_, n)| *n == name)
+            .map(|(v, _)| *v)
+    }
+}
+
+/// Camera spring presets (critically damped or close to it; bounce 0 for cameras).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Spring {
+    /// Stiffness 205, damping 33.3, mass 1.5: 90% in about 0.32 s (Cap's default).
+    #[default]
+    Focused,
+    /// About 0.9 s to settle, for slow pushes.
+    Smooth,
+    /// About 0.3 s to settle.
+    Snappy,
+    /// No motion: the camera jumps to the target.
+    Instant,
+}
+
+impl Spring {
+    /// Wire names, in order.
+    pub const NAMES: [(Self, &'static str); 4] = [
+        (Self::Focused, "focused"),
+        (Self::Smooth, "smooth"),
+        (Self::Snappy, "snappy"),
+        (Self::Instant, "instant"),
+    ];
+
+    /// Wire name.
+    pub fn name(self) -> &'static str {
+        Self::NAMES
+            .iter()
+            .find(|(v, _)| *v == self)
+            .map_or("focused", |(_, n)| n)
+    }
+
+    /// Parses a wire name.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::NAMES
+            .iter()
+            .find(|(_, n)| *n == name)
+            .map(|(v, _)| *v)
+    }
+
+    /// Stiffness, damping and mass, or `None` for an instant cut.
+    pub fn physics(self) -> Option<[f64; 3]> {
+        match self {
+            Self::Focused => Some([205.0, 33.3, 1.5]),
+            Self::Smooth => Some([60.0, 15.5, 1.0]),
+            Self::Snappy => Some([500.0, 44.7, 1.0]),
+            Self::Instant => None,
         }
     }
 }
@@ -676,17 +774,7 @@ impl Clone for ItemKind {
                 shape: *shape,
                 rect: *rect,
             },
-            Self::Motion {
-                from,
-                to,
-                focus,
-                ease,
-            } => Self::Motion {
-                from: *from,
-                to: *to,
-                focus: *focus,
-                ease: *ease,
-            },
+            Self::Zoom(zoom) => Self::Zoom(*zoom),
             Self::Caption { words, edits } => Self::Caption {
                 words: words.clone(),
                 edits: edits.clone(),

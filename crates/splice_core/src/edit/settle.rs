@@ -79,7 +79,7 @@ impl Editor {
                 LaneKind::Captions => "Captions",
                 LaneKind::Graphics => "Graphics",
                 LaneKind::Overlay => "Overlay",
-                LaneKind::Motion => "Motion",
+                LaneKind::Camera => "Camera",
                 LaneKind::Audio => "Music",
             };
             if count > 0 || kind == LaneKind::Overlay {
@@ -411,7 +411,7 @@ fn rank(kind: LaneKind) -> u8 {
         LaneKind::Captions => 0,
         LaneKind::Graphics => 1,
         LaneKind::Overlay => 2,
-        LaneKind::Motion => 3,
+        LaneKind::Camera => 3,
         LaneKind::Audio => 4,
     }
 }

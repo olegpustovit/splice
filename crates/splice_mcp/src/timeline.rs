@@ -419,7 +419,7 @@ fn effects(p: &Project, id: TimelineId, schemas: &Json) -> Json {
                 .iter()
                 .any(|item| item.id == media && item.kind == MediaKind::Take);
             let types: &[&str] = if is_take {
-                &["window", "cursor", "clickZoom", "camera", "keystrokes"]
+                &["window", "cursor", "camera", "keystrokes"]
             } else {
                 &["window"]
             };

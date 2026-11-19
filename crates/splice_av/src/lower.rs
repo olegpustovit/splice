@@ -69,8 +69,6 @@ struct Lowering {
     tracks: Vec<(Key, i32)>,
     /// Parsed take events and their registered cursor table, per media.
     takes: Vec<(MediaId, Option<TakeEvents>, Option<i32>)>,
-    /// Click-zoom keyframes per picture and the timeline frames they land on.
-    zooms: Vec<(TimelineId, Vec<[f64; 4]>, Vec<Frame>)>,
 }
 
 pub(super) fn build(
@@ -96,47 +94,12 @@ pub(super) fn build(
         end,
         tracks: Vec::new(),
         takes: Vec::new(),
-        zooms: Vec::new(),
     };
     let black = state.fill(usize::MAX, 0, 0)?;
     state.plan.base = black;
     let [width, height] = project.size.map(f64::from);
     let mut first = evaluator.buffer();
     let mut last = evaluator.buffer();
-    // Click zoom is a curve, not a ramp: cut the timeline at its keyframes.
-    let mut cuts = cuts.to_vec();
-    for pair in cuts.clone().windows(2) {
-        evaluator.frame(pair[0], &mut first);
-        for layer in &first.layers {
-            if let Layer::Picture(picture) = *layer
-                && let Some(zoom) = picture.click_zoom
-                && !state.zooms.iter().any(|(item, ..)| *item == picture.item)
-                && let Some(index) = state.take(project, package, picture.media)?
-                && let Some(events) = &state.takes[index].1
-                && let Some(span) = evaluator.source_span(picture.item)
-            {
-                let fps = Lowering::media(project, picture.media)?.probe.fps;
-                let keys = takes::zoom_keys(&events.clicks, zoom, fps);
-                let frames: Vec<Frame> = keys
-                    .iter()
-                    .map(|k| {
-                        (f64::from(span.start) + (k[0] * fps - span.source) / span.step).round()
-                            as Frame
-                    })
-                    .collect();
-                cuts.extend(
-                    frames
-                        .iter()
-                        .copied()
-                        .filter(|&f| span.start < f && f < span.end),
-                );
-                state.zooms.push((picture.item, keys, frames));
-            }
-        }
-    }
-    cuts.sort_unstable();
-    cuts.dedup();
-    let cuts = cuts.as_slice();
     let mut chips: Vec<(ClipId, MediaId, Keys)> = Vec::new();
     let mut video = Vec::new();
     let mut audio = Vec::new();
@@ -177,7 +140,6 @@ pub(super) fn build(
                         coordinates(a.destination),
                         [width, height],
                     );
-                    picture.scale = ramp(a.scale, b.scale, range);
                     picture.opacity = opacity(a.opacity, b.opacity, range);
                     state.dress(&mut picture, a, range, project, package, evaluator)?;
                     video.push(picture);
@@ -350,10 +312,6 @@ impl Lowering {
         evaluator: &Evaluator,
     ) -> Result<(), Error> {
         let d = picture.destination;
-        if let Some([x, y]) = picture.focus {
-            let [width, height] = project.size.map(f64::from);
-            layer.focus = [x * width, y * height, x * width, y * height];
-        }
         if let Some(window) = picture.window {
             layer.corner = window.corner * d.w.min(d.h);
             layer.shadow = window.shadow.clamp(0.0, 1.0);
@@ -393,25 +351,6 @@ impl Lowering {
                 if cursor.click_rings {
                     layer.flags |= VideoLayer::CLICK_RINGS;
                 }
-            }
-        }
-        if let Some((_, keys, frames)) = self.zooms.iter().find(|(item, ..)| *item == picture.item)
-        {
-            let canvas = |z: [f64; 3]| {
-                let s = picture.source;
-                [
-                    d.x + (z[1] - s.x) / s.w * d.w,
-                    d.y + (z[2] - s.y) / s.h * d.h,
-                ]
-            };
-            let [a, b] = layer.source.map(|t| takes::zoom_at(keys, t));
-            let [fa, fb] = [canvas(a), canvas(b)];
-            layer.scale = [layer.scale[0] * a[0], layer.scale[1] * b[0]];
-            layer.focus = [fa[0], fa[1], fb[0], fb[1]];
-            // An interval spanning exactly one keyframe segment eases natively; a segment split
-            // by other cuts is approximated by linear pieces between exact samples.
-            if frames.windows(2).any(|w| w == [from, to]) {
-                layer.flags |= VideoLayer::EASE;
             }
         }
         Ok(())

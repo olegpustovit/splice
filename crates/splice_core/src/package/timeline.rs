@@ -141,23 +141,21 @@ pub(super) fn decode_clip(value: &Json) -> Result<Clip, PackageError> {
 pub(super) fn encode_item(id: ItemId, timing: ItemTiming, data: &ItemData) -> Json {
     let (kind, params) = match &data.kind {
         ItemKind::Title { text: title } => ("title", object(vec![("text", text(title))])),
-        ItemKind::Motion {
-            from,
-            to,
-            focus,
-            ease,
-        } => {
-            let mut fields = vec![("from", Json::Float(*from)), ("to", Json::Float(*to))];
-            if let Some([x, y]) = focus {
+        ItemKind::Zoom(zoom) => {
+            let mut fields = vec![("amount", Json::Float(zoom.amount))];
+            if let Some([x, y]) = zoom.focus {
                 fields.push((
                     "focus",
-                    object(vec![("x", Json::Float(*x)), ("y", Json::Float(*y))]),
+                    object(vec![("x", Json::Float(x)), ("y", Json::Float(y))]),
                 ));
             }
-            if *ease {
-                fields.push(("ease", Json::Bool(true)));
+            if zoom.mode != CameraMode::Auto {
+                fields.push(("mode", text(zoom.mode.name())));
             }
-            ("motion", object(fields))
+            if zoom.spring != Spring::Focused {
+                fields.push(("spring", text(zoom.spring.name())));
+            }
+            ("zoom", object(fields))
         }
         ItemKind::Caption { words, edits } => (
             "caption",
@@ -246,8 +244,40 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
                 text: params.string("text")?.into(),
             }
         }
+        "zoom" => {
+            shape(params, &["amount", "focus", "mode", "spring"])?;
+            let point = |key: &str| -> Result<Option<[f64; 2]>, PackageError> {
+                match params.field(key) {
+                    None => Ok(None),
+                    Some(point) => {
+                        shape(point, &["x", "y"])?;
+                        Ok(Some([number(point, "x")?, number(point, "y")?]))
+                    }
+                }
+            };
+            let named = |key: &str, default| {
+                match params.field(key).and_then(Json::as_str) {
+                    None => Ok(default),
+                    Some(name) => Ok(name),
+                }
+                .map(str::to_owned)
+            };
+            let mode = named("mode", "auto")?;
+            let spring = named("spring", "focused")?;
+            ItemKind::Zoom(Zoom {
+                amount: number(params, "amount")?,
+                focus: point("focus")?,
+                mode: CameraMode::parse(&mode)
+                    .ok_or_else(|| bad("zoom.mode", "auto, content or frame"))?,
+                spring: Spring::parse(&spring)
+                    .ok_or_else(|| bad("zoom.spring", "focused, smooth, snappy or instant"))?,
+            })
+        }
+        // 0.3 motion items migrate to camera segments that hold their end scale (D12): the old
+        // renderer snapped back to 1× after them, which nobody wanted.
         "motion" => {
             shape(params, &["from", "to", "focus", "ease"])?;
+            let to = number(params, "to")?;
             let focus = match params.field("focus") {
                 None => None,
                 Some(point) => {
@@ -255,15 +285,12 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
                     Some([number(point, "x")?, number(point, "y")?])
                 }
             };
-            ItemKind::Motion {
-                from: number(params, "from")?,
-                to: number(params, "to")?,
+            ItemKind::Zoom(Zoom {
+                amount: to.max(1.0),
                 focus,
-                ease: params
-                    .field("ease")
-                    .and_then(Json::as_bool)
-                    .unwrap_or(false),
-            }
+                mode: CameraMode::Auto,
+                spring: Spring::Focused,
+            })
         }
         "media" => {
             shape(
@@ -624,6 +651,11 @@ pub(super) fn decode_effects(value: &Json) -> Result<Vec<Effect>, PackageError> 
     let mut effects = Vec::new();
     for value in value.array_or_empty("effects")? {
         shape(value, &["id", "type", "enabled", "params"])?;
+        // 0.3 click zoom was a render-time curve; 0.4 zooms are explicit camera segments
+        // (intent.autoZoom makes them). The old setting is dropped on load.
+        if value.field("type").and_then(Json::as_str) == Some("clickZoom") {
+            continue;
+        }
         let mut params = Vec::new();
         for (name, value) in value
             .required("params")?

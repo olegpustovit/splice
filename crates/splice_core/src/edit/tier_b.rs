@@ -140,36 +140,25 @@ impl Editor {
                 events,
                 hidden,
             } => self.hide_keys(&clip, &events, hidden),
-            Op::MotionAdd {
+            Op::ZoomAdd {
                 at,
                 length,
-                from,
-                to,
+                zoom,
+                lane,
+            } => self.add_item(
+                OverlayContent::Zoom(zoom),
+                Some(&at),
+                None,
+                lane.as_ref(),
+                Some(length),
+            ),
+            Op::ZoomEdit {
+                zoom,
+                amount,
                 focus,
-                ease,
-            } => {
-                check_scale(from, "from")?;
-                check_scale(to, "to")?;
-                self.add_item(
-                    OverlayContent::Motion {
-                        from,
-                        to,
-                        focus,
-                        ease,
-                    },
-                    Some(&at),
-                    None,
-                    None,
-                    Some(length),
-                )
-            }
-            Op::MotionSet {
-                item,
-                from,
-                to,
-                focus,
-                ease,
-            } => self.set_motion(&item, from, to, focus, ease),
+                mode,
+                spring,
+            } => self.set_zoom(&zoom, amount, focus, mode, spring),
             Op::EffectAdd {
                 target,
                 kind,
@@ -596,45 +585,41 @@ impl Editor {
         ))
     }
 
-    fn set_motion(
+    fn set_zoom(
         &mut self,
-        item: &Target,
-        from: Option<f64>,
-        to: Option<f64>,
+        zoom: &Target,
+        amount: Option<f64>,
         focus: Option<Option<[f64; 2]>>,
-        ease: Option<bool>,
+        mode: Option<CameraMode>,
+        spring: Option<Spring>,
     ) -> Result<Outcome, CommandError> {
-        let TimelineId::Item(id) = self.timeline(item)? else {
-            return Err(wrong_kind("Pass a motion overlay (ovl_…)."));
+        let TimelineId::Item(id) = self.timeline(zoom)? else {
+            return Err(wrong_kind(
+                "Pass a zoom item (ovl_…) from timeline.snapshot.",
+            ));
         };
         let slot = item_slot(&self.project, id)?;
-        let ItemKind::Motion {
-            from: old_from,
-            to: old_to,
-            focus: old_focus,
-            ease: old_ease,
-        } = &mut self.project.items.data_mut(slot).expect("live item").kind
+        let ItemKind::Zoom(zoom) = &mut self.project.items.data_mut(slot).expect("live item").kind
         else {
-            return Err(wrong_kind("Pass a motion overlay (ovl_…)."));
+            return Err(wrong_kind(
+                "Pass a zoom item (ovl_…) from timeline.snapshot.",
+            ));
         };
-        if let Some(from) = from {
-            check_scale(from, "from")?;
-            *old_from = from;
-        }
-        if let Some(to) = to {
-            check_scale(to, "to")?;
-            *old_to = to;
+        if let Some(amount) = amount {
+            zoom.amount = amount;
         }
         if let Some(focus) = focus {
-            *old_focus = focus;
+            zoom.focus = focus;
         }
-        if let Some(ease) = ease {
-            *old_ease = ease;
+        if let Some(mode) = mode {
+            zoom.mode = mode;
         }
-        Ok(Outcome::edit(
-            format!("Motion {id} {old_from}→{old_to}"),
-            Target::Timeline(TimelineId::Item(id)),
-        ))
+        if let Some(spring) = spring {
+            zoom.spring = spring;
+        }
+        let amount = zoom.amount;
+        self.say(format_args!("Zoom {id} at {amount}×"));
+        Ok(Outcome::noted(Target::Timeline(TimelineId::Item(id))))
     }
 
     // ── Effects ──
@@ -703,7 +688,7 @@ impl Editor {
                     Caption => matches!(item, ItemKind::Caption { .. }),
                     Text => matches!(item, ItemKind::Caption { .. } | ItemKind::Title { .. }),
                     Visual => matches!(item, ItemKind::Media(_)),
-                    Layer => !matches!(item, ItemKind::Sound(_) | ItemKind::Motion { .. }),
+                    Layer => !matches!(item, ItemKind::Sound(_) | ItemKind::Zoom(_)),
                     Audio => matches!(item, ItemKind::Sound(_) | ItemKind::Media(_)),
                     Shape => matches!(item, ItemKind::Shape { .. }),
                     Template => true,
@@ -1772,14 +1757,6 @@ fn number(name: &str, value: f64) -> EffectParam {
 
 fn round4(value: f64) -> f64 {
     (value * 10_000.0).round() / 10_000.0
-}
-
-fn check_scale(value: f64, name: &str) -> Result<(), CommandError> {
-    if (0.5..=2.0).contains(&value) {
-        Ok(())
-    } else {
-        Err(CommandError::bad(name, "a scale from 0.5 to 2"))
-    }
 }
 
 fn no_source_frame() -> CommandError {

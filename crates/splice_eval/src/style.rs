@@ -36,15 +36,6 @@ pub struct Cursor {
     pub click_rings: bool,
 }
 
-/// Click zoom settings for an event-aware renderer.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ClickZoom {
-    /// Maximum zoom scale.
-    pub scale: f64,
-    /// Hold duration on the source clock.
-    pub hold: f64,
-}
-
 /// Camera bubble corner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Corner {
@@ -161,14 +152,6 @@ pub(super) fn cursor(scopes: &[&[Effect]]) -> Option<Cursor> {
     Some(Cursor {
         scale: style.number("size", 1.5).clamp(0.5, 4.0),
         click_rings: style.boolean("clickRings", true),
-    })
-}
-
-pub(super) fn click_zoom(scopes: &[&[Effect]]) -> Option<ClickZoom> {
-    let style = Resolution::new(scopes, "clickZoom");
-    style.enabled.unwrap_or(false).then(|| ClickZoom {
-        scale: style.number("scale", 1.6).clamp(1.05, 2.5),
-        hold: style.number("hold", 45.0).clamp(15.0, 120.0),
     })
 }
 

@@ -10,7 +10,7 @@ use ogpu_core::backend::{self as b, Commands, Device, PreparedRenderTarget, Text
 use ogpu_core::types::{Extent, Origin, TextureDescriptor, TextureFormat, TextureUsage};
 use splice_eval::{Animate, FramePlan, Look, MaskMode, MaskShape};
 use splice_gpu::{Bound, Compositor, Layer, MAX_LAYERS, rgb};
-use splice_model::{Frame, ShapeKind, TimelineId};
+use splice_model::{CameraMode, Frame, ShapeKind, TimelineId};
 
 const RING_SECONDS: f64 = 0.45;
 
@@ -352,6 +352,18 @@ impl GpuProgram {
             .unwrap_or_default()
     }
 
+    /// The timeline camera on a spine picture in the evaluated frame.
+    fn view(&self, id: TimelineId) -> splice_eval::View {
+        self.frame
+            .layers
+            .iter()
+            .find_map(|layer| match layer {
+                splice_eval::Layer::Picture(p) if p.item == id => Some(p.view),
+                _ => None,
+            })
+            .unwrap_or(splice_eval::View::IDENTITY)
+    }
+
     /// A camera bubble's background treatment as a cutout look.
     fn camera_look(&self, clip: splice_model::ClipId) -> Look {
         let background = self.frame.layers.iter().find_map(|layer| match *layer {
@@ -395,11 +407,6 @@ impl GpuProgram {
     ) -> Result<(), Error> {
         let span = f64::from((to - from).max(1));
         let linear = (f64::from(at - from) / span).clamp(0.0, 1.0);
-        let t = if layer.flags & VideoLayer::EASE != 0 {
-            linear * linear * (3.0 - 2.0 * linear)
-        } else {
-            linear
-        };
         let lerp = |a: f64, b: f64, k: f64| a + (b - a) * k;
         let opacity = (lerp(layer.opacity[0], layer.opacity[1], linear) * look.opacity) as f32;
         let target = [cw as f32, ch as f32];
@@ -441,15 +448,31 @@ impl GpuProgram {
             cy += (chei - height) / 2.0;
             (cwid, chei) = (width, height);
         }
-        let scale = lerp(layer.scale[0], layer.scale[1], t);
-        let fx = lerp(layer.focus[0], layer.focus[2], t);
-        let fy = lerp(layer.focus[1], layer.focus[3], t);
-        let zoomed = [
-            fx + (dx - fx) * scale,
-            fy + (dy - fy) * scale,
-            dw * scale,
-            dh * scale,
-        ];
+        // The timeline camera (D12, D13): content mode narrows the crop to the viewport inside
+        // a fixed frame; frame mode scales the card so the viewport fills the card's place.
+        let view = match role {
+            Role::Picture(id) => self.view(id),
+            _ => splice_eval::View::IDENTITY,
+        };
+        let scale = view.amount.max(1.0);
+        let [vx, vy, vw, vh] = view.viewport();
+        let content = match view.mode {
+            CameraMode::Content => true,
+            CameraMode::Frame => false,
+            CameraMode::Auto => ch > cw,
+        };
+        let zoomed = if content || scale <= 1.0 {
+            (cx, cy, cwid, chei) = (cx + vx * cwid, cy + vy * chei, cwid * vw, chei * vh);
+            [dx, dy, dw, dh]
+        } else {
+            [
+                dx - vx * scale * dw,
+                dy - vy * scale * dh,
+                dw * scale,
+                dh * scale,
+            ]
+        };
+        let scale = if content { 1.0 } else { scale };
         let (dest, pivot) = transform(zoomed, look);
         let placed = dest.map(f64::from);
         let mut picture = Layer::new(Layer::TEXTURE, dest, target);

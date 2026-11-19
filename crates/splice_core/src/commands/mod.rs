@@ -11,6 +11,20 @@ mod table;
 pub use op::*;
 pub use table::COMMANDS;
 
+/// Command IDs that 0.4 replaced: (old, replacement, why). Calling an old ID names its successor.
+pub const RETIRED: &[(&str, &str, &str)] = &[
+    (
+        "motion.add",
+        "zoom.add",
+        "scale animations snapped back to 1x when they ended; zooms are camera segments now",
+    ),
+    (
+        "motion.set",
+        "zoom.set",
+        "scale animations are camera segments now (zoom.set edits one)",
+    ),
+];
+
 /// Splice's own rows, after the prototype's 61 (docs/reference/core.js), in table order.
 pub const EXTENSIONS: &[&str] = &[
     "transcript.set",
@@ -297,6 +311,16 @@ pub fn describe(id: Option<&str>, query: Option<&str>) -> Result<Json, CommandEr
 }
 
 fn unknown(id: &str) -> CommandError {
+    if let Some((_, replacement, why)) = RETIRED.iter().find(|(old, ..)| *old == id) {
+        return CommandError {
+            code: "UNKNOWN_COMMAND",
+            message: format!("{id} was retired in 0.4: {why}"),
+            fix: format!(
+                "Use {replacement}; commands.describe {{id:\"{replacement}\"}} has its arguments."
+            ),
+            valid: vec![*replacement],
+        };
+    }
     let prefix = id.split('.').next().unwrap_or("");
     let suffix = id.rsplit('.').next().unwrap_or("");
     let mut valid: Vec<_> = COMMANDS

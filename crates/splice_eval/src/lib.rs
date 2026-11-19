@@ -3,6 +3,7 @@
 
 use splice_model::{ClipId, Frame, ItemId, MediaId, Rect, ShapeKind, TimelineId, WordId};
 
+mod camera;
 mod compound;
 mod cube;
 mod eval;
@@ -10,6 +11,7 @@ mod layout;
 mod look;
 mod style;
 
+pub use camera::View;
 pub use cube::{cube_atlas, parse_cube};
 pub use eval::{EvalError, Evaluator, SourceSpan, caption_tokens};
 pub use look::{
@@ -17,8 +19,8 @@ pub use look::{
     Transition, TransitionKind,
 };
 pub use style::{
-    Animate, Background, CaptionPreset, CaptionStyle, ClickZoom, Cursor, KeyPosition, Keys,
-    TextStyle, Window, resolve_effect,
+    Animate, Background, CaptionPreset, CaptionStyle, Cursor, KeyPosition, Keys, TextStyle, Window,
+    resolve_effect,
 };
 
 #[cfg(test)]
@@ -152,18 +154,14 @@ pub struct Picture {
     pub source: Rect,
     /// Destination rectangle in pixels before zoom.
     pub destination: Rect,
-    /// Scale from the active Motion item, about `focus`.
-    pub scale: f64,
-    /// Canvas point (normalized 0…1) the Motion scale holds still; the center when absent.
-    pub focus: Option<[f64; 2]>,
+    /// The timeline camera on spine pictures (identity on overlays).
+    pub view: View,
     /// Fade opacity.
     pub opacity: f64,
     /// Resolved Window treatment. Its background is a separate layer.
     pub window: Option<Window>,
     /// Cursor style applied to the source before crop.
     pub cursor: Option<Cursor>,
-    /// Settings for zoom driven by recorded clicks.
-    pub click_zoom: Option<ClickZoom>,
     /// Keyed transform, color, masks, key and transition treatment.
     pub look: Look,
 }

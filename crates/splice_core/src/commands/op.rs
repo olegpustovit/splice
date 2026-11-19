@@ -1,6 +1,6 @@
 use splice_model::{
-    Access, Aspect, Duck, Ease, Edge, EffectId, EffectParam, Fit, Frame, Key, LaneId, LaneKind,
-    MediaId, Placement, Rect, ShapeKind, TimelineId, WordId,
+    Access, Aspect, CameraMode, Duck, Ease, Edge, EffectId, EffectParam, Fit, Frame, Key, LaneId,
+    LaneKind, MediaId, Placement, Rect, ShapeKind, Spring, TimelineId, WordId, Zoom,
 };
 
 /// An edit command with its validated wire arguments.
@@ -131,33 +131,29 @@ pub enum Op {
         /// New visible text.
         text: String,
     },
-    /// Add Scale Animation.
-    MotionAdd {
+    /// Add Zoom: a camera segment (D12).
+    ZoomAdd {
         /// Start position.
         at: FrameArg,
         /// Duration.
         length: Frame,
-        /// Starting scale.
-        from: f64,
-        /// Ending scale.
-        to: f64,
-        /// Canvas point (0…1) the scale holds still.
-        focus: Option<[f64; 2]>,
-        /// Ease in and out.
-        ease: bool,
+        /// The segment's framing.
+        zoom: Zoom,
+        /// Camera lane (default: the first, created if missing).
+        lane: Option<Target>,
     },
-    /// Edit Scale Keyframes.
-    MotionSet {
-        /// Motion item to edit.
-        item: Target,
-        /// New starting scale.
-        from: Option<f64>,
-        /// New ending scale.
-        to: Option<f64>,
-        /// New focus. Null resets to the center.
+    /// Edit Zoom.
+    ZoomEdit {
+        /// Zoom item to edit.
+        zoom: Target,
+        /// New magnification.
+        amount: Option<f64>,
+        /// New focus point; null keeps the current framing.
         focus: Option<Option<[f64; 2]>>,
-        /// New easing.
-        ease: Option<bool>,
+        /// New mode.
+        mode: Option<CameraMode>,
+        /// New spring.
+        spring: Option<Spring>,
     },
     /// Pin / Unpin.
     ItemAnchor {
@@ -424,14 +420,6 @@ pub enum Op {
         params: Vec<EffectParam>,
     },
     /// Zoom Settings.
-    ZoomSet {
-        /// Screen take clip, or the project.
-        target: Target,
-        /// Turn click zoom on or off.
-        enabled: Option<bool>,
-        /// Click zoom parameters.
-        params: Vec<EffectParam>,
-    },
     /// Add Mask.
     MaskAdd {
         /// Clip or media overlay.
@@ -518,10 +506,10 @@ pub enum Op {
         item: Target,
         /// Clicks as (source frame, x, y), x and y normalized to the source.
         clicks: Vec<(Frame, f64, f64)>,
-        /// Zoom scale.
-        scale: Option<f64>,
-        /// Frames to hold each zoom.
-        hold: Option<Frame>,
+        /// Typing as source frame ranges: extends a zoom, never moves it.
+        typing: Vec<(Frame, Frame)>,
+        /// Magnification (default 1.5).
+        amount: Option<f64>,
     },
     /// Roll Edit (Splice extension).
     ItemRoll {
@@ -779,17 +767,8 @@ pub enum InsertSource {
 pub enum OverlayContent {
     /// Visible title.
     Title(Option<String>),
-    /// Scale motion.
-    Motion {
-        /// Starting scale.
-        from: f64,
-        /// Ending scale.
-        to: f64,
-        /// Canvas point (0…1) the scale holds still.
-        focus: Option<[f64; 2]>,
-        /// Ease in and out.
-        ease: bool,
-    },
+    /// Camera segment.
+    Zoom(Zoom),
     /// Media overlay.
     Media {
         /// The referenced media descriptor.

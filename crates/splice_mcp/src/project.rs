@@ -422,7 +422,7 @@ pub(super) fn lane_kind(kind: LaneKind) -> &'static str {
         LaneKind::Graphics => "graphics",
         LaneKind::Captions => "captions",
         LaneKind::Overlay => "overlay",
-        LaneKind::Motion => "motion",
+        LaneKind::Camera => "camera",
         LaneKind::Audio => "audio",
     }
 }

@@ -1,5 +1,5 @@
 use super::{CommandError as Error, DecodeScratch, Json, args::*, op::*};
-use splice_model::{Duck, Ease, Fit, Frame, Placement, Rect, ShapeKind};
+use splice_model::{CameraMode, Duck, Ease, Fit, Frame, Placement, Rect, ShapeKind, Spring, Zoom};
 
 type DecodedOp = Result<Op, Error>;
 
@@ -136,12 +136,7 @@ pub(super) fn overlay_replace_spine(a: &Json, _scratch: &mut DecodeScratch) -> D
 pub(super) fn overlay_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let content = match a.string("kind")? {
         "title" => OverlayContent::Title(a.opt_string("text")?),
-        "motion" => OverlayContent::Motion {
-            from: a.opt_number("from")?.unwrap_or(1.0),
-            to: a.opt_number("to")?.unwrap_or(1.32),
-            focus: focus(a)?.flatten(),
-            ease: a.flag("ease", false)?,
-        },
+        "zoom" => OverlayContent::Zoom(zoom_args(a)?),
         "media" => OverlayContent::Media {
             media: a.target("media")?,
             source: a.opt_int("source")?.unwrap_or(0),
@@ -161,7 +156,7 @@ pub(super) fn overlay_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
                 .transpose()?
                 .unwrap_or(Fit::Fill),
         },
-        _ => return Err(Error::bad("kind", "title, motion, or media")),
+        _ => return Err(Error::bad("kind", "title, zoom or media")),
     };
     Ok(Op::OverlayAdd {
         content,
@@ -188,24 +183,65 @@ pub(super) fn title_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     })
 }
 
-pub(super) fn motion_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
-    Ok(Op::MotionAdd {
-        at: a.frame("at")?,
-        length: a.opt_int("length")?.unwrap_or(120),
-        from: a.opt_number("from")?.unwrap_or(1.0),
-        to: a.opt_number("to")?.unwrap_or(1.32),
+/// A camera segment's framing: `amount` (1–5, default 1.5), `focus`, `mode`, `spring`.
+fn zoom_args(a: &Json) -> Result<Zoom, Error> {
+    Ok(Zoom {
+        amount: zoom_amount(a)?.unwrap_or(1.5),
         focus: focus(a)?.flatten(),
-        ease: a.flag("ease", false)?,
+        mode: zoom_mode(a)?.unwrap_or_default(),
+        spring: zoom_spring(a)?.unwrap_or_default(),
     })
 }
 
-pub(super) fn motion_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
-    Ok(Op::MotionSet {
-        item: a.target("item")?,
-        from: a.opt_number("from")?,
-        to: a.opt_number("to")?,
+fn zoom_amount(a: &Json) -> Result<Option<f64>, Error> {
+    let [low, high] = Zoom::AMOUNT;
+    a.opt_number("amount")?
+        .map(|amount| {
+            if (low..=high).contains(&amount) {
+                Ok(amount)
+            } else {
+                Err(Error::bad(
+                    "amount",
+                    "a magnification from 1 to 5 (1.5 is a typical push-in)",
+                ))
+            }
+        })
+        .transpose()
+}
+
+fn zoom_mode(a: &Json) -> Result<Option<CameraMode>, Error> {
+    a.opt_string("mode")?
+        .map(|name| {
+            CameraMode::parse(&name).ok_or_else(|| Error::bad("mode", "auto, content or frame"))
+        })
+        .transpose()
+}
+
+fn zoom_spring(a: &Json) -> Result<Option<Spring>, Error> {
+    a.opt_string("spring")?
+        .map(|name| {
+            Spring::parse(&name)
+                .ok_or_else(|| Error::bad("spring", "focused, smooth, snappy or instant"))
+        })
+        .transpose()
+}
+
+pub(super) fn zoom_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ZoomAdd {
+        at: a.frame("at")?,
+        length: a.opt_int("length")?.unwrap_or(90),
+        zoom: zoom_args(a)?,
+        lane: a.opt_target("lane")?,
+    })
+}
+
+pub(super) fn zoom_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ZoomEdit {
+        zoom: a.target("zoom")?,
+        amount: zoom_amount(a)?,
         focus: focus(a)?,
-        ease: a.opt_flag("ease")?,
+        mode: zoom_mode(a)?,
+        spring: zoom_spring(a)?,
     })
 }
 
@@ -780,14 +816,6 @@ pub(super) fn transition_remove(a: &Json, _scratch: &mut DecodeScratch) -> Decod
     })
 }
 
-pub(super) fn zoom_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
-    Ok(Op::ZoomSet {
-        target: a.target("target")?,
-        enabled: a.opt_flag("enabled")?,
-        params: schema_params(a, "clickZoom", &mut scratch.params)?,
-    })
-}
-
 pub(super) fn mask_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::MaskAdd {
         item: a.target("item")?,
@@ -934,11 +962,24 @@ pub(super) fn intent_auto_zoom(a: &Json, _scratch: &mut DecodeScratch) -> Decode
             "{at, x, y} source clicks; splice mcp fills them from the take's events when omitted",
         ));
     }
+    let mut typing = Vec::new();
+    for run in a.field("typing").map(list).unwrap_or(&[]) {
+        let (from, to) = (run.opt_int("from")?, run.opt_int("to")?);
+        match (from, to) {
+            (Some(from), Some(to)) if to > from => typing.push((from, to)),
+            _ => {
+                return Err(Error::bad(
+                    "typing",
+                    "[{from, to}] source frame ranges with to > from",
+                ));
+            }
+        }
+    }
     Ok(Op::IntentAutoZoom {
         item: a.target("item")?,
         clicks,
-        scale: a.opt_number("scale")?,
-        hold: a.opt_int("hold")?,
+        typing,
+        amount: zoom_amount(a)?,
     })
 }
 

@@ -99,9 +99,6 @@ fn done(summary: String) -> Outcome {
     }
 }
 
-/// A click on a clip's source clock: (frame, x, y).
-type Click = (Frame, f64, f64);
-
 /// A transcript word on the timeline: (start, end, clip, lowercase text).
 struct Spoken {
     start: Frame,
@@ -133,20 +130,6 @@ impl Editor {
                     "Removed the transition into {}",
                     self.owner_label(owner)
                 )))
-            }
-            Op::ZoomSet {
-                target,
-                enabled,
-                params,
-            } => {
-                let owner = self.owner(&target)?;
-                let mut created = Vec::new();
-                let id = self.upsert(owner, "clickZoom", params, enabled, &mut created)?;
-                Ok(Outcome {
-                    summary: Summary::Text(format!("Zoom settings on {}", self.owner_label(owner))),
-                    primary: Some(Target::Effect(id)),
-                    created,
-                })
             }
             Op::MaskAdd { item, params } => {
                 let owner = self.owner(&item)?;
@@ -200,9 +183,9 @@ impl Editor {
             Op::IntentAutoZoom {
                 item,
                 clicks,
-                scale,
-                hold,
-            } => self.auto_zoom(&item, &clicks, scale.unwrap_or(1.8), hold.unwrap_or(45)),
+                typing,
+                amount,
+            } => self.auto_zoom(&item, &clicks, &typing, amount.unwrap_or(1.5)),
             Op::ItemRoll { item, by } => self.roll(&item, by),
             Op::ItemSlip { item, by } => self.slip(&item, by),
             Op::ItemSlide { item, by } => self.slide(&item, by),
@@ -1233,102 +1216,144 @@ impl Editor {
         )))
     }
 
+    /// Camera segments from a take's clicks (T38.4, Cap's rules plus Recorder's distance split):
+    /// a zoom opens 0.3 s before a click and holds 2.5 s after the last one; clicks merge into
+    /// one zoom while they come within 2.5 s and 0.25 of the screen; typing extends a zoom and
+    /// never moves it. Earlier auto zooms on the clip are replaced.
     fn auto_zoom(
         &mut self,
         item: &Target,
         clicks: &[(Frame, f64, f64)],
-        scale: f64,
-        hold: Frame,
+        typing: &[(Frame, Frame)],
+        amount: f64,
     ) -> Result<Outcome, CommandError> {
         let (id, slot) = self.spine_clip(item)?;
         let timing = self.project.clips.timing(slot).expect("live clip");
         let rate = source_rate(&self.project, slot)?;
-        let ease = 12;
-        // Clicks on the clip's own clock, merged when the next one lands inside the hold.
-        let mut groups: Vec<(Frame, Frame, Vec<Click>)> = Vec::new();
+        let fps = f64::from(self.project.fps);
+        let frames = |seconds: f64| (seconds * fps).round() as Frame;
+        let (lead, tail, merge, settle, gap) = (
+            frames(0.3),
+            frames(2.5),
+            frames(2.5),
+            frames(0.5),
+            frames(0.6),
+        );
+        let local = |source: Frame| -> Result<Frame, CommandError> {
+            rounded((f64::from(source) - f64::from(timing.source)) / rate)
+        };
+        // Clusters: first and last click frame, coordinate sums and count.
+        let mut clusters: Vec<(Frame, Frame, [f64; 2], f64)> = Vec::new();
         for &(source, x, y) in clicks {
-            let local = rounded((f64::from(source) - f64::from(timing.source)) / rate)?;
-            if local < 0 || local >= timing.length {
+            let at = local(source)?;
+            if at < 0 || at >= timing.length {
                 continue;
             }
-            let (x, y) = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
-            match groups.last_mut() {
-                Some(group) if local <= group.1 + ease => {
-                    group.1 = local + hold;
-                    group.2.push((local, x, y));
+            let p = [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)];
+            let joins = clusters.last().is_some_and(|&(_, last, sum, n)| {
+                let c = [sum[0] / n, sum[1] / n];
+                at - last <= merge && ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)).sqrt() < 0.25
+            });
+            match clusters.last_mut() {
+                Some(cluster) if joins => {
+                    cluster.1 = at;
+                    cluster.2 = [cluster.2[0] + p[0], cluster.2[1] + p[1]];
+                    cluster.3 += 1.0;
                 }
-                _ => groups.push((local, local + hold, vec![(local, x, y)])),
+                _ => clusters.push((at, at, p, 1.0)),
             }
         }
-        if groups.is_empty() {
+        if clusters.is_empty() {
             return Err(CommandError::bad("clicks", "clicks inside the clip"));
         }
-        let mut scales = Vec::new();
-        let mut xs = Vec::new();
-        let mut ys = Vec::new();
-        let last = timing.length - 1;
-        for (index, (start, end, points)) in groups.iter().enumerate() {
-            let zoom_in = (start - ease).max(scales.last().map_or(0, |k: &Key| k.at + 1));
-            let peak = (*start).max(zoom_in + 1);
-            let out = (*end).min(last - 1).max(peak + 1);
-            let rest = (out + ease).min(last).max(out + 1);
-            if index > 0 && zoom_in <= scales.last().map_or(-1, |k: &Key| k.at) {
+        let typing: Vec<(Frame, Frame)> = typing
+            .iter()
+            .map(|&(from, to)| Ok((local(from)?, local(to)?)))
+            .collect::<Result<_, CommandError>>()?;
+        // Segments [start, end) on the clip's clock, focus snapped to edges within 0.25.
+        let snap = |v: f64| {
+            if v < 0.25 {
+                0.0
+            } else if v > 0.75 {
+                1.0
+            } else {
+                v
+            }
+        };
+        let mut segments: Vec<(Frame, Frame, Frame, [f64; 2])> = Vec::new();
+        for &(first, last, sum, n) in &clusters {
+            let mut end = last + tail;
+            for &(from, to) in &typing {
+                if from < end && to > first - lead {
+                    end = end.max(to + settle);
+                }
+            }
+            let start = (first - lead).max(0);
+            let end = end.min(timing.length);
+            if let Some(previous) = segments.last_mut()
+                && previous.1 > start
+            {
+                // Zoom out between far-apart clicks when there is room; otherwise pan.
+                previous.1 = (start - gap).max(previous.2 + settle).min(start);
+            }
+            segments.push((start, end, last, [snap(sum[0] / n), snap(sum[1] / n)]));
+        }
+        // Replace this clip's earlier auto zooms.
+        let clip = id;
+        let stale: Vec<Slot> = self
+            .project
+            .items
+            .order()
+            .iter()
+            .copied()
+            .filter(|&slot| {
+                let data = self.project.items.data(slot).expect("live item");
+                matches!(data.kind, ItemKind::Zoom(_))
+                    && data.appearance.name.as_deref() == Some(AUTO_ZOOM)
+                    && matches!(
+                        self.project.items.timing(slot).expect("live item").anchor,
+                        Anchor::ClipSource { clip: c, .. } if c == clip
+                    )
+            })
+            .collect();
+        for slot in stale {
+            self.project.items.remove(slot);
+        }
+        let mut created = Vec::with_capacity(segments.len());
+        for &(start, end, _, focus) in &segments {
+            if end - start < 3 {
                 continue;
             }
-            scales.push(Key {
-                at: zoom_in,
-                value: 1.0,
-                ease: Ease::InOut,
-            });
-            scales.push(Key {
-                at: peak,
-                value: scale,
-                ease: Ease::Linear,
-            });
-            scales.push(Key {
-                at: out,
-                value: scale,
-                ease: Ease::InOut,
-            });
-            scales.push(Key {
-                at: rest,
-                value: 1.0,
-                ease: Ease::Linear,
-            });
-            // The pivot jumps while unzoomed, then glides between clicks of one group.
-            for (n, &(at, x, y)) in points.iter().enumerate() {
-                let at = if n == 0 {
-                    zoom_in
-                } else {
-                    at.max(xs.last().map_or(0, |k: &Key| k.at + 1))
-                };
-                let ease = if n + 1 == points.len() {
-                    Ease::Hold
-                } else {
-                    Ease::InOut
-                };
-                xs.push(Key { at, value: x, ease });
-                ys.push(Key { at, value: y, ease });
+            let at = FrameArg::Frame(timing.start + start);
+            let outcome = self.add_item(
+                OverlayContent::Zoom(Zoom {
+                    amount,
+                    focus: Some(focus),
+                    mode: CameraMode::Auto,
+                    spring: Spring::Focused,
+                }),
+                Some(&at),
+                None,
+                None,
+                Some(end - start),
+            )?;
+            if let Some(Target::Timeline(TimelineId::Item(zoom))) = outcome.created.first() {
+                let slot = item_slot(&self.project, *zoom)?;
+                self.project
+                    .items
+                    .data_mut(slot)
+                    .expect("live item")
+                    .appearance
+                    .name = Some(AUTO_ZOOM.into());
             }
+            created.extend(outcome.created);
         }
-        let scales: Vec<Key> = scales.into_iter().filter(|k| k.at <= last).collect();
-        let params = vec![
-            keyed("scale", scales),
-            keyed("anchorX", xs),
-            keyed("anchorY", ys),
-        ];
-        let owner = Owner::Clip(slot);
-        let mut created = Vec::new();
-        let fx = self.upsert(owner, "transform", params, Some(true), &mut created)?;
-        if self.fits(applies("clickZoom")?.0, owner) {
-            self.upsert(owner, "clickZoom", Vec::new(), Some(false), &mut created)?;
-        }
+        let count = created.len();
         Ok(Outcome {
             summary: Summary::Text(format!(
-                "Baked {} zoom(s) into editable transform keys on {id}",
-                groups.len()
+                "Added {count} camera zoom(s) on {id} from its clicks"
             )),
-            primary: Some(Target::Effect(fx)),
+            primary: created.first().cloned(),
             created,
         })
     }
@@ -2358,6 +2383,9 @@ const TEMPLATES: &[Template] = &[
         lines: &[line("title", "Chapter", "middle", 0.07, "center", 0.0)],
     },
 ];
+
+/// Name that marks camera segments `intent.autoZoom` made (and replaces on a re-run).
+const AUTO_ZOOM: &str = "Auto zoom";
 
 /// The deepest nesting `clip.compound` makes; the evaluator flattens this many levels.
 const MAX_COMPOUND_DEPTH: usize = 4;

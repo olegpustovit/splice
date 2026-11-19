@@ -260,7 +260,7 @@ fn encode_lane(lane: &Lane) -> Json {
             text(match lane.kind {
                 LaneKind::Graphics => "graphics",
                 LaneKind::Overlay => "overlay",
-                LaneKind::Motion => "motion",
+                LaneKind::Camera => "camera",
                 LaneKind::Captions => "captions",
                 LaneKind::Audio => "audio",
             }),
@@ -274,10 +274,16 @@ fn decode_lane(value: &Json) -> Result<Lane, PackageError> {
     let kind = match value.string("kind")? {
         "graphics" => LaneKind::Graphics,
         "overlay" => LaneKind::Overlay,
-        "motion" => LaneKind::Motion,
+        // 0.3 "motion" lanes hold what are now camera segments.
+        "camera" | "motion" => LaneKind::Camera,
         "captions" => LaneKind::Captions,
         "audio" => LaneKind::Audio,
-        _ => return Err(bad("lane.kind", "graphics, overlay, motion, or captions")),
+        _ => {
+            return Err(bad(
+                "lane.kind",
+                "graphics, overlay, camera, captions or audio",
+            ));
+        }
     };
     Ok(Lane {
         id: value.string("id")?.parse().map_err(|_| bad_id("lane.id"))?,

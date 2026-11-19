@@ -44,6 +44,10 @@ fn package_round_trip_preserves_hash_and_every_sample_file() {
     drop(package);
     let (_, loaded) = Package::open(&path).unwrap();
     assert_eq!(first.hash, loaded.hash);
+    // SPLICE_BLESS=1 rewrites the sample in the current format (reviewed as a diff).
+    if std::env::var_os("SPLICE_BLESS").is_some() {
+        fs::copy(path.join("project.json"), sample.join("project.json")).unwrap();
+    }
     for file in ["project.json", "media.json", transcript] {
         assert_eq!(
             fs::read(path.join(file)).unwrap(),
@@ -143,4 +147,34 @@ fn package_recovers_abandoned_lock_record() {
     );
     drop(package);
     assert_eq!(fs::metadata(lock).unwrap().len(), 0);
+}
+
+/// 0.3 → 0.4 (D12): motion lanes load as camera lanes, motion items as zoom segments that hold
+/// their end scale, and click-zoom effects are dropped (intent.autoZoom makes explicit zooms).
+#[test]
+fn a_0_3_project_migrates_motion_and_click_zoom_to_camera_segments() {
+    let temp = Temp::new("migrate-0.3");
+    let path = temp.project();
+    fs::create_dir_all(&path).unwrap();
+    let project = r#"{"format":"splice/1","rev":0,"hash":"0000000000000001","serial":9,"fps":30,"size":[1080,1920],"aspect":"9:16","access":"live",
+"effects":[{"id":"fx_1","type":"clickZoom","params":{"scale":1.6}}],
+"spine":{"id":"lan_spine","name":"Video","effects":[]},
+"lanes":[{"id":"lan_2","name":"Motion","kind":"motion","effects":[]}],
+"clips":[{"id":"clp_3","media":null,"start":0,"length":120,"source":0,"speed":1,"fadeIn":0,"fadeOut":0,"volume":{"mic":1,"system":0.8},"enabled":{},"crop":null,"fit":"fit","effects":[]}],
+"items":[{"id":"ovl_4","kind":"motion","lane":"lan_2","anchor":{"pinned":true,"frame":10},"length":60,"params":{"from":1,"to":1.4,"focus":{"x":0.25,"y":0.75},"ease":true},"effects":[]}],
+"markers":[]}"#;
+    fs::write(path.join("project.json"), project).unwrap();
+    fs::write(
+        path.join("media.json"),
+        r#"{"format":"splice/1","media":[]}"#,
+    )
+    .unwrap();
+    let (_, loaded) = Package::open(&path).unwrap();
+    assert_eq!(loaded.lanes[0].kind, splice_model::LaneKind::Camera);
+    assert!(loaded.effects.is_empty(), "clickZoom dropped");
+    let slot = loaded.items.order()[0];
+    let splice_model::ItemKind::Zoom(zoom) = loaded.items.data(slot).unwrap().kind else {
+        panic!("motion became a zoom")
+    };
+    assert_eq!((zoom.amount, zoom.focus), (1.4, Some([0.25, 0.75])));
 }

@@ -275,28 +275,53 @@ fn tier_a_described_examples_match_prototype_snapshots() {
     let base = sample();
     let mut expected = String::new();
     let mut actual = String::new();
+    // SPLICE_BLESS=1 rewrites the goldens. They began as the JS prototype's snapshots; 0.4
+    // diverges on purpose (camera segments replace motion items, titles cut in), so they are
+    // Splice's own now and every re-bless is reviewed as a diff.
+    let bless = std::env::var_os("SPLICE_BLESS").is_some();
+    let mut blessed = Vec::new();
     for command in commands::COMMANDS
         .iter()
         .filter(|row| row.tier == commands::Tier::First)
     {
-        let case = cases
-            .iter()
-            .find(|case| {
-                case.field("op").unwrap().field("cmd").unwrap().as_str() == Some(command.id)
-            })
-            .unwrap_or_else(|| panic!("missing golden for {}", command.id));
         let described = commands::describe(Some(command.id), None).unwrap();
         let op = described.field("example").unwrap();
-        assert_eq!(Some(op), case.field("op"), "{}", command.id);
+        let case = cases.iter().find(|case| {
+            case.field("op").unwrap().field("cmd").unwrap().as_str() == Some(command.id)
+        });
+        let case = match case {
+            Some(case) => case,
+            None if bless => &Json::Null,
+            None => panic!("missing golden for {}", command.id),
+        };
+        if !bless {
+            assert_eq!(Some(op), case.field("op"), "{}", command.id);
+        }
         assert!(commands::decode(op).is_ok(), "{}", command.id);
         let mut project = base.clone();
         let report = apply(&mut project, std::slice::from_ref(op), Source::Agent, false)
             .unwrap_or_else(|error| panic!("{}: {error}", command.id));
         assert_eq!(report.changes[0].cmd, command.id);
         let snapshot = tier_a_snapshot(&project, report.mints);
+        if bless {
+            blessed.push(Json::Object(vec![
+                ("op".into(), op.clone()),
+                ("snapshot".into(), snapshot),
+            ]));
+            continue;
+        }
+        expected.clear();
+        actual.clear();
         splice_json::write(case.field("snapshot").unwrap(), &mut expected).unwrap();
         splice_json::write(&snapshot, &mut actual).unwrap();
         assert_eq!(actual, expected, "{}", command.id);
+    }
+    if bless {
+        let mut text = String::new();
+        splice_json::write(&Json::Array(blessed), &mut text).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/json/tier-a.json");
+        std::fs::write(path, text).unwrap();
     }
     assert_eq!(cases.len(), 20);
 }
@@ -358,7 +383,7 @@ fn tier_a_snapshot(project: &Project, mints: Vec<String>) -> Json {
             let keys: &[&str] = match item.field("kind").unwrap().as_str().unwrap() {
                 "title" => &["text"],
                 "media" => &["media", "source", "placement", "behindPresenter", "muted"],
-                "motion" => &["from", "to"],
+                "zoom" => &["amount", "focus", "mode", "spring"],
                 "caption" => &["words"],
                 kind => panic!("unexpected item kind {kind}"),
             };

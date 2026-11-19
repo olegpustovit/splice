@@ -177,7 +177,7 @@ fn tier_b_components_crop_and_keys() {
         ),
         (r#"{"cmd":"clip.crop","items":["clp_take"]}"#, "BAD_ARGS"),
         (
-            r#"{"cmd":"motion.set","item":"ovl_detail","to":5}"#,
+            r#"{"cmd":"zoom.set","zoom":"ovl_detail","amount":9}"#,
             "BAD_ARGS",
         ),
     ] {
@@ -241,54 +241,62 @@ fn tier_b_captions_generate_edit_split_merge_and_follow_cuts() {
     assert!(project.items.find(gone).is_none());
 }
 
+/// D12: zoom segments apply, validate with the rule, round-trip, and a 0.3 `motion` item
+/// (ovl_detail in the sample, 1 → 1.16) loads as a segment that holds 1.16.
 #[test]
-fn tier_b_motion_focus_and_ease_apply_validate_and_round_trip() {
+fn zoom_segments_apply_validate_round_trip_and_migrate_motion_items() {
     let mut project = sample();
+    let slot = project.items.find("ovl_detail".parse().unwrap()).unwrap();
+    let ItemKind::Zoom(migrated) = project.items.data(slot).unwrap().kind else {
+        panic!("motion migrates to zoom")
+    };
+    assert_eq!((migrated.amount, migrated.focus), (1.16, None));
     run(
         &mut project,
-        r#"[{"cmd":"motion.set","item":"ovl_detail","focus":{"x":0.25,"y":0.75},"ease":true},
-            {"cmd":"motion.add","at":0,"length":30,"to":1.5,"focus":{"x":0.5,"y":0.1}}]"#,
+        r#"[{"cmd":"zoom.set","zoom":"ovl_detail","focus":{"x":0.25,"y":0.75},"spring":"smooth"},
+            {"cmd":"zoom.add","at":0,"length":30,"amount":2,"focus":{"x":0.5,"y":0.1},"mode":"content"}]"#,
     )
     .unwrap();
-    let slot = project.items.find("ovl_detail".parse().unwrap()).unwrap();
-    let ItemKind::Motion { focus, ease, .. } = &project.items.data(slot).unwrap().kind else {
-        panic!("motion")
+    let ItemKind::Zoom(zoom) = project.items.data(slot).unwrap().kind else {
+        panic!("zoom")
     };
-    assert_eq!((*focus, *ease), (Some([0.25, 0.75]), true));
-    for (op, code) in [
-        (
-            r#"{"cmd":"motion.set","item":"ovl_detail","focus":{"x":2,"y":0}}"#,
-            "BAD_ARGS",
-        ),
-        (
-            r#"{"cmd":"motion.add","at":0,"focus":{"x":0.5}}"#,
-            "BAD_ARGS",
-        ),
+    assert_eq!(
+        (zoom.focus, zoom.spring),
+        (Some([0.25, 0.75]), Spring::Smooth)
+    );
+    for op in [
+        r#"{"cmd":"zoom.set","zoom":"ovl_detail","focus":{"x":2,"y":0}}"#,
+        r#"{"cmd":"zoom.add","at":0,"focus":{"x":0.5}}"#,
+        r#"{"cmd":"zoom.add","at":0,"amount":0.8}"#,
+        r#"{"cmd":"zoom.add","at":0,"spring":"bouncy"}"#,
+        r#"{"cmd":"zoom.set","zoom":"ovl_hook","amount":2}"#,
     ] {
         let error = run(&mut project, &format!("[{op}]")).unwrap_err();
-        assert_eq!(error.error.code, code, "{op}");
+        assert!(
+            matches!(error.error.code, "BAD_ARGS" | "WRONG_KIND"),
+            "{op}: {error:?}"
+        );
     }
-    // Saved and reopened, the focus and easing survive; null resets the focus.
-    let dir = std::env::temp_dir().join(format!("splice-motion-{}.splice", std::process::id()));
+    // Saved and reopened, the segment survives; null focus keeps the current framing.
+    let dir = std::env::temp_dir().join(format!("splice-zoom-{}.splice", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     drop(crate::package::Package::create(&dir, &project).unwrap());
     let (package, reopened) = crate::package::Package::open(&dir).unwrap();
     drop(package);
     std::fs::remove_dir_all(&dir).unwrap();
-    let slot = reopened.items.find("ovl_detail".parse().unwrap()).unwrap();
     assert_eq!(
         reopened.items.data(slot).unwrap().kind,
         project.items.data(slot).unwrap().kind
     );
     run(
         &mut project,
-        r#"[{"cmd":"motion.set","item":"ovl_detail","focus":null}]"#,
+        r#"[{"cmd":"zoom.set","zoom":"ovl_detail","focus":null}]"#,
     )
     .unwrap();
-    let ItemKind::Motion { focus, ease, .. } = &project.items.data(slot).unwrap().kind else {
-        panic!("motion")
+    let ItemKind::Zoom(zoom) = project.items.data(slot).unwrap().kind else {
+        panic!("zoom")
     };
-    assert_eq!((*focus, *ease), (None, true));
+    assert_eq!(zoom.focus, None);
 }
 
 #[test]

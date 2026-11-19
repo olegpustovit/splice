@@ -14,9 +14,28 @@ fn registry_matches_prototype_ids_order_and_status() {
         .filter_map(|line| line.trim().strip_prefix("[\"")?.split('"').next())
         .collect();
     assert_eq!((built.len(), planned.len()), (41, 20));
+    // 0.4 replaces the prototype's scale animations with camera segments (D12): motion.add and
+    // motion.set take their places as zoom.add and zoom.set, and the prototype's planned click
+    // "zoom.set" (settings) became intent.autoZoom's job.
+    let renamed = |id: &str| {
+        RETIRED
+            .iter()
+            .find(|(old, ..)| *old == id)
+            .map_or(id.to_owned(), |(_, new, _)| (*new).to_owned())
+    };
+    let built: Vec<String> = built.into_iter().map(renamed).collect();
+    let planned: Vec<String> = planned
+        .into_iter()
+        .filter(|id| *id != "zoom.set")
+        .map(renamed)
+        .collect();
+    let extensions: Vec<String> = EXTENSIONS.iter().map(|id| (*id).to_owned()).collect();
     assert_eq!(
-        COMMANDS.iter().map(|row| row.id).collect::<Vec<_>>(),
-        [built, planned, EXTENSIONS.to_vec()].concat()
+        COMMANDS
+            .iter()
+            .map(|row| row.id.to_owned())
+            .collect::<Vec<_>>(),
+        [built, planned, extensions].concat()
     );
     assert_eq!(
         COMMANDS
@@ -25,13 +44,14 @@ fn registry_matches_prototype_ids_order_and_status() {
             .count(),
         20
     );
-    // 0.3 builds the prototype's 20 planned rows and 16 Splice rows; nothing stays planned.
+    // 0.3 built the prototype's planned rows (less its click-zoom settings, now
+    // intent.autoZoom's job) and 16 Splice rows; nothing stays planned.
     assert_eq!(
         COMMANDS
             .iter()
             .filter(|row| row.tier == Tier::Third)
             .count(),
-        36
+        35
     );
     assert!(COMMANDS.iter().all(|row| row.tier != Tier::Planned));
 }
@@ -66,7 +86,7 @@ fn every_command_has_a_documented_decodable_example_and_distinct_variant() {
     let effect = describe(Some("effect.add"), None).unwrap();
     assert_eq!(effect.field("cut").unwrap().as_str(), Some("0.2"));
     let effects = effect.field("effectTypes").unwrap();
-    assert_eq!(effects.as_object().unwrap().len(), 24);
+    assert_eq!(effects.as_object().unwrap().len(), 23);
     assert!(
         effects
             .field("window")
@@ -94,7 +114,7 @@ fn every_command_has_a_documented_decodable_example_and_distinct_variant() {
             .iter()
             .map(|row| row.field("id").unwrap().as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["clip.crop", "crop.keys"]
+        ["zoom.add", "zoom.set", "clip.crop", "crop.keys"]
     );
 }
 

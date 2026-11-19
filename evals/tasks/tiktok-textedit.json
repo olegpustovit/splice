@@ -32,7 +32,7 @@
     },
     {
       "name": "zoom",
-      "expr": "effect('clickZoom') is not None or any(i['kind'] == 'motion' for i in items)"
+      "expr": "any(i['kind'] == 'zoom' for i in items)"
     },
     {
       "name": "music on the timeline",

@@ -231,14 +231,8 @@ impl Editor {
         data.appearance.fade_in = 0;
         clamp_fades(&mut data.appearance, length);
         shift_keys(&mut data.appearance.effects, cut);
-        match (&mut original.kind, &mut data.kind) {
-            (ItemKind::Motion { from, to, .. }, ItemKind::Motion { from: right, .. }) => {
-                let midpoint = *from + (*to - *from) * f64::from(cut) / f64::from(timing.length);
-                *to = midpoint;
-                *right = midpoint;
-            }
-            (_, ItemKind::Media(overlay)) => overlay.source = frame_add(overlay.source, cut)?,
-            _ => {}
+        if let ItemKind::Media(overlay) = &mut data.kind {
+            overlay.source = frame_add(overlay.source, cut)?;
         }
         let right = ItemId::from_serial(self.mint("ovl")?);
         self.project
@@ -261,32 +255,15 @@ impl Editor {
         length: Option<Frame>,
     ) -> Result<Outcome, CommandError> {
         let (kind, default_length, mut appearance) = match content {
+            // Titles cut in (T36.2): a fade is an explicit fadeIn/fadeOut, never a surprise.
             OverlayContent::Title(text) => (
                 ItemKind::Title {
                     text: text.unwrap_or_else(|| "Your next move".into()),
                 },
                 90,
-                Appearance {
-                    fade_in: 6,
-                    fade_out: 6,
-                    ..Appearance::default()
-                },
-            ),
-            OverlayContent::Motion {
-                from,
-                to,
-                focus,
-                ease,
-            } => (
-                ItemKind::Motion {
-                    from,
-                    to,
-                    focus,
-                    ease,
-                },
-                120,
                 Appearance::default(),
             ),
+            OverlayContent::Zoom(zoom) => (ItemKind::Zoom(zoom), 90, Appearance::default()),
             OverlayContent::Media {
                 media: id,
                 source,

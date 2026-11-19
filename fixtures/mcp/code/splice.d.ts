@@ -182,34 +182,35 @@ declare namespace Splice {
       item: string;
       text: string;
     }
-    /** Add Scale Animation (edit, 0.2). */
-    interface MotionAdd extends Base {
-      cmd: "motion.add";
+    /** Add Zoom (edit, 0.2). */
+    interface ZoomAdd extends Base {
+      cmd: "zoom.add";
       /** frame or anchor form */
       at: At;
-      /** @default 120 */
+      /** the camera holds the framing this long, then eases back to 1× · @default 90 */
       length?: number;
-      /** scale · @default 1 */
-      from?: number;
-      /** scale · @default 1.32 */
-      to?: number;
-      /** {x,y} canvas point (0–1) the zoom holds still (default: center) */
+      /** 1–5 · magnification · @default 1.5 */
+      amount?: number;
+      /** {x,y} content point (0–1) to frame; the viewport never leaves the content */
       focus?: { x: number; y: number };
-      /** ease in and out · @default false */
-      ease?: boolean;
+      /** content zooms inside a fixed window frame (portrait default), frame zooms the whole card */
+      mode?: "auto" | "content" | "frame";
+      /** @default focused */
+      spring?: "focused" | "smooth" | "snappy" | "instant";
+      /** lan_… camera lane */
+      lane?: string;
     }
-    /** Edit Scale Keyframes (edit, 0.2). */
-    interface MotionSet extends Base {
-      cmd: "motion.set";
-      /** ovl_… motion */
-      item: string;
-      /** 0.5–2 */
-      from?: number;
-      /** 0.5–2 */
-      to?: number;
-      /** {x,y} canvas point (0–1), or null for the center */
+    /** Edit Zoom (edit, 0.2). */
+    interface ZoomSet extends Base {
+      cmd: "zoom.set";
+      /** ovl_… zoom */
+      zoom: string;
+      /** 1–5 */
+      amount?: number;
+      /** {x,y} content point (0–1), or null to keep the current framing */
       focus?: { x: number; y: number } | null;
-      ease?: boolean;
+      mode?: "auto" | "content" | "frame";
+      spring?: "focused" | "smooth" | "snappy" | "instant";
     }
     /** Pin / Unpin (edit, 0.1). */
     interface ItemAnchor extends Base {
@@ -362,7 +363,7 @@ declare namespace Splice {
       cmd: "effect.add";
       /** clp_… | ovl_… | lan_… | lan_spine | project */
       target: string;
-      type: "window" | "cursor" | "clickZoom" | "camera" | "captions" | "keystrokes";
+      type: "window" | "cursor" | "camera" | "captions" | "keystrokes";
       /** only the values you want to set; the rest inherit */
       params?: Record<string, unknown>;
       /** false turns an inherited effect off at this scope · @default true */
@@ -500,18 +501,6 @@ declare namespace Splice {
       direction?: "left" | "right" | "up" | "down";
       /** #rrggbb · dip color */
       color?: string;
-    }
-    /** Zoom Settings (edit, 0.3). */
-    interface ZoomSet extends Base {
-      cmd: "zoom.set";
-      /** clp_… | project · a screen take or the project */
-      target: string;
-      /** boolean · click zoom on or off */
-      enabled?: boolean;
-      /** number · 1.1…3 */
-      scale?: number;
-      /** number · source frames each zoom holds */
-      hold?: number;
     }
     /** Add Mask (edit, 0.3). */
     interface MaskAdd extends Base {
@@ -654,10 +643,10 @@ declare namespace Splice {
       item: string;
       /** [{at, x, y}] · source frames; splice mcp reads them from the take when omitted */
       clicks?: { at: number; x: number; y: number }[];
-      /** number · @default 1.8 */
-      scale?: number;
-      /** @default 45 */
-      hold?: number;
+      /** [{from, to}] · source frames; typing extends a zoom and never moves it (read from the take when omitted) */
+      typing?: string;
+      /** 1–5 · @default 1.5 */
+      amount?: number;
     }
     /** Set Transcript (edit, 0.2). */
     interface TranscriptSet extends Base {
@@ -836,8 +825,8 @@ declare namespace Splice {
     | op.OverlayAdd
     | op.TitleAdd
     | op.TitleSet
-    | op.MotionAdd
-    | op.MotionSet
+    | op.ZoomAdd
+    | op.ZoomSet
     | op.ItemAnchor
     | op.ItemLane
     | op.OverlaySet
@@ -870,7 +859,6 @@ declare namespace Splice {
     | op.LaneReorder
     | op.CropKeys
     | op.TransitionAdd
-    | op.ZoomSet
     | op.MaskAdd
     | op.MaskSet
     | op.CaptionsTranslate
@@ -948,9 +936,9 @@ declare const splice: {
       add(args: Omit<Splice.op.TitleAdd, "cmd">): Splice.op.TitleAdd;
       set(args: Omit<Splice.op.TitleSet, "cmd">): Splice.op.TitleSet;
     };
-    motion: {
-      add(args: Omit<Splice.op.MotionAdd, "cmd">): Splice.op.MotionAdd;
-      set(args: Omit<Splice.op.MotionSet, "cmd">): Splice.op.MotionSet;
+    zoom: {
+      add(args: Omit<Splice.op.ZoomAdd, "cmd">): Splice.op.ZoomAdd;
+      set(args: Omit<Splice.op.ZoomSet, "cmd">): Splice.op.ZoomSet;
     };
     lane: {
       create(args: Omit<Splice.op.LaneCreate, "cmd">): Splice.op.LaneCreate;
@@ -1010,9 +998,6 @@ declare const splice: {
       add(args: Omit<Splice.op.TransitionAdd, "cmd">): Splice.op.TransitionAdd;
       set(args: Omit<Splice.op.TransitionSet, "cmd">): Splice.op.TransitionSet;
       remove(args: Omit<Splice.op.TransitionRemove, "cmd">): Splice.op.TransitionRemove;
-    };
-    zoom: {
-      set(args: Omit<Splice.op.ZoomSet, "cmd">): Splice.op.ZoomSet;
     };
     mask: {
       add(args: Omit<Splice.op.MaskAdd, "cmd">): Splice.op.MaskAdd;

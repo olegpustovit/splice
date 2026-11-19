@@ -46,7 +46,10 @@ pub struct Evaluator {
     overlays: Vec<PreparedOverlay>,
     titles: Vec<PreparedTitle>,
     captions: Vec<PreparedCaption>,
-    motions: Vec<PreparedMotion>,
+    /// Zoom segments while preparing; solved into `camera` at the end.
+    zooms: Vec<crate::camera::Segment>,
+    /// The timeline camera, one view per frame (D12).
+    camera: Vec<crate::View>,
     sounds: Vec<PreparedSound>,
     shapes: Vec<PreparedShape>,
     /// Timeline spans of speech, sorted and merged, for ducking.
@@ -165,7 +168,7 @@ struct Visual {
 }
 
 impl Visual {
-    fn draw(&self, at: f64, scale: f64, fade: f64, look: Look, out: &mut FramePlan) {
+    fn draw(&self, at: f64, fade: f64, look: Look, out: &mut FramePlan) {
         if let Some(window) = self.picture.window
             && window.background != Background::None
         {
@@ -178,7 +181,6 @@ impl Visual {
         if self.visible {
             out.layers.push(Layer::Picture(Picture {
                 source_frame: at,
-                scale,
                 opacity: fade,
                 look,
                 ..self.picture
@@ -202,14 +204,6 @@ struct PreparedTitle {
     text: String,
     rig: Rig,
     style: Option<style::TextStyle>,
-}
-
-struct PreparedMotion {
-    interval: Interval,
-    from: f64,
-    to: f64,
-    focus: Option<[f64; 2]>,
-    ease: bool,
 }
 
 struct PreparedCaption {
@@ -305,7 +299,8 @@ impl Evaluator {
             overlays: Vec::new(),
             titles: Vec::new(),
             captions: Vec::new(),
-            motions: Vec::new(),
+            zooms: Vec::new(),
+            camera: Vec::new(),
             sounds: Vec::new(),
             shapes: Vec::new(),
             speech: Vec::new(),
@@ -338,8 +333,9 @@ impl Evaluator {
         for (rank, slot) in ordered {
             result.prepare_item(project, rank, slot, size)?;
         }
-        // Prefer motion from the highest active lane.
-        result.motions.reverse();
+        // Where segments overlap, the later start wins (sort is stable for equal starts).
+        result.zooms.sort_by_key(|segment| segment.start);
+        result.camera = crate::camera::solve(&result.zooms, result.end, project.fps);
         result.soloed = result
             .clips
             .iter()
@@ -429,13 +425,6 @@ impl Evaluator {
         }
         for shape in &self.shapes {
             shape.interval.add_breakpoints(&mut cuts);
-        }
-        for motion in &self.motions {
-            motion.interval.add_breakpoints(&mut cuts);
-            if motion.ease {
-                // Renderers ramp linearly between cuts: sample the eased curve every 4 frames.
-                cuts.extend((motion.interval.start..motion.interval.end).step_by(4));
-            }
         }
         cuts.retain(|&at| at >= 0 && at <= self.end);
         cuts.sort_unstable();
@@ -735,21 +724,11 @@ impl Evaluator {
         let look = clip.rig.look(local, self.size.map(f64::from));
         let picture_source = source.clamp(0.0, (input.frames - 1.0).max(0.0));
         if let Some(visual) = &clip.visual {
-            let motion = self
-                .motions
-                .iter()
-                .find(|motion| motion.interval.contains(frame));
-            let zoom = motion.map_or(1.0, |motion| {
-                let mut progress = f64::from(frame - motion.interval.start)
-                    / f64::from((motion.interval.end - motion.interval.start - 1).max(1));
-                if motion.ease {
-                    progress = progress * progress * (3.0 - 2.0 * progress);
-                }
-                motion.from + (motion.to - motion.from) * progress
-            });
-            visual.draw(picture_source, zoom, 1.0, look, out);
-            if let (Some(motion), Some(Layer::Picture(picture))) = (motion, out.layers.last_mut()) {
-                picture.focus = motion.focus;
+            visual.draw(picture_source, 1.0, look, out);
+            if let Some(Layer::Picture(picture)) = out.layers.last_mut()
+                && let Some(view) = usize::try_from(frame).ok().and_then(|f| self.camera.get(f))
+            {
+                picture.view = *view;
             }
         }
         let (gain, pan) = self.mix(clip.mix.as_ref(), local);
@@ -793,7 +772,6 @@ impl Evaluator {
             let source = overlay.input.frame(frame - overlay.interval.start);
             overlay.visual.draw(
                 source.min((overlay.input.frames - 1.0).max(0.0)),
-                1.0,
                 opacity,
                 overlay.rig.look(local, self.size.map(f64::from)),
                 out,
@@ -1008,21 +986,22 @@ impl Evaluator {
                     rig,
                 });
             }
-            ItemKind::Motion {
-                from,
-                to,
-                focus,
-                ease,
-            } => {
-                if !from.is_finite() || !to.is_finite() || *from <= 0.0 || *to <= 0.0 {
+            ItemKind::Zoom(zoom) => {
+                let [low, high] = splice_model::Zoom::AMOUNT;
+                if !(low..=high).contains(&zoom.amount)
+                    || zoom
+                        .focus
+                        .is_some_and(|c| c.iter().any(|v| !(0.0..=1.0).contains(v)))
+                {
                     return Err(EvalError::Range);
                 }
-                self.motions.push(PreparedMotion {
-                    interval,
-                    from: *from,
-                    to: *to,
-                    focus: *focus,
-                    ease: *ease,
+                self.zooms.push(crate::camera::Segment {
+                    start: interval.start,
+                    end: interval.end,
+                    amount: zoom.amount,
+                    center: zoom.focus.map(|p| crate::View::center_on(p, zoom.amount)),
+                    mode: zoom.mode,
+                    spring: zoom.spring,
                 });
             }
             ItemKind::Sound(sound) => {
@@ -1165,11 +1144,8 @@ fn prepare_clip(
             // A camera-only take still has a backdrop even without a screen size.
             blank_visual(media.id, TimelineId::Clip(id), bounds, window)
         };
-        if clip.take {
-            if enabled.pointer == Some(true) {
-                visual.picture.cursor = style::cursor(&scopes);
-            }
-            visual.picture.click_zoom = style::click_zoom(&scopes);
+        if clip.take && enabled.pointer == Some(true) {
+            visual.picture.cursor = style::cursor(&scopes);
         }
         clip.visual = Some(visual);
     }
@@ -1305,12 +1281,10 @@ fn blank_visual(
             source_frame: 0.0,
             source: layout::rect(0.0, 0.0, 1.0, 1.0),
             destination: bounds,
-            scale: 1.0,
-            focus: None,
+            view: crate::View::IDENTITY,
             opacity: 1.0,
             window,
             cursor: None,
-            click_zoom: None,
             look: Look::default(),
         },
     }
