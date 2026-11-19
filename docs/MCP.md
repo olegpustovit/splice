@@ -1,4 +1,4 @@
-# MCP contract (0.3)
+# MCP contract (0.4)
 
 `splice mcp` speaks MCP over stdio: JSON-RPC 2.0, newline-delimited and hand-rolled (no SDK). It never
 opens UI. When a viewer has the target project open, the server forwards calls to the viewer over
@@ -83,8 +83,12 @@ Stay under 20 tools in the default profile: new capabilities become `edit.apply`
   logged and has no effect (docs/LOOP.md).
 - Results carry `structuredContent` matching the tool's `outputSchema` and a text block. The text
   mirrors success as compact JSON and summarizes a business error with its fix.
-- Business errors are results with `isError:true`: `{code, message, fix, current?, valid?, changedSince?}`.
-  The `fix` says exactly what to call or change. If an agent had to guess, the fix hint was wrong;
+- Business errors are results with `isError:true`:
+  `{code, message, fix, param?, got?, expected?, didYouMean?, current?, valid?, changedSince?}`.
+  When an argument is at fault the error names the rule it broke (D18): `param`, the value `got`
+  (filled from the failing op), and what is `expected`; an unknown argument, effect parameter or
+  command is `UNKNOWN_PARAM`/`UNKNOWN_COMMAND` with the closest known name in `didYouMean`.
+  Out-of-range values are refused, never clamped. The `fix` says exactly what to call or change. If an agent had to guess, the fix hint was wrong;
   that is a friction entry and a bug.
 
 ## Command descriptions
@@ -146,7 +150,8 @@ inline image and a `sheet` file URI.
 
 Some 0.3 commands need inputs the core cannot read (it never opens media). `edit.apply` fills them
 before the batch applies, so the journal records plain ops that replay without media:
-`intent.autoZoom` (clicks and typing bursts from the take's events), `crop.keys {follow:"cursor"|"face",
+`intent.autoZoom` (clicks and typing bursts from the take's events; it writes `zoom` items on a
+camera lane), `crop.keys {follow:"cursor"|"face",
 aspect}` (keys every half second), `media.relink` (probed frames), `media.consolidate` (copies
 files into `media/`), `mask.track` (Vision object tracking), `audio.sync` (envelope
 cross-correlation offset) and `captions.translate` without `texts` (on-device Translation).
@@ -273,7 +278,10 @@ return {revision: e.revision, clips: t.spine.length};
 `LANE_NOT_EMPTY`, `OVERLAP`, `REPLAY_MINTS`, `REPLAY_MEDIA`, `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
 `MEDIA_OFFLINE`, `BAD_MEDIA`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`, `EXPORT_FAILED`, `FRAME_FAILED`,
 `CAPTURE_FAILED`, `CAPTURE_SOURCE`, `CAPTURE_CANCELLED` (CLI), `DISK_FULL`,
-0.3 edits: `NO_HANDLES` (roll, slip, slide), `NO_NEIGHBOR`, `NOT_ADJACENT`, `NOT_JOINABLE`,
+0.4: `UNKNOWN_PARAM` (with `didYouMean`), `NOT_KEYABLE` (keys on a parameter the evaluator does not
+animate; the fix lists the keyable ones, also marked `keys:true` in `Splice.Effects`).
+0.3 edits: `NO_HANDLES` (roll, slip, slide; a transition whose clips lack the source it consumes),
+`NO_NEIGHBOR`, `NOT_ADJACENT`, `NOT_JOINABLE`,
 `NOT_JOINED`, `NOTHING_TO_RESTORE`, `NO_TRANSITION`, `TOO_LONG`, `FIT_IMPOSSIBLE`, `NEEDS_TEXT`,
 `NO_CLICKS`, `NO_FACES`, `NOT_TRACKED`, `NO_CAPTIONS`, `NO_TRANSCRIPT`, `MARKER_EXISTS`,
 `MEDIA_MISMATCH`, `LOUDNESS_UNKNOWN`, `TOO_DEEP`, `RETIMED`,

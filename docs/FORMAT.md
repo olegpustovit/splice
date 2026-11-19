@@ -129,11 +129,12 @@ Rules:
 
 ### 0.3 additions (additive within `splice/1`)
 
-- **Keys.** Any numeric effect parameter may be keyed:
+- **Keys.** A numeric effect parameter marked `"keys": true` in `effects.json` may be keyed (0.4:
+  the others refuse keys with `NOT_KEYABLE`, see below):
   `{"keys":[{"at":0,"value":1,"ease":"inOut"},{"at":60,"value":1.4}]}`. `at` is a frame relative
   to the owner's start (it may be negative), strictly increasing. `ease` is the curve toward the
-  next key: `linear` (default, omitted on write), `hold`, `in`, `out`, `inOut` or a cubic Bezier
-  `[x1, y1, x2, y2]`. Splitting, in-trimming or rolling an owner shifts its keys so they stay on
+  next key: `linear`, `hold`, `in`, `out`, `inOut` or a cubic Bezier `[x1, y1, x2, y2]`. Files
+  always store it (`linear` when absent on read); commands default an omitted ease to `inOut`. Splitting, in-trimming or rolling an owner shifts its keys so they stay on
   the same content.
 - **Effects** cover the look as well as the frame: `transform`, `crop` (keyed rect), `color`
   (with an optional `.cube` `lut` path), `mask` (several per owner), `key`, `cutout`,
@@ -152,6 +153,26 @@ Rules:
   nested timelines of `clip.compound`; the compound's media entry has `kind:"compound"` and the
   outer clip plays it like any media. `clip.compound` refuses nesting past 4 levels (`TOO_DEEP`);
   an item that runs past the compounded clips stays outside, anchored to the compound clip.
+
+### 0.4 changes (additive within `splice/1`, migrated on load)
+
+- **Camera lane and zoom items (D12, D13).** Lane kind `camera` (0.3 `motion` loads as `camera`)
+  holds items `{"kind":"zoom","params":{"amount":1.5,"focus":{"x":0.7,"y":0.3},"mode":"auto",
+  "spring":"focused"}}`. `amount` is 1–5; `focus` is a content point (0–1) the viewport centers
+  on, clamped so the viewport never leaves the content (omit to keep the current framing);
+  `mode` is `auto` (content on portrait canvases, else frame), `content` (zoom inside a fixed
+  frame) or `frame` (the card scales); `spring` is `focused`, `smooth`, `snappy` or `instant`.
+  One camera per timeline: the evaluator solves an analytic spring per channel from these
+  segments, holding the center outside them. 0.3 `motion` items migrate to zoom items
+  (`amount = max(to, 1)`, same focus) and the 0.3 `clickZoom` effect is dropped
+  (`intent.autoZoom` writes zoom items instead).
+- **Keys only where they animate (T36.4).** A 0.3 file with keys on a parameter that is not
+  keyable loads with the first key's value (0.3 rendered the default there).
+- **Transitions consume handles (D14).** A `transition` effect belongs to a spine clip right after
+  another; its length is at most the shorter clip and needs `length/2` unused source frames before
+  the incoming clip and the rest after the outgoing one. Writers refuse anything else
+  (`WRONG_KIND`, `NO_NEIGHBOR`, `TOO_LONG`, `NO_HANDLES`). Files from 0.3 without handles still
+  play: edge frames hold.
 
 ## `journal.ops`
 
@@ -219,13 +240,18 @@ transcript with descriptor-only media. The native media acceptance tests in T4 n
 The evaluator prepares one immutable project snapshot and reuses a frame buffer during playback.
 It resolves effects per parameter from project to spine and clip, from overlay lane to overlay,
 and from project to captions lane and cue. Source geometry uses the media probe dimensions.
-The frame plan carries ordered visual layers, audio gains, and caption word timing. Cursor,
-keystroke and click-zoom layers also carry the source clock for the capture event renderer.
+The frame plan carries ordered visual layers, audio gains, caption word timing, the camera view
+of each picture, and at most one *group*: the layers of a transition's incoming side or a fading
+clip, composited as one flattened image with an opacity, scale, offset and clip (D14), plus an
+optional rigid *shift* of the outgoing side. Cursor and keystroke layers carry the source clock
+for the capture event renderer.
 
-On macOS, `splice_av` divides that plan at cuts and at changes in the linear ramps. It maps
-source intervals to composition tracks, scales those intervals for speed changes, and applies
-the planned layer order, crop, transform, opacity and audio gain. Frame reads and MP4 encoding
-share those tracks and instructions. Export and frame grabs use the same title and caption
+On macOS, `splice_av` divides that plan where the layer stack changes and maps each layer to a
+composition track (lowering only maps sources). The GPU compositor draws every frame from the
+evaluated plan itself: bounds, opacity, look, camera, window and cursor come from the evaluator at
+that exact frame, never interpolated. A group renders into a pooled transparent canvas and is
+composited once, so a window and its backdrop fade together and the backdrop is drawn once.
+Frame reads and MP4 encoding share those tracks and instructions. Export and frame grabs use the same title and caption
 bitmaps and opacity ramps. The viewer samples the same video composition through
 `AVPlayerItemVideoOutput`, displays the image at the project's aspect, and paints the resolved
 titles and captions with PXUI. The color conversion writes directly into three reusable shared
