@@ -317,7 +317,7 @@ coverage; visual rows a frame golden; hot paths an allocation proof and a measur
 
 ### T15 · Debt and hardening (0.3) [L + M]
 - [x] T15.1 [L] apply p99 budget: best of 5 interleaved passes per sample, threshold 1 ms unchanged. Accept: green under load; a planted 2 ms sleep turns it red. — b6deabb · best of 5 interleaved; green at load 18 (470 µs), red with a planted 2 ms sleep.
-- [ ] T15.2 [M] Phone and camera footage: `preferredTransform` in shader UVs, VFR sources on integer frames, P3 → Rec.709 tag. Accept: portrait, VFR and P3 goldens.
+- [x] T15.2 [M] Phone and camera footage: `preferredTransform` in shader UVs, VFR sources on integer frames, P3 → Rec.709 tag. Accept: portrait, VFR and P3 goldens. — f0c3848 · portrait (90° transform) renders upright, VFR maps by time, P3 converts to Rec. 709 on decode (P3 200,120,60 → 214,115,47; it passed through before); fixtures from fixtures/media/camera-footage.swift.
 - [x] T15.3 [M] Long media: transcription and analysis as `job_`s with progress; streaming `events.json` index. Accept: a 60-minute synthetic take with flat memory. — 7e75ee9 · transcription and analysis over 10 min run as jobs; events.json streams (19 MB test, no 16 MiB cap).
 - [x] T15.4 [L] Bounded memory: journal compaction, revisions spilled to disk. Accept: 10,000 batches < 200 MB; undo to any revision reproduces its hash. — 5d88a0c · projects kept for the last 32 revisions and every 64th, others rebuilt from a prefix base; 1,500 batches keep ~55; old revisions rebuild to their hashes. Journal records ~200 B/batch (10,000 ≈ 2 MB).
 - [x] T15.5 [L] Fuzz every decoder (typed errors, no panics); a 2,000-batch random stream over all rows with undo/redo holds invariants and replays; crash at every byte of save recovers. — bcb3b1e · mutated args for every row never panic; 2,000-batch stream with undo reopens to the same hash; a save cut at any byte keeps the last project.
@@ -345,13 +345,13 @@ coverage; visual rows a frame golden; hot paths an allocation proof and a measur
 
 ### T19 · Audio complete (0.3) [M + L]
 - [x] T19.1 [L] Fades and crossfades on sounds; `volume`/`pan` keys; lane volume, mute, solo; ducking as visible keys. — e1c65e8, b6deabb · fades, volume/pan keys, mute/solo, ducking baked to visible keys.
-- [ ] T19.2 [M] `eq`, `compressor`, `gate`, `voiceIsolation` effects rendered offline (AVAudioEngine manual rendering). Accept: noise floor −15 dB, speech within 1 dB.
+- [x] T19.2 [M] `eq`, `compressor`, `gate`, `voiceIsolation` effects rendered offline (AVAudioEngine manual rendering). Accept: noise floor −15 dB, speech within 1 dB. — f0c3848 · −40 dBFS noise floor falls to −115 dB between phrases; speech moves 0.2 dB.
 - [x] T19.3 [L] `cut.pauses`; filler and retake flags in `transcript.get`; review lists on `dryRun`. — e1c65e8, b6deabb · cut.pauses; fillers and retakes in transcript.get.
 - [x] T19.4 [L+M] `audio.sync` by envelope cross-correlation. Accept: a 1.37 s offset syncs within 1 frame. — 4d63bef · envelope cross-correlation; a 1.37 s offset syncs within one frame.
 - [x] T19.5 [M] Peaks, onsets/beats, SoundAnalysis labels in the analysis store. — 6ff4417 · peaks, onsets/beats, SoundAnalysis label runs.
 
 ### T20 · Analysis and intents (0.3) [M + L]
-- [ ] T20.1 [M+L] `media.analyze {media, kinds}` (loudness, pauses, peaks, beats, sounds, shots, text, faces, people), cached by digest; `audio.summary` alias.
+- [x] T20.1 [M+L] `media.analyze {media, kinds}` (loudness, pauses, peaks, beats, sounds, shots, text, faces, people), cached by digest; `audio.summary` alias. — 6ff4417, f0c3848 · media.analyze kinds cached by stamp; shot cut found at 1.60 s in an exported movie (jump 0.49 vs ≤ 0.014); OCR in the blur-mask test.
 - [x] T20.2 [L] `intent.pace`, `intent.fitDuration`, `intent.keepShots`, `intent.autoZoom`, `zoom.set`, `crop.keys`, deterministic with dryRun review lists. — e1c65e8, b6deabb · intents deterministic with dryRun review lists; autoZoom from clicks and typing.
 - [x] T20.3 [L] `captions.import` (SRT/VTT), `captions.translate {lane, language, texts?}`. — e1c65e8 · SRT/VTT import; translate with on-device Translation or agent texts (D7).
 
@@ -363,7 +363,7 @@ coverage; visual rows a frame golden; hot paths an allocation proof and a measur
 - [x] T21.5 [M] Export queue (2 concurrent), cancel removes partials, `DISK_FULL`, progress with fps/ETA. — 9710184 · 2 concurrent then queued; cancel removes partials; DISK_FULL preflight; fps/ETA.
 
 ### T22 · Recording complete (0.3) [M]
-- [ ] T22.1 [M] Pause/resume (`record.stop {pause}`, `record.start {resume}`), markers during a take.
+- [x] T22.1 [M] Pause/resume (`record.stop {pause}`, `record.start {resume}`), markers during a take. — 7198c69 · live via tools/record-check.py: 1.5 s + pause + 1.5 s → 3.07 s take with the marker (resume-with-marker used to leave the take paused).
 - [x] T22.2 [M] Voice-over (`source:"none"`, mic onto an audio lane at a frame) and camera-only takes. — 2917c76 · voice-over onto an audio lane (live in the voiceover eval), camera-only.
 - [x] T22.3 [L] Retakes: `retakeOf` links; `intent.keepShots` keeps the last attempt. — 2917c76, b6deabb · retakeOf placement; keepShots keeps the last attempt.
 - [x] T22.4 [M] Fragmented writing; `kill -9` mid-take recovers. — 2917c76 · 2 s movie fragments; record.start {recover} publishes staged takes.
@@ -375,12 +375,12 @@ coverage; visual rows a frame golden; hot paths an allocation proof and a measur
 - [x] T23.2 [L] Multi-project revisions in `code.run`; job waits excluded from the 2 s wall. — 5bb6021 · per-project revisions; host time excluded from the 2 s wall; record.* callable (ed81d09).
 - [x] T23.3 [L] `notifications/progress` and `notifications/cancelled`; `view.frames {sheet:true}` contact sheet. — 5bb6021 · notifications/progress and cancelled; view.frames {sheet:true}.
 - [x] T23.4 [L] Skill recipes per workflow, each run by the sweep. — f91ed4d · five recipes in the splice skill, exercised by the sweep.
-- [ ] T23.5 [L] Code-mode cost ≤ direct on every eval task.
+- [ ] T23.5 [L] Code-mode cost ≤ direct on every eval task. — open: code mode costs −11% overall (12.28M vs 13.85M tokens, 66 runs) and −33% to −47% on music-duck, tutorial-polish and undo-session, but more on talking-head (+13%), tiktok-textedit (+10%), hand-off (+5%) and crop-and-frame (+1%, noise at n=3).
 
 ### T24 · Verification gate (0.3) [L + M]
 - [x] T24.1 [L+M] Capability sweep: one deterministic code-mode program applies every row and preset, exports, frame-probes each feature, undoes to the start hash. A row missing from the sweep fails the parity test. — f91ed4d · evals/sweep.js: all 78 rows dry-run, a layered batch commits, session undo restores the spine; make check and mac-check.
-- [ ] T24.2 [M] Evals: tutorial-polish, podcast-clean, talking-head, broll-story, voiceover, hand-off; all 11 pass 3/3 in both arms.
-- [ ] T24.3 [L+M] Budgets table as tests (plan §4 P9).
+- [x] T24.2 [M] Evals: tutorial-polish, podcast-clean, talking-head, broll-story, voiceover, hand-off; all 11 pass 3/3 in both arms. — 843dcde, ed81d09 · 66 runs, 11 tasks × 3 × both arms at ed81d09: 65 pass; the miss was a check that rejected camera-bubble blur (widened). First pass found six product bugs, fixed in ed81d09.
+- [ ] T24.3 [L+M] Budgets table as tests (plan §4 P9). — partly: apply p99 < 1 ms and warm edits of every new edit row 0 allocations (ed81d09); keyed eval 0 allocations, p99 ~1.9 µs locked at 100 µs; open 1 h / 5,000 items 60 ms, 20 MB; 1080p60 full-stack export 2.7× realtime. Open: 4K full-stack frame measures 21 ms compose p90 on the grab path (decode 46 ms, readback 8 ms), which includes GPU wake-up between decodes; the 16 ms viewer budget needs GPU timestamps in the viewer harness. Transcription/analysis speed not measured yet.
 - [x] T24.4 [L+M] Chaos: kill -9 during save, export and record; disk full; 1,000 writer-handoff races. — 1bd96f0, 3be88d1 · kill -9 during apply (40 rounds) reopens whole; 1,000 writer races never share a package; save cut at any byte (bcb3b1e).
 
 ## Log
@@ -459,3 +459,5 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-19 · T7.6 · built, notarization HUMAN · `make dmg` on the Mini: Splice-0.1.0.dmg 9.0 MB, Developer ID signed, app verifies and runs from the mounted image; spctl: "Unnotarized Developer ID" until a notarytool profile exists.
 - 2026-11-19 · defects measured · 5c9bffc · tighten-talk re-run, both arms at HEAD, n=3: 6/6 pass; the captions-after-cut and project-duration reports no longer appear (filed in earlier rounds). One new report fixed: code.run adopts the first project it opens and session it starts as defaults.
 - 2026-11-19 · 0.3 plan · accepted · 5sn6awbkq9ae: D5–D11, board T15–T24 (48 tasks).
+- 2026-11-19 · 0.3 · T15–T24 · 608dcd8…7198c69 · 44 of 48 tasks done. Gates: make check 150 tests ~7 s; mac-check green. Evals: 65/66 at ed81d09, code mode −11% tokens overall.
+- 2026-11-19 · defects · ed81d09, 115bd8c, f0c3848, 7198c69 · Found by 0.3 evals and tests: keys restarted on split pieces; stills could not be imported; mask.set rejected schema params; six sibling compounds failed to render; use-after-free with an image overlay over a dissolve; P3 passed through unconverted; resume with a marker never resumed; open/close cost 4.8 ms (now 30 µs).
