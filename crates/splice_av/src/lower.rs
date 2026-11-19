@@ -515,7 +515,8 @@ impl Lowering {
                 reveal: None,
             });
         }
-        let units = units(text, style.unit);
+        // Characters are grapheme clusters, so emoji sequences animate whole (T42.3).
+        let units = splice_eval::text_units(text, style.unit);
         for (index, unit) in units.into_iter().enumerate() {
             let start = range[0] + (index as f64 * style.stagger).round() as Frame;
             let mut part = layer.clone();
@@ -835,35 +836,6 @@ fn media_path(package: &Path, media: &Media, component: Option<&str>) -> Result<
     } else {
         Err(Error::Offline(path))
     }
-}
-
-/// UTF-16 ranges of the words, characters or lines of `text`.
-fn units(text: &str, unit: u8) -> Vec<[usize; 2]> {
-    let mut out = Vec::new();
-    let mut start = None;
-    let mut at = 0;
-    for c in text.chars() {
-        let boundary = match unit {
-            1 => !c.is_whitespace(),
-            2 => c != '\n',
-            _ => !c.is_whitespace(),
-        };
-        let width = c.len_utf16();
-        if unit == 1 {
-            if boundary {
-                out.push([at, at + width]);
-            }
-        } else if boundary {
-            start.get_or_insert(at);
-        } else if let Some(s) = start.take() {
-            out.push([s, at]);
-        }
-        at += width;
-    }
-    if let Some(s) = start {
-        out.push([s, at]);
-    }
-    out
 }
 
 /// The native raster style for an eval text style (captions pass their stroke).

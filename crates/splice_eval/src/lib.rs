@@ -12,6 +12,7 @@ mod eval;
 mod layout;
 mod look;
 mod style;
+mod text;
 
 pub use camera::View;
 pub use cube::{cube_atlas, parse_cube};
@@ -27,6 +28,7 @@ pub use style::{
     Animate, Background, CaptionPreset, CaptionStyle, Cursor, KeyPosition, Keys, TextStyle, Window,
     resolve_effect,
 };
+pub use text::{grapheme_len, text_units};
 
 #[cfg(test)]
 mod look_tests;

@@ -688,7 +688,7 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
     CGSize room = CGSizeMake(MAX(width - 2 * pad - 2 * inset, 1), MAX(height - pad - 2 * inset, 1));
     // Shrink to fit instead of dropping lines that do not fit (T36.5, T42.3).
     CTFontRef font = styled_font(style, font_size);
-    for (int attempt = 0; attempt < 4; attempt++) {
+    for (int attempt = 0; attempt < 8; attempt++) {
         NSAttributedString *probe = styled_text(text, font, paragraph, style, color, stroke, clear, NO,
                                                 NSMakeRange(NSNotFound, 0), NSMakeRange(NSNotFound, 0), color);
         CTFramesetterRef measure = CTFramesetterCreateWithAttributedString((__bridge CFAttributedStringRef)probe);
