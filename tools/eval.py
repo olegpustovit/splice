@@ -6,7 +6,8 @@ against `splice mcp`, checks the end state, and appends a row to evals/results.t
 
 A task file:
     {"id": "...", "platform": "any"|"macos",
-     "seed": {"copy": "fixtures/projects/sample.splice"} | {"new": true} | {"record": {...}},
+     "seed": {"copy": "fixtures/projects/sample.splice"} | {"new": true} | {"record": {..., "events": [...]}},
+     "ops": [...],  # optional edit.apply ops run on the seed
      "assets": {"music.wav": {"tone": 12}, "photo.png": {"png": [1600, 1200]}},  # generated inputs
      "prompt": "... {project} ... {assets} ...",
      "checks": [{"name": "...", "expr": "python expression over the helpers below"}]}
@@ -77,6 +78,32 @@ def record_seed(project, spec):
     splice("record", project, "--window", app, "--title", name, "--duration", str(spec.get("duration", 6)),
            *(["--mic"] if spec.get("mic") else []))
     sh(["killall", app])
+    if "events" in spec:
+        script_events(project, spec["events"])
+
+
+def script_events(project, actions):
+    """Replaces a recorded take's input events with scripted actions (an automated recording
+    sees no hand): [{"t": seconds, "do": "click"|"type"|"move", "x", "y", "for": seconds}].
+    Typing writes key events without characters, so evals never depend on key text."""
+    takes = os.path.join(project, "takes")
+    for take in sorted(os.listdir(takes)):
+        path = os.path.join(takes, take, "events.json")
+        if not os.path.isfile(path):
+            continue
+        log = json.load(open(path))
+        events = []
+        for a in actions:
+            t, x, y = a["t"], a.get("x", 0.5), a.get("y", 0.5)
+            events.append({"t": t, "k": "move", "x": x, "y": y})
+            if a["do"] == "click":
+                events += [{"t": t + 0.02, "k": "down", "x": x, "y": y, "b": 0},
+                           {"t": t + 0.1, "k": "up", "x": x, "y": y, "b": 0}]
+            elif a["do"] == "type":
+                n = int(a.get("for", 2) * 8)
+                events += [{"t": round(t + i / 8, 3), "k": "key", "keyCode": 4} for i in range(n)]
+        log["events"] = sorted(events, key=lambda e: e["t"])
+        json.dump(log, open(path, "w"))
 
 
 def seed(task, work):
@@ -88,6 +115,10 @@ def seed(task, work):
         record_seed(project, s["record"])
     else:
         splice("new", project)
+    if task.get("ops"):
+        ops = os.path.join(work, "seed-ops.json")
+        json.dump(task["ops"], open(ops, "w"))
+        splice("apply", ops, "--project", project)
     assets = {}
     for name, spec in task.get("assets", {}).items():
         path = os.path.join(work, name)

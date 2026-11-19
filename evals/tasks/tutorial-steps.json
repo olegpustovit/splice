@@ -1,0 +1,81 @@
+{
+  "id": "tutorial-steps",
+  "platform": "macos",
+  "seed": {
+    "record": {
+      "app": "TextEdit",
+      "duration": 36,
+      "events": [
+        {
+          "t": 2.0,
+          "do": "click",
+          "x": 0.3,
+          "y": 0.3
+        },
+        {
+          "t": 2.5,
+          "do": "type",
+          "for": 3
+        },
+        {
+          "t": 14.0,
+          "do": "click",
+          "x": 0.6,
+          "y": 0.5
+        },
+        {
+          "t": 14.5,
+          "do": "type",
+          "for": 3
+        },
+        {
+          "t": 27.0,
+          "do": "click",
+          "x": 0.4,
+          "y": 0.7
+        },
+        {
+          "t": 27.5,
+          "do": "type",
+          "for": 3
+        }
+      ]
+    }
+  },
+  "ops": [
+    {
+      "cmd": "marker.add",
+      "at": 45,
+      "name": "Step 1: open the note"
+    },
+    {
+      "cmd": "marker.add",
+      "at": 405,
+      "name": "retake: step 2"
+    },
+    {
+      "cmd": "marker.add",
+      "at": 795,
+      "name": "Step 2: add the list"
+    }
+  ],
+  "prompt": "The Splice project {project} holds a silent screen recording of a two-step TextEdit tutorial. Markers name each step; the attempt marked 'retake:' was redone later and must not appear. Cut it into a tight tutorial: keep each real step with its actions, drop the retake attempt and the idle time between steps. Use the splice MCP tools only.",
+  "checks": [
+    {
+      "name": "step 1 kept",
+      "expr": "any(c['source'] <= 3 * project['fps'] < c['source'] + c['length'] * c['speed'] for c in take_clips())"
+    },
+    {
+      "name": "step 2 kept",
+      "expr": "any(c['source'] <= 28 * project['fps'] < c['source'] + c['length'] * c['speed'] for c in take_clips())"
+    },
+    {
+      "name": "retake dropped",
+      "expr": "not any(c['source'] <= 15 * project['fps'] < c['source'] + c['length'] * c['speed'] for c in take_clips())"
+    },
+    {
+      "name": "idle cut",
+      "expr": "sum(c['length'] for c in take_clips()) < 24 * project['fps']"
+    }
+  ]
+}

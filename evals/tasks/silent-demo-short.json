@@ -1,0 +1,80 @@
+{
+  "id": "silent-demo-short",
+  "platform": "macos",
+  "seed": {
+    "record": {
+      "app": "TextEdit",
+      "duration": 36,
+      "events": [
+        {
+          "t": 2.0,
+          "do": "click",
+          "x": 0.3,
+          "y": 0.3
+        },
+        {
+          "t": 2.5,
+          "do": "type",
+          "for": 3
+        },
+        {
+          "t": 14.0,
+          "do": "click",
+          "x": 0.6,
+          "y": 0.5
+        },
+        {
+          "t": 14.5,
+          "do": "type",
+          "for": 3
+        },
+        {
+          "t": 27.0,
+          "do": "click",
+          "x": 0.4,
+          "y": 0.7
+        },
+        {
+          "t": 27.5,
+          "do": "type",
+          "for": 3
+        }
+      ]
+    }
+  },
+  "prompt": "The Splice project {project} holds a silent 36-second screen recording (no voice) of someone working in TextEdit: three short bursts of clicking and typing separated by long idle stretches. Make it a 15 to 25 second vertical short: 9:16 with a background frame around the window, the idle time cut but every click and keystroke kept, a bigger cursor with click rings, zooms where they click, and clean transitions. Check your work, then export with the social preset. Use the splice MCP tools only.",
+  "checks": [
+    {
+      "name": "9:16",
+      "expr": "project['aspect'] == '9:16'"
+    },
+    {
+      "name": "15-25 s",
+      "expr": "15 <= sum(c['length'] for c in clips) / project['fps'] <= 25"
+    },
+    {
+      "name": "every action kept",
+      "expr": "all(any(c['source'] <= a * project['fps'] < c['source'] + c['length'] * c['speed'] for c in take_clips()) for a in [2.0, 4.0, 14.0, 16.0, 27.0, 29.0])"
+    },
+    {
+      "name": "idle cut",
+      "expr": "sum(c['length'] for c in take_clips()) < 30 * project['fps']"
+    },
+    {
+      "name": "background frame",
+      "expr": "(effect('window') or {}).get('background', 'gradient') != 'none' and effect('window') is not None"
+    },
+    {
+      "name": "cursor",
+      "expr": "(effect('cursor') or {}).get('size', 1) >= 1.5"
+    },
+    {
+      "name": "zoom",
+      "expr": "any(i['kind'] == 'zoom' for i in items)"
+    },
+    {
+      "name": "export",
+      "expr": "len(exports()) >= 1"
+    }
+  ]
+}
