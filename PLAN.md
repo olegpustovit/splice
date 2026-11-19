@@ -2,8 +2,9 @@
 
 **Cut 0.1 landed on 2026-11-18.** The signed release is installed on the Mini and the live recording
 checks passed across debug and release installs. The loop keeps going until the M1 exit (0.3).
-**Now: 0.1.1 (T10, opening always works), then 0.2** per the 0.2 proposal
-(https://artifacts.microapps.space/a/qg46h5ht5g07, accepted 2026-11-19).
+0.1.1 and 0.2 landed on 2026-11-19 (https://artifacts.microapps.space/a/qg46h5ht5g07).
+**Now: 0.3, the complete headless editor and M1 exit** per the 0.3 plan
+(https://artifacts.microapps.space/a/5sn6awbkq9ae, accepted 2026-11-19): T15–T24 below.
 Scope is fixed. When a task does not fit, ship it as a `ponytail:` with an upgrade
 trigger instead of cutting the task; when that is not possible, move the task to a later cut and
 say so in the log. Never weaken a test to make a cut.
@@ -43,8 +44,9 @@ Build the core on the Linux box. Reach for the Mac only for `[mac]` tasks:
 - **0.2 · headless-complete:** T3.6 outcome evals gate the cut, T2.7 Tier B (as T11), T12 recording
   render on the Metal compositor, T13 audio, T9 captions, T14 code mode, T6.3. Exit: every eval
   passes 3/3, friction triaged, no `PLANNED` reaches an agent for a row describe calls available.
-- **0.3 · M1 exit:** every registry row built (the 20 planned rows too), T7.6 notarization,
-  performance budgets met, the friction backlog empty or triaged.
+- **0.3 · M1 exit:** T15–T24. Every registry row built (the 20 planned rows plus 16 new), keys on every
+  numeric parameter, the capability sweep green on both machines, 11 evals 3/3 in both arms, every
+  budget green, T7.6 notarization, the friction backlog empty or triaged.
 
 ## Board
 
@@ -294,6 +296,93 @@ cut logs one "try it as a user" line.
   wall -19%, turns -48%, calls -63%, tool errors 1 vs 3. Cache writes -4% overall, still above direct on 3
   tasks (+3%, +11%, +13%).
 
+## 0.3 decisions (2026-11-19)
+
+- **D5** The keyframe engine (`param.set`, `param.keys`, ease and Bezier) moves from M8 into 0.3. Crop keys,
+  masks, speed ramps, volume automation, text animators and auto-zoom are key producers, not new renderers.
+- **D6** The direct profile stays at 19 tools: `media.analyze` replaces `audio.summary` (alias for one cut);
+  pause and resume are `record.stop {pause}` / `record.start {resume}`.
+- **D7** The agent does language work (chapters, highlights, translation text); Splice supplies data and
+  deterministic recipes. No on-device LLM.
+- **D8** FCPXML export is the only timeline interchange; OTIO is dropped. SRT/VTT import.
+- **D9** Out of 0.3: stabilization, multicam, reverse clips, proxies, OTIO, EDL, dubbing/TTS, diarization,
+  3D, particles, node/HDR grading, timeline UI.
+- **D10** Swift-only Apple APIs use the `@_cdecl` shim pattern in `apple_sys/native/*.swift`.
+- **D11** One format minor bump for keys, transitions, compound clips, stills and templates, with load-time
+  migration.
+
+Every visual feature is a shader in `splice_gpu` (viewer, grabs and export match); Vision and audio units
+only produce data. Rows need a decoder, apply, golden, undo round-trip, describe example and `.d.ts`
+coverage; visual rows a frame golden; hot paths an allocation proof and a measured time.
+
+### T15 · Debt and hardening (0.3) [L + M]
+- [ ] T15.1 [L] apply p99 budget: best of 5 interleaved passes per sample, threshold 1 ms unchanged. Accept: green under load; a planted 2 ms sleep turns it red.
+- [ ] T15.2 [M] Phone and camera footage: `preferredTransform` in shader UVs, VFR sources on integer frames, P3 → Rec.709 tag. Accept: portrait, VFR and P3 goldens.
+- [ ] T15.3 [M] Long media: transcription and analysis as `job_`s with progress; streaming `events.json` index. Accept: a 60-minute synthetic take with flat memory.
+- [ ] T15.4 [L] Bounded memory: journal compaction, revisions spilled to disk. Accept: 10,000 batches < 200 MB; undo to any revision reproduces its hash.
+- [ ] T15.5 [L] Fuzz every decoder (typed errors, no panics); a 2,000-batch random stream over all rows with undo/redo holds invariants and replays; crash at every byte of save recovers.
+- [ ] T15.6 [M] = T7.6 notarization (HUMAN credentials).
+
+### T16 · Parameters and keys (0.3) [L]
+- [ ] T16.1 [L] Model: parameter paths, `Keys {frame, value, ease}` (linear, hold, in, out, inOut, cubic Bezier), format minor bump and migration. Accept: fixture round-trips, migration goldens.
+- [ ] T16.2 [L] `param.set`, `param.keys {target, path, keys, mode}`; describe lists keyable paths. Accept: easing goldens.
+- [ ] T16.3 [L+M] Overlay transform (position, rotation, opacity, anchor) and blend modes in `splice_gpu`. Accept: frame goldens, viewer/export parity ≤ 2/255.
+- [ ] T16.4 [L] Per-frame eval with 2,000 keys over 200 items allocates nothing; p99 measured and locked.
+
+### T17 · Timeline editing complete (0.3) [L]
+- [ ] T17.1 [L] `item.roll`, `item.slip`, `item.slide`, `audio.link`/`audio.unlink` (J/L cuts), `clip.join`, `clip.ungroup`, `clip.restore`, `lane.reorder`.
+- [ ] T17.2 [L] `clip.freeze`, speed ramps as `speed` keys with pitch kept, overlay retime.
+- [ ] T17.3 [L+M] `transition.add/set/remove`: dissolve, dip, wipe, push, slide, zoom; equal-power audio crossfade; `NO_HANDLES`.
+- [ ] T17.4 [L] `clip.compound`, `clip.uncompound`: nested timeline media, depth cap 4. Accept: round trip restores the hash.
+- [ ] T17.5 [L+M] Stills (PNG, JPEG, HEIC, GIF) via `clip.insert`; `generator.add` (solid, gradient, rect, ellipse, arrow, line, callout).
+
+### T18 · Look: color, masks, keying, text (0.3) [L + M]
+- [ ] T18.1 [L+M] `color` effect: exposure, contrast, saturation, vibrance, temperature, tint, highlights, shadows, `.cube` LUT. Accept: identity LUT is bit-exact.
+- [ ] T18.2 [L+M] `mask.add`, `mask.set` (rect, rounded, ellipse; cover, blur, pixelate, spotlight; feather, invert), `mask.track` via `VNTrackObjectRequest`. Accept: a blurred email fails OCR in the export.
+- [ ] T18.3 [M] `key` (chroma) and `cutout` (person segmentation matte) effects; camera bubble background blur/remove.
+- [ ] T18.4 [L+M] Text styles shared by titles and captions; word/character animators; 20+ caption presets; platform safe zones. Accept: preset goldens; 100 animated words allocate nothing.
+- [ ] T18.5 [L] `style.set` brand kit; `template.add`, `template.set` (lower-third, callout, cta, title-card, chapter-card).
+
+### T19 · Audio complete (0.3) [M + L]
+- [ ] T19.1 [L] Fades and crossfades on sounds; `volume`/`pan` keys; lane volume, mute, solo; ducking as visible keys.
+- [ ] T19.2 [M] `eq`, `compressor`, `gate`, `voiceIsolation` effects rendered offline (AVAudioEngine manual rendering). Accept: noise floor −15 dB, speech within 1 dB.
+- [ ] T19.3 [L] `cut.pauses`; filler and retake flags in `transcript.get`; review lists on `dryRun`.
+- [ ] T19.4 [L+M] `audio.sync` by envelope cross-correlation. Accept: a 1.37 s offset syncs within 1 frame.
+- [ ] T19.5 [M] Peaks, onsets/beats, SoundAnalysis labels in the analysis store.
+
+### T20 · Analysis and intents (0.3) [M + L]
+- [ ] T20.1 [M+L] `media.analyze {media, kinds}` (loudness, pauses, peaks, beats, sounds, shots, text, faces, people), cached by digest; `audio.summary` alias.
+- [ ] T20.2 [L] `intent.pace`, `intent.fitDuration`, `intent.keepShots`, `intent.autoZoom`, `zoom.set`, `crop.keys`, deterministic with dryRun review lists.
+- [ ] T20.3 [L] `captions.import` (SRT/VTT), `captions.translate {lane, language, texts?}`.
+
+### T21 · Output and interchange (0.3) [M + L]
+- [ ] T21.1 [M] Export presets: youtube, shorts, reels, tiktok, linkedin, ProRes 422/4444, HEVC alpha, audio m4a/wav, gif, poster; ranges, bitrate, fps, size.
+- [ ] T21.2 [M] `export.start {variants}`; chapter track from markers; soft captions and SRT/VTT sidecars.
+- [ ] T21.3 [L] `export.start {format:"fcpxml"}`, validated against the FCPXML 1.10 DTD.
+- [ ] T21.4 [L] `media.relink`, `media.consolidate`, `project.info {saveAs}`.
+- [ ] T21.5 [M] Export queue (2 concurrent), cancel removes partials, `DISK_FULL`, progress with fps/ETA.
+
+### T22 · Recording complete (0.3) [M]
+- [ ] T22.1 [M] Pause/resume (`record.stop {pause}`, `record.start {resume}`), markers during a take.
+- [ ] T22.2 [M] Voice-over (`source:"none"`, mic onto an audio lane at a frame) and camera-only takes.
+- [ ] T22.3 [L] Retakes: `retakeOf` links; `intent.keepShots` keeps the last attempt.
+- [ ] T22.4 [M] Fragmented writing; `kill -9` mid-take recovers.
+- [ ] T22.5 [M] Device lists in dryRun; exclude Splice windows and chosen apps.
+- [ ] T22.6 [M] 30-minute 4K60 soak: 0 dropped complete frames, drift ≤ 1 frame, flat memory.
+
+### T23 · Code mode and MCP (0.3) [L]
+- [ ] T23.1 [L] Describe index ≤ 12k chars with every row; golden plus size assert.
+- [ ] T23.2 [L] Multi-project revisions in `code.run`; job waits excluded from the 2 s wall.
+- [ ] T23.3 [L] `notifications/progress` and `notifications/cancelled`; `view.frames {sheet:true}` contact sheet.
+- [ ] T23.4 [L] Skill recipes per workflow, each run by the sweep.
+- [ ] T23.5 [L] Code-mode cost ≤ direct on every eval task.
+
+### T24 · Verification gate (0.3) [L + M]
+- [ ] T24.1 [L+M] Capability sweep: one deterministic code-mode program applies every row and preset, exports, frame-probes each feature, undoes to the start hash. A row missing from the sweep fails the parity test.
+- [ ] T24.2 [M] Evals: tutorial-polish, podcast-clean, talking-head, broll-story, voiceover, hand-off; all 11 pass 3/3 in both arms.
+- [ ] T24.3 [L+M] Budgets table as tests (plan §4 P9).
+- [ ] T24.4 [L+M] Chaos: kill -9 during save, export and record; disk full; 1,000 writer-handoff races.
+
 ## Log
 
 Append one line per loop iteration: date, task, result, commit, wall time of the checks.
@@ -369,3 +458,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-19 · defects · 3a99937 · captions.generate follows a take split earlier in the batch; a pinned item spanning a ripple cut loses the removed frames (sample watermark 660 → 651). Regression test fails without the fix.
 - 2026-11-19 · T7.6 · built, notarization HUMAN · `make dmg` on the Mini: Splice-0.1.0.dmg 9.0 MB, Developer ID signed, app verifies and runs from the mounted image; spctl: "Unnotarized Developer ID" until a notarytool profile exists.
 - 2026-11-19 · defects measured · 5c9bffc · tighten-talk re-run, both arms at HEAD, n=3: 6/6 pass; the captions-after-cut and project-duration reports no longer appear (filed in earlier rounds). One new report fixed: code.run adopts the first project it opens and session it starts as defaults.
+- 2026-11-19 · 0.3 plan · accepted · 5sn6awbkq9ae: D5–D11, board T15–T24 (48 tasks).
