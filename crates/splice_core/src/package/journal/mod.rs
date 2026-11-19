@@ -43,6 +43,8 @@ pub struct Journal {
     // segments on disk if a measured journal passes 50 MB.
     records: Vec<Record>,
     problem: Option<PackageError>,
+    /// The (rev, hash) `project.json` holds, so an unchanged close writes nothing.
+    saved: (u64, u64),
 }
 
 impl Journal {
@@ -59,6 +61,7 @@ impl Journal {
             origin: project.clone(),
             records: Vec::new(),
             problem: None,
+            saved: (project.rev, project.hash),
         };
         Ok((journal, project.clone()))
     }
@@ -126,6 +129,7 @@ impl Journal {
                     origin: checkpoint.clone(),
                     records: Vec::new(),
                     problem,
+                    saved: (checkpoint.rev, checkpoint.hash),
                 };
                 return Ok((journal, checkpoint));
             }
@@ -147,6 +151,7 @@ impl Journal {
             origin,
             records: recovered.records,
             problem,
+            saved: (checkpoint.rev, checkpoint.hash),
         };
         Ok((journal, recovered.project))
     }
@@ -239,7 +244,12 @@ impl Journal {
     /// Saves a checkpoint at the verified tip without rewriting the journal.
     pub fn checkpoint(&mut self, project: &Project) -> Result<(), PackageError> {
         self.check_tip(project)?;
-        self.package.save(project)
+        if self.saved == (project.rev, project.hash) {
+            return Ok(());
+        }
+        self.package.save(project)?;
+        self.saved = (project.rev, project.hash);
+        Ok(())
     }
 
     /// Checkpoints the live state and releases the writer lock.

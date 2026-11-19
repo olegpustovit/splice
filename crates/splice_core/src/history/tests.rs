@@ -515,3 +515,61 @@ fn budget_open_an_hour_long_five_thousand_item_project() {
     );
     assert!(peak < 300_000_000, "open peaked at {peak} bytes");
 }
+
+/// T24.4 chaos: 1,000 rounds of two writers racing to open the same package. Each open is either
+/// the one writer or `LOCKED` (never both at once). Every tenth round the winners also write a
+/// batch (fsynced writes cost ~4 ms each, so not every round), and every one of those lands.
+#[test]
+fn writer_races_never_share_a_package_or_lose_a_batch() {
+    let temp = Temp::new("writer-races");
+    Store::create(&temp.0, &Project::default())
+        .unwrap()
+        .close()
+        .unwrap();
+    let path = std::sync::Arc::new(temp.0.clone());
+    let holders = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let mut wins = 0u64;
+    for round in 0..1_000u32 {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let racers: Vec<_> = (0..2u32)
+            .map(|racer| {
+                let (path, holders, barrier) = (path.clone(), holders.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let mut store = match Store::open(&path) {
+                        Ok(store) => store,
+                        Err(error) => {
+                            assert_eq!(error.code, "LOCKED");
+                            return (0u64, 0u64);
+                        }
+                    };
+                    let inside = holders.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    assert_eq!(inside, 0, "two writers held the package");
+                    let writes = round % 10 == 0;
+                    if writes {
+                        let at = round * 2 + racer;
+                        let op =
+                            splice_json::parse(&format!(r#"{{"cmd":"marker.add","at":{at}}}"#))
+                                .unwrap();
+                        store
+                            .apply(std::slice::from_ref(&op), &WriteOptions::default())
+                            .unwrap();
+                    }
+                    holders.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    store.close().unwrap();
+                    (1, u64::from(writes))
+                })
+            })
+            .collect();
+        let (opened, wrote) = racers
+            .into_iter()
+            .map(|racer| racer.join().unwrap())
+            .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+        assert!(opened >= 1, "round {round}: nobody got the package");
+        wins += wrote;
+    }
+    let store = Store::open(&temp.0).unwrap();
+    assert!(store.problem().is_none());
+    assert_eq!(store.project().markers.len() as u64, wins);
+    assert_eq!(store.project().rev, wins);
+}

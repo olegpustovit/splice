@@ -272,13 +272,17 @@ impl Package {
     }
 
     fn record_owner(&mut self) -> Result<(), PackageError> {
-        let host = std::process::Command::new("hostname")
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .unwrap_or_default();
-        let host = host.trim();
+        // One `hostname` process per process, not per open (it cost ~3 ms each time).
+        static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let host = HOST.get_or_init(|| {
+            std::process::Command::new("hostname")
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|host| host.trim().to_owned())
+                .unwrap_or_default()
+        });
         if host.is_empty() {
             return Err(PackageError::invalid(
                 &"could not determine the local hostname",
@@ -311,7 +315,7 @@ impl Package {
             .set_len(0)
             .and_then(|()| self.lock.seek(SeekFrom::Start(0)))
             .and_then(|_| self.lock.write_all(&owner))
-            .and_then(|()| self.lock.sync_all())
+            // The record is a diagnostic (flock does the locking), so it is not fsynced.
             .map_err(|error| PackageError::io(&path, error))
     }
 }
@@ -323,7 +327,7 @@ fn saved_for_other_snapshot(saved: &Json, snapshot: &Json) -> Result<bool, Packa
 impl Drop for Package {
     fn drop(&mut self) {
         if self.owns_record
-            && let Err(error) = self.lock.set_len(0).and_then(|()| self.lock.sync_all())
+            && let Err(error) = self.lock.set_len(0)
         {
             eprintln!("splice: {}: {error}", self.path.join("lock").display());
         }
