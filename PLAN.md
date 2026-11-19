@@ -383,6 +383,109 @@ coverage; visual rows a frame golden; hot paths an allocation proof and a measur
 - [x] T24.3 [L+M] Budgets table as tests (plan §4 P9). — apply p99 < 1 ms and warm edits of every new edit row 0 allocations (ed81d09); keyed eval 0 allocations, p99 ~1.9 µs locked at 100 µs; open 1 h / 5,000 items 60 ms, 20 MB; 1080p60 full-stack export 2.7–2.9× realtime; transcription 53.9× and analysis 77.6× realtime; 4K full-stack warm compose p90 14.7–15.6 ms on the shared M1 Mini (< 16 ms), after hardware source-over blending, culling layers under opaque full-canvas fills and a mask bounding-box early-out (was 20.1 ms). The 4K and export budgets run as serial gpu_ cases.
 - [x] T24.4 [L+M] Chaos: kill -9 during save, export and record; disk full; 1,000 writer-handoff races. — 1bd96f0, 3be88d1 · kill -9 during apply (40 rounds) reopens whole; 1,000 writer races never share a package; save cut at any byte (bcb3b1e).
 
+## 0.4 decisions (2026-11-19) · "Looks right, headless"
+
+Sources: test-drive report and proposal https://artifacts.microapps.space/a/0qn1qr0559nx; prior-art
+corrections https://artifacts.microapps.space/a/5tqswvaqk2r3. The research changes the proposal in
+eight places; the board below already carries the changes.
+
+- **D12 One camera per timeline** (research: timeline, not per clip). Motion items, click zoom and
+  auto zoom only produce camera segments in timeline time; one analytic spring per channel
+  (amount, center) chases step targets. Outside segments: amount 1, center held. Pre-aim while
+  amount ≤ 1.0005; bounce-out guard (amount ≥ 1). Center in travel space [0,1]². Invariant:
+  **viewport ⊂ content and focus visible**; `frame` mode lets the card overflow the canvas.
+- **D13** Camera mode `content` (fixed frame, UV zoom inside; default for portrait windowed takes)
+  | `frame` (the card zooms, may overflow).
+- **D14 One backdrop.** The background is drawn once per frame; every opacity-based transition
+  composites the incoming side as one flattened group (research: always, not only when frames
+  differ). Transitions consume handles and never change length; `NO_HANDLES` names the fix.
+- **D15 Activity is a signal.** Smart ops take `basis: auto|transcript|activity`; `auto` falls back
+  to activity. Idle = events, frame diff and audio all quiet; keep head and tail visible.
+- **D16 Text is an item** with inline `box`, `style`, `in`/`out`/`loop`; presets compile to keys.
+- **D17 Escape hatch is gated.** HTML/Lottie/SVG stay behind a measured determinism gate (0.4.x).
+- **D18 The editor enforces quality.** Lints come back with every `apply`/`dryRun`; `view.check`
+  adds pixel checks; errors carry `{param, got, expected, fix}`.
+- **D19 Privacy by default.** dryRun omits window titles unless `titles:true`; key text policy is
+  human-only.
+- **D20 Keys are eased by default** (`inOut`); springs are `{spring:{duration, bounce}}`.
+- **D21 Ripple keeps connected items.** Deleting a whole parent cascades; a partial cut re-parents
+  overlays to the nearest surviving clip (FCP policy); results list what moved and why.
+
+### T36 · 0.3.1 hotfix: the artifacts users see [L + M]
+- [ ] T36.1 [L] Transitions: Background never blended or moved; backing look applied once (H7); wipe matte multiplies shadow and cursor; push/slide show the backdrop, not black. Accept: 6 kinds × window goldens, backdrop constant ±2/255.
+- [ ] T36.2 [L] Title fades default 0; fades/dips go to the backdrop, not black (T27.5).
+- [ ] T36.3 [L] Transition validation on every path (H9): generic `effect.*`/`param.*`, length ≤ neighbors, not on the first clip, not project/lane scope.
+- [ ] T36.4 [L] No silent keys: every schema param keyed through one `sample(t)` path or refused `NOT_KEYABLE`; enumerate-and-render test; agent keys default `inOut`.
+- [ ] T36.5 [M] Captions: stroke under fill (H8); second line not clipped; active color rendered.
+- [ ] T36.6 [L] Motion items hold `to` after they end; `MOTION_ENDS_ZOOMED` warning when `to ≠ 1`.
+- [ ] T36.7 [L] Errors carry the rule: `{param, got, expected, fix}` on every BAD_ARGS; `UNKNOWN_PARAM` with `didYouMean`.
+- [ ] T36.8 [L] Docs, TS types and ranges generated from `effects.json` and validators; test fails on any mismatch (M8).
+- [ ] T36.9 [L] Build identity: `serverInfo.version = <crate>+<sha>[-dirty]`.
+- [ ] T36.10 [M] Recording discoverability: `window:{app}` in descriptions and fixes; dryRun omits titles unless `titles:true`.
+
+### T37 · Edit-model correctness (report §4) [L]
+- [ ] T37.1 [L] C1 project-unique word IDs `w:<media>:<n>` with migration; cues break at clip boundaries.
+- [ ] T37.2 [L] H1 overlay double move; H2 gap/past-end placement; H2b cut of a whole range cascades; timeline length = spine (titles past the end trimmed or refused).
+- [ ] T37.3 [L] D21 partial cuts re-parent anchored items; `connected:"reparent"|"delete"|"trim"`; result lists moved/removed items with causes.
+- [ ] T37.4 [L] H3 word anchors resolve to clip anchors; H4 freeze = speed 0 (no OUT_OF_SOURCE after); H5 duplicate keeps captions on the copy.
+- [ ] T37.5 [L] M1 3-frame minimum on every edit; M2 overlay source in media frames; M3 overlays stop at media end; M4 join seams rebase on split; M5 compound with item anchors; M6 end-edge anchors on split; M7 `keepShots` needs a range.
+- [ ] T37.6 [L] M17 `style.set` doesn't enable windows; M18 `effect.add` checks components; M19 ripple shortens anchored items before bumping, bump report carries a cause; M21 lane/project transform applies or is refused.
+- [ ] T37.7 [L] H10 cancel only stops the job its request started, watch list bounded; M10 enrich resolves `$ref`s and runs in `splice apply`; M11 sidecars honour range/overwrite; M12 variant name collision; M13 consolidate only on commit; M14 relink re-probes; M16 recovery skips takes still being written.
+- [ ] T37.8 [L] Low list: silent clamps → errors; `marker.add` past end; negative `cut.range from`; SRT hour overflow; friction-log unwrap; `catch_unwind` per request; idle undo reports nothing to undo.
+
+### T38 · Camera (D12, D13) [L + M]
+- [ ] T38.1 [L] Camera model: timeline segments `{from,to,amount,center|follow,mode,spring}`; analytic spring per channel (focused k205/c33.3/m1.5, smooth ~0.9 s); pre-aim; bounce-out guard; hold-center zoom-out; travel-space clamp. Accept: step golden vs reference; 0 allocations; 2,000 segments p99 < 50 µs.
+- [ ] T38.2 [L] Placement: `content` mode samples UV inside a fixed frame; `frame` mode scales the card. Property test: 10,000 random segments, viewport ⊂ content.
+- [ ] T38.3 [L] Producers: `motion.*`, `zoom.set`/click zoom and `intent.autoZoom` write camera segments; the old click-zoom curve and Picture scale/focus go; load-time migration of motion items.
+- [ ] T38.4 [L] Auto zoom v2: lead 0.3 s, tail 2.5 s, merge ≤ 2.5 s, distance split < 0.25, 1.5× default (warn > 2.5×), dead zone 0.5 × 0.7, edge snap 0.25, `autoZoom.version`.
+- [ ] T38.5 [L] Backing never borrows camera/transform; one pivot convention. Accept: backdrop constant under camera moves.
+- [ ] T38.6 [L] API `zoom.add/set/remove {at,length,amount,center|follow,in,out,mode}`; describe reports `fitSafeScale`.
+
+### T39 · Cursor [L + M]
+- [ ] T39.1 [L] Smoothed 60 Hz table per take: decimate, shake filter (0.015 UV/100 ms), hold gaps > 67 ms, Mellow spring 470/3/70 with lead c/k, click lookahead 500 ms, click spring 530/1/40 for 175 ms; replaces the 0.25 s teleport rule.
+- [ ] T39.2 [L] Idle hide 2 s / fade 0.4 s / pre-roll 0.25 s; click 0.8× over 130 ms.
+- [ ] T39.3 [L] Synthesized paths for warps: seeded cubic Bézier (spread `arc`·clamp(D,2,200) px), minimum-jerk progress, Fitts duration a=0.2 s b=0.1 s/bit in [0.25,1] s, arrive 0.15 s early, no re-spring, overshoot off. Accept: 1,000 random anchor sets pass human heuristics; deterministic.
+- [ ] T39.4 [M] Pointer declarations `record.start {resume, pointer:{x,y,action}}` and `takes.events` injection after the fact.
+- [ ] T39.5 [L] Cursor params keyable/size + `hideWhenIdle`, `smoothing`, `clickPulse`, `path`, `arc`, `arriveBefore`.
+
+### T40 · One backdrop, group transitions (D14) [L + M]
+- [ ] T40.1 [L] Backdrop drawn once per frame; clips render content inside their frame.
+- [ ] T40.2 [M] Group compositing: outgoing stack drawn direct, incoming into one pooled offscreen, composited at t (premultiplied). Accept: dissolve black→black over blue backdrop stays black; 4K warm compose p90 < 16 ms.
+- [ ] T40.3 [L] Transitions consume handles (no length change); `NO_HANDLES {need, have, fix}`; OTIO invariants (no overlap, no adjacent transitions on one clip).
+- [ ] T40.4 [L] New content-only kinds: `whip`, `zoomPunch`, `swipe`.
+
+### T41 · Activity editing for silent takes (D15) [L]
+- [ ] T41.1 [L] `media.analyze {kinds:["activity"]}`: idle/typing/clicks/scroll ranges from events (+ frame diff on macOS), no characters.
+- [ ] T41.2 [L] `intent.steps` (markers or activity bursts as steps; keep [step−lead, last activity+settle]; cut gaps > maxGap; drop `retake:` attempts; dryRun list).
+- [ ] T41.3 [L] `basis` on `cut.pauses`, `intent.pace`, `intent.fitDuration`; `auto` falls back to activity; better NO_TRANSCRIPT fix.
+- [ ] T41.4 [L] `intent.speedTyping {factor, minRun}` as eased speed keys.
+- [ ] T41.5 [L] Free-text caption cues (`text, from, to`) so SRT import and agent captions work on silent takes.
+
+### T42 · Text & motion, native (D16, D20) [L + M]
+- [ ] T42.1 [L] Eases: `{spring:{duration,bounce}}` (closed form, settle time reported), `back`, `elastic`, `bounce`, `steps(n)`; keys default `inOut`.
+- [ ] T42.2 [L] `title.add/set` inline `box{x,y,w,h,fit,wrap}`, `style`, `in`/`out`/`loop` compiling to text/animate/transform effects; result returns final and swept bounds.
+- [ ] T42.3 [M] Text layout: wrap, shrink-to-fit, no truncation, emoji kept; units by grapheme cluster.
+- [ ] T42.4 [L] One z-order (higher = front) and `item.order`; lane/project transforms apply as parents.
+- [ ] T42.5 [L] `motion.preset {items, preset}` writing ordinary keys (bounceIn, shake, pulse, float, wiggle, pop).
+- [ ] T42.6 [L] Templates use brand colors and safe zones.
+
+### T43 · QA loop (D18) [L]
+- [ ] T43.1 [L] Lints in every `apply`/`dryRun`: zoom ≠ 1 at an item's end, text bounds vs safe zone and window, transition on windowed clip without handles, title past the timeline, pacing stats (cut rate, longest static) vs profile.
+- [ ] T43.2 [L] `view.check {from,to,checks}` (macOS): off-canvas content, black/frozen spans, camera jump, cursor teleport, transition bleed; returns issues + contact sheet. Versioned `safeZone:"tiktok-2026"`.
+- [ ] T43.3 [L] `view.frames {strip}` motion strip with difference heatmap.
+
+### T44 · Evals & gates [L + M]
+- [ ] T44.1 [M] `silent-demo-short` eval (silent take → 15–25 s short; every action kept; zero lint errors; cursor continuous; no zoom snap; clean transitions).
+- [ ] T44.2 [M] `tutorial-steps` eval (retake removed) and window-transition goldens (6 kinds × window).
+- [ ] T44.3 [L] One regression test per report bug id (C1–M23), named after it.
+- [ ] T44.4 [M] All evals 3/3 both arms; budgets stay green.
+
+### 0.4.x (gated or asset-bound; not in the 0.4 exit)
+- T45.1 HTML escape hatch (HyperFrames-compatible seek contract) behind a determinism gate on macOS.
+- T45.2 Native Lottie/SVG/GIF vector engine (ThorVG-class): needs a dependency decision (std + cc rule).
+- T45.3 Bundled CC0 music/SFX library: needs curated, licensed assets.
+- T45.4 Particles, counters, look packs, glyph atlas per-glyph quads, caret track via AX.
+
 ## Log
 
 Append one line per loop iteration: date, task, result, commit, wall time of the checks.
