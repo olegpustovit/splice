@@ -204,8 +204,8 @@ Depends on T1.3, T4.1, T7.
 - **D1** Start the M3 compositor inside 0.2. It renders on **OGPU** (PXUI's portable GPU layer:
   Metal now, Vulkan later), sharing the viewer's device and textures, with decoded frames imported
   zero-copy (IOSurface on macOS, dmabuf on Linux). The layer plan (ramps, zoom keyframes, cursor
-  tables) is portable Rust. Amended 2026-11-19: the first cut renders with Core Image inside a custom
-  `AVVideoCompositing` as an interim `ponytail:` (T12.1); T12.7 moves it to OGPU.
+  tables) is portable Rust. Amended 2026-11-19: the first cut rendered with Core Image (T12.1);
+  T12.7 replaced it, so OGPU (`splice_gpu`) now draws the viewer, frame grabs and export.
 - **D2** `quickjs_sys` (vendored QuickJS-NG, built by `cc`) is allowed, behind a gate allowlist
   entry with measured binary size and build time.
 - **D3** Code mode is a tool profile, `splice mcp --code` (`code.run` + `commands.describe`), so
@@ -251,7 +251,7 @@ cut logs one "try it as a user" line.
   stroke, wallpaper presets.
 - [x] T12.5 (5cc7409) Keystroke chips (timed text) and the rounded, shadowed camera bubble.
 - [ ] T12.6 `intent.reframe {aspect}`: crop to the active window or area, no letterbox bands.
-- [ ] T12.7 OGPU compositor: `ogpu_metal` IOSurface import (the macOS twin of `import_dmabuf`), a
+- [x] T12.7 (ef451c1, eea9f2c) OGPU compositor: `ogpu_metal` IOSurface import (the macOS twin of `import_dmabuf`), a
   portable `splice_gpu` renderer for the layer plan (MSL now, SPIR-V with Vulkan), used by the viewer
   (zero-copy into its texture), frame grabs and export. Follow ../rays: the app leases one OGPU
   device that PXUI's `Renderer` borrows; composited textures reach PXUI as `pxui::Image`s from
@@ -341,3 +341,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-19 · T3.6 · done · ce3f118 · tools/eval.py with 5 outcome tasks. Linux baseline with claude: tighten-talk, undo-session and crop-and-frame pass (11–16 calls, 34–42 s each). tiktok-textedit and music-duck need the Mac and T13.
 - 2026-11-19 · T12.1–T12.5 · done (interim renderer) · 5cc7409 · Cursor, click rings, eased click zoom toward the click, window corners and shadow, keystroke chips and export text render through a custom compositor. `cargo t -p splice_av native_take` 0.30 s on the Mini. `make mac-check` green; window_program_4k 8.2 ms against an 8 ms budget (4.1–4.5 ms before, measured side by side), which T12.7 fixes by moving the renderer to OGPU.
 - 2026-11-19 · T14 merged · da57597 · Code mode on QuickJS-NG; goldens re-blessed against the 0.2 command table. `make check` 3.36 s (98 tests); `make mac-check` green.
+- 2026-11-19 · T12.7 · done · ef451c1, eea9f2c · One OGPU renderer (`splice_gpu`) for the viewer, frame grabs and export; the custom compositor only pins decoded buffers. Export is a main-thread stepper (OGPU's Metal handles live there): AVAssetReader → OGPU → AVAssetWriter with the audio mix alongside. Rec. 709 tagging keeps grabs and MP4s equal: check-macos-export.sh 0.23–0.56/255 (was 1.55). window_program_4k 7.6–7.9 ms at load 8.5–9.5, zero warm allocations. `make mac-check` green. Open: decoded frames are copied once on the GPU (an OGPU `rewrap_texture` would make it zero-copy); MSL only until Linux gets a decoder.
