@@ -99,7 +99,8 @@ def run_agent(agent, prompt, work, code=False):
         cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
                "--mcp-config", json.dumps(MCP), "--strict-mcp-config",
                "--allowedTools", "mcp__splice", "--permission-mode", "bypassPermissions"]
-    out = sh(cmd, cwd=ROOT, timeout=1800)
+    # The agent must not read the caller's stdin (under `ssh … bash -s` that is the rest of the script).
+    out = sh(cmd, cwd=ROOT, timeout=1800, stdin=subprocess.DEVNULL)
     with open(os.path.join(work, "agent.jsonl"), "w") as f:
         f.write(out.stdout)
     calls = errors = recoveries = tokens = 0
