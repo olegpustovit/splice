@@ -900,3 +900,87 @@ fn code_run_reports_revisions_for_every_project_it_touched() {
         ("r7".into(), "r8".into())
     );
 }
+
+/// T24.1: every registry row, then a layered batch, then a session undo, in one code.run.
+#[test]
+fn capability_sweep_applies_every_row_and_restores_the_start() {
+    let root = TestDirectory::new("sweep");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    let setup = |id: &str| -> &'static str {
+        match id {
+            "clip.join" => r#"[{"cmd":"item.split","item":"clp_take","at":300,"ref":"cut"}]"#,
+            "clip.ungroup" => {
+                r#"[{"cmd":"item.split","item":"clp_take","at":300,"ref":"cut"},{"cmd":"clip.join","items":["clp_take","$cut.right"]}]"#
+            }
+            "clip.restore" => r#"[{"cmd":"cut.range","from":200,"to":230}]"#,
+            "mask.set" | "mask.track" => r#"[{"cmd":"mask.add","item":"clp_take","ref":"mask"}]"#,
+            "audio.link" | "audio.sync" => {
+                r#"[{"cmd":"audio.unlink","item":"clp_take","ref":"voice"}]"#
+            }
+            "clip.uncompound" => {
+                r#"[{"cmd":"clip.compound","items":["clp_take","clp_end"],"ref":"compound"}]"#
+            }
+            "transition.set" | "transition.remove" => {
+                r#"[{"cmd":"transition.add","item":"clp_take"}]"#
+            }
+            "template.set" => {
+                r#"[{"cmd":"template.add","name":"lower-third","at":150,"ref":"lower"}]"#
+            }
+            "item.slide" => r#"[{"cmd":"item.trim","item":"clp_end","edge":"in","delta":12}]"#,
+            "caption.set" | "caption.split" | "caption.merge" => "[]",
+            _ => "[]",
+        }
+    };
+    let mut rows = String::from("[");
+    for (index, row) in splice_core::commands::COMMANDS.iter().enumerate() {
+        if index > 0 {
+            rows.push(',');
+        }
+        rows.push_str(&format!(
+            "[\"{}\",{},{}]",
+            row.id,
+            row.example,
+            setup(row.id)
+        ));
+    }
+    rows.push(']');
+    let program = fs::read_to_string(mcp_fixtures().join("../../evals/sweep.js"))
+        .unwrap()
+        .replace("ROWS", &rows)
+        .replace("SAMPLE", &format!("{:?}", sample.to_str().unwrap()));
+    let mut code = String::new();
+    splice_json::write(&Json::String(program), &mut code).unwrap();
+    let call = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"code.run","arguments":{{"code":{code}}}}}}}"#
+    );
+    let init = r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"sweep","version":"0"}}}"#;
+    let mut output = Vec::new();
+    rpc::serve_with_log(
+        &mut Cursor::new(format!("{init}\n{call}\n").into_bytes()),
+        &mut output,
+        None,
+        true,
+    )
+    .unwrap();
+    let output = String::from_utf8(output).unwrap();
+    let reply = splice_json::parse(output.lines().nth(1).unwrap()).unwrap();
+    let content = reply
+        .field("result")
+        .and_then(|r| r.field("structuredContent"))
+        .unwrap_or_else(|| panic!("{output}"));
+    let result = content
+        .field("result")
+        .unwrap_or_else(|| panic!("{output}"));
+    let count = |key: &str| result.field(key).and_then(Json::as_u64).unwrap();
+    let failures = result.field("failures").unwrap().as_array().unwrap();
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(count("rows"), splice_core::commands::COMMANDS.len() as u64);
+    assert_eq!(count("applied"), count("rows"));
+    assert!(count("batchChanges") >= 12);
+    assert_eq!(
+        result.field("restored"),
+        Some(&Json::Bool(true)),
+        "{output}"
+    );
+}

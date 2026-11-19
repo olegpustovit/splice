@@ -36,6 +36,9 @@ has the project open in the viewer, they see your edits as you make them.
   `mic`, `systemAudio`, `camera` and `events:true`. Set `duration` for unattended runs.
 - `record.stop {jobId}`: the take lands on the spine as one undoable batch, with its cursor, clicks
   and keys as components you can query (`takes.events`) and edit.
+- Pause with `record.stop {jobId, pause:true}`, resume with `record.start {resume:jobId}`, and
+  drop a marker with `record.start {resume:jobId, marker:"Name"}`. `voiceover:true, at` records
+  the mic onto an audio lane; `retakeOf` places a retake after the earlier take.
 - `TCC_DENIED` with `needsHuman:true`: stop and tell the human the exact fix. Don't retry in a loop.
 
 ## When a call fails
@@ -46,7 +49,8 @@ Errors come back as results: `{code, message, fix, current?, valid?}`.
 - `STALE_REVISION`: a human (or another agent) edited. Re-read with `timeline.snapshot`, re-check your
   intent against the new state, then retry with the new `ifRevision`. Never retry blindly.
 - `BAD_ARGS` / `OUT_OF_RANGE`: the `valid` field lists accepted values or ranges.
-- `PLANNED`: that command is in the registry but not built yet. Use the alternatives `commands.describe` lists.
+- `NEEDS_TEXT` (captions.translate), `NO_HANDLES` (roll, slip, slide), `FIT_IMPOSSIBLE`
+  (intent.fitDuration): the fix says what to pass or change.
 - Pass the same `idempotencyKey` when you retry after a transport error.
 
 ## Report friction (this is how Splice improves)
@@ -68,3 +72,28 @@ and the argument.
 <!-- Maintained by the build loop (docs/LOOP.md). One line each, citing a friction ID; deleted once a
 core change makes the line unnecessary. -->
 - (none yet)
+
+## Recipes
+
+Each recipe is a few batches; `commands.describe {query}` gives every command's full types.
+The capability sweep runs these exact ops, so they stay correct.
+
+- **Tutorial (screen take):** `cursor.set {size:2}`; `intent.autoZoom {item}` (clicks and typing
+  come from the take); `media.analyze {kinds:["text"]}` to find on-screen labels; `mask.add
+  {item, mode:"blur", x, y, w, h}` over anything private; `template.add {name:"lower-third"}`;
+  `marker.add` per chapter; `captions.generate`; export `variants:[{aspect:"16:9"},{aspect:"9:16"}]`.
+- **Podcast:** `audio.sync {item, to}` for a second mic; `transcript.get` lists `fillers` and
+  `retakes`, cut them with `cut.words`; `cut.pauses {min:21}`; `effect.add {type:"voiceIsolation"}`
+  and `{type:"compressor"}` on the voice; `audio.set {normalize:-16}`; export `audio-m4a` plus
+  the video.
+- **Talking head:** `effect.add {type:"cutout", params:{background:"blur"}}` after
+  `media.analyze {kinds:["matte"]}`; `crop.keys {item, follow:"face", aspect:"9:16"}`;
+  `effect.add {type:"color", params:{lut:"look.cube"}}`; `audio.unlink` then trim the sound for a
+  J-cut.
+- **B-roll story:** `clip.insert {path:"photo.heic"}` for stills; `param.keys {path:"transform.scale",
+  keys:[…]}` for Ken Burns moves; `transition.add {item, kind:"dissolve"}` between clips;
+  `media.analyze {kinds:["beats"]}` on the music and cut on the beats; `style.set` then
+  `template.add {name:"title-card"}`.
+- **Hand-off:** `export.start {format:"fcpxml"}` for Final Cut Pro, `{preset:"prores-422"}` for a
+  master, `{captions:"srt"}` for a sidecar.
+
