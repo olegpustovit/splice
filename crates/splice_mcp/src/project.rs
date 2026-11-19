@@ -3,7 +3,7 @@ use splice_core::{
     history::{Store, StoreError},
     package,
 };
-use splice_model::{Access, Aspect, LaneKind, Media, MediaId, MediaKind, Project};
+use splice_model::{Access, Aspect, JobId, LaneKind, Media, MediaId, MediaKind, Project};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -13,6 +13,10 @@ use std::{
 pub(super) struct Projects {
     open: Vec<OpenProject>,
     viewer_only: bool,
+    /// Exports that finish at once (FCPXML, poster, GIF): job ID, owner project, final status.
+    pub(super) finished: Vec<(JobId, String, Json)>,
+    /// Export job IDs issued so far, running or finished.
+    pub(super) export_serial: u64,
     #[cfg(target_os = "macos")]
     pub(super) exports: Vec<super::export::Job>,
     #[cfg(target_os = "macos")]
@@ -62,11 +66,30 @@ impl OpenProject {
 }
 
 impl Projects {
+    /// The next export job ID (running and instant exports share one sequence).
+    pub(super) fn next_export_id(&mut self) -> JobId {
+        self.export_serial += 1;
+        JobId::from_serial(self.export_serial)
+    }
+
+    /// Records an export that finished at once, so jobs.status reports it like any job.
+    pub(super) fn finish_export(&mut self, project: &str, mut receipt: Json) -> Json {
+        let id = self.next_export_id();
+        if let Json::Object(fields) = &mut receipt {
+            fields.insert(0, ("jobId".into(), Json::String(id.to_string())));
+        }
+        self.finished
+            .push((id, project.to_owned(), receipt.clone()));
+        receipt
+    }
+
     #[cfg(any(target_os = "macos", test))]
     pub(super) fn viewer(store: Store) -> Self {
         Self {
             open: vec![OpenProject::Local(store)],
             viewer_only: true,
+            finished: Vec::new(),
+            export_serial: 0,
             #[cfg(target_os = "macos")]
             exports: Vec::new(),
             #[cfg(target_os = "macos")]

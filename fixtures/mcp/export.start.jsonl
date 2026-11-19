@@ -5,4 +5,6 @@
 > {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"export.start","arguments":{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r0","preset":"social-h264"}}}
 < {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"error":{"code":"UNSUPPORTED_PLATFORM","message":"…","fix":"…"}},"isError":true}}
 > {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"export.start","arguments":{"projectId":"prj_1","ifRevision":"r0","format":"fcpxml","overwrite":true}}}
-< {"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"output":"…","settings":{"format":"FCPXML 1.10"}},"isError":false}}
+< {"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"jobId":"job_1","state":"done","output":"…","settings":{"format":"FCPXML 1.10"}},"isError":false}}
+> {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"jobs.status","arguments":{"projectId":"prj_1","jobId":"job_1","wait":5}}}
+< {"jsonrpc":"2.0","id":5,"result":{"structuredContent":{"jobId":"job_1","state":"done","output":"…"},"isError":false}}

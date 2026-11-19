@@ -178,7 +178,10 @@ pub(super) fn export(projects: &mut Projects, args: &Json) -> Result<Json, Store
     store.check_write(&options)?;
     match args.optional_string("format")? {
         None | Some("video") => {}
-        Some("fcpxml") => return export_fcpxml(store, path),
+        Some("fcpxml") => {
+            let receipt = export_fcpxml(store, path)?;
+            return Ok(projects.finish_export(owner, receipt));
+        }
         Some(_) => return Err(bad("format", "video (default) or fcpxml")),
     }
     let end = super::timeline::duration(store.project())?;
@@ -200,13 +203,15 @@ pub(super) fn export(projects: &mut Projects, args: &Json) -> Result<Json, Store
     {
         let mut receipts = Vec::with_capacity(outputs.len());
         for output in outputs {
-            let id = JobId::from_serial(projects.exports.len() as u64 + 1);
             let store = projects.lookup_id(owner)?;
             match output.kind {
                 super::presets::Kind::Poster | super::presets::Kind::Gif => {
-                    receipts.push(super::export::still(store, &output, path, overwrite)?);
+                    let receipt = super::export::still(store, &output, path, overwrite)?;
+                    receipts.push(projects.finish_export(owner, receipt));
                 }
                 _ => {
+                    let id = projects.next_export_id();
+                    let store = projects.lookup_id(owner)?;
                     let job = super::export::Job::start(
                         store,
                         id,
@@ -333,6 +338,13 @@ fn job_once(projects: &mut Projects, name: &str, args: &Json) -> Result<Json, St
             job.step(super::rpc::EXPORT_SLICE);
         }
         return job.status(ahead >= super::project::CONCURRENT_EXPORTS);
+    }
+    // Instant exports (FCPXML, poster, GIF) are done jobs.
+    if let Some((_, owner, status)) = projects.finished.iter().find(|(job, ..)| *job == id) {
+        if project.is_some_and(|project| project != owner) {
+            return Err(missing_job(id));
+        }
+        return Ok(status.clone());
     }
     Err(missing_job(id))
 }
