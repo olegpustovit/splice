@@ -231,3 +231,29 @@ fn an_inserted_still_lasts_five_seconds() {
         .unwrap();
     assert_eq!((still.start, still.length), (120, 5 * project.fps as Frame));
 }
+
+#[test]
+fn compounds_nest_four_deep_and_no_deeper() {
+    let mut project = sample();
+    let wrap =
+        splice_json::parse(r#"[{"cmd":"clip.compound","items":["clp_take"],"ref":"c"}]"#).unwrap();
+    apply(&mut project, wrap.as_array().unwrap(), Source::Agent, false).unwrap();
+    for level in 2..=5 {
+        let slot = project
+            .clips
+            .order()
+            .iter()
+            .copied()
+            .find(|&slot| project.clips.timing(slot).unwrap().start == 120)
+            .unwrap();
+        let id = project.clips.id(slot).unwrap();
+        let op = splice_json::parse(&format!(r#"[{{"cmd":"clip.compound","items":["{id}"]}}]"#))
+            .unwrap();
+        let result = apply(&mut project, op.as_array().unwrap(), Source::Agent, false);
+        if level <= 4 {
+            result.unwrap();
+        } else {
+            assert_eq!(result.unwrap_err().error.code, "TOO_DEEP");
+        }
+    }
+}

@@ -127,6 +127,32 @@ Rules:
 - Markers may carry an optional `color` swatch. `project.set` keeps the canvas's shorter edge
   when it changes the aspect.
 
+### 0.3 additions (additive within `splice/1`)
+
+- **Keys.** Any numeric effect parameter may be keyed:
+  `{"keys":[{"at":0,"value":1,"ease":"inOut"},{"at":60,"value":1.4}]}`. `at` is a frame relative
+  to the owner's start (it may be negative), strictly increasing. `ease` is the curve toward the
+  next key: `linear` (default, omitted on write), `hold`, `in`, `out`, `inOut` or a cubic Bezier
+  `[x1, y1, x2, y2]`. Splitting, in-trimming or rolling an owner shifts its keys so they stay on
+  the same content.
+- **Effects** cover the look as well as the frame: `transform`, `crop` (keyed rect), `color`
+  (with an optional `.cube` `lut` path), `mask` (several per owner), `key`, `cutout`,
+  `transition` (on the incoming spine clip), `speed` (keyed `rate`; 0 is a freeze), `volume`, `eq`,
+  `compressor`, `gate`, `voiceIsolation`, `text`, `animate`, `shape`, `template` (groups the items
+  a template made) and `brand` (project style). `commands/effects.json` is the schema; every
+  writer and the validator check params against it.
+- **Shapes.** An item `{"kind":"shape","params":{"shape":"arrow","rect":{"x","y","w","h"}}}` on a
+  graphics lane; `shape` is `solid`, `gradient`, `rect`, `ellipse`, `arrow`, `line` or
+  `callout`. Its fill, stroke and corner radius are a `shape` effect.
+- **Stills.** Image media (`kind:"image"`) have no duration of their own: `probe.frames` is a
+  large sentinel and a clip of an image may have any length (5 s when inserted).
+- **Joins.** A clip made by `clip.join` carries `"joins":[frame, …]`, the offsets of the former
+  cuts, so `clip.ungroup` can split it back.
+- **Compounds.** `"compounds":[{"media":"med_…","clips":[…],"items":[…],"lanes":[…]}]` holds the
+  nested timelines of `clip.compound`; the compound's media entry has `kind:"compound"` and the
+  outer clip plays it like any media. `clip.compound` refuses nesting past 4 levels (`TOO_DEEP`);
+  an item that runs past the compounded clips stays outside, anchored to the compound clip.
+
 ## `journal.ops`
 
 One JSON object per line:

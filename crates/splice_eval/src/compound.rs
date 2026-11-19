@@ -13,17 +13,27 @@ pub(crate) fn flatten(project: &Project) -> Result<Option<Project>, EvalError> {
         return Ok(None);
     }
     let mut flat = project.clone();
-    for _ in 0..MAX_DEPTH {
-        let compound = flat.clips.order().iter().copied().find(|&slot| {
-            flat.clips
-                .data(slot)
-                .and_then(|data| data.media)
-                .is_some_and(|id| flat.compounds.iter().any(|c| c.media == id))
-        });
-        let Some(slot) = compound else {
+    // Each round expands every compound clip on the spine: one nesting level per round.
+    for _ in 0..=MAX_DEPTH {
+        let round: Vec<ClipId> = flat
+            .clips
+            .order()
+            .iter()
+            .filter(|&&slot| {
+                flat.clips
+                    .data(slot)
+                    .and_then(|data| data.media)
+                    .is_some_and(|id| flat.compounds.iter().any(|c| c.media == id))
+            })
+            .map(|&slot| flat.clips.id(slot).expect("live clip"))
+            .collect();
+        if round.is_empty() {
             return Ok(Some(flat));
-        };
-        expand(&mut flat, slot)?;
+        }
+        for id in round {
+            let slot = flat.clips.find(id).ok_or(EvalError::Range)?;
+            expand(&mut flat, slot)?;
+        }
     }
     Err(EvalError::Range)
 }
@@ -42,7 +52,18 @@ fn expand(flat: &mut Project, slot: Slot) -> Result<(), EvalError> {
         .find(|c| c.media == media)
         .ok_or(EvalError::Media(media))?
         .clone();
+    let id = flat.clips.id(slot).ok_or(EvalError::Range)?;
     flat.clips.remove(slot);
+    // Outer items anchored to the compound clip keep their frame once it is gone.
+    for index in 0..flat.items.order().len() {
+        let item = flat.items.order()[index];
+        let timing = flat.items.timing_mut(item).ok_or(EvalError::Range)?;
+        if let Anchor::ClipSource { clip, source } = timing.anchor
+            && clip == id
+        {
+            timing.anchor = Anchor::Pinned(outer.start + source - outer.source);
+        }
+    }
     let window = (outer.source, outer.source + outer.length);
     let offset = outer.start - outer.source;
     for mut clip in compound.clips {

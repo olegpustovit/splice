@@ -1987,6 +1987,19 @@ impl Editor {
             .timing(*slots.last().expect("clips"))
             .expect("live clip");
         let (start, end) = (first.start, last.start + last.length);
+        let deepest = slots
+            .iter()
+            .filter_map(|&slot| self.project.clips.data(slot).expect("live clip").media)
+            .map(|media| compound_depth(&self.project, media))
+            .max()
+            .unwrap_or(0);
+        if deepest >= MAX_COMPOUND_DEPTH {
+            return Err(error(
+                "TOO_DEEP",
+                &format!("Compound clips nest at most {MAX_COMPOUND_DEPTH} deep."),
+                "Uncompound an inner compound clip first with clip.uncompound.",
+            ));
+        }
         let media_id = MediaId::from_serial(self.mint("med")?);
         let mut clips = Vec::with_capacity(slots.len());
         let mut ids = Vec::with_capacity(slots.len());
@@ -2001,8 +2014,11 @@ impl Editor {
             });
             ids.push(id);
         }
-        // Items anchored inside move with the clips, pinned to the compound's clock.
+        // Items anchored inside move with the clips, pinned to the compound's clock. One that
+        // runs past the compound stays outside, anchored to the compound clip, so it still plays
+        // whole (the nested timeline would cut it at the compound's end).
         let mut inner_items = Vec::new();
+        let mut outside = Vec::new();
         for index in (0..self.project.items.order().len()).rev() {
             let slot = self.project.items.order()[index];
             let timing = self.project.items.timing(slot).expect("live item");
@@ -2010,6 +2026,10 @@ impl Editor {
                 && ids.contains(&clip)
             {
                 let span = time::item_span(&self.project, slot)?;
+                if span.start < start || span.end > end {
+                    outside.push((slot, span.start - start));
+                    continue;
+                }
                 let id = self.project.items.id(slot).expect("live item");
                 let data = self.project.items.data(slot).expect("live item").clone();
                 inner_items.push(Item {
@@ -2079,6 +2099,9 @@ impl Editor {
             })
             .ok_or_else(arena_full)?;
         self.project.clips.sort_by_start();
+        for (slot, source) in outside {
+            self.reanchor(slot, Anchor::ClipSource { clip, source });
+        }
         Ok(Outcome::create(
             format!("Made compound clip {clip} from {} clip(s)", slots.len()),
             Target::Timeline(TimelineId::Clip(clip)),
@@ -2335,6 +2358,26 @@ const TEMPLATES: &[Template] = &[
         lines: &[line("title", "Chapter", "middle", 0.07, "center", 0.0)],
     },
 ];
+
+/// The deepest nesting `clip.compound` makes; the evaluator flattens this many levels.
+const MAX_COMPOUND_DEPTH: usize = 4;
+
+/// How many compound levels a media holds: 0 for ordinary media.
+fn compound_depth(project: &Project, media: MediaId) -> usize {
+    project
+        .compounds
+        .iter()
+        .find(|compound| compound.media == media)
+        .map_or(0, |compound| {
+            1 + compound
+                .clips
+                .iter()
+                .filter_map(|clip| clip.data.media)
+                .map(|inner| compound_depth(project, inner))
+                .max()
+                .unwrap_or(0)
+        })
+}
 
 #[cfg(test)]
 mod retake_tests {

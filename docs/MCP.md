@@ -1,4 +1,4 @@
-# MCP contract (M1)
+# MCP contract (0.3)
 
 `splice mcp` speaks MCP over stdio: JSON-RPC 2.0, newline-delimited and hand-rolled (no SDK). It never
 opens UI. When a viewer has the target project open, the server forwards calls to the viewer over
@@ -46,23 +46,23 @@ errors. Invalid tool arguments and editor failures return `isError:true`.
 | --- | --- | --- | --- |
 | 1 | `project.info` | read | Open by `path` (`create:true` makes a new project) or by `projectId`: fps, size, duration, lanes, offline media, revision |
 | 2 | `timeline.snapshot` | read | Whole timeline with resolved frames and labels |
-| 3 | `items.inspect` | read | Full properties of IDs, including effects and their resolved values |
+| 3 | `items.inspect` | read | Full properties of IDs (`ids`, or `items`), including effects and their resolved values; an `fx_` ID returns that effect with its `owner` |
 | 4 | `timeline.find` | read | Query by kind, text, lane, range, word |
 | 5 | `takes.events` | read | Cursor, clicks and keys of a take, in timeline frames (keys redacted by policy) |
 | 6 | `transcript.get` | read | Words with IDs and timing; `captions: json\|srt\|vtt` |
-| 7 | `audio.summary` | read | Loudness, silences and pauses per clip |
-| 8 | `view.frames` | read | PNG frames at frames N from the export composition (what the agent sees = what export makes) |
+| 7 | `media.analyze` | read | Per clip or media, by `kinds`: loudness, pauses, peaks, beats, sounds, shots, text, faces, people, matte. Cached by file stamp; long media runs as a job. `audio.summary` stays an alias |
+| 8 | `view.frames` | read | PNG frames at frames N from the export composition (what the agent sees = what export makes); `sheet:true` returns one contact sheet |
 | 9 | `commands.describe` | read | The command registry: params, examples, status (built or planned) |
 | 10 | `session.start` | edit | A session id and a checkpoint revision |
 | 11 | `edit.apply` | edit | One atomic batch of registry commands; `dryRun`, `ifRevision`, `idempotencyKey` |
 | 12 | `history.list` | read | Revisions with labels, sources, sessions, and what each changed |
 | 13 | `history.undo` | edit | `scope: "last"` (the session's last batch) · `"session"` (all of it) · `"to"` + `revision` (restore that exact state). Always a new revision; undo an undo to redo |
 | 14 | `ui.show` | view | Playhead, selection, framing in a viewer if one is open; headless: `{applied:false, reason:"headless"}` |
-| 15 | `export.start` | edit | Export job, **no approval**. Default path `<project>.splice/exports/<name>-r<rev>.mp4`; refuses to overwrite unless `overwrite:true` |
+| 15 | `export.start` | edit | Export job, **no approval**: presets, `variants`, `range`, chapters, caption sidecars, `format:"fcpxml"`. Default path `<project>.splice/exports/<name>-r<rev>.mp4`; refuses to overwrite unless `overwrite:true` |
 | 16 | `jobs.status` | read | Progress and result of export, transcription and recording jobs |
 | 17 | `jobs.cancel` | edit | Cancel a job |
-| 18 | `record.start` | edit | Headless capture of a display, window or area, with mic, system audio, camera and input events, into a project (`create:true` makes one). `dryRun:true` lists sources and permission states without recording; `duration` auto-stops |
-| 19 | `record.stop` | edit | Finish recording: the take lands in `takes/` and on the spine as one undoable agent batch (`insert:false` keeps it in media only) |
+| 18 | `record.start` | edit | Headless capture of a display, window or area, with mic, system audio, camera and input events, into a project (`create:true` makes one). `dryRun:true` lists sources, devices and permission states without recording; `duration` auto-stops. Also voice-overs, retakes, `resume` with `marker`, `exclude`, `recover` |
+| 19 | `record.stop` | edit | Finish recording: the take lands in `takes/` and on the spine as one undoable agent batch (`insert:false` keeps it in media only); `pause:true` pauses instead |
 
 Changes from the prototype's 17 tools: no export approval (`NEEDS_APPROVAL` and `DENIED` are gone),
 `history.undo` gains `scope:"to"`, `project.info` opens by path, and the recording pair is added.
@@ -122,8 +122,13 @@ Agents cannot restore a revision that would change the project's access level.
 
 `takes.events` reports timeline frame numbers and source frame numbers. Key events expose their
 indexes, visibility and categories. Captured characters and raw key codes stay in the take.
-`audio.summary` returns track settings and labels transcript-derived pauses. Integrated loudness
-(LUFS) is measured natively at import; peaks and recorded take components report null.
+`media.analyze {clip|media, kinds}` returns track settings and transcript-derived pauses, plus the
+requested native kinds: `loudness`, `peaks`, `beats` (onsets and tempo), `sounds` (SoundAnalysis
+labels as runs), `shots`, `text` (Vision OCR with boxes), `faces`, `people` and `matte` (a person
+matte movie for `cutout`). Results are cached in `<package>/analysis/<media>/`, valid while the
+file's size and mtime match. Media over 10 minutes (or `async:true`) analyze as a job; poll
+`jobs.status`. A missing file is `MEDIA_OFFLINE`. `audio.summary` is an alias with no kinds.
+`transcript.get` also lists `fillers` and `retakes` (repeated phrases) for `cut.words`.
 
 `transcript.get {transcribe:true, sessionId}` recognizes a spine clip's speech on device
 (SpeechAnalyzer, macOS 26+; the first run downloads the language model) and commits the words as one
@@ -134,6 +139,18 @@ indexes, visibility and categories. Captured characters and raw key codes stay i
 A filmstrip of two or more samples spans the first through last timeline frames. Each result
 includes the full-size PNG as a local `file:` resource under the package cache, plus an inline
 PNG with a longest edge of up to 640 pixels. Out-of-range frame numbers return `OUT_OF_RANGE`.
+`sheet:true` tiles the frames (360-pixel thumbnails in a near-square grid) into one PNG: one
+inline image and a `sheet` file URI.
+
+## Inputs edit.apply fills
+
+Some 0.3 commands need inputs the core cannot read (it never opens media). `edit.apply` fills them
+before the batch applies, so the journal records plain ops that replay without media:
+`intent.autoZoom` (clicks and typing bursts from the take's events), `crop.keys {follow:"cursor"|"face",
+aspect}` (keys every half second), `media.relink` (probed frames), `media.consolidate` (copies
+files into `media/`), `mask.track` (Vision object tracking), `audio.sync` (envelope
+cross-correlation offset) and `captions.translate` without `texts` (on-device Translation).
+Pass the inputs yourself to skip the native step.
 
 On Linux, rendering, export and capture return `UNSUPPORTED_PLATFORM`. A job ID with no retained
 job returns `NOT_FOUND`. Headless `ui.show` returns `{"applied":false,"reason":"headless"}`.
@@ -148,6 +165,20 @@ or pass `social-h264` for H.264. The default output is `exports/<project-name>-r
 the project package. An explicit MP4 path can be absolute or relative to that package.
 Pass `overwrite:true` to replace an existing movie after encoding succeeds.
 By default, publishing a new filename uses a hard link on the destination volume.
+
+`preset` is one of `social-hevc`, `social-h264`, `youtube`, `shorts`, `reels`, `tiktok`,
+`linkedin`, `prores-422`, `prores-4444`, `hevc-alpha`, `audio-m4a`, `audio-wav`, `gif` or
+`poster` (a PNG still). `range:{from, to}` exports part of the timeline; `bitrate` and `size`
+override the preset (the frame rate is the project's). `variants:[{aspect, preset?}]` exports
+reframed copies in one job. Markers become a chapter track; `captions:"srt"|"vtt"` writes a
+sidecar and burned-in captions stay as they are. `format:"fcpxml"` writes FCPXML 1.10 for Final
+Cut Pro instead of encoding. Two exports encode at once and later ones queue (`queued` in
+`jobs.status`, with `fps` and `eta` while running). A full disk fails early with `DISK_FULL`, and
+cancelling removes the partial file.
+
+Clients that pass `_meta.progressToken` on `export.start` receive `notifications/progress`
+(`progress` 0–1, `total` 1) as frames encode. `notifications/cancelled` with the request's ID
+cancels the job that request started.
 
 The server publishes the finished MP4 even when the client makes no status calls. Use
 `jobs.status {jobId}` for progress and the final path. `jobs.cancel {jobId}` requests cancellation,
@@ -173,8 +204,16 @@ pending, recording, ready, done, or cancelled. A timed capture stops automatical
 ready. Call `record.stop {jobId}` to stop a manual capture or publish a ready capture. It returns
 the new revision and `mediaId` and, when inserted, a `clipId`. The media entry and clip form one
 undoable edit. Set `insert:false` at start or stop to save the media without a clip. `jobs.cancel`
-discards a take before publication. `still:true` captures a PNG with a three-frame default span
-if inserted. A successful still stop also returns its package-relative `output` path.
+discards a take before publication. `still:true` captures a PNG that inserts as a 5-second
+still. A successful still stop also returns its package-relative `output` path.
+
+`record.stop {jobId, pause:true}` pauses a take; `record.start {resume:jobId}` continues it into
+the same take, and `marker:"Name"` with `resume` drops a marker (markers land on the timeline at
+publish). `voiceover:true, at` records only the microphone onto a new audio lane at frame `at`.
+`camera:true, screen:false` is a camera-only take. `retakeOf:"clp_…"` places the take right after
+an earlier one, named after it. `exclude:["com.app.id"]` hides apps (Splice's own windows are
+always excluded). Takes write fragmented movies every 2 s; after a crash, `record.start
+{recover:true}` publishes what was staged.
 
 ## Code mode profile
 
@@ -187,11 +226,12 @@ timers or clock. `Date.now()` and `new Date()` are fixed at 2026-01-01T00:00:00Z
 `Math.random` is seeded, so runs replay identically. The reply is
 `{result, logs, calls:[{tool, ok, ms}], revisions:{from, to}|null, error?:{code, message, fix, line}}`
 with `isError:true` when `error` is set; logs and calls are kept on failure. `revisions` covers
-the first project the code touched; `line` is the line in `code`.
+the first project the code touched, with `projects:{prj_…:{from, to}}` for any other; `line` is
+the line in `code`.
 
 Inside the code, the global `splice` has:
 
-- `splice.<group>.<name>(args)` for every default-profile tool except `record.*`, e.g.
+- `splice.<group>.<name>(args)` for every default-profile tool, e.g.
   `splice.project.info({path})`, `splice.edit.apply({...})`, `splice.timeline.snapshot()`.
   `splice.call(name, args)` is the same by name. Calls are synchronous and return the tool's
   structured result; `view.frames` returns paths only (no image content). `projectId` and
@@ -206,6 +246,9 @@ errors use `CODE_ERROR`. Limits per run, each with its own code: 64 KB of source
 2 s of JavaScript excluding time inside tool calls (`CODE_TIMEOUT`), 32 MB heap (`CODE_MEMORY`),
 1 MB stack (`CODE_STACK`), 200 tool calls (`CODE_CALLS`), 32 KB of result JSON (`CODE_OUTPUT`);
 logs are truncated at 32 KB. Calling `code.run` from code throws `UNKNOWN_TOOL`; `record.start` returns a job at once, so code can start, mark and stop takes.
+
+Without a query the declarations are an index (asserted at most 12,000 characters): every command
+by group, and each tool's signature with the first sentence of its description.
 
 `commands.describe {format:"ts", query?}` returns `{format:"ts", text}`: TypeScript declarations
 generated from the command registry and the tool schemas, with an interface per command
@@ -229,7 +272,11 @@ return {revision: e.revision, clips: t.spine.length};
 `WRONG_KIND`, `OUT_OF_SOURCE`, `TOO_SHORT`, `LANE_CONFLICT`, `TRANSCRIPT_CHANGED`,
 `LANE_NOT_EMPTY`, `OVERLAP`, `REPLAY_MINTS`, `REPLAY_MEDIA`, `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
 `MEDIA_OFFLINE`, `BAD_MEDIA`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`, `EXPORT_FAILED`, `FRAME_FAILED`,
-`CAPTURE_FAILED`, `CAPTURE_SOURCE`, `CAPTURE_CANCELLED` (CLI),
+`CAPTURE_FAILED`, `CAPTURE_SOURCE`, `CAPTURE_CANCELLED` (CLI), `DISK_FULL`,
+0.3 edits: `NO_HANDLES` (roll, slip, slide), `NO_NEIGHBOR`, `NOT_ADJACENT`, `NOT_JOINABLE`,
+`NOT_JOINED`, `NOTHING_TO_RESTORE`, `NO_TRANSITION`, `TOO_LONG`, `FIT_IMPOSSIBLE`, `NEEDS_TEXT`,
+`NO_CLICKS`, `NO_FACES`, `NOT_TRACKED`, `NO_CAPTIONS`, `NO_TRANSCRIPT`, `MARKER_EXISTS`,
+`MEDIA_MISMATCH`, `LOUDNESS_UNKNOWN`, `TOO_DEEP`, `RETIMED`,
 `UNSUPPORTED_PLATFORM` (Linux: export, frames, recording), `TCC_DENIED` (recording without a grant;
 the fix names the System Settings pane and `splice permissions --request`; `needsHuman:true` when only
 a person can click), `IDENTITY_MISMATCH` (the running bundle is not the installed, Developer ID–signed

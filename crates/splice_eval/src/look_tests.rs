@@ -239,3 +239,29 @@ fn warm_frames_with_2000_keys_allocate_nothing_and_stay_fast() {
     // Debug build, 200 keyed titles: the frame must stay far under a 60 fps budget.
     assert!(p99 < 2_000_000, "p99 {p99} ns");
 }
+
+/// The depth cap counts nesting, not compound clips: six sibling compounds render.
+#[test]
+fn many_sibling_compounds_render_like_their_clips() {
+    let splits = r#"{"cmd":"item.split","item":"clp_take","at":200,"ref":"a"},
+        {"cmd":"item.split","item":"$a.right","at":280,"ref":"b"},
+        {"cmd":"item.split","item":"$b.right","at":360,"ref":"c"}"#;
+    let compounds = [
+        "clp_open", "clp_take", "$a.right", "$b.right", "$c.right", "clp_end",
+    ]
+    .map(|item| format!(r#"{{"cmd":"clip.compound","items":["{item}"]}}"#))
+    .join(",");
+    let split = applied(&format!("[{splits}]"));
+    let compound = applied(&format!("[{splits},{compounds}]"));
+    assert_eq!(compound.compounds.len(), 6);
+    let (a, b) = (
+        Evaluator::prepare(&split).unwrap(),
+        Evaluator::prepare(&compound).unwrap(),
+    );
+    let (mut pa, mut pb) = (a.buffer(), b.buffer());
+    for at in [0, 150, 250, 330, 400, 600] {
+        a.frame(at, &mut pa);
+        b.frame(at, &mut pb);
+        assert_eq!(pa.layers, pb.layers, "frame {at}");
+    }
+}
