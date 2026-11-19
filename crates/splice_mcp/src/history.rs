@@ -122,7 +122,7 @@ pub fn edit_result_json(result: EditResult) -> Json {
                     .changes
                     .into_iter()
                     .map(|change| {
-                        object(vec![
+                        let mut fields = vec![
                             ("op", count(change.op)),
                             ("cmd", text(change.cmd)),
                             ("summary", Json::String(change.summary)),
@@ -130,7 +130,40 @@ pub fn edit_result_json(result: EditResult) -> Json {
                                 "created",
                                 Json::Array(change.created.iter().map(target).collect()),
                             ),
-                        ])
+                        ];
+                        let detail = change.detail.unwrap_or_default();
+                        if let Some(settle) = detail.settle {
+                            fields.push(("settle", Json::Unsigned(settle.ceil() as u64)));
+                        }
+                        if let Some([end, swept]) = detail.bounds {
+                            let rect = |[x, y, w, h]: [f64; 4]| {
+                                let round = |v: f64| Json::Float((v * 1e4).round() / 1e4);
+                                object(vec![
+                                    ("x", round(x)),
+                                    ("y", round(y)),
+                                    ("w", round(w)),
+                                    ("h", round(h)),
+                                ])
+                            };
+                            let inside = |[x, y, w, h]: [f64; 4]| {
+                                x >= -1e-9
+                                    && y >= -1e-9
+                                    && x + w <= 1.0 + 1e-9
+                                    && y + h <= 1.0 + 1e-9
+                            };
+                            fields.push((
+                                "bounds",
+                                object(vec![
+                                    ("final", rect(end)),
+                                    ("swept", rect(swept)),
+                                    ("onCanvas", Json::Bool(inside(swept))),
+                                ]),
+                            ));
+                        }
+                        if let Some(z) = detail.z {
+                            fields.push(("z", Json::Signed(i64::from(z))));
+                        }
+                        object(fields)
                     })
                     .collect(),
             ),

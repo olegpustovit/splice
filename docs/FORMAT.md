@@ -136,7 +136,12 @@ Rules:
   the others refuse keys with `NOT_KEYABLE`, see below):
   `{"keys":[{"at":0,"value":1,"ease":"inOut"},{"at":60,"value":1.4}]}`. `at` is a frame relative
   to the owner's start (it may be negative), strictly increasing. `ease` is the curve toward the
-  next key: `linear`, `hold`, `in`, `out`, `inOut` or a cubic Bezier `[x1, y1, x2, y2]`. Files
+  next key: `linear`, `hold`, `in`, `out`, `inOut`, `back` (overshoots ~10%), `elastic`,
+  `bounce`, a cubic Bezier `[x1, y1, x2, y2]`, `{"steps":n}` (1–100 equal jumps) or
+  `{"spring":{"duration":d,"bounce":b}}`: a closed-form spring from this key toward the next,
+  `d` its perceptual duration in frames (2–600), `b` from −0.9 to 0.9 (0 critically damped,
+  above 0 overshoots, below 0 overdamped). The spring runs from the key; the next key takes over at
+  its own frame, so it should come after the settle time edit results report. Files
   always store it (`linear` when absent on read); commands default an omitted ease to `inOut`. Splitting, in-trimming or rolling an owner shifts its keys so they stay on
   the same content.
 - **Effects** cover the look as well as the frame: `transform`, `crop` (keyed rect), `color`

@@ -58,7 +58,7 @@ fn keyed_transform_color_and_masks_sample_per_frame() {
 }
 
 fn keys_ease(t: f64) -> f64 {
-    splice_model::Ease::InOut.apply(t)
+    splice_model::Ease::InOut.apply(t, 1.0)
 }
 
 #[test]

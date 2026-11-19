@@ -9,6 +9,7 @@ use std::fmt::{self, Write};
 
 mod edits;
 mod mints;
+mod motion;
 mod properties;
 mod settle;
 mod silent;
@@ -23,6 +24,8 @@ pub use time::{resolve_view_frame, span};
 
 #[cfg(test)]
 mod fuzz_tests;
+#[cfg(test)]
+mod motion_tests;
 #[cfg(test)]
 mod silent_tests;
 #[cfg(test)]
@@ -44,7 +47,7 @@ pub struct Span {
 }
 
 /// A direct command result, in batch order.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EditChange {
     /// Zero-based index of the operation within the batch.
     pub op: usize,
@@ -54,6 +57,20 @@ pub struct EditChange {
     pub summary: String,
     /// IDs created directly by the command.
     pub created: Vec<Target>,
+    /// What the command measured about its result, when it reports anything.
+    pub detail: Option<ChangeDetail>,
+}
+
+/// Facts a text or motion command reports about what it wrote (T42).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ChangeDetail {
+    /// Frames the slowest spring key needs to settle within 0.1% of its target.
+    pub settle: Option<f64>,
+    /// A title's text box at rest and the box swept over its whole animation, normalized
+    /// canvas `[x, y, w, h]` (outside 0…1 means off canvas).
+    pub bounds: Option<[[f64; 4]; 2]>,
+    /// The paint order an item got: higher draws in front.
+    pub z: Option<i32>,
 }
 
 /// An implicit change caused by maintaining timeline relationships.
@@ -145,7 +162,7 @@ pub struct Diff {
 }
 
 /// The same result is returned for preview and for a committed in-memory batch.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ApplyReport {
     /// Direct results.
     pub changes: Vec<EditChange>,
@@ -402,6 +419,8 @@ struct Editor {
     move_scratch: spine::MoveScratch,
     /// The current op's summary, written in place (`Summary::Note`) so warm edits allocate nothing.
     note: String,
+    /// What the current op measured (bounds, settle time, order); moved into its change.
+    detail: Option<ChangeDetail>,
 }
 
 impl Default for Editor {
@@ -423,6 +442,7 @@ impl Default for Editor {
             selection_scratch: Vec::new(),
             move_scratch: spine::MoveScratch::default(),
             note: String::new(),
+            detail: None,
         }
     }
 }
@@ -501,6 +521,7 @@ impl Editor {
         {
             return Err(CommandError::bad("ref", "a unique name within the batch"));
         }
+        self.detail = None;
         let outcome = self.run(decoded, id, load)?;
         if let Some(name) = bind {
             self.bindings.push(Binding {
@@ -530,6 +551,7 @@ impl Editor {
             cmd: id,
             summary,
             created,
+            detail: self.detail.take(),
         });
         Ok(())
     }

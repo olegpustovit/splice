@@ -491,11 +491,25 @@ pub(super) fn keys(value: &Json, key: &str) -> Result<Vec<Key>, Error> {
     let list = value
         .field(key)
         .ok_or_else(|| Error::bad(key, "an array of {at, value, ease}"))?;
+    // A bad ease names its key and every accepted form.
+    for (index, entry) in list.as_array().into_iter().flatten().enumerate() {
+        if let Some(ease) = entry.field("ease")
+            && crate::package::decode_ease(ease).is_none()
+        {
+            return Err(Error::rule(
+                "BAD_ARGS",
+                &format!("{key}[{index}].ease"),
+                Some(ease.clone()),
+                EASES,
+                &format!("Pass {key}[{index}].ease as one of {EASES}."),
+            ));
+        }
+    }
     let wrapped = Json::Object(vec![("keys".into(), list.clone())]);
     let mut keys = crate::package::decode_keys(&wrapped).ok_or_else(|| {
         Error::bad(
             key,
-            "a nonempty array of {at, value, ease?} with increasing integer at; ease linear, hold, in, out, inOut or [x1, y1, x2, y2]",
+            "a nonempty array of {at, value, ease?} with increasing integer at",
         )
     })?;
     // Agent keys are eased unless they say otherwise (D20).
@@ -507,25 +521,15 @@ pub(super) fn keys(value: &Json, key: &str) -> Result<Vec<Key>, Error> {
     Ok(keys)
 }
 
-/// An ease name or Bezier, linear when absent.
+/// Every accepted ease, as the broken rule states it (T42.1).
+pub(crate) const EASES: &str = "linear, hold, in, out, inOut, back, elastic, bounce, \
+    [x1, y1, x2, y2], {steps: 1–100} or {spring: {duration: 2–600 frames, bounce: −0.9–0.9 = 0}}";
+
+/// An ease name, Bezier, steps or spring; linear when absent.
 pub(super) fn ease(value: &Json, key: &str) -> Result<Ease, Error> {
     match value.field(key) {
         None => Ok(Ease::Linear),
-        Some(Json::String(name)) => Ease::parse(name)
-            .ok_or_else(|| Error::bad(key, "linear, hold, in, out, inOut or [x1, y1, x2, y2]")),
-        Some(other) => {
-            let wrapped = Json::Object(vec![(
-                "keys".into(),
-                Json::Array(vec![Json::Object(vec![
-                    ("at".into(), Json::Unsigned(0)),
-                    ("value".into(), Json::Float(0.0)),
-                    ("ease".into(), other.clone()),
-                ])]),
-            )]);
-            crate::package::decode_keys(&wrapped)
-                .map(|keys| keys[0].ease)
-                .ok_or_else(|| Error::bad(key, "linear, hold, in, out, inOut or [x1, y1, x2, y2]"))
-        }
+        Some(ease) => crate::package::decode_ease(ease).ok_or_else(|| Error::bad(key, EASES)),
     }
 }
 

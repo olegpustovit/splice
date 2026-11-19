@@ -391,6 +391,9 @@ pub fn describe(id: Option<&str>, query: Option<&str>) -> Result<Json, CommandEr
                 Json::Array(args::caption_presets().to_vec()),
             ));
         }
+        if id == "param.keys" {
+            fields.push(("eases".into(), eases()));
+        }
         if id.starts_with("effect.") {
             fields.push(("effectTypes".into(), effect_schemas().clone()));
             fields.push(("resolution".into(), text("Effects inherit each parameter through project, lane, and item. Set enabled:false at a scope to turn off an inherited effect.")));
@@ -470,6 +473,50 @@ fn unknown(id: &str) -> CommandError {
 
 fn text(value: &str) -> Json {
     Json::String(value.into())
+}
+
+/// The ease vocabulary for `commands.describe {id:"param.keys"}`, with measured spring settle
+/// times (T42.1, D20).
+fn eases() -> Json {
+    let settle = [-0.5, 0.0, 0.25, 0.5]
+        .into_iter()
+        .map(|bounce| {
+            let ease = splice_model::Ease::Spring {
+                duration: 30.0,
+                bounce,
+            };
+            Json::Object(vec![
+                ("duration".into(), Json::Unsigned(30)),
+                ("bounce".into(), Json::Float(bounce)),
+                (
+                    "settle".into(),
+                    Json::Unsigned(ease.settle().unwrap_or(0.0).ceil() as u64),
+                ),
+            ])
+        })
+        .collect();
+    Json::Object(vec![
+        ("accepted".into(), text(args::EASES)),
+        ("default".into(), text("inOut")),
+        (
+            "spring".into(),
+            text(
+                "{spring:{duration, bounce}}: a closed-form spring from this key toward the next \
+                 (any frame seeks exactly). duration is the perceptual duration in frames; bounce \
+                 0 is critically damped, above 0 overshoots, below 0 is overdamped. It settles \
+                 (stays within 0.1%) after `settle` frames, which scale with duration; place the \
+                 next key at least that far away or the value jumps there. Results report settle.",
+            ),
+        ),
+        ("springSettle".into(), Json::Array(settle)),
+        (
+            "named".into(),
+            text(
+                "back overshoots ~10% then settles; elastic rings onto the value; bounce lands \
+                 like a dropped ball; {steps:n} jumps in n equal steps.",
+            ),
+        ),
+    ])
 }
 
 /// The schema entry for one parameter of an effect type.

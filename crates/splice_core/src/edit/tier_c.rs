@@ -267,7 +267,12 @@ impl Editor {
                 path,
                 keys,
                 merge,
-            } => self.set_param(&target, &path, EffectValue::Keys(keys), merge),
+            } => {
+                let springs = super::motion::springs(&keys);
+                let outcome = self.set_param(&target, &path, EffectValue::Keys(keys), merge)?;
+                self.report_springs(springs);
+                Ok(outcome)
+            }
             Op::GeneratorAdd {
                 shape,
                 at,

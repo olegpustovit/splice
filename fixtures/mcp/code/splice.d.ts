@@ -19,14 +19,19 @@ declare namespace Splice {
     | { ref: string; edge?: "start" | "end"; offset?: number }
     | { marker: string; offset?: number }
     | { word: string; transcriptHash?: string; edge?: "start" | "end"; offset?: number };
-  /** A rectangle normalized to the source frame (0–1). */
-  type Rect = { x: number; y: number; w: number; h: number };
-  /** Curve toward the next key. */
-  type Ease = "linear" | "hold" | "in" | "out" | "inOut" | [number, number, number, number];
-  /** A keyframe; frames are relative to the owner's start. */
-  type Key = { at: number; value: number; ease?: Ease };
   /** "r12" or 12. */
   type Revision = number | string;
+  /** A rectangle normalized to the source frame (0–1). */
+  type Rect = { x: number; y: number; w: number; h: number };
+  /** Curve toward the next key (agent keys default to "inOut"). A spring's duration is in frames;
+   * bounce 0 is critically damped, above 0 overshoots, below 0 is overdamped. */
+  type Ease =
+    | "linear" | "hold" | "in" | "out" | "inOut" | "back" | "elastic" | "bounce"
+    | [number, number, number, number]
+    | { steps: number }
+    | { spring: { duration: number; bounce?: number } };
+  /** A keyframe; frames are relative to the owner's start. */
+  type Key = { at: number; value: number; ease?: Ease };
 
   namespace op {
     interface Base {
@@ -488,7 +493,7 @@ declare namespace Splice {
       cmd: "crop.keys";
       /** clp_… | ovl_… · clip or media overlay */
       item: string;
-      /** [{at, x, y, w, h, ease}] · owner frames; crop normalized to the source; ease linear, hold, in, out, inOut or [x1,y1,x2,y2] */
+      /** [{at, x, y, w, h, ease}] · owner frames; crop normalized to the source; ease as param.keys (commands.describe {id:"param.keys"} lists eases) */
       keys?: { at: number; x: number; y: number; w: number; h: number; ease?: Ease }[];
       /** splice mcp computes keys that keep it in frame */
       follow?: "cursor" | "face";
@@ -757,7 +762,7 @@ declare namespace Splice {
       target: string;
       /** type.param · any number in commands.describe effectTypes */
       path: string;
-      /** [{at, value, ease}] · frames relative to the owner's start (absolute for lanes and the project) */
+      /** [{at, value, ease}] · frames relative to the owner's start (absolute for lanes and the project); ease inOut by default, or linear, hold, in, out, back, elastic, bounce, [x1,y1,x2,y2], {steps:n}, {spring:{duration, bounce}} (the result reports settle frames) */
       keys: Key[];
       /** @default replace */
       mode?: "replace" | "merge";

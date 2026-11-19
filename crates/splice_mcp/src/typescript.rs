@@ -24,14 +24,22 @@ declare namespace Splice {
     | { ref: string; edge?: "start" | "end"; offset?: number }
     | { marker: string; offset?: number }
     | { word: string; transcriptHash?: string; edge?: "start" | "end"; offset?: number };
-  /** A rectangle normalized to the source frame (0–1). */
-  type Rect = { x: number; y: number; w: number; h: number };
-  /** Curve toward the next key. */
-  type Ease = "linear" | "hold" | "in" | "out" | "inOut" | [number, number, number, number];
-  /** A keyframe; frames are relative to the owner's start. */
-  type Key = { at: number; value: number; ease?: Ease };
   /** "r12" or 12. */
   type Revision = number | string;
+"#;
+
+/// Types only command interfaces use (the index leaves them out).
+const COMMAND_TYPES: &str = r#"  /** A rectangle normalized to the source frame (0–1). */
+  type Rect = { x: number; y: number; w: number; h: number };
+  /** Curve toward the next key (agent keys default to "inOut"). A spring's duration is in frames;
+   * bounce 0 is critically damped, above 0 overshoots, below 0 is overdamped. */
+  type Ease =
+    | "linear" | "hold" | "in" | "out" | "inOut" | "back" | "elastic" | "bounce"
+    | [number, number, number, number]
+    | { steps: number }
+    | { spring: { duration: number; bounce?: number } };
+  /** A keyframe; frames are relative to the owner's start. */
+  type Key = { at: number; value: number; ease?: Ease };
 "#;
 
 const API: &str = r#"
@@ -63,6 +71,7 @@ pub(super) fn declarations(filter: Option<&str>) -> String {
     let wanted = |name: &str| all || terms.iter().any(|term| name.to_lowercase().contains(term));
     let filter = if all { "" } else { filter.as_str() };
     let mut out = String::from(HEADER);
+    out.push_str(COMMAND_TYPES);
     // Planned rows only fail with NOT_IMPLEMENTED; commands.describe still lists them.
     let commands: Vec<&Command> = COMMANDS
         .iter()

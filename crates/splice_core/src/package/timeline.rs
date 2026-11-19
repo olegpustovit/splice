@@ -729,16 +729,10 @@ pub fn encode_keys(keys: &[Key]) -> Json {
         Json::Array(
             keys.iter()
                 .map(|key| {
-                    let ease = match key.ease {
-                        Ease::Bezier(points) => {
-                            Json::Array(points.iter().map(|&p| Json::Float(p)).collect())
-                        }
-                        other => text(other.name().expect("named ease")),
-                    };
                     object(vec![
                         ("at", frame_json(key.at)),
                         ("value", Json::Float(key.value)),
-                        ("ease", ease),
+                        ("ease", encode_ease(key.ease)),
                     ])
                 })
                 .collect(),
@@ -767,17 +761,7 @@ pub fn decode_keys(value: &Json) -> Option<Vec<Key>> {
         let value = entry.field("value")?.as_f64().filter(|v| v.is_finite())?;
         let ease = match entry.field("ease") {
             None => Ease::Linear,
-            Some(Json::Array(points)) if points.len() == 4 => {
-                let mut p = [0.0; 4];
-                for (slot, point) in p.iter_mut().zip(points) {
-                    *slot = point.as_f64().filter(|v| v.is_finite())?;
-                }
-                if !(0.0..=1.0).contains(&p[0]) || !(0.0..=1.0).contains(&p[2]) {
-                    return None;
-                }
-                Ease::Bezier(p)
-            }
-            Some(name) => Ease::parse(name.as_str()?)?,
+            Some(ease) => decode_ease(ease)?,
         };
         if keys.last().is_some_and(|last: &Key| last.at >= at) {
             return None;
@@ -785,6 +769,64 @@ pub fn decode_keys(value: &Json) -> Option<Vec<Key>> {
         keys.push(Key { at, value, ease });
     }
     (!keys.is_empty()).then_some(keys)
+}
+
+/// An ease: a name, `[x1, y1, x2, y2]`, `{"steps":n}` or `{"spring":{"duration","bounce"}}`.
+pub fn encode_ease(ease: Ease) -> Json {
+    match ease {
+        Ease::Bezier(points) => Json::Array(points.iter().map(|&p| Json::Float(p)).collect()),
+        Ease::Steps(n) => object(vec![("steps", Json::Unsigned(u64::from(n)))]),
+        Ease::Spring { duration, bounce } => object(vec![(
+            "spring",
+            object(vec![
+                ("duration", Json::Float(duration)),
+                ("bounce", Json::Float(bounce)),
+            ]),
+        )]),
+        other => text(other.name().expect("named ease")),
+    }
+}
+
+/// Parses `encode_ease` output; `None` when the shape or a range is wrong. A spring's bounce
+/// defaults to 0 (critically damped).
+pub fn decode_ease(value: &Json) -> Option<Ease> {
+    let in_range = |v: f64, [lo, hi]: [f64; 2]| v.is_finite() && v >= lo && v <= hi;
+    match value {
+        Json::Array(points) if points.len() == 4 => {
+            let mut p = [0.0; 4];
+            for (slot, point) in p.iter_mut().zip(points) {
+                *slot = point.as_f64().filter(|v| v.is_finite())?;
+            }
+            if !(0.0..=1.0).contains(&p[0]) || !(0.0..=1.0).contains(&p[2]) {
+                return None;
+            }
+            Some(Ease::Bezier(p))
+        }
+        Json::Object(fields) if fields.len() == 1 => {
+            if let Some(n) = value.field("steps") {
+                let n = u32::try_from(n.as_u64()?).ok()?;
+                return (keys::STEPS[0]..=keys::STEPS[1])
+                    .contains(&n)
+                    .then_some(Ease::Steps(n));
+            }
+            let spring = value.field("spring")?;
+            let names = spring.as_object()?;
+            if names
+                .iter()
+                .any(|(name, _)| !matches!(name.as_str(), "duration" | "bounce"))
+            {
+                return None;
+            }
+            let duration = spring.field("duration")?.as_f64()?;
+            let bounce = match spring.field("bounce") {
+                Some(bounce) => bounce.as_f64()?,
+                None => 0.0,
+            };
+            (in_range(duration, keys::SPRING_DURATION) && in_range(bounce, keys::SPRING_BOUNCE))
+                .then_some(Ease::Spring { duration, bounce })
+        }
+        _ => Ease::parse(value.as_str()?),
+    }
 }
 
 fn encode_rect(rect: Rect) -> Json {
