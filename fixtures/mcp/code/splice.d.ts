@@ -594,7 +594,7 @@ declare const splice: {
     info(args?: { projectId?: string; path?: string; create?: boolean; }): { projectId: string; revision: Splice.Revision; fps: number; size?: unknown[]; aspect?: string; durationFrames: number; access: string; lanes: unknown[]; media: unknown[]; offlineMedia?: unknown[]; transcript?: Record<string, unknown>; effects?: Record<string, unknown>; openSession?: string | null; };
   };
   timeline: {
-    /** List the spine, drawing lanes and markers with resolved frame ranges. Use detail:full for all item fields. */
+    /** List the spine, drawing lanes and markers with resolved frame ranges. detail:full adds every item field and is large; prefer concise, then items.inspect for the IDs you need. */
     snapshot(args?: { projectId?: string; from?: number; to?: number; detail?: "concise" | "full"; limit?: number; cursor?: string; }): { revision: Splice.Revision; fps?: number; range?: Record<string, unknown>; lanes: unknown[]; spine: unknown[]; markers: unknown[]; total?: number; nextCursor?: string | null; };
     /** Find items, markers, words and edit points by text, kind, lane, color or frame range. */
     find(args?: { projectId?: string; text?: string; kind?: string; lane?: string; color?: string; from?: number; to?: number; limit?: number; }): { revision: Splice.Revision; matches: unknown[]; total: number; };
