@@ -111,6 +111,10 @@ endif
 mac-run: mac-sync
 	ssh $(MAC) '$(MAC_ENV) $(MAC_NICE) $(CMD)'
 
+# Live recording through the installed app (T22.1; SOAK=1800 for the T22.6 soak). Records the screen.
+mac-record-check: mac-sync
+	ssh $(MAC) '$(MAC_ENV) $(MAC_NICE) make install >/dev/null && python3 tools/record-check.py $(if $(SOAK),--soak $(SOAK))'
+
 mac-pull:
 	mkdir -p target/mac && rsync -az $(MAC):$(F) target/mac/
 

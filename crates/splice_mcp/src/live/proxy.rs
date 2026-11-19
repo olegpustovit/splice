@@ -34,7 +34,11 @@ impl Routes {
                     "Use the project that started the job.",
                 ));
             }
-            replace(&mut inner, "jobId", text(&job.inner));
+            replace(
+                &mut inner,
+                job_field(name, args).expect("routed job"),
+                text(&job.inner),
+            );
         }
         Ok(inner)
     }
@@ -146,7 +150,10 @@ impl Routes {
         let Some(job) = payload.field("jobId").and_then(Json::as_str) else {
             return;
         };
-        let id = if matches!(name, "export.start" | "record.start") {
+        // A resumed take keeps its job: only new exports and recordings get a route.
+        let started =
+            matches!(name, "export.start" | "record.start") && args.field("resume").is_none();
+        let id = if started {
             self.jobs.push(JobRoute {
                 inner: job.into(),
                 project: args
@@ -158,7 +165,7 @@ impl Routes {
             });
             JobId::from_serial(self.jobs.len() as u64).to_string()
         } else if self.job(name, args).is_some() {
-            args.field("jobId")
+            args.field(job_field(name, args).expect("routed job"))
                 .and_then(Json::as_str)
                 .expect("known job")
                 .into()
@@ -169,12 +176,22 @@ impl Routes {
     }
 
     fn job(&self, name: &str, args: &Json) -> Option<&JobRoute> {
-        if !matches!(name, "jobs.status" | "jobs.cancel" | "record.stop") {
-            return None;
-        }
-        let id = args.field("jobId")?.as_str()?.parse::<JobId>().ok()?;
+        let id = args
+            .field(job_field(name, args)?)?
+            .as_str()?
+            .parse::<JobId>()
+            .ok()?;
         self.jobs
             .get(usize::try_from(id.serial().checked_sub(1)?).ok()?)
+    }
+}
+
+/// The argument naming an existing job: `jobId`, or `resume` on a resumed recording.
+fn job_field(name: &str, args: &Json) -> Option<&'static str> {
+    match name {
+        "jobs.status" | "jobs.cancel" | "record.stop" => Some("jobId"),
+        "record.start" if args.field("resume").is_some() => Some("resume"),
+        _ => None,
     }
 }
 

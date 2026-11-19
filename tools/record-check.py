@@ -24,7 +24,10 @@ class Server:
         self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": self.next, "method": method, "params": params}) + "\n")
         self.proc.stdin.flush()
         while True:
-            reply = json.loads(self.proc.stdout.readline())
+            line = self.proc.stdout.readline()
+            if not line:
+                raise SystemExit(f"{method}: splice mcp exited (status {self.proc.wait()})")
+            reply = json.loads(line)
             if reply.get("id") == self.next:
                 return reply.get("result", reply)
 
@@ -60,7 +63,7 @@ def pause_resume(server, path):
     stop = server.call("record.stop", projectId=server.project, jobId=job)
     snapshot = server.call("timeline.snapshot", projectId=server.project)
     fps = server.call("project.info", projectId=server.project)["fps"]
-    length = sum(c["length"] for c in snapshot["spine"]) / fps
+    length = sum(c["to"] - c["from"] for c in snapshot["spine"]) / fps
     markers = [m["name"] for m in snapshot.get("markers", [])]
     result = {"check": "pause-resume", "seconds": round(length, 2), "markers": markers, "revision": stop.get("revision")}
     # 3 s recorded around a 1.5 s pause: the pause is not in the take.
@@ -82,7 +85,7 @@ def soak(server, path, seconds):
     stop = server.call("record.stop", projectId=server.project, jobId=job)
     snapshot = server.call("timeline.snapshot", projectId=server.project)
     fps = server.call("project.info", projectId=server.project)["fps"]
-    frames = sum(c["length"] for c in snapshot["spine"])
+    frames = sum(c["to"] - c["from"] for c in snapshot["spine"])
     drift = abs(frames - seconds * fps)
     growth = (max(samples[1:] or [0]) - samples[1]) if len(samples) > 1 else 0
     result = {"check": "soak", "seconds": seconds, "frames": frames, "driftFrames": drift,

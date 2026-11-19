@@ -305,12 +305,13 @@ pub(super) fn record_start(projects: &mut Projects, args: &Json) -> Result<Json,
             .map_err(|_| bad("resume", "a recording jobId"))?;
         #[cfg(target_os = "macos")]
         {
-            let method = if args.field("marker").is_some() {
-                "take.mark"
-            } else {
-                "take.resume"
-            };
-            return super::record::command(projects, id, method, args);
+            // Resuming a running take is a no-op, so `resume` with `marker` both continues a
+            // paused take and marks it (it used to only mark, leaving the take paused).
+            let status = super::record::command(projects, id, "take.resume", args)?;
+            if args.field("marker").is_none() {
+                return Ok(status);
+            }
+            return super::record::command(projects, id, "take.mark", args);
         }
         #[cfg(not(target_os = "macos"))]
         {
