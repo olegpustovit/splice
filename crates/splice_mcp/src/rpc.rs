@@ -12,6 +12,8 @@ const PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
 const CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
 const SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
+/// `<crate version>+<git short sha>[-dirty]` (`+unknown` outside a checkout), from build.rs.
+const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("SPLICE_BUILD"));
 /// Jobs watched for progress and cancellation at once; the oldest is forgotten first.
 const MAX_WATCHED: usize = 64;
 /// Encoding time per turn of the serve loop while an export runs, so requests still get answers.
@@ -591,10 +593,7 @@ fn capabilities() -> Json {
 }
 
 fn server_info() -> Json {
-    object(vec![
-        ("name", text("splice")),
-        ("version", text(env!("CARGO_PKG_VERSION"))),
-    ])
+    object(vec![("name", text("splice")), ("version", text(VERSION))])
 }
 
 fn supported_versions() -> Json {
@@ -677,6 +676,26 @@ mod tests {
         assert_eq!(error.string("param").unwrap(), "querry");
         assert_eq!(error.string("didYouMean").unwrap(), "query");
         connection.close().unwrap();
+    }
+
+    #[test]
+    fn t36_9_server_info_names_the_build() {
+        let (version, build) = VERSION.split_once('+').unwrap();
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        let sha = build.strip_suffix("-dirty").unwrap_or(build);
+        assert!(
+            sha == "unknown" || (sha.len() >= 7 && sha.bytes().all(|b| b.is_ascii_hexdigit())),
+            "{build}"
+        );
+        let mut connection = connection();
+        connection.initialized = false;
+        let reply = handle_line(
+            br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#,
+            &mut connection,
+        )
+        .unwrap();
+        let info = reply.field("result").unwrap().field("serverInfo").unwrap();
+        assert_eq!(info.string("version").unwrap(), VERSION);
     }
 
     #[test]

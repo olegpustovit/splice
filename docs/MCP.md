@@ -36,6 +36,9 @@ first tool request directly with the protocol version and client capabilities in
 See the [MCP stdio specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio)
 and [versioning rules](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning).
 
+`serverInfo.version` names the exact build: `<crate version>+<git short sha>`, with `-dirty` when
+the tree had uncommitted changes, or `+unknown` when built outside a git checkout.
+
 Send one UTF-8 JSON-RPC message per newline, up to 16 MiB. The server flushes each response, ignores
 one-way notifications, and exits at EOF. Unknown methods and malformed RPC requests use JSON-RPC
 errors. Invalid tool arguments and editor failures return `isError:true`. An argument the tool does

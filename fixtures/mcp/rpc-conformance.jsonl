@@ -1,7 +1,7 @@
 > {"jsonrpc":"2.0","id":0,"method":"tools/list"}
 < {"jsonrpc":"2.0","id":0,"error":{"code":-32600,"message":"Initialize before calling tools"}}
 > {"jsonrpc":"2.0","id":"hello","method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}
-< {"jsonrpc":"2.0","id":"hello","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"splice","version":"0.1.0"}}}
+< {"jsonrpc":"2.0","id":"hello","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"splice","version":"…"}}}
 > {"jsonrpc":"2.0","method":"notifications/initialized"}
 > {"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":30}}
 > {"jsonrpc":"2.0","id":18446744073709551615,"method":"ping"}
@@ -28,15 +28,15 @@
 < {"jsonrpc":"2.0","id":8,"result":{}}
 
 > {"jsonrpc":"2.0","id":"discover","method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
-< {"jsonrpc":"2.0","id":"discover","result":{"resultType":"complete","supportedVersions":["2026-07-28","2025-11-25"],"capabilities":{"tools":{"listChanged":false}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"splice","version":"0.1.0"}}}}
+< {"jsonrpc":"2.0","id":"discover","result":{"resultType":"complete","supportedVersions":["2026-07-28","2025-11-25"],"capabilities":{"tools":{"listChanged":false}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"splice","version":"…"}}}}
 > {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"commands.describe","arguments":{"query":"___no_matching_command___"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
-< {"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","content":[{"type":"text","text":"{\"commands\":[]}"}],"structuredContent":{"commands":[]},"isError":false,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"splice","version":"0.1.0"}}}}
+< {"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","content":[{"type":"text","text":"{\"commands\":[]}"}],"structuredContent":{"commands":[]},"isError":false,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"splice","version":"…"}}}}
 > {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}
 < {"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Pass clientCapabilities as an object in params._meta"}}
 > {"jsonrpc":"2.0","id":3,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"1900-01-01","io.modelcontextprotocol/clientCapabilities":{}}}}
 < {"jsonrpc":"2.0","id":3,"error":{"code":-32022,"message":"Unsupported protocol version","data":{"supported":["2026-07-28","2025-11-25"],"requested":"1900-01-01"}}}
 > {"jsonrpc":"2.0","id":4,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}
-< {"jsonrpc":"2.0","id":4,"result":{"protocolVersion":"2026-07-28","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"splice","version":"0.1.0"}}}
+< {"jsonrpc":"2.0","id":4,"result":{"protocolVersion":"2026-07-28","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"splice","version":"…"}}}
 
 > {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1900-01-01","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}
-< {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"splice","version":"0.1.0"}}}
+< {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"splice","version":"…"}}}
