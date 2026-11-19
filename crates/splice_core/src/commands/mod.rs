@@ -1,4 +1,5 @@
 use splice_json::Value as Json;
+use splice_model::{EffectParam, EffectValue};
 use std::fmt;
 
 mod args;
@@ -11,7 +12,25 @@ pub use op::*;
 pub use table::COMMANDS;
 
 /// Splice's own rows, after the prototype's 61 (docs/reference/core.js), in table order.
-pub const EXTENSIONS: &[&str] = &["transcript.set"];
+pub const EXTENSIONS: &[&str] = &[
+    "transcript.set",
+    "item.roll",
+    "item.slip",
+    "item.slide",
+    "clip.freeze",
+    "clip.compound",
+    "clip.uncompound",
+    "transition.set",
+    "transition.remove",
+    "param.set",
+    "param.keys",
+    "mask.track",
+    "generator.add",
+    "template.add",
+    "template.set",
+    "media.relink",
+    "media.consolidate",
+];
 
 #[cfg(test)]
 mod tests;
@@ -23,8 +42,22 @@ pub enum Tier {
     First,
     /// Included in Splice 0.2.
     Second,
-    /// Listed for the 0.3 cut.
+    /// Included in Splice 0.3.
+    Third,
+    /// Designed, not built (none after 0.3).
     Planned,
+}
+
+impl Tier {
+    /// The release that ships the row.
+    pub fn cut(self) -> &'static str {
+        match self {
+            Self::First => "0.1",
+            Self::Second => "0.2",
+            Self::Third => "0.3",
+            Self::Planned => "later",
+        }
+    }
 }
 
 /// The shared command documentation and input decoder.
@@ -83,14 +116,7 @@ impl Command {
             ("id".into(), text(self.id)),
             ("title".into(), text(self.title)),
             ("risk".into(), text(self.risk)),
-            (
-                "cut".into(),
-                text(match self.tier {
-                    Tier::First => "0.1",
-                    Tier::Second => "0.2",
-                    Tier::Planned => "0.3",
-                }),
-            ),
+            ("cut".into(), text(self.tier.cut())),
         ];
         // Every 0.1 and 0.2 row applies (tier_a and tier_b tests apply each described example).
         fields.push(("available".into(), Json::Bool(self.tier != Tier::Planned)));
@@ -189,8 +215,11 @@ pub fn lookup(id: &str) -> Option<&'static Command> {
 }
 
 /// Returns the effect schema catalog used by command discovery.
-pub fn effect_schemas() -> Json {
-    splice_json::parse(include_str!("effects.json")).expect("checked effect schemas")
+pub fn effect_schemas() -> &'static Json {
+    static SCHEMAS: std::sync::OnceLock<Json> = std::sync::OnceLock::new();
+    SCHEMAS.get_or_init(|| {
+        splice_json::parse(include_str!("effects.json")).expect("checked effect schemas")
+    })
 }
 
 /// Returns the documented schema for an ID or a filtered catalog when the ID is absent.
@@ -239,7 +268,7 @@ pub fn describe(id: Option<&str>, query: Option<&str>) -> Result<Json, CommandEr
             ));
         }
         if id.starts_with("effect.") {
-            fields.push(("effectTypes".into(), effect_schemas()));
+            fields.push(("effectTypes".into(), effect_schemas().clone()));
             fields.push(("resolution".into(), text("Effects inherit each parameter through project, lane, and item. Set enabled:false at a scope to turn off an inherited effect.")));
         }
         return Ok(Json::Object(fields));
@@ -295,4 +324,87 @@ fn unknown(id: &str) -> CommandError {
 
 fn text(value: &str) -> Json {
     Json::String(value.into())
+}
+
+/// The schema entry for one parameter of an effect type.
+fn param_spec(kind: &str, name: &str) -> Result<&'static Json, CommandError> {
+    let schemas = effect_schemas();
+    let schema = schemas
+        .field(kind)
+        .and_then(|schema| schema.field("params"))
+        .ok_or_else(|| {
+            CommandError::new(
+                "BAD_ARGS",
+                format!("No effect type {kind}."),
+                "commands.describe {id:\"effect.add\"} lists types.".into(),
+            )
+        })?;
+    schema.field(name).ok_or_else(|| {
+        let names = schema
+            .as_object()
+            .map(|fields| {
+                fields
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        CommandError::new(
+            "BAD_ARGS",
+            format!("{kind} has no parameter {name}."),
+            format!("Parameters: {names}."),
+        )
+    })
+}
+
+/// Checks parameter names and values against `effects.json` (decoding, apply and package
+/// validation share it).
+pub fn check_effect(kind: &str, params: &[EffectParam]) -> Result<(), CommandError> {
+    for param in params {
+        let spec = param_spec(kind, &param.name)?;
+        let number = |key| spec.field(key).and_then(Json::as_f64).unwrap_or(0.0);
+        let in_range = |n: f64| n.is_finite() && n >= number("min") && n <= number("max");
+        let ok = match (spec.field("type").and_then(Json::as_str), &param.value) {
+            (Some("number"), EffectValue::Number(n)) => in_range(*n),
+            (Some("number"), EffectValue::Keys(keys)) => {
+                !keys.is_empty() && keys.iter().all(|key| in_range(key.value))
+            }
+            (Some("bool"), EffectValue::Bool(_)) => true,
+            (Some("enum"), EffectValue::Text(text)) => spec
+                .field("options")
+                .and_then(Json::as_array)
+                .is_some_and(|options| options.iter().any(|o| o.as_str() == Some(text))),
+            (Some("color"), EffectValue::Text(text)) => {
+                text.len() == 7
+                    && text.starts_with('#')
+                    && text[1..].bytes().all(|b| b.is_ascii_hexdigit())
+            }
+            (Some("file" | "text"), EffectValue::Text(text)) => {
+                text.len() <= 4096 && !text.contains('\0')
+            }
+            _ => false,
+        };
+        if !ok {
+            let expected = match spec.field("type").and_then(Json::as_str) {
+                Some("number") => format!(
+                    "a number from {} to {}, or {{keys:[{{at, value, ease}}]}} in that range",
+                    number("min"),
+                    number("max")
+                ),
+                Some("bool") => "true or false".into(),
+                Some("color") => "a #rrggbb color".into(),
+                Some("file") => "a file path".into(),
+                Some("text") => "text".into(),
+                _ => {
+                    let mut options = String::new();
+                    splice_json::write(spec.field("options").unwrap_or(&Json::Null), &mut options)
+                        .expect("finite schema");
+                    format!("one of {options}")
+                }
+            };
+            return Err(CommandError::bad(&param.name, &expected));
+        }
+    }
+    Ok(())
 }

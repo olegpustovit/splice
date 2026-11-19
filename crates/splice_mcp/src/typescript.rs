@@ -26,6 +26,10 @@ declare namespace Splice {
     | { word: string; transcriptHash?: string; edge?: "start" | "end"; offset?: number };
   /** A rectangle normalized to the source frame (0–1). */
   type Rect = { x: number; y: number; w: number; h: number };
+  /** Curve toward the next key. */
+  type Ease = "linear" | "hold" | "in" | "out" | "inOut" | [number, number, number, number];
+  /** A keyframe; frames are relative to the owner's start. */
+  type Key = { at: number; value: number; ease?: Ease };
   /** "r12" or 12. */
   type Revision = number | string;
 "#;
@@ -151,11 +155,7 @@ fn index() -> String {
 }
 
 fn command(out: &mut String, row: &Command) {
-    let cut = match row.tier {
-        Tier::First => "0.1",
-        Tier::Second => "0.2",
-        Tier::Planned => "0.3, planned: fails with NOT_IMPLEMENTED",
-    };
+    let cut = row.tier.cut();
     let _ = writeln!(out, "    /** {} ({}, {cut}). */", row.title, row.risk);
     let _ = writeln!(out, "    interface {} extends Base {{", pascal(row.id));
     let _ = writeln!(out, "      cmd: \"{}\";", row.id);
@@ -230,6 +230,27 @@ fn param_type(kind: &str, doc: &str) -> String {
     }
     if kind.starts_with("{x,y,w,h}") {
         return "Rect | null".into();
+    }
+    if kind.starts_with("[{at, value") {
+        return "Key[]".into();
+    }
+    if kind.starts_with("[{at, x, y, w, h") {
+        return "{ at: number; x: number; y: number; w: number; h: number; ease?: Ease }[]".into();
+    }
+    if kind.starts_with("[{at, x, y}]") {
+        return "{ at: number; x: number; y: number }[]".into();
+    }
+    if kind.starts_with("[[from, to]]") {
+        return "[number, number][]".into();
+    }
+    if kind.starts_with("{x, y, w, h}") {
+        return "Rect".into();
+    }
+    if kind.starts_with("{title, subtitle}") {
+        return "{ title?: string; subtitle?: string }".into();
+    }
+    if kind.starts_with("number | {keys}") {
+        return "number | { keys: Key[] }".into();
     }
     if kind.starts_with("{wordId") {
         return "Record<string, { text?: string; emph?: boolean; emoji?: string; hidden?: boolean } | null>".into();

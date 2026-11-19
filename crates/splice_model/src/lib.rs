@@ -3,12 +3,14 @@
 
 mod arena;
 mod ids;
+pub mod keys;
 mod media;
 mod timeline;
 pub mod timing;
 
 pub use arena::{Clips, Items, Slot};
 pub use ids::*;
+pub use keys::{Ease, Key};
 pub use media::*;
 pub use timeline::*;
 
@@ -48,6 +50,21 @@ pub struct Project {
     pub media: Vec<Media>,
     /// Transcripts for imported or recorded media.
     pub transcripts: Vec<Transcript>,
+    /// Nested timelines behind `MediaKind::Compound` media.
+    pub compounds: Vec<Compound>,
+}
+
+/// A nested timeline (T17.4). Its clips start at frame 0 and its items are pinned to its clock.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Compound {
+    /// The `MediaKind::Compound` descriptor that plays it.
+    pub media: MediaId,
+    /// Spine clips on the compound's clock.
+    pub clips: Vec<Clip>,
+    /// Items pinned to the compound's clock.
+    pub items: Vec<Item>,
+    /// The lanes those items used, for breaking apart into a project that removed them.
+    pub lanes: Vec<Lane>,
 }
 
 impl Default for Project {
@@ -72,6 +89,7 @@ impl Default for Project {
             markers: Vec::new(),
             media: Vec::new(),
             transcripts: Vec::new(),
+            compounds: Vec::new(),
         }
     }
 }
@@ -97,6 +115,7 @@ impl Clone for Project {
             markers: self.markers.clone(),
             media: self.media.clone(),
             transcripts: self.transcripts.clone(),
+            compounds: self.compounds.clone(),
         }
     }
 
@@ -125,5 +144,6 @@ impl Clone for Project {
         self.markers.clone_from(&source.markers);
         self.media.clone_from(&source.media);
         self.transcripts.clone_from(&source.transcripts);
+        self.compounds.clone_from(&source.compounds);
     }
 }

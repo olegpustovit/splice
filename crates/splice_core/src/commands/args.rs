@@ -1,7 +1,7 @@
 use super::{CommandError, Json, op::*};
 use splice_model::{
-    Access, Aspect, Edge, EffectParam, EffectValue, Fit, Frame, LaneKind, Placement, Rect,
-    TimelineId, WordId,
+    Access, Aspect, Ease, Edge, EffectParam, EffectValue, Fit, Frame, Key, LaneKind, Placement,
+    Rect, TimelineId, WordId,
 };
 
 type Error = CommandError;
@@ -386,8 +386,13 @@ pub(super) fn effect_params(value: &Json) -> Result<Vec<EffectParam>, Error> {
             EffectValue::Text(s.into())
         } else if let Some(n) = parameter.as_f64().filter(|n| n.is_finite()) {
             EffectValue::Number(n)
+        } else if let Some(keys) = crate::package::decode_keys(parameter) {
+            EffectValue::Keys(keys)
         } else {
-            return Err(Error::bad(key, "a finite number, boolean, or string"));
+            return Err(Error::bad(
+                key,
+                "a finite number, boolean, string or {keys:[{at, value, ease}]}",
+            ));
         };
         result.push(EffectParam {
             name: key.clone(),
@@ -395,6 +400,72 @@ pub(super) fn effect_params(value: &Json) -> Result<Vec<EffectParam>, Error> {
         });
     }
     Ok(result)
+}
+
+/// Top-level arguments that name parameters of effect `kind`, as effect parameters.
+pub(super) fn schema_params(value: &Json, kind: &str) -> Result<Vec<EffectParam>, Error> {
+    let schemas = super::effect_schemas();
+    let Some(schema) = schemas.field(kind).and_then(|s| s.field("params")) else {
+        return Ok(Vec::new());
+    };
+    let mut result = Vec::new();
+    for (key, parameter) in value.as_object().into_iter().flatten() {
+        if schema.field(key).is_none() {
+            continue;
+        }
+        let value = if let Some(b) = parameter.as_bool() {
+            EffectValue::Bool(b)
+        } else if let Some(s) = parameter.as_str() {
+            EffectValue::Text(s.into())
+        } else if let Some(n) = parameter.as_f64().filter(|n| n.is_finite()) {
+            EffectValue::Number(n)
+        } else if let Some(keys) = crate::package::decode_keys(parameter) {
+            EffectValue::Keys(keys)
+        } else {
+            return Err(Error::bad(key, "a number, boolean, string or {keys}"));
+        };
+        result.push(EffectParam {
+            name: key.clone(),
+            value,
+        });
+    }
+    Ok(result)
+}
+
+/// `[{at, value, ease}]` with increasing frames.
+pub(super) fn keys(value: &Json, key: &str) -> Result<Vec<Key>, Error> {
+    let list = value
+        .field(key)
+        .ok_or_else(|| Error::bad(key, "an array of {at, value, ease}"))?;
+    let wrapped = Json::Object(vec![("keys".into(), list.clone())]);
+    crate::package::decode_keys(&wrapped).ok_or_else(|| {
+        Error::bad(
+            key,
+            "a nonempty array of {at, value, ease?} with increasing integer at; ease linear, hold, in, out, inOut or [x1, y1, x2, y2]",
+        )
+    })
+}
+
+/// An ease name or Bezier, linear when absent.
+pub(super) fn ease(value: &Json, key: &str) -> Result<Ease, Error> {
+    match value.field(key) {
+        None => Ok(Ease::Linear),
+        Some(Json::String(name)) => Ease::parse(name)
+            .ok_or_else(|| Error::bad(key, "linear, hold, in, out, inOut or [x1, y1, x2, y2]")),
+        Some(other) => {
+            let wrapped = Json::Object(vec![(
+                "keys".into(),
+                Json::Array(vec![Json::Object(vec![
+                    ("at".into(), Json::Unsigned(0)),
+                    ("value".into(), Json::Float(0.0)),
+                    ("ease".into(), other.clone()),
+                ])]),
+            )]);
+            crate::package::decode_keys(&wrapped)
+                .map(|keys| keys[0].ease)
+                .ok_or_else(|| Error::bad(key, "linear, hold, in, out, inOut or [x1, y1, x2, y2]"))
+        }
+    }
 }
 
 pub(super) fn crop(value: &Json) -> Result<Option<Option<Rect>>, Error> {

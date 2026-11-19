@@ -1,6 +1,6 @@
 use splice_model::{
-    Access, Aspect, Duck, Edge, EffectId, EffectParam, Fit, Frame, LaneId, LaneKind, MediaId,
-    Placement, Rect, TimelineId, WordId,
+    Access, Aspect, Duck, Ease, Edge, EffectId, EffectParam, Fit, Frame, Key, LaneId, LaneKind,
+    MediaId, Placement, Rect, ShapeKind, TimelineId, WordId,
 };
 
 /// An edit command with its validated wire arguments.
@@ -386,45 +386,269 @@ pub enum Op {
         items: Vec<Target>,
     },
     /// Join Clips.
-    ClipJoin,
+    ClipJoin {
+        /// Adjacent spine clips from one source, in order.
+        items: Vec<Target>,
+    },
     /// Ungroup.
-    ClipUngroup,
+    ClipUngroup {
+        /// A joined clip.
+        item: Target,
+    },
     /// Restore Cuts.
-    ClipRestore,
+    ClipRestore {
+        /// Clips whose cut material to bring back; empty restores every seam.
+        items: Vec<Target>,
+    },
     /// Reorder Lane.
-    LaneReorder,
+    LaneReorder {
+        /// Lane to move.
+        lane: Target,
+        /// New stack index, 0 at the top.
+        to: usize,
+    },
     /// Animated Crop.
-    CropKeys,
+    CropKeys {
+        /// Clip or media overlay.
+        item: Target,
+        /// Owner-relative keys: frame, crop x/y/w/h normalized to the source, ease.
+        keys: Vec<(Frame, [f64; 4], Ease)>,
+    },
     /// Add Transition.
-    TransitionAdd,
+    TransitionAdd {
+        /// Incoming spine clip.
+        item: Target,
+        /// Transition parameters.
+        params: Vec<EffectParam>,
+    },
     /// Zoom Settings.
-    ZoomSet,
+    ZoomSet {
+        /// Screen take clip, or the project.
+        target: Target,
+        /// Turn click zoom on or off.
+        enabled: Option<bool>,
+        /// Click zoom parameters.
+        params: Vec<EffectParam>,
+    },
     /// Add Mask.
-    MaskAdd,
+    MaskAdd {
+        /// Clip or media overlay.
+        item: Target,
+        /// Mask parameters.
+        params: Vec<EffectParam>,
+    },
     /// Edit Mask.
-    MaskSet,
+    MaskSet {
+        /// Mask effect.
+        mask: Target,
+        /// Mask parameters.
+        params: Vec<EffectParam>,
+        /// Turn the mask on or off.
+        enabled: Option<bool>,
+    },
     /// Translate Captions.
-    CaptionsTranslate,
+    CaptionsTranslate {
+        /// Captions lane to translate.
+        lane: Target,
+        /// BCP 47 tag of the translation.
+        language: String,
+        /// One translated text per cue, in cue order.
+        texts: Vec<String>,
+    },
     /// Import SRT / VTT.
-    CaptionsImport,
+    CaptionsImport {
+        /// Destination captions lane; a new one when omitted.
+        lane: Option<Target>,
+        /// SRT or WebVTT text.
+        text: String,
+    },
     /// Link Audio.
-    AudioLink,
+    AudioLink {
+        /// Detached sound item.
+        item: Target,
+    },
     /// Unlink Audio.
-    AudioUnlink,
+    AudioUnlink {
+        /// Spine clip whose audio becomes a separate sound item.
+        item: Target,
+        /// Destination audio lane.
+        lane: Option<Target>,
+    },
     /// Move into Sync.
-    AudioSync,
+    AudioSync {
+        /// Sound item or media overlay to align.
+        item: Target,
+        /// Spine clip it belongs to.
+        to: Target,
+        /// Source frames of `item` that line up with the first source frame of `to`.
+        offset: Frame,
+    },
     /// Style.
-    StyleSet,
+    StyleSet {
+        /// Brand kit parameters.
+        params: Vec<EffectParam>,
+    },
     /// Cut Pauses.
-    CutPauses,
+    CutPauses {
+        /// Pauses at least this long are cut (frames).
+        min: Option<Frame>,
+        /// Silence kept on each side of a cut (frames).
+        keep: Option<Frame>,
+    },
     /// Tighten Pace.
-    IntentPace,
+    IntentPace {
+        /// Longest pause to keep (frames).
+        max_pause: Option<Frame>,
+    },
     /// Fit to Duration.
-    IntentFitDuration,
+    IntentFitDuration {
+        /// Target length in seconds.
+        seconds: f64,
+    },
     /// Keep Shots.
-    IntentKeepShots,
+    IntentKeepShots {
+        /// Timeline ranges to keep, half-open; everything else on the spine is cut.
+        ranges: Vec<(Frame, Frame)>,
+    },
     /// Auto Zoom.
-    IntentAutoZoom,
+    IntentAutoZoom {
+        /// Screen take clip.
+        item: Target,
+        /// Clicks as (source frame, x, y), x and y normalized to the source.
+        clicks: Vec<(Frame, f64, f64)>,
+        /// Zoom scale.
+        scale: Option<f64>,
+        /// Frames to hold each zoom.
+        hold: Option<Frame>,
+    },
+    /// Roll Edit (Splice extension).
+    ItemRoll {
+        /// Spine clip whose out-edge moves with the next clip's in-edge.
+        item: Target,
+        /// Signed frames.
+        by: Frame,
+    },
+    /// Slip (Splice extension).
+    ItemSlip {
+        /// Clip or media item.
+        item: Target,
+        /// Signed source frames.
+        by: Frame,
+    },
+    /// Slide (Splice extension).
+    ItemSlide {
+        /// Spine clip moved between its neighbors.
+        item: Target,
+        /// Signed frames.
+        by: Frame,
+    },
+    /// Freeze Frame (Splice extension).
+    ClipFreeze {
+        /// Spine clip.
+        item: Target,
+        /// Timeline frame to hold.
+        at: FrameArg,
+        /// Hold length in frames.
+        length: Frame,
+    },
+    /// Compound Clip (Splice extension).
+    ClipCompound {
+        /// Adjacent spine clips.
+        items: Vec<Target>,
+    },
+    /// Break Apart Compound (Splice extension).
+    ClipUncompound {
+        /// Compound clip.
+        item: Target,
+    },
+    /// Edit Transition (Splice extension).
+    TransitionSet {
+        /// Incoming spine clip.
+        item: Target,
+        /// Transition parameters.
+        params: Vec<EffectParam>,
+    },
+    /// Remove Transition (Splice extension).
+    TransitionRemove {
+        /// Incoming spine clip.
+        item: Target,
+    },
+    /// Set Parameter (Splice extension).
+    ParamSet {
+        /// Clip, item, lane, effect owner or the project.
+        target: Target,
+        /// `type.param`, e.g. `transform.scale`.
+        path: String,
+        /// Constant value.
+        value: f64,
+    },
+    /// Keyframe Parameter (Splice extension).
+    ParamKeys {
+        /// Clip, item, lane, effect owner or the project.
+        target: Target,
+        /// `type.param`, e.g. `transform.scale`.
+        path: String,
+        /// Keys relative to the owner's start.
+        keys: Vec<Key>,
+        /// Merge into existing keys instead of replacing them.
+        merge: bool,
+    },
+    /// Track Mask (Splice extension).
+    MaskTrack {
+        /// Mask effect.
+        mask: Target,
+        /// Mask center keys (owner frame, x, y), normalized to the destination.
+        keys: Vec<(Frame, f64, f64)>,
+    },
+    /// Add Shape (Splice extension).
+    GeneratorAdd {
+        /// What to draw.
+        shape: ShapeKind,
+        /// Start.
+        at: FrameArg,
+        /// Duration.
+        length: Option<Frame>,
+        /// Normalized canvas bounds.
+        rect: Option<Rect>,
+        /// Graphics lane.
+        lane: Option<Target>,
+        /// Shape style parameters.
+        params: Vec<EffectParam>,
+    },
+    /// Add Template (Splice extension).
+    TemplateAdd {
+        /// Template name.
+        name: String,
+        /// Start.
+        at: FrameArg,
+        /// Duration.
+        length: Option<Frame>,
+        /// Text fields (title, subtitle, …).
+        fields: Vec<(String, String)>,
+    },
+    /// Edit Template (Splice extension).
+    TemplateSet {
+        /// Any item of the template.
+        item: Target,
+        /// Text fields to change.
+        fields: Vec<(String, String)>,
+    },
+    /// Relink Media (Splice extension).
+    MediaRelink {
+        /// Media descriptor.
+        media: Target,
+        /// New file path.
+        path: String,
+        /// Probed length of the new file, checked against the descriptor unless `force`.
+        frames: Option<Frame>,
+        /// Accept a different length.
+        force: bool,
+    },
+    /// Consolidate Media (Splice extension).
+    MediaConsolidate {
+        /// Descriptors to copy into the package; all external media when empty.
+        media: Vec<Target>,
+    },
     /// Set Transcript (a Splice extension).
     TranscriptSet {
         /// Source media.
@@ -580,6 +804,13 @@ pub enum OverlayContent {
         crop: Option<Rect>,
         /// Scale mode.
         fit: Fit,
+    },
+    /// Generated shape.
+    Shape {
+        /// What to draw.
+        shape: ShapeKind,
+        /// Normalized canvas bounds.
+        rect: Rect,
     },
 }
 

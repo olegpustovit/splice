@@ -109,11 +109,15 @@ fn render_plan_matches_ten_prototype_frames() {
                     )
                     .unwrap();
                 }
-                Layer::Fade { opacity } => writeln!(&mut output, "fade {opacity:.3}").unwrap(),
+                Layer::Fade { opacity, .. } => writeln!(&mut output, "fade {opacity:.3}").unwrap(),
+                Layer::Shape { item, bounds, .. } => {
+                    writeln!(&mut output, "shape {item} {}", rect_text(*bounds)).unwrap();
+                }
                 Layer::Title {
                     item,
                     bounds,
                     opacity,
+                    ..
                 } => {
                     writeln!(
                         &mut output,
@@ -128,6 +132,7 @@ fn render_plan_matches_ten_prototype_frames() {
                     word,
                     opacity,
                     style,
+                    ..
                 } => {
                     let words = evaluator
                         .caption_words(*item)
@@ -249,7 +254,7 @@ fn take_fade_applies_to_audio_and_behind_presenter_layers() {
         index(&|layer| matches!(layer, Layer::Picture(picture) if picture.item == overlay));
     let front = index(&|layer| matches!(layer, Layer::Picture(picture) if picture.item == other));
     let camera = index(&|layer| matches!(layer, Layer::Camera { .. }));
-    let fade = index(&|layer| matches!(layer, Layer::Fade { opacity: 0.5 }));
+    let fade = index(&|layer| matches!(layer, Layer::Fade { opacity: 0.5, .. }));
     assert!(behind < camera && camera < fade && fade < front);
     assert_eq!(output.audio.len(), 1);
     assert_eq!(output.audio[0].track, Track::System);

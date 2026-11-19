@@ -3,7 +3,7 @@ use splice_json::Value as Json;
 use splice_model::*;
 
 pub(crate) fn encode(p: &Project) -> Json {
-    object(vec![
+    let mut fields = vec![
         ("format", text(FORMAT)),
         ("rev", Json::Unsigned(p.rev)),
         ("hash", hash_text(p.hash)),
@@ -85,16 +85,89 @@ pub(crate) fn encode(p: &Project) -> Json {
             "markers",
             Json::Array(p.markers.iter().map(encode_marker).collect()),
         ),
+    ];
+    if !p.compounds.is_empty() {
+        fields.push((
+            "compounds",
+            Json::Array(p.compounds.iter().map(encode_compound).collect()),
+        ));
+    }
+    object(fields)
+}
+
+fn encode_compound(c: &Compound) -> Json {
+    object(vec![
+        ("media", display(&c.media)),
+        (
+            "clips",
+            Json::Array(
+                c.clips
+                    .iter()
+                    .map(|clip| timeline::encode_clip(clip.id, clip.timing, &clip.data))
+                    .collect(),
+            ),
+        ),
+        (
+            "items",
+            Json::Array(
+                c.items
+                    .iter()
+                    .map(|item| timeline::encode_item(item.id, item.timing, &item.data))
+                    .collect(),
+            ),
+        ),
+        (
+            "lanes",
+            Json::Array(c.lanes.iter().map(encode_lane).collect()),
+        ),
     ])
 }
 
-pub(super) fn decode(value: &Json) -> Result<Project, PackageError> {
+fn decode_compound(value: &Json) -> Result<Compound, PackageError> {
+    shape(value, &["media", "clips", "items", "lanes"])?;
+    Ok(Compound {
+        media: value
+            .string("media")?
+            .parse()
+            .map_err(|_| bad_id("compound.media"))?,
+        clips: value
+            .array("clips")?
+            .iter()
+            .map(timeline::decode_clip)
+            .collect::<Result<_, _>>()?,
+        items: value
+            .array("items")?
+            .iter()
+            .map(timeline::decode_item)
+            .collect::<Result<_, _>>()?,
+        lanes: value
+            .array("lanes")?
+            .iter()
+            .map(decode_lane)
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+pub(crate) fn decode(value: &Json) -> Result<Project, PackageError> {
     check_version(value)?;
     shape(
         value,
         &[
-            "format", "rev", "hash", "serial", "fps", "size", "aspect", "access", "effects",
-            "spine", "lanes", "clips", "items", "markers",
+            "format",
+            "rev",
+            "hash",
+            "serial",
+            "fps",
+            "size",
+            "aspect",
+            "access",
+            "effects",
+            "spine",
+            "lanes",
+            "clips",
+            "items",
+            "markers",
+            "compounds",
         ],
     )?;
     let values = value.array("size")?;
@@ -153,6 +226,11 @@ pub(super) fn decode(value: &Json) -> Result<Project, PackageError> {
             .collect::<Result<Vec<_>, _>>()?,
         media: Vec::new(),
         transcripts: Vec::new(),
+        compounds: value
+            .array_or_empty("compounds")?
+            .iter()
+            .map(decode_compound)
+            .collect::<Result<Vec<_>, _>>()?,
     };
     for value in clips {
         let clip = timeline::decode_clip(value)?;

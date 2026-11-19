@@ -1,5 +1,5 @@
 use super::{CommandError as Error, DecodeScratch, Json, args::*, op::*};
-use splice_model::{Duck, Fit, Frame, Placement};
+use splice_model::{Duck, Ease, Fit, Frame, Placement, Rect, ShapeKind};
 
 type DecodedOp = Result<Op, Error>;
 
@@ -626,5 +626,478 @@ pub(super) fn transcript_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedO
         media: a.target("media")?,
         words,
         language,
+    })
+}
+
+// ── 0.3 rows (PLAN.md T16–T21) ──
+
+fn frames_list(a: &Json, key: &str) -> Result<Vec<(Frame, Frame)>, Error> {
+    let mut ranges = Vec::new();
+    for range in a
+        .field(key)
+        .and_then(Json::as_array)
+        .ok_or_else(|| Error::bad(key, "an array of [from, to] timeline frames"))?
+    {
+        let pair = range.as_array().filter(|pair| pair.len() == 2);
+        let frames = pair.and_then(|pair| {
+            Some((
+                Frame::try_from(pair[0].as_i64()?).ok()?,
+                Frame::try_from(pair[1].as_i64()?).ok()?,
+            ))
+        });
+        match frames {
+            Some((from, to)) if from >= 0 && to > from => ranges.push((from, to)),
+            _ => return Err(Error::bad(key, "[from, to] pairs with to after from")),
+        }
+    }
+    Ok(ranges)
+}
+
+fn text_fields(a: &Json, key: &str) -> Result<Vec<(String, String)>, Error> {
+    let Some(fields) = a.field(key) else {
+        return Ok(Vec::new());
+    };
+    let mut result = Vec::new();
+    for (name, value) in fields
+        .as_object()
+        .ok_or_else(|| Error::bad(key, "an object of text fields"))?
+    {
+        let text = value
+            .as_str()
+            .ok_or_else(|| Error::bad(&format!("{key}.{name}"), "text"))?;
+        result.push((name.clone(), text.to_owned()));
+    }
+    Ok(result)
+}
+
+pub(super) fn clip_join(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ClipJoin {
+        items: a.targets("items")?,
+    })
+}
+
+pub(super) fn clip_ungroup(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ClipUngroup {
+        item: a.target("item")?,
+    })
+}
+
+pub(super) fn clip_restore(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ClipRestore {
+        items: match a.field("items") {
+            Some(_) => a.targets("items")?,
+            None => Vec::new(),
+        },
+    })
+}
+
+pub(super) fn lane_reorder(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let to = a
+        .field("to")
+        .and_then(Json::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or_else(|| Error::bad("to", "a stack index, 0 at the top"))?;
+    Ok(Op::LaneReorder {
+        lane: a.target("lane")?,
+        to,
+    })
+}
+
+pub(super) fn crop_keys(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let mut keys = Vec::new();
+    for key in a
+        .field("keys")
+        .and_then(Json::as_array)
+        .ok_or_else(|| Error::bad("keys", "an array of {at, x, y, w, h, ease}"))?
+    {
+        let at = key
+            .opt_int("at")?
+            .ok_or_else(|| Error::bad("keys.at", "an owner frame"))?;
+        let rect = [
+            key.number("x")?,
+            key.number("y")?,
+            key.number("w")?,
+            key.number("h")?,
+        ];
+        if rect[2] <= 0.0
+            || rect[3] <= 0.0
+            || rect[0] < 0.0
+            || rect[1] < 0.0
+            || rect[0] + rect[2] > 1.0 + 1e-9
+            || rect[1] + rect[3] > 1.0 + 1e-9
+            || keys
+                .last()
+                .is_some_and(|last: &(Frame, [f64; 4], Ease)| last.0 >= at)
+        {
+            return Err(Error::bad(
+                "keys",
+                "increasing frames with x, y, w, h inside 0…1 of the source",
+            ));
+        }
+        keys.push((at, rect, ease(key, "ease")?));
+    }
+    if keys.is_empty() {
+        return Err(Error::bad("keys", "at least one key"));
+    }
+    Ok(Op::CropKeys {
+        item: a.target("item")?,
+        keys,
+    })
+}
+
+pub(super) fn transition_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::TransitionAdd {
+        item: a.target("item")?,
+        params: schema_params(a, "transition")?,
+    })
+}
+
+pub(super) fn transition_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::TransitionSet {
+        item: a.target("item")?,
+        params: schema_params(a, "transition")?,
+    })
+}
+
+pub(super) fn transition_remove(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::TransitionRemove {
+        item: a.target("item")?,
+    })
+}
+
+pub(super) fn zoom_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ZoomSet {
+        target: a.target("target")?,
+        enabled: a.opt_flag("enabled")?,
+        params: schema_params(a, "clickZoom")?,
+    })
+}
+
+pub(super) fn mask_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::MaskAdd {
+        item: a.target("item")?,
+        params: schema_params(a, "mask")?,
+    })
+}
+
+pub(super) fn mask_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::MaskSet {
+        mask: a.target("mask")?,
+        params: schema_params(a, "mask")?,
+        enabled: a.opt_flag("enabled")?,
+    })
+}
+
+pub(super) fn mask_track(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let mut keys = Vec::new();
+    for key in a
+        .field("keys")
+        .and_then(Json::as_array)
+        .ok_or_else(|| Error::bad("keys", "an array of {at, x, y} mask centers"))?
+    {
+        let at = key
+            .opt_int("at")?
+            .ok_or_else(|| Error::bad("keys.at", "an owner frame"))?;
+        if keys
+            .last()
+            .is_some_and(|last: &(Frame, f64, f64)| last.0 >= at)
+        {
+            return Err(Error::bad("keys", "increasing frames"));
+        }
+        keys.push((at, key.number("x")?, key.number("y")?));
+    }
+    if keys.is_empty() {
+        return Err(Error::bad(
+            "keys",
+            "at least one {at, x, y}; splice mcp fills them by tracking when omitted",
+        ));
+    }
+    Ok(Op::MaskTrack {
+        mask: a.target("mask")?,
+        keys,
+    })
+}
+
+pub(super) fn captions_translate(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let mut texts = Vec::new();
+    for text in a.field("texts").map(list).unwrap_or(&[]) {
+        texts.push(
+            text.as_str()
+                .ok_or_else(|| Error::bad("texts", "an array of strings, one per cue"))?
+                .to_owned(),
+        );
+    }
+    Ok(Op::CaptionsTranslate {
+        lane: a.target("lane")?,
+        language: a.string("language")?.into(),
+        texts,
+    })
+}
+
+pub(super) fn captions_import(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::CaptionsImport {
+        lane: a.opt_target("lane")?,
+        text: a.string("text")?.into(),
+    })
+}
+
+pub(super) fn audio_link(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::AudioLink {
+        item: a.target("item")?,
+    })
+}
+
+pub(super) fn audio_unlink(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::AudioUnlink {
+        item: a.target("item")?,
+        lane: a.opt_target("lane")?,
+    })
+}
+
+pub(super) fn audio_sync(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::AudioSync {
+        item: a.target("item")?,
+        to: a.target("to")?,
+        offset: a.opt_int("offset")?.ok_or_else(|| {
+            Error::bad(
+                "offset",
+                "source frames; splice mcp measures it from the audio when omitted",
+            )
+        })?,
+    })
+}
+
+pub(super) fn style_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let params = schema_params(a, "brand")?;
+    if params.is_empty() {
+        return Err(Error::bad(
+            "font",
+            "at least one of font, color, color2, accent, textColor, logo, logoPosition",
+        ));
+    }
+    Ok(Op::StyleSet { params })
+}
+
+pub(super) fn cut_pauses(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::CutPauses {
+        min: a.opt_int("min")?,
+        keep: a.opt_int("keep")?,
+    })
+}
+
+pub(super) fn intent_pace(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::IntentPace {
+        max_pause: a.opt_int("maxPause")?,
+    })
+}
+
+pub(super) fn intent_fit_duration(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let seconds = a.number("seconds")?;
+    if seconds.is_nan() || seconds <= 0.0 {
+        return Err(Error::bad("seconds", "a positive duration"));
+    }
+    Ok(Op::IntentFitDuration { seconds })
+}
+
+pub(super) fn intent_keep_shots(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::IntentKeepShots {
+        ranges: frames_list(a, "ranges")?,
+    })
+}
+
+pub(super) fn intent_auto_zoom(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let mut clicks = Vec::new();
+    for click in a.field("clicks").map(list).unwrap_or(&[]) {
+        let at = click
+            .opt_int("at")?
+            .ok_or_else(|| Error::bad("clicks.at", "a source frame"))?;
+        clicks.push((at, click.number("x")?, click.number("y")?));
+    }
+    if clicks.is_empty() {
+        return Err(Error::bad(
+            "clicks",
+            "{at, x, y} source clicks; splice mcp fills them from the take's events when omitted",
+        ));
+    }
+    Ok(Op::IntentAutoZoom {
+        item: a.target("item")?,
+        clicks,
+        scale: a.opt_number("scale")?,
+        hold: a.opt_int("hold")?,
+    })
+}
+
+pub(super) fn item_roll(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ItemRoll {
+        item: a.target("item")?,
+        by: a
+            .opt_int("by")?
+            .ok_or_else(|| Error::bad("by", "signed frames"))?,
+    })
+}
+
+pub(super) fn item_slip(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ItemSlip {
+        item: a.target("item")?,
+        by: a
+            .opt_int("by")?
+            .ok_or_else(|| Error::bad("by", "signed source frames"))?,
+    })
+}
+
+pub(super) fn item_slide(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ItemSlide {
+        item: a.target("item")?,
+        by: a
+            .opt_int("by")?
+            .ok_or_else(|| Error::bad("by", "signed frames"))?,
+    })
+}
+
+pub(super) fn clip_freeze(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let length = a.opt_int("length")?.unwrap_or(60);
+    if length <= 0 {
+        return Err(Error::bad("length", "positive frames"));
+    }
+    Ok(Op::ClipFreeze {
+        item: a.target("item")?,
+        at: a.frame("at")?,
+        length,
+    })
+}
+
+pub(super) fn clip_compound(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ClipCompound {
+        items: a.targets("items")?,
+    })
+}
+
+pub(super) fn clip_uncompound(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ClipUncompound {
+        item: a.target("item")?,
+    })
+}
+
+fn param_path(a: &Json) -> Result<String, Error> {
+    let path = a.string("path")?;
+    match path.split_once('.') {
+        Some((kind, name)) if !kind.is_empty() && !name.is_empty() => Ok(path.into()),
+        _ => Err(Error::bad(
+            "path",
+            "type.param, e.g. transform.scale or volume.gain",
+        )),
+    }
+}
+
+pub(super) fn param_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ParamSet {
+        target: a.target("target")?,
+        path: param_path(a)?,
+        value: a.number("value")?,
+    })
+}
+
+pub(super) fn param_keys(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let merge = match a.opt_string("mode")?.as_deref() {
+        None | Some("replace") => false,
+        Some("merge") => true,
+        _ => return Err(Error::bad("mode", "replace or merge")),
+    };
+    Ok(Op::ParamKeys {
+        target: a.target("target")?,
+        path: param_path(a)?,
+        keys: keys(a, "keys")?,
+        merge,
+    })
+}
+
+fn normalized_rect(a: &Json, key: &str) -> Result<Option<Rect>, Error> {
+    let Some(value) = a.field(key) else {
+        return Ok(None);
+    };
+    let rect = Rect {
+        x: value.number("x")?,
+        y: value.number("y")?,
+        w: value.number("w")?,
+        h: value.number("h")?,
+    };
+    if ![rect.x, rect.y, rect.w, rect.h]
+        .iter()
+        .all(|n| n.is_finite())
+        || rect.w.abs() > 4.0
+        || rect.h.abs() > 4.0
+    {
+        return Err(Error::bad(key, "{x, y, w, h} normalized to the canvas"));
+    }
+    Ok(Some(rect))
+}
+
+pub(super) fn generator_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let shape = ShapeKind::parse(a.string("shape")?).ok_or_else(|| {
+        Error::bad(
+            "shape",
+            "solid, gradient, rect, ellipse, arrow, line or callout",
+        )
+    })?;
+    Ok(Op::GeneratorAdd {
+        shape,
+        at: a.frame("at")?,
+        length: a.opt_int("length")?,
+        rect: normalized_rect(a, "rect")?,
+        lane: a.opt_target("lane")?,
+        params: schema_params(a, "shape")?,
+    })
+}
+
+pub(super) fn template_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let name = a.string("name")?;
+    if ![
+        "lower-third",
+        "callout",
+        "cta",
+        "title-card",
+        "chapter-card",
+    ]
+    .contains(&name)
+    {
+        return Err(Error::bad(
+            "name",
+            "lower-third, callout, cta, title-card or chapter-card",
+        ));
+    }
+    Ok(Op::TemplateAdd {
+        name: name.into(),
+        at: a.frame("at")?,
+        length: a.opt_int("length")?,
+        fields: text_fields(a, "fields")?,
+    })
+}
+
+pub(super) fn template_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::TemplateSet {
+        item: a.target("item")?,
+        fields: text_fields(a, "fields")?,
+    })
+}
+
+pub(super) fn media_relink(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let path = a.string("path")?;
+    if path.is_empty() || path.contains('\0') {
+        return Err(Error::bad("path", "a file path"));
+    }
+    Ok(Op::MediaRelink {
+        media: a.target("media")?,
+        path: path.into(),
+        frames: a.opt_int("frames")?,
+        force: a.flag("force", false)?,
+    })
+}
+
+pub(super) fn media_consolidate(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::MediaConsolidate {
+        media: match a.field("media") {
+            Some(_) => a.targets("media")?,
+            None => Vec::new(),
+        },
     })
 }

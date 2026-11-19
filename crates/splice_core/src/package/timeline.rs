@@ -37,6 +37,12 @@ pub(super) fn encode_clip(id: ClipId, timing: ClipTiming, data: &ClipData) -> Js
     ];
     push_text(&mut fields, "name", &data.appearance.name);
     push_text(&mut fields, "color", &data.appearance.color);
+    if !data.joins.is_empty() {
+        fields.push((
+            "joins",
+            Json::Array(data.joins.iter().map(|&at| frame_json(at)).collect()),
+        ));
+    }
     if !data.hidden_keys.is_empty() {
         fields.push((
             "hiddenKeys",
@@ -71,6 +77,7 @@ pub(super) fn decode_clip(value: &Json) -> Result<Clip, PackageError> {
             "name",
             "color",
             "hiddenKeys",
+            "joins",
         ],
     )?;
     let media = optional_string(value, "media")?
@@ -90,6 +97,15 @@ pub(super) fn decode_clip(value: &Json) -> Result<Clip, PackageError> {
                 .as_u64()
                 .and_then(|n| u32::try_from(n).ok())
                 .ok_or_else(|| bad("hiddenKeys", "an array of unsigned indices"))?,
+        );
+    }
+    let mut joins = Vec::new();
+    for at in value.array_or_empty("joins")? {
+        joins.push(
+            at.as_i64()
+                .and_then(|n| Frame::try_from(n).ok())
+                .filter(|&n| n > 0)
+                .ok_or_else(|| bad("joins", "an array of positive frame offsets"))?,
         );
     }
     Ok(Clip {
@@ -117,6 +133,7 @@ pub(super) fn decode_clip(value: &Json) -> Result<Clip, PackageError> {
                 system: number(volume, "system")?,
             },
             hidden_keys,
+            joins,
         },
     })
 }
@@ -185,6 +202,13 @@ pub(super) fn encode_item(id: ItemId, timing: ItemTiming, data: &ItemData) -> Js
             }
             ("sound", object(fields))
         }
+        ItemKind::Shape { shape, rect } => (
+            "shape",
+            object(vec![
+                ("shape", text(shape.name())),
+                ("rect", encode_rect(*rect)),
+            ]),
+        ),
     };
     let mut fields = vec![
         ("id", display(&id)),
@@ -306,7 +330,24 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
                 .collect::<Result<Vec<_>, _>>()?;
             ItemKind::Caption { words, edits }
         }
-        _ => return Err(bad("item.kind", "title, media, motion, or caption")),
+        "shape" => {
+            shape(params, &["shape", "rect"])?;
+            ItemKind::Shape {
+                shape: ShapeKind::parse(params.string("shape")?).ok_or_else(|| {
+                    bad(
+                        "shape",
+                        "solid, gradient, rect, ellipse, arrow, line or callout",
+                    )
+                })?,
+                rect: decode_rect(params.required("rect")?)?,
+            }
+        }
+        _ => {
+            return Err(bad(
+                "item.kind",
+                "title, media, motion, sound, shape or caption",
+            ));
+        }
     };
     Ok(Item {
         id: value.string("id")?.parse().map_err(|_| bad_id("item.id"))?,
@@ -564,6 +605,7 @@ pub fn encode_effects(effects: &[Effect]) -> Json {
                             EffectValue::Number(n) => Json::Float(*n),
                             EffectValue::Bool(b) => Json::Bool(*b),
                             EffectValue::Text(s) => text(s),
+                            EffectValue::Keys(keys) => encode_keys(keys),
                         };
                         (param.name.clone(), value)
                     })
@@ -594,8 +636,10 @@ pub(super) fn decode_effects(value: &Json) -> Result<Vec<Effect>, PackageError> 
                 EffectValue::Bool(b)
             } else if let Some(s) = value.as_str() {
                 EffectValue::Text(s.into())
+            } else if let Some(keys) = decode_keys(value) {
+                EffectValue::Keys(keys)
             } else {
-                return Err(bad(name, "a number, boolean or string"));
+                return Err(bad(name, "a number, boolean, string or {keys}"));
             };
             params.push(EffectParam {
                 name: name.clone(),
@@ -613,4 +657,88 @@ pub(super) fn decode_effects(value: &Json) -> Result<Vec<Effect>, PackageError> 
         });
     }
     Ok(effects)
+}
+
+/// `{"keys":[{"at","value","ease"}]}`; `ease` is a name or `[x1, y1, x2, y2]`.
+pub fn encode_keys(keys: &[Key]) -> Json {
+    object(vec![(
+        "keys",
+        Json::Array(
+            keys.iter()
+                .map(|key| {
+                    let ease = match key.ease {
+                        Ease::Bezier(points) => {
+                            Json::Array(points.iter().map(|&p| Json::Float(p)).collect())
+                        }
+                        other => text(other.name().expect("named ease")),
+                    };
+                    object(vec![
+                        ("at", frame_json(key.at)),
+                        ("value", Json::Float(key.value)),
+                        ("ease", ease),
+                    ])
+                })
+                .collect(),
+        ),
+    )])
+}
+
+/// Parses `encode_keys` output: at least one key, frames strictly increasing, finite values,
+/// Bezier x control points within 0…1. `None` when the shape is wrong.
+pub fn decode_keys(value: &Json) -> Option<Vec<Key>> {
+    let fields = value.as_object()?;
+    if fields.len() != 1 {
+        return None;
+    }
+    let list = value.field("keys")?.as_array()?;
+    let mut keys = Vec::with_capacity(list.len());
+    for entry in list {
+        let fields = entry.as_object()?;
+        if fields
+            .iter()
+            .any(|(name, _)| !matches!(name.as_str(), "at" | "value" | "ease"))
+        {
+            return None;
+        }
+        let at = Frame::try_from(entry.field("at")?.as_i64()?).ok()?;
+        let value = entry.field("value")?.as_f64().filter(|v| v.is_finite())?;
+        let ease = match entry.field("ease") {
+            None => Ease::Linear,
+            Some(Json::Array(points)) if points.len() == 4 => {
+                let mut p = [0.0; 4];
+                for (slot, point) in p.iter_mut().zip(points) {
+                    *slot = point.as_f64().filter(|v| v.is_finite())?;
+                }
+                if !(0.0..=1.0).contains(&p[0]) || !(0.0..=1.0).contains(&p[2]) {
+                    return None;
+                }
+                Ease::Bezier(p)
+            }
+            Some(name) => Ease::parse(name.as_str()?)?,
+        };
+        if keys.last().is_some_and(|last: &Key| last.at >= at) {
+            return None;
+        }
+        keys.push(Key { at, value, ease });
+    }
+    (!keys.is_empty()).then_some(keys)
+}
+
+fn encode_rect(rect: Rect) -> Json {
+    object(vec![
+        ("x", Json::Float(rect.x)),
+        ("y", Json::Float(rect.y)),
+        ("w", Json::Float(rect.w)),
+        ("h", Json::Float(rect.h)),
+    ])
+}
+
+fn decode_rect(value: &Json) -> Result<Rect, PackageError> {
+    shape(value, &["x", "y", "w", "h"])?;
+    Ok(Rect {
+        x: number(value, "x")?,
+        y: number(value, "y")?,
+        w: number(value, "w")?,
+        h: number(value, "h")?,
+    })
 }

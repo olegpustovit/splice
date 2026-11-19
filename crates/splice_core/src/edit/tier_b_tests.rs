@@ -77,7 +77,7 @@ fn tier_b_effects_inherit_override_reset_and_promote() {
         r#"[{"cmd":"effect.add","target":"project","type":"spotlight"}]"#,
     )
     .unwrap_err();
-    assert_eq!(error.error.code, "PLANNED");
+    assert_eq!(error.error.code, "BAD_ARGS");
     // Set, then reset the only override: the instance disappears.
     run(
         &mut project,

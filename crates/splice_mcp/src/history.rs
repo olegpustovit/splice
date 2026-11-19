@@ -35,6 +35,8 @@ pub(super) fn apply(store: &mut Store, args: &Json) -> Result<Json, StoreError> 
                 "a nonempty array of operations from commands.describe",
             )
         })?;
+    let filled = super::enrich::ops(store, ops)?;
+    let ops = filled.as_deref().unwrap_or(ops);
     Ok(edit_result_json(apply_batch(store, ops, &options)?))
 }
 

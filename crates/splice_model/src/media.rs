@@ -32,6 +32,8 @@ pub enum MediaKind {
     Image,
     /// Multi-component recording.
     Take,
+    /// Nested timeline made by clip.compound (`Project::compounds`).
+    Compound,
 }
 
 /// Properties needed for editing without opening a media file.

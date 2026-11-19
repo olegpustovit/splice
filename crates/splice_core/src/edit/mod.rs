@@ -13,14 +13,18 @@ mod properties;
 mod settle;
 mod spine;
 mod tier_b;
+mod tier_c;
 mod time;
 
+pub use tier_c::{consolidated_path, parse_cues};
 pub use time::{resolve_view_frame, span};
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tier_b_tests;
+#[cfg(test)]
+mod tier_c_tests;
 
 /// One frame range and its lane, when it occupies one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

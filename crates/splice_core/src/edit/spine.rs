@@ -509,7 +509,7 @@ impl Editor {
         Ok(frame)
     }
 
-    fn spine_end(&self) -> Result<Frame, CommandError> {
+    pub(super) fn spine_end(&self) -> Result<Frame, CommandError> {
         self.project.clips.order().last().map_or(Ok(0), |&slot| {
             self.project
                 .clips

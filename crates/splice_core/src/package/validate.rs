@@ -289,40 +289,14 @@ fn appearance(
 fn effects(effects: &[Effect], ids: &mut Vec<u64>) -> Result<(), PackageError> {
     for effect in effects {
         insert_id(ids, effect.id.serial(), "effect IDs")?;
-        let allowed = match effect.kind.as_str() {
-            "window" => &[
-                "padding",
-                "corner",
-                "shadow",
-                "inset",
-                "background",
-                "color",
-                "color2",
-            ][..],
-            "cursor" => &["size", "clickRings", "hidden"],
-            "clickZoom" => &["scale", "hold"],
-            "camera" => &["corner", "size", "roundness", "shadow"],
-            "captions" => &[
-                "preset",
-                "size",
-                "position",
-                "color",
-                "active",
-                "stroke",
-                "uppercase",
-                "safe",
-            ],
-            "keystrokes" => &["size", "position"],
-            _ => return Err(bad("effect.type", "a known effect type")),
-        };
+        crate::commands::check_effect(&effect.kind, &effect.params).map_err(|error| {
+            PackageError::new(
+                "FORMAT_UNKNOWN_KEY",
+                format!("{} effect: {}", effect.kind, error.message),
+                "Use fields and values from this effect's schema.",
+            )
+        })?;
         for (index, param) in effect.params.iter().enumerate() {
-            if !allowed.contains(&param.name.as_str()) {
-                return Err(PackageError::new(
-                    "FORMAT_UNKNOWN_KEY",
-                    format!("unknown {} effect parameter {:?}", effect.kind, param.name),
-                    "Use fields from this effect's schema.",
-                ));
-            }
             if effect.params[..index]
                 .iter()
                 .any(|earlier| earlier.name == param.name)

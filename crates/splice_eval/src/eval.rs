@@ -1,3 +1,4 @@
+use super::look::{self, AudioFx, Look, Mix, Num, Rig, Transition, TransitionKind};
 use super::{
     Audio, Background, CaptionStyle, CaptionWord, FramePlan, Keys, Layer, Picture, Track, layout,
     style,
@@ -47,8 +48,17 @@ pub struct Evaluator {
     captions: Vec<PreparedCaption>,
     motions: Vec<PreparedMotion>,
     sounds: Vec<PreparedSound>,
+    shapes: Vec<PreparedShape>,
     /// Timeline spans of speech, sorted and merged, for ducking.
     speech: Vec<(Frame, Frame)>,
+    /// LUT paths referenced by `Grade::lut`.
+    luts: Vec<String>,
+    /// Whether any audible item is soloed (the rest are silent).
+    soloed: bool,
+    /// Offline audio chains per item.
+    fx: Vec<(TimelineId, AudioFx)>,
+    /// Items that need the person matte (T18.3).
+    cutouts: Vec<(TimelineId, MediaId)>,
 }
 
 struct PreparedSound {
@@ -56,6 +66,19 @@ struct PreparedSound {
     interval: Interval,
     input: Input,
     duck: Option<Duck>,
+    mix: Option<Mix>,
+}
+
+struct PreparedShape {
+    id: ItemId,
+    interval: Interval,
+    shape: ShapeKind,
+    bounds: Rect,
+    fill: [u32; 2],
+    stroke: u32,
+    stroke_width: f64,
+    corner: f64,
+    rig: Rig,
 }
 
 /// An item's timeline interval and linear mapping to its source clock.
@@ -80,6 +103,9 @@ struct PreparedClip {
     camera: Option<Camera>,
     keys: Option<Keys>,
     hidden_keys: Vec<u32>,
+    rig: Rig,
+    mix: Option<Mix>,
+    transition: Option<Transition>,
 }
 
 struct Input {
@@ -88,14 +114,29 @@ struct Input {
     step: f64,
     frames: f64,
     tracks: Vec<(Track, f64)>,
+    /// Source frames consumed by each timeline frame of a speed ramp (prefix sums).
+    map: Option<Vec<f64>>,
 }
 
 impl Input {
     fn frame(&self, offset: Frame) -> f64 {
-        self.source + f64::from(offset) * self.step
+        match &self.map {
+            Some(map) if !map.is_empty() => {
+                let last = map.len() - 1;
+                let index = usize::try_from(offset).unwrap_or(0).min(last);
+                let past = f64::from(offset) - index as f64;
+                let rate = if last > 0 {
+                    map[last] - map[last - 1]
+                } else {
+                    self.step
+                };
+                self.source + map[index] + past * rate
+            }
+            _ => self.source + f64::from(offset) * self.step,
+        }
     }
 
-    fn audio(&self, at: f64, item: TimelineId, fade: f64, out: &mut FramePlan) {
+    fn audio(&self, at: f64, item: TimelineId, fade: f64, pan: f64, out: &mut FramePlan) {
         if at >= 0.0 && at < self.frames {
             out.audio
                 .extend(self.tracks.iter().map(|&(track, gain)| Audio {
@@ -104,6 +145,7 @@ impl Input {
                     track,
                     source_frame: at,
                     gain: fade * gain,
+                    pan,
                 }));
         }
     }
@@ -122,14 +164,14 @@ struct Visual {
 }
 
 impl Visual {
-    fn draw(&self, at: f64, scale: f64, fade: f64, out: &mut FramePlan) {
+    fn draw(&self, at: f64, scale: f64, fade: f64, look: Look, out: &mut FramePlan) {
         if let Some(window) = self.picture.window
             && window.background != Background::None
         {
             out.layers.push(Layer::Background {
                 bounds: self.bounds,
                 fill: window.background,
-                opacity: fade,
+                opacity: fade * look.opacity,
             });
         }
         if self.visible {
@@ -137,6 +179,7 @@ impl Visual {
                 source_frame: at,
                 scale,
                 opacity: fade,
+                look,
                 ..self.picture
             }));
         }
@@ -148,12 +191,15 @@ struct PreparedOverlay {
     input: Input,
     visual: Visual,
     behind: bool,
+    rig: Rig,
+    mix: Option<Mix>,
 }
 
 struct PreparedTitle {
     id: ItemId,
     interval: Interval,
     text: String,
+    rig: Rig,
 }
 
 struct PreparedMotion {
@@ -169,6 +215,7 @@ struct PreparedCaption {
     interval: Interval,
     style: CaptionStyle,
     words: Vec<CaptionWord>,
+    rig: Rig,
 }
 
 #[derive(Clone, Copy)]
@@ -250,11 +297,16 @@ impl Evaluator {
             captions: Vec::new(),
             motions: Vec::new(),
             sounds: Vec::new(),
+            shapes: Vec::new(),
             speech: Vec::new(),
+            luts: Vec::new(),
+            soloed: false,
+            fx: Vec::new(),
+            cutouts: Vec::new(),
         };
         let mut end = 0;
         for &slot in project.clips.order() {
-            let clip = prepare_clip(project, slot, size)?;
+            let clip = prepare_clip(project, slot, size, &mut result)?;
             if clip.interval.start < end {
                 return Err(EvalError::Range);
             }
@@ -278,6 +330,21 @@ impl Evaluator {
         }
         // Prefer motion from the highest active lane.
         result.motions.reverse();
+        result.soloed = result
+            .clips
+            .iter()
+            .filter_map(|c| c.mix.as_ref())
+            .any(|m| m.solo)
+            || result
+                .overlays
+                .iter()
+                .filter_map(|o| o.mix.as_ref())
+                .any(|m| m.solo)
+            || result
+                .sounds
+                .iter()
+                .filter_map(|s| s.mix.as_ref())
+                .any(|m| m.solo);
         if result.sounds.iter().any(|sound| sound.duck.is_some()) {
             result.speech = speech(project, &result.clips)?;
         }
@@ -325,6 +392,45 @@ impl Evaluator {
                 }
             }
         }
+        for clip in &self.clips {
+            clip.rig.breakpoints(clip.interval.start, &mut cuts);
+            if let Some(mix) = &clip.mix {
+                mix.breakpoints(clip.interval.start, &mut cuts);
+            }
+            if let Some(transition) = clip.transition {
+                let start = clip.interval.start - transition.length / 2;
+                cuts.extend([
+                    start,
+                    start + transition.length / 2,
+                    start + transition.length,
+                ]);
+            }
+            if clip.input.as_ref().is_some_and(|input| input.map.is_some()) {
+                // Speed ramps lower as piecewise-constant rates.
+                cuts.extend((clip.interval.start..clip.interval.end).step_by(2));
+            }
+        }
+        for overlay in &self.overlays {
+            overlay.rig.breakpoints(overlay.interval.start, &mut cuts);
+            if let Some(mix) = &overlay.mix {
+                mix.breakpoints(overlay.interval.start, &mut cuts);
+            }
+        }
+        for sound in &self.sounds {
+            if let Some(mix) = &sound.mix {
+                mix.breakpoints(sound.interval.start, &mut cuts);
+            }
+        }
+        for title in &self.titles {
+            title.rig.breakpoints(title.interval.start, &mut cuts);
+        }
+        for shape in &self.shapes {
+            shape.interval.add_breakpoints(&mut cuts);
+            shape.rig.breakpoints(shape.interval.start, &mut cuts);
+        }
+        for caption in &self.captions {
+            caption.rig.breakpoints(caption.interval.start, &mut cuts);
+        }
         for motion in &self.motions {
             motion.interval.add_breakpoints(&mut cuts);
             if motion.ease {
@@ -332,9 +438,43 @@ impl Evaluator {
                 cuts.extend((motion.interval.start..motion.interval.end).step_by(4));
             }
         }
+        cuts.retain(|&at| at >= 0 && at <= self.end);
         cuts.sort_unstable();
         cuts.dedup();
         cuts
+    }
+
+    /// A prepared LUT path.
+    pub fn lut(&self, index: u16) -> Option<&str> {
+        self.luts.get(usize::from(index)).map(String::as_str)
+    }
+
+    /// The offline audio chain of a clip or item, when it has one.
+    pub fn audio_fx(&self, item: TimelineId) -> Option<AudioFx> {
+        self.fx
+            .iter()
+            .find_map(|&(id, fx)| (id == item).then_some(fx))
+    }
+
+    /// Items with a person cutout and their media (the matte comes from the analysis store).
+    pub fn cutouts(&self) -> &[(TimelineId, MediaId)] {
+        &self.cutouts
+    }
+
+    /// The transition into a clip, if it has one.
+    pub fn transition(&self, clip: ClipId) -> Option<Transition> {
+        self.clips
+            .iter()
+            .find(|prepared| prepared.id == clip)
+            .and_then(|prepared| prepared.transition)
+    }
+
+    /// The speed-ramp source offset table of a clip (source frames consumed per timeline frame).
+    pub fn speed_map(&self, clip: ClipId) -> Option<&[f64]> {
+        self.clips
+            .iter()
+            .find(|prepared| prepared.id == clip)
+            .and_then(|prepared| prepared.input.as_ref()?.map.as_deref())
     }
 
     /// Returns the prepared source clock for a clip or a media overlay.
@@ -396,9 +536,12 @@ impl Evaluator {
             .sum::<usize>();
         FramePlan {
             layers: Vec::with_capacity(
-                5 + self.overlays.len() * 2 + self.titles.len() + self.captions.len(),
+                12 + self.overlays.len() * 2
+                    + self.titles.len()
+                    + self.captions.len()
+                    + self.shapes.len(),
             ),
-            audio: Vec::with_capacity(clip_tracks + overlay_tracks),
+            audio: Vec::with_capacity(2 * clip_tracks + overlay_tracks),
             ..FramePlan::default()
         }
     }
@@ -415,7 +558,19 @@ impl Evaluator {
             .and_then(|i| self.clips.get(i))
             .filter(|clip| clip.interval.contains(at));
         out.clip = clip.map(|clip| clip.id);
-        if let Some(clip) = clip {
+        if let Some((from, to, progress, transition)) = self.transition_at(at) {
+            let (mark, audio_mark) = (out.layers.len(), out.audio.len());
+            self.draw_clip(&self.clips[from], at, out);
+            let (mid, audio_mid) = (out.layers.len(), out.audio.len());
+            self.draw_clip(&self.clips[to], at, out);
+            self.blend(
+                transition,
+                progress,
+                [mark, mid],
+                [audio_mark, audio_mid],
+                out,
+            );
+        } else if let Some(clip) = clip {
             self.draw_clip(clip, at, out);
         }
         self.draw_overlays(at, clip.is_some_and(|clip| clip.take), false, out);
@@ -424,11 +579,32 @@ impl Evaluator {
             .iter()
             .filter(|sound| sound.interval.contains(at))
         {
+            let local = f64::from(at - sound.interval.start);
             let source = sound.input.frame(at - sound.interval.start);
-            let gain = sound.interval.alpha(at) * self.duck_gain(sound.duck, at);
+            let (gain, pan) = self.mix(sound.mix.as_ref(), local);
+            let gain = sound.interval.alpha(at) * self.duck_gain(sound.duck, at) * gain;
             sound
                 .input
-                .audio(source, TimelineId::Item(sound.id), gain, out);
+                .audio(source, TimelineId::Item(sound.id), gain, pan, out);
+        }
+        let canvas = self.size.map(f64::from);
+        for shape in self
+            .shapes
+            .iter()
+            .filter(|shape| shape.interval.contains(at))
+        {
+            out.layers.push(Layer::Shape {
+                item: shape.id,
+                shape: shape.shape,
+                bounds: shape.bounds,
+                fill: shape.fill[0],
+                fill2: shape.fill[1],
+                stroke: shape.stroke,
+                stroke_width: shape.stroke_width,
+                corner: shape.corner,
+                opacity: shape.interval.alpha(at),
+                look: shape.rig.look(f64::from(at - shape.interval.start), canvas),
+            });
         }
         let [w, h] = self.size.map(f64::from);
         let height = h.min(w) * 0.1;
@@ -447,6 +623,7 @@ impl Evaluator {
                     height,
                 ),
                 opacity: title.interval.alpha(at),
+                look: title.rig.look(f64::from(at - title.interval.start), canvas),
             });
         }
         for caption in self
@@ -460,6 +637,9 @@ impl Evaluator {
                 word,
                 opacity: caption.interval.alpha(at),
                 style: caption.style,
+                look: caption
+                    .rig
+                    .look(f64::from(at - caption.interval.start), canvas),
             });
         }
     }
@@ -490,8 +670,11 @@ impl Evaluator {
 
     fn draw_clip(&self, clip: &PreparedClip, frame: Frame, out: &mut FramePlan) {
         let Some(input) = &clip.input else { return };
+        let local = f64::from(frame - clip.interval.start);
         let source = input.frame(frame - clip.interval.start);
         let opacity = clip.interval.alpha(frame);
+        let look = clip.rig.look(local, self.size.map(f64::from));
+        let picture_source = source.clamp(0.0, (input.frames - 1.0).max(0.0));
         if let Some(visual) = &clip.visual {
             let motion = self
                 .motions
@@ -505,12 +688,13 @@ impl Evaluator {
                 }
                 motion.from + (motion.to - motion.from) * progress
             });
-            visual.draw(source, zoom, 1.0, out);
+            visual.draw(picture_source, zoom, 1.0, look, out);
             if let (Some(motion), Some(Layer::Picture(picture))) = (motion, out.layers.last_mut()) {
                 picture.focus = motion.focus;
             }
         }
-        input.audio(source, TimelineId::Clip(clip.id), opacity, out);
+        let (gain, pan) = self.mix(clip.mix.as_ref(), local);
+        input.audio(source, TimelineId::Clip(clip.id), opacity * gain, pan, out);
         if clip.take {
             self.draw_overlays(frame, true, true, out);
         }
@@ -518,7 +702,7 @@ impl Evaluator {
             out.layers.push(Layer::Camera {
                 clip: clip.id,
                 media: input.id,
-                source_frame: source,
+                source_frame: picture_source,
                 bounds: camera.bounds,
                 radius: camera.radius,
                 shadow: camera.shadow,
@@ -528,13 +712,14 @@ impl Evaluator {
             out.layers.push(Layer::Keystrokes {
                 clip: clip.id,
                 media: input.id,
-                source_frame: source,
+                source_frame: picture_source,
                 style,
             });
         }
         if opacity < 1.0 {
             out.layers.push(Layer::Fade {
                 opacity: 1.0 - opacity,
+                color: 0,
             });
         }
     }
@@ -544,16 +729,153 @@ impl Evaluator {
             (overlay.behind && on_take) == behind && overlay.interval.contains(frame)
         }) {
             let opacity = overlay.interval.alpha(frame);
+            let local = f64::from(frame - overlay.interval.start);
             let source = overlay.input.frame(frame - overlay.interval.start);
             overlay.visual.draw(
                 source.min((overlay.input.frames - 1.0).max(0.0)),
                 1.0,
                 opacity,
+                overlay.rig.look(local, self.size.map(f64::from)),
                 out,
             );
-            overlay
-                .input
-                .audio(source, overlay.visual.picture.item, opacity, out);
+            let (gain, pan) = self.mix(overlay.mix.as_ref(), local);
+            overlay.input.audio(
+                source,
+                overlay.visual.picture.item,
+                opacity * gain,
+                pan,
+                out,
+            );
+        }
+    }
+
+    /// Keyed gain and pan of an audible item, silenced when another item is soloed.
+    fn mix(&self, mix: Option<&Mix>, local: f64) -> (f64, f64) {
+        match mix {
+            Some(mix) if !(self.soloed && !mix.solo) => (mix.gain(local), mix.pan(local)),
+            Some(_) => (0.0, 0.0),
+            None if self.soloed => (0.0, 0.0),
+            None => (1.0, 0.0),
+        }
+    }
+
+    /// The clips a transition blends at `at`: outgoing index, incoming index, progress 0…1.
+    fn transition_at(&self, at: Frame) -> Option<(usize, usize, f64, Transition)> {
+        let index = self.clips.partition_point(|clip| clip.interval.start <= at);
+        for to in [index, index.saturating_sub(1)] {
+            let Some(clip) = self.clips.get(to).filter(|_| to > 0) else {
+                continue;
+            };
+            let Some(transition) = clip.transition else {
+                continue;
+            };
+            if self.clips[to - 1].interval.end != clip.interval.start {
+                continue;
+            }
+            let start = clip.interval.start - transition.length / 2;
+            if at >= start && at < start + transition.length {
+                let progress = (f64::from(at - start) + 0.5) / f64::from(transition.length);
+                return Some((to - 1, to, progress, transition));
+            }
+        }
+        None
+    }
+
+    /// Applies a transition to the outgoing layers `[a, b)` and incoming layers `[b, ..)`.
+    fn blend(
+        &self,
+        transition: Transition,
+        t: f64,
+        [a, b]: [usize; 2],
+        [audio_a, audio_b]: [usize; 2],
+        out: &mut FramePlan,
+    ) {
+        let [w, h] = self.size.map(f64::from);
+        let [dx, dy] = transition.direction;
+        let quarter = std::f64::consts::FRAC_PI_2;
+        for (index, audio) in out.audio.iter_mut().enumerate().skip(audio_a) {
+            audio.gain *= if index < audio_b {
+                (t * quarter).cos()
+            } else {
+                (t * quarter).sin()
+            };
+        }
+        let edit = |layer: &mut Layer, f: &dyn Fn(&mut Look, &mut f64)| match layer {
+            Layer::Picture(picture) => f(&mut picture.look, &mut picture.opacity),
+            Layer::Background { opacity, .. } => {
+                let mut look = Look::default();
+                f(&mut look, opacity);
+                *opacity *= look.opacity;
+            }
+            _ => {}
+        };
+        match transition.kind {
+            TransitionKind::Dissolve | TransitionKind::Zoom => {
+                let zoom = transition.kind == TransitionKind::Zoom;
+                for (index, layer) in out.layers.iter_mut().enumerate().skip(a) {
+                    let incoming = index >= b;
+                    edit(layer, &|look, _| {
+                        if incoming {
+                            look.opacity *= t;
+                            if zoom {
+                                look.scale *= 1.15 - 0.15 * t;
+                            }
+                        } else if zoom {
+                            look.scale *= 1.0 + 0.15 * t;
+                        }
+                    });
+                }
+            }
+            TransitionKind::Dip => {
+                let color = transition.color;
+                if t < 0.5 {
+                    out.layers.truncate(b);
+                    out.layers.push(Layer::Fade {
+                        opacity: (2.0 * t).min(1.0),
+                        color,
+                    });
+                } else {
+                    out.layers.drain(a..b);
+                    out.layers.push(Layer::Fade {
+                        opacity: (2.0 * (1.0 - t)).min(1.0),
+                        color,
+                    });
+                }
+            }
+            TransitionKind::Wipe => {
+                let clip = [
+                    if dx < 0.0 { w * (1.0 - t) } else { 0.0 },
+                    if dy < 0.0 { h * (1.0 - t) } else { 0.0 },
+                    if dx != 0.0 { w * t } else { w },
+                    if dy != 0.0 { h * t } else { h },
+                ];
+                for layer in out.layers.iter_mut().skip(b) {
+                    edit(layer, &|look, _| look.clip = Some(clip));
+                }
+            }
+            TransitionKind::Push | TransitionKind::Slide => {
+                let push = transition.kind == TransitionKind::Push;
+                for (index, layer) in out.layers.iter_mut().enumerate().skip(a) {
+                    let incoming = index >= b;
+                    let shift = if incoming {
+                        [-dx * (1.0 - t) * w, -dy * (1.0 - t) * h]
+                    } else if push {
+                        [dx * t * w, dy * t * h]
+                    } else {
+                        [0.0, 0.0]
+                    };
+                    match layer {
+                        Layer::Background { bounds, .. } | Layer::Camera { bounds, .. } => {
+                            bounds.x += shift[0];
+                            bounds.y += shift[1];
+                        }
+                        _ => edit(layer, &|look, _| {
+                            look.offset[0] += shift[0];
+                            look.offset[1] += shift[1];
+                        }),
+                    }
+                }
+            }
         }
     }
 
@@ -595,12 +917,36 @@ impl Evaluator {
         self.end = self.end.max(interval.end);
         let lane = &p.lanes[rank].effects;
         let local = &data.appearance.effects;
+        let inherited: [&[Effect]; 2] = [&p.effects, lane];
+        let audio_scopes: [&[Effect]; 3] = [&p.effects, lane, local];
+        let shifts = [-start, -start, 0];
+        let rig = Rig::new(&inherited, &shifts, local, &mut self.luts);
+        let fx = AudioFx::new(&audio_scopes);
+        if fx != AudioFx::default() {
+            self.fx.push((TimelineId::Item(id), fx));
+        }
         match &data.kind {
             ItemKind::Title { text } => self.titles.push(PreparedTitle {
                 id,
                 interval,
                 text: text.clone(),
+                rig,
             }),
+            ItemKind::Shape { shape, rect } => {
+                let style = look::shape_style(local);
+                let [w, h] = size;
+                self.shapes.push(PreparedShape {
+                    id,
+                    interval,
+                    shape: *shape,
+                    bounds: layout::rect(rect.x * w, rect.y * h, rect.w * w, rect.h * h),
+                    fill: [style.0, style.1],
+                    stroke: style.2,
+                    stroke_width: style.3 * w.min(h),
+                    corner: style.4 * (rect.w * w).min(rect.h * h).abs(),
+                    rig,
+                });
+            }
             ItemKind::Motion {
                 from,
                 to,
@@ -637,6 +983,7 @@ impl Evaluator {
                         tracks,
                     )?,
                     duck: sound.duck,
+                    mix: Mix::new(&audio_scopes, &shifts),
                 });
             }
             ItemKind::Media(overlay) => {
@@ -659,11 +1006,16 @@ impl Evaluator {
                 } else {
                     visual(media, TimelineId::Item(id), bounds, overlay.framing, window)?
                 };
+                if rig.cutout() {
+                    self.cutouts.push((TimelineId::Item(id), media.id));
+                }
                 self.overlays.push(PreparedOverlay {
                     interval,
                     input,
                     visual,
                     behind: overlay.behind_presenter,
+                    rig,
+                    mix: Mix::new(&audio_scopes, &shifts),
                 });
             }
             ItemKind::Caption { words, edits } => {
@@ -675,6 +1027,7 @@ impl Evaluator {
                             interval,
                             style,
                             words,
+                            rig,
                         });
                     }
                 }
@@ -684,11 +1037,20 @@ impl Evaluator {
     }
 }
 
-fn prepare_clip(p: &Project, slot: Slot, size: [f64; 2]) -> Result<PreparedClip, EvalError> {
+fn prepare_clip(
+    p: &Project,
+    slot: Slot,
+    size: [f64; 2],
+    evaluator: &mut Evaluator,
+) -> Result<PreparedClip, EvalError> {
     let id = p.clips.id(slot).ok_or(EvalError::Range)?;
     let data = p.clips.data(slot).ok_or(EvalError::Range)?;
     let timing = p.clips.timing(slot).ok_or(EvalError::Range)?;
     let interval = Interval::new(timing.start, timing.length, &data.appearance)?;
+    let local = &data.appearance.effects;
+    let inherited: [&[Effect]; 2] = [&p.effects, &p.spine.effects];
+    let audio_scopes: [&[Effect]; 3] = [&p.effects, &p.spine.effects, local];
+    let shifts = [-timing.start, -timing.start, 0];
     let mut clip = PreparedClip {
         id,
         interval,
@@ -698,7 +1060,14 @@ fn prepare_clip(p: &Project, slot: Slot, size: [f64; 2]) -> Result<PreparedClip,
         camera: None,
         keys: None,
         hidden_keys: data.hidden_keys.clone(),
+        rig: Rig::new(&inherited, &shifts, local, &mut evaluator.luts),
+        mix: Mix::new(&audio_scopes, &shifts),
+        transition: look::transition(local),
     };
+    let fx = AudioFx::new(&audio_scopes);
+    if fx != AudioFx::default() {
+        evaluator.fx.push((TimelineId::Clip(id), fx));
+    }
     let Some(media_id) = data.media else {
         return Ok(clip);
     };
@@ -712,9 +1081,15 @@ fn prepare_clip(p: &Project, slot: Slot, size: [f64; 2]) -> Result<PreparedClip,
     } else {
         file_tracks(media)
     };
-    let input = input(media, timing.source, timing::source_rate(p, slot)?, tracks)?;
+    let mut input = input(media, timing.source, timing::source_rate(p, slot)?, tracks)?;
+    if let Some((rate, _)) = look::speed(local) {
+        input.map = Some(speed_map(&rate, input.step, timing.length));
+    }
     if input.frame(timing.length) > input.frames + 0.000_001 {
         return Err(EvalError::Range);
+    }
+    if clip.rig.cutout() && media.kind != MediaKind::Audio {
+        evaluator.cutouts.push((TimelineId::Clip(id), media.id));
     }
     clip.input = Some(input);
     if media.kind != MediaKind::Audio {
@@ -753,6 +1128,26 @@ fn prepare_clip(p: &Project, slot: Slot, size: [f64; 2]) -> Result<PreparedClip,
     Ok(clip)
 }
 
+/// Source frames consumed at each timeline frame 0..=length of a speed-ramped clip.
+fn speed_map(rate: &Num, step: f64, length: Frame) -> Vec<f64> {
+    let mut map = Vec::with_capacity(usize::try_from(length).unwrap_or(0) + 1);
+    let mut sum = 0.0;
+    map.push(0.0);
+    // Trapezoids at quarter frames, carried forward: O(length).
+    let mut previous = rate.at(0.0).max(0.0);
+    for frame in 0..length.max(0) {
+        for quarter in 1..=4 {
+            let next = rate
+                .at(f64::from(frame) + f64::from(quarter) * 0.25)
+                .max(0.0);
+            sum += (previous + next) * 0.125 * step;
+            previous = next;
+        }
+        map.push(sum);
+    }
+    map
+}
+
 fn media(project: &Project, id: MediaId) -> Result<&Media, EvalError> {
     project
         .media
@@ -784,6 +1179,7 @@ fn input(
         step,
         frames: f64::from(media.probe.frames),
         tracks,
+        map: None,
     })
 }
 
@@ -851,6 +1247,7 @@ fn blank_visual(
             window,
             cursor: None,
             click_zoom: None,
+            look: Look::default(),
         },
     }
 }

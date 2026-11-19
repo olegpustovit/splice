@@ -418,6 +418,7 @@ fn info(store: &Store, id: &str) -> Result<Json, StoreError> {
                         MediaKind::Video => "video",
                         MediaKind::Audio => "audio",
                         MediaKind::Image => "image",
+                        MediaKind::Compound => "compound",
                     }),
                 ),
                 ("frames", frame(media.probe.frames)),

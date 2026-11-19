@@ -1,13 +1,18 @@
 //! Prepare a timeline once per revision, then evaluate frames without allocating.
 #![deny(missing_docs)]
 
-use splice_model::{ClipId, Frame, ItemId, MediaId, Rect, TimelineId, WordId};
+use splice_model::{ClipId, Frame, ItemId, MediaId, Rect, ShapeKind, TimelineId, WordId};
 
 mod eval;
 mod layout;
+mod look;
 mod style;
 
 pub use eval::{EvalError, Evaluator, SourceSpan, caption_tokens};
+pub use look::{
+    AudioFx, Blend, ChromaKey, Cutout, Grade, Look, MAX_MASKS, Mask, MaskMode, MaskShape,
+    Transition, TransitionKind,
+};
 pub use style::{
     Background, CaptionPreset, CaptionStyle, ClickZoom, Cursor, KeyPosition, Keys, Window,
     resolve_effect,
@@ -71,10 +76,35 @@ pub enum Layer {
         /// Chip style.
         style: Keys,
     },
-    /// The primary clip's fade through black.
+    /// The primary clip's fade through black, or a transition's dip through a color.
     Fade {
-        /// Black opacity.
+        /// Color opacity.
         opacity: f64,
+        /// RGB color (black for fades).
+        color: u32,
+    },
+    /// Generated shape or fill (T17.5).
+    Shape {
+        /// Owning item.
+        item: ItemId,
+        /// What to draw.
+        shape: ShapeKind,
+        /// Bounds in canvas pixels (arrows and lines run corner to corner).
+        bounds: Rect,
+        /// Fill color.
+        fill: u32,
+        /// Second fill color for gradients.
+        fill2: u32,
+        /// Stroke color.
+        stroke: u32,
+        /// Stroke width in canvas pixels.
+        stroke_width: f64,
+        /// Corner radius in canvas pixels.
+        corner: f64,
+        /// Fade opacity.
+        opacity: f64,
+        /// Keyed transform.
+        look: Look,
     },
     /// Title overlay, with text available from `Evaluator::title`.
     Title {
@@ -84,6 +114,8 @@ pub enum Layer {
         bounds: Rect,
         /// Fade opacity.
         opacity: f64,
+        /// Keyed transform.
+        look: Look,
     },
     /// Caption cue with timed text available from `Evaluator::caption_words`.
     Caption {
@@ -95,6 +127,8 @@ pub enum Layer {
         opacity: f64,
         /// Resolved style and safe-zone placement.
         style: CaptionStyle,
+        /// Keyed transform.
+        look: Look,
     },
 }
 
@@ -123,6 +157,8 @@ pub struct Picture {
     pub cursor: Option<Cursor>,
     /// Settings for zoom driven by recorded clicks.
     pub click_zoom: Option<ClickZoom>,
+    /// Keyed transform, color, masks, key and transition treatment.
+    pub look: Look,
 }
 
 /// Audio track identity within a descriptor.
@@ -149,6 +185,8 @@ pub struct Audio {
     pub source_frame: f64,
     /// Linear gain after fading.
     pub gain: f64,
+    /// Stereo pan −1 (left) … 1 (right).
+    pub pan: f64,
 }
 
 /// Resolved text and timeline range for a caption word.

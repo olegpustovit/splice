@@ -55,7 +55,8 @@
         "def": "#1d2420",
         "label": "Color 2"
       }
-    }
+    },
+    "applies": "visual"
   },
   "cursor": {
     "title": "Cursor",
@@ -79,7 +80,8 @@
         "def": false,
         "label": "Hide cursor"
       }
-    }
+    },
+    "applies": "take"
   },
   "clickZoom": {
     "title": "Click Zoom",
@@ -101,7 +103,8 @@
         "step": 1,
         "label": "Hold (f)"
       }
-    }
+    },
+    "applies": "take"
   },
   "camera": {
     "title": "Camera Layout",
@@ -141,8 +144,19 @@
         "max": 1,
         "step": 0.05,
         "label": "Shadow"
+      },
+      "background": {
+        "type": "enum",
+        "def": "keep",
+        "options": [
+          "keep",
+          "blur",
+          "remove"
+        ],
+        "label": "Background"
       }
-    }
+    },
+    "applies": "take"
   },
   "captions": {
     "title": "Caption Style",
@@ -211,7 +225,8 @@
         ],
         "label": "Safe zone"
       }
-    }
+    },
+    "applies": "caption"
   },
   "keystrokes": {
     "title": "Keystroke Chips",
@@ -234,6 +249,821 @@
           "top-left"
         ],
         "label": "Position"
+      }
+    },
+    "applies": "take"
+  },
+  "transform": {
+    "title": "Transform",
+    "appliesTo": "spine clips, media overlays, titles, shapes and captions",
+    "applies": "layer",
+    "params": {
+      "x": {
+        "type": "number",
+        "def": 0,
+        "min": -2,
+        "max": 2,
+        "step": 0.01,
+        "label": "X"
+      },
+      "y": {
+        "type": "number",
+        "def": 0,
+        "min": -2,
+        "max": 2,
+        "step": 0.01,
+        "label": "Y"
+      },
+      "scale": {
+        "type": "number",
+        "def": 1,
+        "min": 0.05,
+        "max": 10,
+        "step": 0.01,
+        "label": "Scale"
+      },
+      "rotation": {
+        "type": "number",
+        "def": 0,
+        "min": -720,
+        "max": 720,
+        "step": 1,
+        "label": "Rotation"
+      },
+      "opacity": {
+        "type": "number",
+        "def": 1,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Opacity"
+      },
+      "anchorX": {
+        "type": "number",
+        "def": 0.5,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Anchor X"
+      },
+      "anchorY": {
+        "type": "number",
+        "def": 0.5,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Anchor Y"
+      },
+      "blend": {
+        "type": "enum",
+        "def": "normal",
+        "options": [
+          "normal",
+          "multiply",
+          "screen",
+          "overlay",
+          "add",
+          "darken",
+          "lighten"
+        ],
+        "label": "Blend"
+      }
+    }
+  },
+  "crop": {
+    "title": "Animated Crop",
+    "appliesTo": "spine clips and media overlays",
+    "applies": "visual",
+    "params": {
+      "x": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 1,
+        "step": 0.001,
+        "label": "Left"
+      },
+      "y": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 1,
+        "step": 0.001,
+        "label": "Top"
+      },
+      "w": {
+        "type": "number",
+        "def": 1,
+        "min": 0.01,
+        "max": 1,
+        "step": 0.001,
+        "label": "Width"
+      },
+      "h": {
+        "type": "number",
+        "def": 1,
+        "min": 0.01,
+        "max": 1,
+        "step": 0.001,
+        "label": "Height"
+      }
+    }
+  },
+  "color": {
+    "title": "Color",
+    "appliesTo": "spine clips, media overlays, lanes and the project",
+    "applies": "visual",
+    "params": {
+      "exposure": {
+        "type": "number",
+        "def": 0,
+        "min": -3,
+        "max": 3,
+        "step": 0.05,
+        "label": "Exposure"
+      },
+      "contrast": {
+        "type": "number",
+        "def": 1,
+        "min": 0,
+        "max": 2,
+        "step": 0.01,
+        "label": "Contrast"
+      },
+      "saturation": {
+        "type": "number",
+        "def": 1,
+        "min": 0,
+        "max": 2,
+        "step": 0.01,
+        "label": "Saturation"
+      },
+      "vibrance": {
+        "type": "number",
+        "def": 0,
+        "min": -1,
+        "max": 1,
+        "step": 0.01,
+        "label": "Vibrance"
+      },
+      "temperature": {
+        "type": "number",
+        "def": 0,
+        "min": -1,
+        "max": 1,
+        "step": 0.01,
+        "label": "Temperature"
+      },
+      "tint": {
+        "type": "number",
+        "def": 0,
+        "min": -1,
+        "max": 1,
+        "step": 0.01,
+        "label": "Tint"
+      },
+      "highlights": {
+        "type": "number",
+        "def": 0,
+        "min": -1,
+        "max": 1,
+        "step": 0.01,
+        "label": "Highlights"
+      },
+      "shadows": {
+        "type": "number",
+        "def": 0,
+        "min": -1,
+        "max": 1,
+        "step": 0.01,
+        "label": "Shadows"
+      },
+      "lut": {
+        "type": "file",
+        "def": "",
+        "label": "LUT (.cube)"
+      },
+      "lutAmount": {
+        "type": "number",
+        "def": 1,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "LUT amount"
+      }
+    }
+  },
+  "mask": {
+    "title": "Mask",
+    "appliesTo": "spine clips and media overlays",
+    "applies": "visual",
+    "multiple": true,
+    "params": {
+      "shape": {
+        "type": "enum",
+        "def": "rect",
+        "options": [
+          "rect",
+          "roundRect",
+          "ellipse"
+        ],
+        "label": "Shape"
+      },
+      "x": {
+        "type": "number",
+        "def": 0.25,
+        "min": -1,
+        "max": 2,
+        "step": 0.001,
+        "label": "Left"
+      },
+      "y": {
+        "type": "number",
+        "def": 0.25,
+        "min": -1,
+        "max": 2,
+        "step": 0.001,
+        "label": "Top"
+      },
+      "w": {
+        "type": "number",
+        "def": 0.5,
+        "min": 0,
+        "max": 2,
+        "step": 0.001,
+        "label": "Width"
+      },
+      "h": {
+        "type": "number",
+        "def": 0.5,
+        "min": 0,
+        "max": 2,
+        "step": 0.001,
+        "label": "Height"
+      },
+      "mode": {
+        "type": "enum",
+        "def": "blur",
+        "options": [
+          "blur",
+          "pixelate",
+          "cover",
+          "spotlight"
+        ],
+        "label": "Mode"
+      },
+      "amount": {
+        "type": "number",
+        "def": 0.6,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Amount"
+      },
+      "feather": {
+        "type": "number",
+        "def": 0.01,
+        "min": 0,
+        "max": 0.2,
+        "step": 0.005,
+        "label": "Feather"
+      },
+      "invert": {
+        "type": "bool",
+        "def": false,
+        "label": "Invert"
+      },
+      "color": {
+        "type": "color",
+        "def": "#000000",
+        "label": "Cover color"
+      }
+    }
+  },
+  "key": {
+    "title": "Chroma Key",
+    "appliesTo": "spine clips and media overlays",
+    "applies": "visual",
+    "params": {
+      "color": {
+        "type": "color",
+        "def": "#00ff00",
+        "label": "Key color"
+      },
+      "tolerance": {
+        "type": "number",
+        "def": 0.3,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Tolerance"
+      },
+      "softness": {
+        "type": "number",
+        "def": 0.1,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Softness"
+      },
+      "spill": {
+        "type": "number",
+        "def": 0.5,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Spill"
+      }
+    }
+  },
+  "cutout": {
+    "title": "Background Removal",
+    "appliesTo": "spine clips and media overlays with people",
+    "applies": "visual",
+    "params": {
+      "background": {
+        "type": "enum",
+        "def": "remove",
+        "options": [
+          "remove",
+          "blur"
+        ],
+        "label": "Background"
+      },
+      "amount": {
+        "type": "number",
+        "def": 1,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Amount"
+      }
+    }
+  },
+  "transition": {
+    "title": "Transition",
+    "appliesTo": "spine clips (into the clip from the one before)",
+    "applies": "spine",
+    "params": {
+      "kind": {
+        "type": "enum",
+        "def": "dissolve",
+        "options": [
+          "dissolve",
+          "dip",
+          "wipe",
+          "push",
+          "slide",
+          "zoom"
+        ],
+        "label": "Kind"
+      },
+      "length": {
+        "type": "number",
+        "def": 15,
+        "min": 2,
+        "max": 240,
+        "step": 1,
+        "label": "Length"
+      },
+      "direction": {
+        "type": "enum",
+        "def": "left",
+        "options": [
+          "left",
+          "right",
+          "up",
+          "down"
+        ],
+        "label": "Direction"
+      },
+      "color": {
+        "type": "color",
+        "def": "#000000",
+        "label": "Dip color"
+      }
+    }
+  },
+  "speed": {
+    "title": "Speed Ramp",
+    "appliesTo": "spine clips",
+    "applies": "spine",
+    "params": {
+      "rate": {
+        "type": "number",
+        "def": 1,
+        "min": 0,
+        "max": 16,
+        "step": 0.01,
+        "label": "Rate (0 holds the frame)"
+      },
+      "pitch": {
+        "type": "bool",
+        "def": true,
+        "label": "Keep pitch"
+      }
+    }
+  },
+  "volume": {
+    "title": "Volume",
+    "appliesTo": "clips with audio, sounds, audio lanes, the spine and the project",
+    "applies": "audio",
+    "params": {
+      "gain": {
+        "type": "number",
+        "def": 1,
+        "min": 0,
+        "max": 4,
+        "step": 0.01,
+        "label": "Gain"
+      },
+      "pan": {
+        "type": "number",
+        "def": 0,
+        "min": -1,
+        "max": 1,
+        "step": 0.01,
+        "label": "Pan"
+      },
+      "mute": {
+        "type": "bool",
+        "def": false,
+        "label": "Mute"
+      },
+      "solo": {
+        "type": "bool",
+        "def": false,
+        "label": "Solo"
+      }
+    }
+  },
+  "eq": {
+    "title": "EQ",
+    "appliesTo": "clips with audio, sounds and audio lanes",
+    "applies": "audio",
+    "params": {
+      "lowCut": {
+        "type": "number",
+        "def": 20,
+        "min": 20,
+        "max": 400,
+        "step": 1,
+        "label": "Low cut"
+      },
+      "low": {
+        "type": "number",
+        "def": 0,
+        "min": -12,
+        "max": 12,
+        "step": 0.5,
+        "label": "Low"
+      },
+      "mid": {
+        "type": "number",
+        "def": 0,
+        "min": -12,
+        "max": 12,
+        "step": 0.5,
+        "label": "Mid"
+      },
+      "midFrequency": {
+        "type": "number",
+        "def": 1000,
+        "min": 200,
+        "max": 5000,
+        "step": 10,
+        "label": "Mid frequency"
+      },
+      "high": {
+        "type": "number",
+        "def": 0,
+        "min": -12,
+        "max": 12,
+        "step": 0.5,
+        "label": "High"
+      }
+    }
+  },
+  "compressor": {
+    "title": "Compressor",
+    "appliesTo": "clips with audio, sounds and audio lanes",
+    "applies": "audio",
+    "params": {
+      "threshold": {
+        "type": "number",
+        "def": -20,
+        "min": -60,
+        "max": 0,
+        "step": 0.5,
+        "label": "Threshold"
+      },
+      "ratio": {
+        "type": "number",
+        "def": 3,
+        "min": 1,
+        "max": 20,
+        "step": 0.1,
+        "label": "Ratio"
+      },
+      "gain": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 24,
+        "step": 0.5,
+        "label": "Makeup gain"
+      }
+    }
+  },
+  "gate": {
+    "title": "Noise Gate",
+    "appliesTo": "clips with audio, sounds and audio lanes",
+    "applies": "audio",
+    "params": {
+      "threshold": {
+        "type": "number",
+        "def": -50,
+        "min": -80,
+        "max": 0,
+        "step": 0.5,
+        "label": "Threshold"
+      }
+    }
+  },
+  "voiceIsolation": {
+    "title": "Voice Isolation",
+    "appliesTo": "clips with audio and sounds",
+    "applies": "audio",
+    "params": {
+      "amount": {
+        "type": "number",
+        "def": 1,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Amount"
+      }
+    }
+  },
+  "text": {
+    "title": "Text Style",
+    "appliesTo": "titles, captions lanes, caption cues and the project",
+    "applies": "text",
+    "params": {
+      "font": {
+        "type": "text",
+        "def": "SF Pro Display",
+        "label": "Font"
+      },
+      "weight": {
+        "type": "enum",
+        "def": "bold",
+        "options": [
+          "regular",
+          "medium",
+          "semibold",
+          "bold",
+          "heavy",
+          "black"
+        ],
+        "label": "Weight"
+      },
+      "size": {
+        "type": "number",
+        "def": 0.06,
+        "min": 0.02,
+        "max": 0.3,
+        "step": 0.005,
+        "label": "Size"
+      },
+      "color": {
+        "type": "color",
+        "def": "#ffffff",
+        "label": "Color"
+      },
+      "stroke": {
+        "type": "color",
+        "def": "#000000",
+        "label": "Stroke"
+      },
+      "strokeWidth": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 0.3,
+        "step": 0.01,
+        "label": "Stroke width"
+      },
+      "shadow": {
+        "type": "number",
+        "def": 0.3,
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "label": "Shadow"
+      },
+      "box": {
+        "type": "enum",
+        "def": "none",
+        "options": [
+          "none",
+          "solid",
+          "rounded"
+        ],
+        "label": "Box"
+      },
+      "boxColor": {
+        "type": "color",
+        "def": "#000000",
+        "label": "Box color"
+      },
+      "align": {
+        "type": "enum",
+        "def": "center",
+        "options": [
+          "left",
+          "center",
+          "right"
+        ],
+        "label": "Align"
+      },
+      "lineHeight": {
+        "type": "number",
+        "def": 1.15,
+        "min": 0.8,
+        "max": 2,
+        "step": 0.05,
+        "label": "Line height"
+      },
+      "position": {
+        "type": "enum",
+        "def": "top",
+        "options": [
+          "top",
+          "middle",
+          "bottom",
+          "lowerThird"
+        ],
+        "label": "Position"
+      }
+    }
+  },
+  "animate": {
+    "title": "Text Animation",
+    "appliesTo": "titles, captions lanes, caption cues and the project",
+    "applies": "text",
+    "params": {
+      "preset": {
+        "type": "enum",
+        "def": "fade",
+        "options": [
+          "none",
+          "fade",
+          "rise",
+          "pop",
+          "typewriter",
+          "highlight",
+          "bounce",
+          "slide"
+        ],
+        "label": "Preset"
+      },
+      "unit": {
+        "type": "enum",
+        "def": "word",
+        "options": [
+          "word",
+          "character",
+          "line"
+        ],
+        "label": "Unit"
+      },
+      "duration": {
+        "type": "number",
+        "def": 8,
+        "min": 1,
+        "max": 60,
+        "step": 1,
+        "label": "Duration"
+      },
+      "stagger": {
+        "type": "number",
+        "def": 3,
+        "min": 0,
+        "max": 30,
+        "step": 1,
+        "label": "Stagger"
+      }
+    }
+  },
+  "shape": {
+    "title": "Shape Style",
+    "appliesTo": "shapes",
+    "applies": "shape",
+    "params": {
+      "fill": {
+        "type": "color",
+        "def": "#ffffff",
+        "label": "Fill"
+      },
+      "fill2": {
+        "type": "color",
+        "def": "#ffffff",
+        "label": "Fill 2"
+      },
+      "stroke": {
+        "type": "color",
+        "def": "#000000",
+        "label": "Stroke"
+      },
+      "strokeWidth": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 0.05,
+        "step": 0.001,
+        "label": "Stroke width"
+      },
+      "corner": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 0.5,
+        "step": 0.01,
+        "label": "Corner"
+      }
+    }
+  },
+  "template": {
+    "title": "Template",
+    "appliesTo": "items made by template.add",
+    "applies": "template",
+    "params": {
+      "name": {
+        "type": "enum",
+        "def": "lower-third",
+        "options": [
+          "lower-third",
+          "callout",
+          "cta",
+          "title-card",
+          "chapter-card"
+        ],
+        "label": "Template"
+      },
+      "group": {
+        "type": "text",
+        "def": "",
+        "label": "Group"
+      }
+    }
+  },
+  "brand": {
+    "title": "Brand Kit",
+    "appliesTo": "the project",
+    "applies": "project",
+    "params": {
+      "font": {
+        "type": "text",
+        "def": "SF Pro Display",
+        "label": "Font"
+      },
+      "color": {
+        "type": "color",
+        "def": "#ffffff",
+        "label": "Primary"
+      },
+      "color2": {
+        "type": "color",
+        "def": "#1d2420",
+        "label": "Secondary"
+      },
+      "accent": {
+        "type": "color",
+        "def": "#ffd23f",
+        "label": "Accent"
+      },
+      "textColor": {
+        "type": "color",
+        "def": "#ffffff",
+        "label": "Text"
+      },
+      "logo": {
+        "type": "file",
+        "def": "",
+        "label": "Logo"
+      },
+      "logoPosition": {
+        "type": "enum",
+        "def": "topRight",
+        "options": [
+          "none",
+          "topLeft",
+          "topRight",
+          "bottomLeft",
+          "bottomRight"
+        ],
+        "label": "Logo position"
       }
     }
   }

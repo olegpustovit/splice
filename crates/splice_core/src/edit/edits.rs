@@ -6,7 +6,7 @@ impl Editor {
     pub(super) fn run(
         &mut self,
         op: Op,
-        cmd: &str,
+        _cmd: &str,
         load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
     ) -> Result<Outcome, CommandError> {
         match op {
@@ -109,30 +109,6 @@ impl Editor {
             Op::TitleSet { item, text } => self.set_title(&item, text),
             Op::MarkerSet { marker, name, at } => self.set_marker(&marker, name, at.as_ref()),
             Op::ProjectSet { aspect, access } => self.set_project(aspect, access),
-            Op::ClipJoin
-            | Op::ClipUngroup
-            | Op::ClipRestore
-            | Op::LaneReorder
-            | Op::CropKeys
-            | Op::TransitionAdd
-            | Op::ZoomSet
-            | Op::MaskAdd
-            | Op::MaskSet
-            | Op::CaptionsTranslate
-            | Op::CaptionsImport
-            | Op::AudioLink
-            | Op::AudioUnlink
-            | Op::AudioSync
-            | Op::StyleSet
-            | Op::CutPauses
-            | Op::IntentPace
-            | Op::IntentFitDuration
-            | Op::IntentKeepShots
-            | Op::IntentAutoZoom => Err(error(
-                "PLANNED",
-                &format!("{cmd} does not have an apply handler yet."),
-                "Use an available command from commands.describe.",
-            )),
             op => self.run_tier_b(op),
         }
     }
@@ -339,6 +315,9 @@ impl Editor {
                     remaining.floor().min(90.0) as Frame,
                     Appearance::default(),
                 )
+            }
+            OverlayContent::Shape { shape, rect } => {
+                (ItemKind::Shape { shape, rect }, 90, Appearance::default())
             }
         };
         let length = length.unwrap_or(default_length);

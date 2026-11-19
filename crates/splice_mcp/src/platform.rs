@@ -415,3 +415,44 @@ pub(super) fn transcribe(store: &mut Store, args: &Json) -> Result<Json, StoreEr
     store.apply(std::slice::from_ref(&op), &options)?;
     super::media::transcript(store.project(), args)
 }
+
+// ── 0.3 inputs filled by `enrich` (macOS implementations in `platform_mac`) ──
+
+/// Probed length of a file for media.relink; `None` when no native prober exists.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn probe_frames(_: &Store, _: &str) -> Result<Option<splice_model::Frame>, StoreError> {
+    Ok(None)
+}
+
+/// Tracked mask centers for mask.track.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn track_mask(_: &Store, _: &[(String, Json)]) -> Result<Json, StoreError> {
+    Err(failure(
+        "UNSUPPORTED_PLATFORM",
+        "Region tracking needs the native Vision backend.",
+        "Pass keys: [{at, x, y}] mask centers explicitly.",
+    ))
+}
+
+/// Audio offset for audio.sync, measured by envelope cross-correlation.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn sync_offset(
+    _: &Store,
+    _: &[(String, Json)],
+) -> Result<splice_model::Frame, StoreError> {
+    Err(failure(
+        "UNSUPPORTED_PLATFORM",
+        "Measuring sync needs the native audio decoder.",
+        "Pass offset in source frames explicitly.",
+    ))
+}
+
+/// On-device translation of a captions lane, one text per cue.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn translate_captions(_: &Store, _: &[(String, Json)]) -> Result<Json, StoreError> {
+    Err(failure(
+        "NEEDS_TEXT",
+        "On-device translation needs the macOS Translation framework.",
+        "Pass texts: one translated string per cue (transcript.get {captions:\"json\"} lists cues).",
+    ))
+}

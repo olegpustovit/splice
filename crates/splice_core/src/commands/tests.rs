@@ -25,13 +25,15 @@ fn registry_matches_prototype_ids_order_and_status() {
             .count(),
         20
     );
+    // 0.3 builds the prototype's 20 planned rows and 16 Splice rows; nothing stays planned.
     assert_eq!(
         COMMANDS
             .iter()
-            .filter(|row| row.tier == Tier::Planned)
+            .filter(|row| row.tier == Tier::Third)
             .count(),
-        20
+        36
     );
+    assert!(COMMANDS.iter().all(|row| row.tier != Tier::Planned));
 }
 
 #[test]
@@ -64,7 +66,7 @@ fn every_command_has_a_documented_decodable_example_and_distinct_variant() {
     let effect = describe(Some("effect.add"), None).unwrap();
     assert_eq!(effect.field("cut").unwrap().as_str(), Some("0.2"));
     let effects = effect.field("effectTypes").unwrap();
-    assert_eq!(effects.as_object().unwrap().len(), 6);
+    assert_eq!(effects.as_object().unwrap().len(), 24);
     assert!(
         effects
             .field("window")

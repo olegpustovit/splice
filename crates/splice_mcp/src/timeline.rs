@@ -182,7 +182,11 @@ pub(super) fn snapshot(p: &Project, args: &Json) -> Result<Json, StoreError> {
     let total = visible.len();
     let start = args.cursor('c', total)?;
     let end = start.saturating_add(args.limit(200)?).min(total);
-    let schemas = if full { effect_schemas() } else { Json::Null };
+    let schemas = if full {
+        effect_schemas().clone()
+    } else {
+        Json::Null
+    };
     let mut spine = Vec::new();
     let mut lane_items: Vec<Vec<Json>> = vec![Vec::new(); p.lanes.len()];
     for row in &visible[start..end] {
@@ -257,7 +261,7 @@ pub(super) fn inspect(p: &Project, args: &Json) -> Result<Json, StoreError> {
             let row = rows.iter().find(|row| row.value.field("id") == Some(value));
             row.map_or_else(
                 || Ok(object(vec![("id", text(id)), ("error", text("NOT_FOUND"))])),
-                |row| row.describe(p, true, &schemas),
+                |row| row.describe(p, true, schemas),
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -467,6 +471,7 @@ fn effects(p: &Project, id: TimelineId, schemas: &Json) -> Json {
                     EffectValue::Text(s) => text(s),
                     EffectValue::Number(n) => Json::Float(*n),
                     EffectValue::Bool(flag) => Json::Bool(*flag),
+                    EffectValue::Keys(keys) => splice_core::package::encode_keys(keys),
                 };
                 params.push((key.clone(), value));
                 sources.push((key.clone(), text(&scope.0)));

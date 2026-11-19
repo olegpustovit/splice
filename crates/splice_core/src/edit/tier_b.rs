@@ -7,99 +7,64 @@ use crate::commands::{
     CaptionWordPatch, Component, EffectSelection, FrameArg, OverlayContent, effect_schemas,
 };
 
-/// Effect types that are designed but not built (core.js PLANNED_EFFECTS).
-const PLANNED_EFFECTS: &[&str] = &[
-    "motionBlur",
-    "blurRegion",
-    "spotlight",
-    "deviceFrame",
-    "backgroundBlur",
-    "clickSound",
-    "grade",
-];
-
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Applies {
+pub(super) enum Applies {
+    /// Pictures: spine clips and media overlays.
     Visual,
+    /// Screen takes.
     Take,
+    /// Caption lanes and cues.
     Caption,
+    /// Anything drawn: pictures, titles, shapes, captions.
+    Layer,
+    /// Spine clips only.
+    Spine,
+    /// Anything audible.
+    Audio,
+    /// Titles and captions.
+    Text,
+    /// Shape items.
+    Shape,
+    /// Items made by template.add.
+    Template,
+    /// The project only.
+    Project,
 }
 
-fn applies(kind: &str) -> Result<Applies, CommandError> {
-    match kind {
-        "window" => Ok(Applies::Visual),
-        "cursor" | "clickZoom" | "camera" | "keystrokes" => Ok(Applies::Take),
-        "captions" => Ok(Applies::Caption),
-        _ => Err(error(
-            if PLANNED_EFFECTS.contains(&kind) {
-                "PLANNED"
-            } else {
-                "BAD_ARGS"
-            },
-            &format!("No effect type {kind}."),
-            "Types: window, cursor, clickZoom, camera, captions, keystrokes. commands.describe {id:\"effect.add\"} lists parameters.",
-        )),
-    }
-}
-
-fn check_params(kind: &str, params: &[EffectParam]) -> Result<(), CommandError> {
+/// The schema's `applies` class and whether an owner may hold several instances.
+pub(super) fn applies(kind: &str) -> Result<(Applies, bool), CommandError> {
     let schemas = effect_schemas();
-    let schema = schemas
-        .field(kind)
-        .and_then(|schema| schema.field("params"))
-        .expect("checked effect type");
-    for param in params {
-        let names = || {
-            schema
-                .as_object()
-                .map(|fields| {
-                    fields
-                        .iter()
-                        .map(|(name, _)| name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default()
-        };
-        let spec = schema.field(&param.name).ok_or_else(|| {
-            error(
-                "BAD_ARGS",
-                &format!("{kind} has no parameter {}.", param.name),
-                &format!("Parameters: {}.", names()),
-            )
-        })?;
-        let number = |key| spec.field(key).and_then(Json::as_f64).unwrap_or(0.0);
-        let ok = match (spec.field("type").and_then(Json::as_str), &param.value) {
-            (Some("number"), EffectValue::Number(n)) => *n >= number("min") && *n <= number("max"),
-            (Some("bool"), EffectValue::Bool(_)) => true,
-            (Some("enum"), EffectValue::Text(text)) => spec
-                .field("options")
-                .and_then(Json::as_array)
-                .is_some_and(|options| options.iter().any(|o| o.as_str() == Some(text))),
-            (Some("color"), EffectValue::Text(text)) => {
-                text.len() == 7
-                    && text.starts_with('#')
-                    && text[1..].bytes().all(|b| b.is_ascii_hexdigit())
+    let Some(schema) = schemas.field(kind) else {
+        let mut names = String::new();
+        for (name, _) in schemas.as_object().into_iter().flatten() {
+            if !names.is_empty() {
+                names.push_str(", ");
             }
-            _ => false,
-        };
-        if !ok {
-            let expected = match spec.field("type").and_then(Json::as_str) {
-                Some("number") => format!("a number from {} to {}", number("min"), number("max")),
-                Some("bool") => "true or false".into(),
-                Some("color") => "a #rrggbb color".into(),
-                _ => {
-                    let mut options = String::new();
-                    splice_json::write(spec.field("options").unwrap_or(&Json::Null), &mut options)
-                        .expect("finite schema");
-                    format!("one of {options}")
-                }
-            };
-            return Err(CommandError::bad(&param.name, &expected));
+            names.push_str(name);
         }
-    }
-    Ok(())
+        return Err(error(
+            "BAD_ARGS",
+            &format!("No effect type {kind}."),
+            &format!("Types: {names}. commands.describe {{id:\"effect.add\"}} lists parameters."),
+        ));
+    };
+    let class = match schema.field("applies").and_then(Json::as_str) {
+        Some("visual") => Applies::Visual,
+        Some("take") => Applies::Take,
+        Some("caption") => Applies::Caption,
+        Some("layer") => Applies::Layer,
+        Some("spine") => Applies::Spine,
+        Some("audio") => Applies::Audio,
+        Some("text") => Applies::Text,
+        Some("shape") => Applies::Shape,
+        Some("template") => Applies::Template,
+        _ => Applies::Project,
+    };
+    let multiple = schema.field("multiple").and_then(Json::as_bool) == Some(true);
+    Ok((class, multiple))
 }
+
+pub(super) use crate::commands::check_effect as check_params;
 
 fn merge(into: &mut Vec<EffectParam>, params: Vec<EffectParam>) {
     for param in params {
@@ -267,7 +232,7 @@ impl Editor {
                 words,
                 language,
             } => self.set_transcript(&media, words, language),
-            _ => unreachable!("tier B dispatch"),
+            op => self.run_tier_c(op),
         }
     }
 
@@ -662,7 +627,7 @@ impl Editor {
 
     // ── Effects ──
 
-    fn owner(&self, target: &Target) -> Result<Owner, CommandError> {
+    pub(super) fn owner(&self, target: &Target) -> Result<Owner, CommandError> {
         match self.resolve(target)? {
             Target::Project => Ok(Owner::Project),
             Target::Lane(id) if id == LaneId::SPINE => Ok(Owner::Spine),
@@ -685,7 +650,7 @@ impl Editor {
         }
     }
 
-    fn owner_label(&self, owner: Owner) -> String {
+    pub(super) fn owner_label(&self, owner: Owner) -> String {
         match owner {
             Owner::Project => "the project".into(),
             Owner::Spine => "lan_spine".into(),
@@ -695,35 +660,49 @@ impl Editor {
         }
     }
 
-    fn fits(&self, kind: Applies, owner: Owner) -> bool {
+    pub(super) fn fits(&self, kind: Applies, owner: Owner) -> bool {
+        use Applies::*;
         match owner {
             Owner::Project => true,
-            Owner::Spine => kind != Applies::Caption,
-            Owner::Lane(index) => {
-                (self.project.lanes[index].kind == LaneKind::Captions) == (kind == Applies::Caption)
-            }
+            Owner::Spine => matches!(kind, Visual | Take | Layer | Spine | Audio),
+            Owner::Lane(index) => matches!(
+                (self.project.lanes[index].kind, kind),
+                (LaneKind::Captions, Caption | Text | Layer)
+                    | (LaneKind::Audio, Audio)
+                    | (LaneKind::Overlay, Visual | Layer | Audio)
+                    | (LaneKind::Graphics, Text | Layer | Shape)
+            ),
             Owner::Clip(slot) => {
                 let media_id = self.project.clips.data(slot).expect("live clip").media;
                 let descriptor = media_id.and_then(|id| media(&self.project, id).ok());
                 match kind {
-                    Applies::Take => descriptor.is_some_and(|m| m.kind == MediaKind::Take),
-                    Applies::Caption => false,
-                    Applies::Visual => descriptor.is_some_and(|m| m.kind != MediaKind::Audio),
+                    Take => descriptor.is_some_and(|m| m.kind == MediaKind::Take),
+                    Visual | Layer | Spine => {
+                        descriptor.is_some_and(|m| m.kind != MediaKind::Audio)
+                    }
+                    Audio => descriptor
+                        .is_some_and(|m| m.kind == MediaKind::Take || !m.probe.audio.is_empty()),
+                    Caption | Text | Shape | Template | Project => false,
                 }
             }
-            Owner::Item(slot) => matches!(
-                (
-                    kind,
-                    &self.project.items.data(slot).expect("live item").kind
-                ),
-                (Applies::Caption, ItemKind::Caption { .. })
-                    | (Applies::Visual, ItemKind::Media(_))
-            ),
+            Owner::Item(slot) => {
+                let item = &self.project.items.data(slot).expect("live item").kind;
+                match kind {
+                    Caption => matches!(item, ItemKind::Caption { .. }),
+                    Text => matches!(item, ItemKind::Caption { .. } | ItemKind::Title { .. }),
+                    Visual => matches!(item, ItemKind::Media(_)),
+                    Layer => !matches!(item, ItemKind::Sound(_) | ItemKind::Motion { .. }),
+                    Audio => matches!(item, ItemKind::Sound(_) | ItemKind::Media(_)),
+                    Shape => matches!(item, ItemKind::Shape { .. }),
+                    Template => true,
+                    Take | Spine | Project => false,
+                }
+            }
         }
     }
 
     /// Writes params into the owner's instance of a type, creating it when missing.
-    fn upsert(
+    pub(super) fn upsert(
         &mut self,
         owner: Owner,
         kind: &str,
@@ -731,23 +710,25 @@ impl Editor {
         enabled: Option<bool>,
         created: &mut Vec<Target>,
     ) -> Result<EffectId, CommandError> {
-        let class = applies(kind)?;
+        let (class, multiple) = applies(kind)?;
         if !self.fits(class, owner) {
-            return Err(wrong_kind(match class {
-                Applies::Take => "It needs a screen take with recorded events.",
-                Applies::Caption => {
-                    "Caption Style applies to a Captions lane, a caption cue or the project."
-                }
-                Applies::Visual => {
-                    "Window applies to spine clips, media overlays, lanes and the project."
-                }
-            }));
+            let schemas = effect_schemas();
+            let to = schemas
+                .field(kind)
+                .and_then(|schema| schema.field("appliesTo"))
+                .and_then(Json::as_str)
+                .unwrap_or("its owners");
+            return Err(wrong_kind(&format!("{kind} applies to {to}.")));
         }
         check_params(kind, &params)?;
-        let index = match effects(&self.project, owner)
-            .iter()
-            .position(|effect| effect.kind == kind)
-        {
+        let existing = if multiple {
+            None
+        } else {
+            effects(&self.project, owner)
+                .iter()
+                .position(|effect| effect.kind == kind)
+        };
+        let index = match existing {
             Some(index) => index,
             None => {
                 let id = EffectId::from_serial(self.mint("fx")?);
@@ -779,7 +760,7 @@ impl Editor {
             .collect()
     }
 
-    fn find_effect(&self, target: &Target) -> Result<(Owner, usize), CommandError> {
+    pub(super) fn find_effect(&self, target: &Target) -> Result<(Owner, usize), CommandError> {
         let Target::Effect(id) = self.resolve(target)? else {
             return Err(wrong_kind("Pass an effect ID (fx_…)."));
         };
@@ -794,7 +775,7 @@ impl Editor {
             .ok_or_else(|| not_found(&id, "items.inspect lists effects with IDs."))
     }
 
-    fn set_effect(
+    pub(super) fn set_effect(
         &mut self,
         target: EffectSelection,
         params: Vec<EffectParam>,
@@ -846,7 +827,7 @@ impl Editor {
         })
     }
 
-    fn remove_effects(
+    pub(super) fn remove_effects(
         &mut self,
         ids: &[Target],
         target: Option<&Target>,
@@ -897,7 +878,7 @@ impl Editor {
                 effects_vec_mut(&mut self.project, owner).clear();
             }
             for effect in &copied {
-                if self.fits(applies(&effect.kind)?, owner) {
+                if self.fits(applies(&effect.kind)?.0, owner) {
                     self.upsert(
                         owner,
                         &effect.kind,

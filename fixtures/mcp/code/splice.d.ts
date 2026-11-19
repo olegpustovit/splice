@@ -21,6 +21,10 @@ declare namespace Splice {
     | { word: string; transcriptHash?: string; edge?: "start" | "end"; offset?: number };
   /** A rectangle normalized to the source frame (0–1). */
   type Rect = { x: number; y: number; w: number; h: number };
+  /** Curve toward the next key. */
+  type Ease = "linear" | "hold" | "in" | "out" | "inOut" | [number, number, number, number];
+  /** A keyframe; frames are relative to the owner's start. */
+  type Key = { at: number; value: number; ease?: Ease };
   /** "r12" or 12. */
   type Revision = number | string;
 
@@ -445,6 +449,205 @@ declare namespace Splice {
       /** ovl_…[] · two or more captions on one lane */
       items: string[];
     }
+    /** Join Clips (edit, 0.3). */
+    interface ClipJoin extends Base {
+      cmd: "clip.join";
+      /** clp_…[] · adjacent spine clips cut from one source, in order */
+      items: string[];
+    }
+    /** Ungroup (edit, 0.3). */
+    interface ClipUngroup extends Base {
+      cmd: "clip.ungroup";
+      /** clp_… · a clip made by clip.join */
+      item: string;
+    }
+    /** Restore Cuts (edit, 0.3). */
+    interface ClipRestore extends Base {
+      cmd: "clip.restore";
+      /** clp_…[] · clips whose cut material comes back; omit for every seam */
+      items?: string[];
+    }
+    /** Reorder Lane (edit, 0.3). */
+    interface LaneReorder extends Base {
+      cmd: "lane.reorder";
+      /** lan_… */
+      lane: string;
+      /** number · stack index, 0 at the top */
+      to: number;
+    }
+    /** Animated Crop (edit, 0.3). */
+    interface CropKeys extends Base {
+      cmd: "crop.keys";
+      /** clp_… | ovl_… · clip or media overlay */
+      item: string;
+      /** [{at, x, y, w, h, ease}] · owner frames; crop normalized to the source; ease linear, hold, in, out, inOut or [x1,y1,x2,y2] */
+      keys: { at: number; x: number; y: number; w: number; h: number; ease?: Ease }[];
+    }
+    /** Add Transition (edit, 0.3). */
+    interface TransitionAdd extends Base {
+      cmd: "transition.add";
+      /** clp_… · the incoming spine clip */
+      item: string;
+      /** @default dissolve */
+      kind?: "dissolve" | "dip" | "wipe" | "push" | "slide" | "zoom";
+      /** centered on the cut · @default 15 */
+      length?: number;
+      /** @default left */
+      direction?: "left" | "right" | "up" | "down";
+      /** #rrggbb · dip color */
+      color?: string;
+    }
+    /** Zoom Settings (edit, 0.3). */
+    interface ZoomSet extends Base {
+      cmd: "zoom.set";
+      /** clp_… | project · a screen take or the project */
+      target: string;
+      /** boolean · click zoom on or off */
+      enabled?: boolean;
+      /** number · 1.1…3 */
+      scale?: number;
+      /** number · source frames each zoom holds */
+      hold?: number;
+    }
+    /** Add Mask (edit, 0.3). */
+    interface MaskAdd extends Base {
+      cmd: "mask.add";
+      /** clp_… | ovl_… */
+      item: string;
+      shape?: "rect" | "roundRect" | "ellipse";
+      mode?: "blur" | "pixelate" | "cover" | "spotlight";
+      /** number · 0…1 of the picture */
+      x?: number;
+      /** number */
+      y?: number;
+      /** number */
+      w?: number;
+      /** number */
+      h?: number;
+      /** number · 0…1 */
+      amount?: number;
+      /** number */
+      feather?: number;
+      /** boolean */
+      invert?: boolean;
+      /** #rrggbb · cover color */
+      color?: string;
+    }
+    /** Edit Mask (edit, 0.3). */
+    interface MaskSet extends Base {
+      cmd: "mask.set";
+      /** fx_… · mask effect */
+      mask: string;
+      /** boolean */
+      enabled?: boolean;
+      /** number | {keys} */
+      x?: number | { keys: Key[] };
+      /** number | {keys} */
+      y?: number | { keys: Key[] };
+      /** number | {keys} */
+      w?: number | { keys: Key[] };
+      /** number | {keys} */
+      h?: number | { keys: Key[] };
+      /** number */
+      amount?: number;
+      mode?: "blur" | "pixelate" | "cover" | "spotlight";
+    }
+    /** Translate Captions (edit, 0.3). */
+    interface CaptionsTranslate extends Base {
+      cmd: "captions.translate";
+      /** lan_… · captions lane */
+      lane: string;
+      /** BCP 47 tag */
+      language: string;
+      /** string[] · one per cue in order; splice mcp translates on device when omitted and a language pack is installed */
+      texts?: string[];
+    }
+    /** Import SRT / VTT (edit, 0.3). */
+    interface CaptionsImport extends Base {
+      cmd: "captions.import";
+      /** SRT or WebVTT text · cues align to transcript words */
+      text: string;
+      /** lan_… · destination captions lane; a new one when omitted */
+      lane?: string;
+    }
+    /** Link Audio (edit, 0.3). */
+    interface AudioLink extends Base {
+      cmd: "audio.link";
+      /** ovl_… · a sound made by audio.unlink */
+      item: string;
+    }
+    /** Unlink Audio (edit, 0.3). */
+    interface AudioUnlink extends Base {
+      cmd: "audio.unlink";
+      /** clp_… · spine clip */
+      item: string;
+      /** lan_… · destination audio lane */
+      lane?: string;
+    }
+    /** Move into Sync (edit, 0.3). */
+    interface AudioSync extends Base {
+      cmd: "audio.sync";
+      /** ovl_… · sound or media overlay */
+      item: string;
+      /** clp_… · spine clip it belongs to */
+      to: string;
+      /** item source frame at the clip's first source frame; splice mcp measures it when omitted */
+      offset: number;
+    }
+    /** Style (edit, 0.3). */
+    interface StyleSet extends Base {
+      cmd: "style.set";
+      font?: string;
+      /** #rrggbb · primary */
+      color?: string;
+      /** #rrggbb · secondary / background */
+      color2?: string;
+      /** #rrggbb */
+      accent?: string;
+      /** #rrggbb */
+      textColor?: string;
+      /** path */
+      logo?: string;
+      logoPosition?: "none" | "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+    }
+    /** Cut Pauses (edit, 0.3). */
+    interface CutPauses extends Base {
+      cmd: "cut.pauses";
+      /** pauses at least this long are cut · @default 0.7 s */
+      min?: number;
+      /** silence kept on each side · @default 4 */
+      keep?: number;
+    }
+    /** Tighten Pace (edit, 0.3). */
+    interface IntentPace extends Base {
+      cmd: "intent.pace";
+      /** longest pause left · @default 0.4 s */
+      maxPause?: number;
+    }
+    /** Fit to Duration (edit, 0.3). */
+    interface IntentFitDuration extends Base {
+      cmd: "intent.fitDuration";
+      /** number · target length; pauses go first, then fillers, then short sentences */
+      seconds: number;
+    }
+    /** Keep Shots (edit, 0.3). */
+    interface IntentKeepShots extends Base {
+      cmd: "intent.keepShots";
+      /** [[from, to]] · timeline frames to keep; the rest of the spine is cut */
+      ranges: [number, number][];
+    }
+    /** Auto Zoom (edit, 0.3). */
+    interface IntentAutoZoom extends Base {
+      cmd: "intent.autoZoom";
+      /** clp_… · screen take */
+      item: string;
+      /** [{at, x, y}] · source frames; splice mcp reads them from the take when omitted */
+      clicks?: { at: number; x: number; y: number }[];
+      /** number · @default 1.8 */
+      scale?: number;
+      /** @default 45 */
+      hold?: number;
+    }
     /** Set Transcript (edit, 0.2). */
     interface TranscriptSet extends Base {
       cmd: "transcript.set";
@@ -454,6 +657,157 @@ declare namespace Splice {
       words: string;
       /** BCP 47 tag · @default en-US */
       language?: string;
+    }
+    /** Roll Edit (edit, 0.3). */
+    interface ItemRoll extends Base {
+      cmd: "item.roll";
+      /** clp_… · its out-edge and the next clip's in-edge move together */
+      item: string;
+      /** signed */
+      by: number;
+    }
+    /** Slip (edit, 0.3). */
+    interface ItemSlip extends Base {
+      cmd: "item.slip";
+      /** clp_… | ovl_… · clip or media overlay */
+      item: string;
+      /** signed, on the source clock */
+      by: number;
+    }
+    /** Slide (edit, 0.3). */
+    interface ItemSlide extends Base {
+      cmd: "item.slide";
+      /** clp_… · moves between its neighbors */
+      item: string;
+      /** signed */
+      by: number;
+    }
+    /** Freeze Frame (edit, 0.3). */
+    interface ClipFreeze extends Base {
+      cmd: "clip.freeze";
+      /** clp_… */
+      item: string;
+      /** timeline frame to hold */
+      at: At;
+      /** @default 60 */
+      length?: number;
+    }
+    /** Compound Clip (edit, 0.3). */
+    interface ClipCompound extends Base {
+      cmd: "clip.compound";
+      /** clp_…[] · adjacent spine clips; overlays anchored inside move with them */
+      items: string[];
+    }
+    /** Break Apart (edit, 0.3). */
+    interface ClipUncompound extends Base {
+      cmd: "clip.uncompound";
+      /** clp_… · compound clip */
+      item: string;
+    }
+    /** Edit Transition (edit, 0.3). */
+    interface TransitionSet extends Base {
+      cmd: "transition.set";
+      /** clp_… · the incoming spine clip */
+      item: string;
+      kind?: "dissolve" | "dip" | "wipe" | "push" | "slide" | "zoom";
+      length?: number;
+      direction?: "left" | "right" | "up" | "down";
+      /** #rrggbb */
+      color?: string;
+    }
+    /** Remove Transition (edit, 0.3). */
+    interface TransitionRemove extends Base {
+      cmd: "transition.remove";
+      /** clp_… · the incoming spine clip */
+      item: string;
+    }
+    /** Set Parameter (edit, 0.3). */
+    interface ParamSet extends Base {
+      cmd: "param.set";
+      /** clp_… | ovl_… | lan_… | project */
+      target: string;
+      /** type.param · e.g. transform.scale, color.exposure, volume.gain */
+      path: string;
+      /** number */
+      value: number;
+    }
+    /** Keyframe Parameter (edit, 0.3). */
+    interface ParamKeys extends Base {
+      cmd: "param.keys";
+      /** clp_… | ovl_… | lan_… | project */
+      target: string;
+      /** type.param · any number in commands.describe effectTypes */
+      path: string;
+      /** [{at, value, ease}] · frames relative to the owner's start (absolute for lanes and the project) */
+      keys: Key[];
+      /** @default replace */
+      mode?: "replace" | "merge";
+    }
+    /** Track Mask (edit, 0.3). */
+    interface MaskTrack extends Base {
+      cmd: "mask.track";
+      /** fx_… · mask effect */
+      mask: string;
+      /** [{at, x, y}] · mask centers; splice mcp tracks the region when omitted */
+      keys?: { at: number; x: number; y: number }[];
+    }
+    /** Add Shape (edit, 0.3). */
+    interface GeneratorAdd extends Base {
+      cmd: "generator.add";
+      shape: "solid" | "gradient" | "rect" | "ellipse" | "arrow" | "line" | "callout";
+      at: At;
+      /** @default 90 */
+      length?: number;
+      /** {x, y, w, h} · normalized canvas; arrows run corner to corner */
+      rect?: Rect;
+      /** lan_… · graphics lane */
+      lane?: string;
+      /** #rrggbb */
+      fill?: string;
+      /** #rrggbb */
+      fill2?: string;
+      /** #rrggbb */
+      stroke?: string;
+      /** number */
+      strokeWidth?: number;
+      /** number */
+      corner?: number;
+    }
+    /** Add Template (edit, 0.3). */
+    interface TemplateAdd extends Base {
+      cmd: "template.add";
+      name: "lower-third" | "callout" | "cta" | "title-card" | "chapter-card";
+      at: At;
+      /** @default 4 s */
+      length?: number;
+      /** {title, subtitle} · text */
+      fields?: { title?: string; subtitle?: string };
+    }
+    /** Edit Template (edit, 0.3). */
+    interface TemplateSet extends Base {
+      cmd: "template.set";
+      /** ovl_… · any item of the template */
+      item: string;
+      /** {title, subtitle} · text */
+      fields: { title?: string; subtitle?: string };
+    }
+    /** Relink Media (edit, 0.3). */
+    interface MediaRelink extends Base {
+      cmd: "media.relink";
+      /** med_… */
+      media: string;
+      /** new file path */
+      path: string;
+      /** number · probed length; splice mcp fills it */
+      frames?: number;
+      /** boolean · accept a different length */
+      force?: boolean;
+    }
+    /** Consolidate Media (edit, 0.3). */
+    interface MediaConsolidate extends Base {
+      cmd: "media.consolidate";
+      /** med_…[] · omit for every external file */
+      media?: string[];
     }
   }
   /** Any registry command, for edit.apply's ops. */
@@ -499,7 +853,43 @@ declare namespace Splice {
     | op.CaptionSet
     | op.CaptionSplit
     | op.CaptionMerge
-    | op.TranscriptSet;
+    | op.ClipJoin
+    | op.ClipUngroup
+    | op.ClipRestore
+    | op.LaneReorder
+    | op.CropKeys
+    | op.TransitionAdd
+    | op.ZoomSet
+    | op.MaskAdd
+    | op.MaskSet
+    | op.CaptionsTranslate
+    | op.CaptionsImport
+    | op.AudioLink
+    | op.AudioUnlink
+    | op.AudioSync
+    | op.StyleSet
+    | op.CutPauses
+    | op.IntentPace
+    | op.IntentFitDuration
+    | op.IntentKeepShots
+    | op.IntentAutoZoom
+    | op.TranscriptSet
+    | op.ItemRoll
+    | op.ItemSlip
+    | op.ItemSlide
+    | op.ClipFreeze
+    | op.ClipCompound
+    | op.ClipUncompound
+    | op.TransitionSet
+    | op.TransitionRemove
+    | op.ParamSet
+    | op.ParamKeys
+    | op.MaskTrack
+    | op.GeneratorAdd
+    | op.TemplateAdd
+    | op.TemplateSet
+    | op.MediaRelink
+    | op.MediaConsolidate;
 }
 
 declare const splice: {
@@ -522,12 +912,21 @@ declare const splice: {
       set(args: Omit<Splice.op.ItemSet, "cmd">): Splice.op.ItemSet;
       anchor(args: Omit<Splice.op.ItemAnchor, "cmd">): Splice.op.ItemAnchor;
       lane(args: Omit<Splice.op.ItemLane, "cmd">): Splice.op.ItemLane;
+      roll(args: Omit<Splice.op.ItemRoll, "cmd">): Splice.op.ItemRoll;
+      slip(args: Omit<Splice.op.ItemSlip, "cmd">): Splice.op.ItemSlip;
+      slide(args: Omit<Splice.op.ItemSlide, "cmd">): Splice.op.ItemSlide;
     };
     clip: {
       speed(args: Omit<Splice.op.ClipSpeed, "cmd">): Splice.op.ClipSpeed;
       insert(args: Omit<Splice.op.ClipInsert, "cmd">): Splice.op.ClipInsert;
       lift(args: Omit<Splice.op.ClipLift, "cmd">): Splice.op.ClipLift;
       crop(args: Omit<Splice.op.ClipCrop, "cmd">): Splice.op.ClipCrop;
+      join(args: Omit<Splice.op.ClipJoin, "cmd">): Splice.op.ClipJoin;
+      ungroup(args: Omit<Splice.op.ClipUngroup, "cmd">): Splice.op.ClipUngroup;
+      restore(args: Omit<Splice.op.ClipRestore, "cmd">): Splice.op.ClipRestore;
+      freeze(args: Omit<Splice.op.ClipFreeze, "cmd">): Splice.op.ClipFreeze;
+      compound(args: Omit<Splice.op.ClipCompound, "cmd">): Splice.op.ClipCompound;
+      uncompound(args: Omit<Splice.op.ClipUncompound, "cmd">): Splice.op.ClipUncompound;
     };
     overlay: {
       replaceSpine(args: Omit<Splice.op.OverlayReplaceSpine, "cmd">): Splice.op.OverlayReplaceSpine;
@@ -546,12 +945,16 @@ declare const splice: {
       create(args: Omit<Splice.op.LaneCreate, "cmd">): Splice.op.LaneCreate;
       rename(args: Omit<Splice.op.LaneRename, "cmd">): Splice.op.LaneRename;
       delete(args: Omit<Splice.op.LaneDelete, "cmd">): Splice.op.LaneDelete;
+      reorder(args: Omit<Splice.op.LaneReorder, "cmd">): Splice.op.LaneReorder;
     };
     component: {
       set(args: Omit<Splice.op.ComponentSet, "cmd">): Splice.op.ComponentSet;
     };
     audio: {
       set(args: Omit<Splice.op.AudioSet, "cmd">): Splice.op.AudioSet;
+      link(args: Omit<Splice.op.AudioLink, "cmd">): Splice.op.AudioLink;
+      unlink(args: Omit<Splice.op.AudioUnlink, "cmd">): Splice.op.AudioUnlink;
+      sync(args: Omit<Splice.op.AudioSync, "cmd">): Splice.op.AudioSync;
     };
     cursor: {
       set(args: Omit<Splice.op.CursorSet, "cmd">): Splice.op.CursorSet;
@@ -570,6 +973,7 @@ declare const splice: {
     cut: {
       range(args: Omit<Splice.op.CutRange, "cmd">): Splice.op.CutRange;
       words(args: Omit<Splice.op.CutWords, "cmd">): Splice.op.CutWords;
+      pauses(args: Omit<Splice.op.CutPauses, "cmd">): Splice.op.CutPauses;
     };
     effect: {
       add(args: Omit<Splice.op.EffectAdd, "cmd">): Splice.op.EffectAdd;
@@ -580,14 +984,56 @@ declare const splice: {
     };
     captions: {
       generate(args: Omit<Splice.op.CaptionsGenerate, "cmd">): Splice.op.CaptionsGenerate;
+      translate(args: Omit<Splice.op.CaptionsTranslate, "cmd">): Splice.op.CaptionsTranslate;
+      import(args: Omit<Splice.op.CaptionsImport, "cmd">): Splice.op.CaptionsImport;
     };
     caption: {
       set(args: Omit<Splice.op.CaptionSet, "cmd">): Splice.op.CaptionSet;
       split(args: Omit<Splice.op.CaptionSplit, "cmd">): Splice.op.CaptionSplit;
       merge(args: Omit<Splice.op.CaptionMerge, "cmd">): Splice.op.CaptionMerge;
     };
+    crop: {
+      keys(args: Omit<Splice.op.CropKeys, "cmd">): Splice.op.CropKeys;
+    };
+    transition: {
+      add(args: Omit<Splice.op.TransitionAdd, "cmd">): Splice.op.TransitionAdd;
+      set(args: Omit<Splice.op.TransitionSet, "cmd">): Splice.op.TransitionSet;
+      remove(args: Omit<Splice.op.TransitionRemove, "cmd">): Splice.op.TransitionRemove;
+    };
+    zoom: {
+      set(args: Omit<Splice.op.ZoomSet, "cmd">): Splice.op.ZoomSet;
+    };
+    mask: {
+      add(args: Omit<Splice.op.MaskAdd, "cmd">): Splice.op.MaskAdd;
+      set(args: Omit<Splice.op.MaskSet, "cmd">): Splice.op.MaskSet;
+      track(args: Omit<Splice.op.MaskTrack, "cmd">): Splice.op.MaskTrack;
+    };
+    style: {
+      set(args: Omit<Splice.op.StyleSet, "cmd">): Splice.op.StyleSet;
+    };
+    intent: {
+      pace(args: Omit<Splice.op.IntentPace, "cmd">): Splice.op.IntentPace;
+      fitDuration(args: Omit<Splice.op.IntentFitDuration, "cmd">): Splice.op.IntentFitDuration;
+      keepShots(args: Omit<Splice.op.IntentKeepShots, "cmd">): Splice.op.IntentKeepShots;
+      autoZoom(args: Omit<Splice.op.IntentAutoZoom, "cmd">): Splice.op.IntentAutoZoom;
+    };
     transcript: {
       set(args: Omit<Splice.op.TranscriptSet, "cmd">): Splice.op.TranscriptSet;
+    };
+    param: {
+      set(args: Omit<Splice.op.ParamSet, "cmd">): Splice.op.ParamSet;
+      keys(args: Omit<Splice.op.ParamKeys, "cmd">): Splice.op.ParamKeys;
+    };
+    generator: {
+      add(args: Omit<Splice.op.GeneratorAdd, "cmd">): Splice.op.GeneratorAdd;
+    };
+    template: {
+      add(args: Omit<Splice.op.TemplateAdd, "cmd">): Splice.op.TemplateAdd;
+      set(args: Omit<Splice.op.TemplateSet, "cmd">): Splice.op.TemplateSet;
+    };
+    media: {
+      relink(args: Omit<Splice.op.MediaRelink, "cmd">): Splice.op.MediaRelink;
+      consolidate(args: Omit<Splice.op.MediaConsolidate, "cmd">): Splice.op.MediaConsolidate;
     };
   };
   project: {

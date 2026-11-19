@@ -1,4 +1,4 @@
-use crate::{ClipId, EffectId, Frame, ItemId, LaneId, MarkerId, MediaId, TimelineId, WordId};
+use crate::{ClipId, EffectId, Frame, ItemId, Key, LaneId, MarkerId, MediaId, TimelineId, WordId};
 
 /// Supported canvas shapes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,6 +116,8 @@ pub struct ClipData {
     pub volume: AudioGains,
     /// Keystroke event indices hidden in this clip.
     pub hidden_keys: Vec<u32>,
+    /// Offsets from the clip start where clip.join merged clips (clip.ungroup splits there).
+    pub joins: Vec<Frame>,
 }
 
 /// Independently switchable media components.
@@ -304,6 +306,14 @@ pub enum ItemKind {
     },
     /// Music or a sound effect on an audio lane.
     Sound(Sound),
+    /// Generated graphic: solid, gradient, shape, arrow, line or callout (T17.5).
+    Shape {
+        /// What to draw.
+        shape: ShapeKind,
+        /// Bounds in normalized canvas coordinates. Arrows and lines run from the top-left
+        /// corner to the bottom-right one.
+        rect: Rect,
+    },
     /// Cue composed from words in a transcript.
     Caption {
         /// Words in cue order.
@@ -322,7 +332,56 @@ impl ItemKind {
             Self::Motion { .. } => LaneKind::Motion,
             Self::Caption { .. } => LaneKind::Captions,
             Self::Sound(_) => LaneKind::Audio,
+            Self::Shape { .. } => LaneKind::Graphics,
         }
+    }
+}
+
+/// Generator kinds. Colors and stroke come from the item's `shape` effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShapeKind {
+    /// Flat fill of the bounds.
+    Solid,
+    /// Two-color gradient fill.
+    Gradient,
+    /// Rectangle with optional rounded corners.
+    Rect,
+    /// Ellipse inscribed in the bounds.
+    Ellipse,
+    /// Arrow with a head at the end point.
+    Arrow,
+    /// Straight line.
+    Line,
+    /// Rounded box with a pointer, for annotations.
+    Callout,
+}
+
+impl ShapeKind {
+    /// Every kind with its wire name.
+    pub const ALL: [(Self, &'static str); 7] = [
+        (Self::Solid, "solid"),
+        (Self::Gradient, "gradient"),
+        (Self::Rect, "rect"),
+        (Self::Ellipse, "ellipse"),
+        (Self::Arrow, "arrow"),
+        (Self::Line, "line"),
+        (Self::Callout, "callout"),
+    ];
+
+    /// Wire name.
+    pub fn name(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(kind, _)| *kind == self)
+            .map_or("rect", |(_, name)| name)
+    }
+
+    /// Parses a wire name.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .find(|(_, known)| *known == name)
+            .map(|(kind, _)| *kind)
     }
 }
 
@@ -441,6 +500,8 @@ pub enum EffectValue {
     Bool(bool),
     /// Text, enum name, or color.
     Text(String),
+    /// Keyframed number (PLAN.md D5).
+    Keys(Vec<Key>),
 }
 
 impl Clone for Spine {
@@ -486,6 +547,7 @@ impl Clone for ClipData {
             enabled: self.enabled.clone(),
             volume: self.volume,
             hidden_keys: self.hidden_keys.clone(),
+            joins: self.joins.clone(),
         }
     }
 
@@ -496,6 +558,7 @@ impl Clone for ClipData {
         self.enabled.clone_from(&source.enabled);
         self.volume = source.volume;
         self.hidden_keys.clone_from(&source.hidden_keys);
+        self.joins.clone_from(&source.joins);
     }
 }
 
@@ -609,6 +672,10 @@ impl Clone for ItemKind {
             Self::Title { text } => Self::Title { text: text.clone() },
             Self::Media(overlay) => Self::Media(*overlay),
             Self::Sound(sound) => Self::Sound(*sound),
+            Self::Shape { shape, rect } => Self::Shape {
+                shape: *shape,
+                rect: *rect,
+            },
             Self::Motion {
                 from,
                 to,
@@ -651,12 +718,14 @@ impl Clone for EffectValue {
             Self::Number(n) => Self::Number(*n),
             Self::Bool(b) => Self::Bool(*b),
             Self::Text(s) => Self::Text(s.clone()),
+            Self::Keys(keys) => Self::Keys(keys.clone()),
         }
     }
 
     fn clone_from(&mut self, source: &Self) {
         match (self, source) {
             (Self::Text(text), Self::Text(other)) => text.clone_from(other),
+            (Self::Keys(keys), Self::Keys(other)) => keys.clone_from(other),
             (dst, src) => *dst = src.clone(),
         }
     }

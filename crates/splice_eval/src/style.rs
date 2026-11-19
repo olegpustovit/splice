@@ -1,4 +1,5 @@
-use splice_model::{Effect, EffectParam, EffectValue};
+use super::look::Num;
+use splice_model::{Effect, EffectParam, EffectValue, Frame};
 
 /// Window background inside a layer's placement rectangle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -241,31 +242,59 @@ pub fn resolve_effect(scopes: &[&[Effect]], kind: &str) -> Option<(bool, Vec<Eff
     result.enabled.map(|enabled| (enabled, result.params))
 }
 
-struct Resolution {
-    enabled: Option<bool>,
-    params: Vec<EffectParam>,
+/// One effect type's overrides merged project → lane → owner (the only merge in eval).
+pub(crate) struct Resolution {
+    pub(crate) enabled: Option<bool>,
+    pub(crate) params: Vec<EffectParam>,
 }
 
 impl Resolution {
-    fn new(scopes: &[&[Effect]], kind: &str) -> Self {
+    pub(crate) fn new(scopes: &[&[Effect]], kind: &str) -> Self {
+        Self::shifted(scopes, &[], kind)
+    }
+
+    /// Like `new`, adding `shifts[i]` to the key frames of scope `i` (absent shifts are 0), so
+    /// timeline-absolute lane and project keys become owner-relative.
+    pub(crate) fn shifted(scopes: &[&[Effect]], shifts: &[Frame], kind: &str) -> Self {
         let mut result = Self {
             enabled: None,
             params: Vec::new(),
         };
-        for scope in scopes {
-            if let Some(effect) = scope.iter().find(|effect| effect.kind == kind) {
+        for (index, scope) in scopes.iter().enumerate() {
+            let shift = shifts.get(index).copied().unwrap_or(0);
+            for effect in scope.iter().filter(|effect| effect.kind == kind) {
                 result.enabled = effect.enabled.or(result.enabled).or(Some(true));
                 for param in &effect.params {
-                    if let Some(existing) = result.params.iter_mut().find(|p| p.name == param.name)
-                    {
-                        existing.value.clone_from(&param.value);
-                    } else {
-                        result.params.push(param.clone());
+                    let mut value = param.value.clone();
+                    if let EffectValue::Keys(keys) = &mut value {
+                        keys.iter_mut().for_each(|key| key.at += shift);
+                    }
+                    match result.params.iter_mut().find(|p| p.name == param.name) {
+                        Some(existing) => existing.value = value,
+                        None => result.params.push(EffectParam {
+                            name: param.name.clone(),
+                            value,
+                        }),
                     }
                 }
             }
         }
         result
+    }
+
+    /// The merged effect when it is on.
+    pub(crate) fn on(scopes: &[&[Effect]], shifts: &[Frame], kind: &str) -> Option<Self> {
+        let result = Self::shifted(scopes, shifts, kind);
+        (result.enabled == Some(true)).then_some(result)
+    }
+
+    /// A number or its keys.
+    pub(crate) fn num(&self, name: &str, default: f64) -> Num {
+        match self.value(name) {
+            Some(EffectValue::Number(n)) if n.is_finite() => Num::Const(*n),
+            Some(EffectValue::Keys(keys)) if !keys.is_empty() => Num::Keys(keys.clone()),
+            _ => Num::Const(default),
+        }
     }
 
     fn value(&self, name: &str) -> Option<&EffectValue> {
@@ -275,28 +304,28 @@ impl Resolution {
             .map(|param| &param.value)
     }
 
-    fn number(&self, name: &str, default: f64) -> f64 {
+    pub(crate) fn number(&self, name: &str, default: f64) -> f64 {
         match self.value(name) {
             Some(EffectValue::Number(n)) if n.is_finite() => *n,
             _ => default,
         }
     }
 
-    fn boolean(&self, name: &str, default: bool) -> bool {
+    pub(crate) fn boolean(&self, name: &str, default: bool) -> bool {
         match self.value(name) {
             Some(EffectValue::Bool(b)) => *b,
             _ => default,
         }
     }
 
-    fn text(&self, name: &str) -> Option<&str> {
+    pub(crate) fn text(&self, name: &str) -> Option<&str> {
         match self.value(name) {
             Some(EffectValue::Text(s)) => Some(s),
             _ => None,
         }
     }
 
-    fn color(&self, name: &str, default: u32) -> u32 {
+    pub(crate) fn color(&self, name: &str, default: u32) -> u32 {
         self.text(name)
             .and_then(|text| text.strip_prefix('#'))
             .filter(|hex| hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
