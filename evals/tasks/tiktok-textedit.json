@@ -1,17 +1,46 @@
 {
   "id": "tiktok-textedit",
   "platform": "macos",
-  "seed": {"record": {"app": "TextEdit", "duration": 8}},
-  "assets": {"upbeat.wav": {"tone": 12}},
+  "seed": {
+    "record": {
+      "app": "TextEdit",
+      "duration": 8
+    }
+  },
+  "assets": {
+    "upbeat.wav": {
+      "tone": 12
+    }
+  },
   "prompt": "The Splice project {project} holds a fresh screen recording of a TextEdit window. Turn it into a polished vertical TikTok: 9:16, the window filling the frame (no black bands), a colorful background frame around it, a bigger cursor with click rings, zoom toward clicks, and the music track at {upbeat} mixed in at social loudness. Then export it with the social preset. Use the splice MCP tools only.",
   "checks": [
-    {"name": "9:16", "expr": "project['aspect'] == '9:16'"},
-    {"name": "no letterbox bands", "expr": "not frame(max(1, sum(c['length'] for c in clips) // 2)).bands()"},
-    {"name": "background frame", "expr": "(effect('window') or {}).get('background', 'gradient') != 'none' and effect('window') is not None"},
-    {"name": "bigger cursor", "expr": "(effect('cursor') or {}).get('size', 1) >= 1.5"},
-    {"name": "zoom", "expr": "effect('clickZoom') is not None or any(i['kind'] == 'motion' for i in items)"},
-    {"name": "music on the timeline", "expr": "any(media_kind(c.get('media')) == 'audio' for c in clips) or any(i['kind'] == 'media' and media_kind(i['params']['media']) == 'audio' and not i['params'].get('muted') for i in items)"},
-    {"name": "export", "expr": "len(exports()) >= 1"}
+    {
+      "name": "9:16",
+      "expr": "project['aspect'] == '9:16'"
+    },
+    {
+      "name": "no letterbox bands",
+      "expr": "not frame(max(1, sum(c['length'] for c in clips) // 2)).bands()"
+    },
+    {
+      "name": "background frame",
+      "expr": "(effect('window') or {}).get('background', 'gradient') != 'none' and effect('window') is not None"
+    },
+    {
+      "name": "bigger cursor",
+      "expr": "(effect('cursor') or {}).get('size', 1) >= 1.5"
+    },
+    {
+      "name": "zoom",
+      "expr": "effect('clickZoom') is not None or any(i['kind'] == 'motion' for i in items)"
+    },
+    {
+      "name": "music on the timeline",
+      "expr": "any(i['kind'] == 'sound' and media_kind(i['params']['media']) == 'audio' and i['params']['volume'] > 0 for i in items)"
+    },
+    {
+      "name": "export",
+      "expr": "len(exports()) >= 1"
+    }
   ]
 }
-

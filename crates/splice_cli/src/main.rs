@@ -461,8 +461,8 @@ fn frame(args: &[String]) -> Result<Json, StoreError> {
     };
     if flag != "--at" {
         return Err(bad_args(
-            "Invalid frame number.",
-            "Pass --at followed by a nonnegative integer frame.",
+            "Expected --at first.",
+            "Run splice frame --at N out.png [project.splice].",
         ));
     }
     let at = frame_number(at)?;

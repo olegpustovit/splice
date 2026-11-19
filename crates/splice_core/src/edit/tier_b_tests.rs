@@ -16,8 +16,8 @@ fn golden(name: &str, project: &Project, report: &ApplyReport) {
             Json::Array(report.mints.iter().cloned().map(Json::String).collect()),
         ),
     ]);
+    // Canonical JSON has no trailing newline (splice_json round-trips every fixture byte for byte).
     splice_json::write(&value, &mut bytes).unwrap();
-    bytes.push('\n');
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/json/tier-b")
         .join(format!("{name}.json"));

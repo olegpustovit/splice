@@ -82,14 +82,13 @@ def seed(task, work):
 
 # ── agent ──
 
-MCP = {"mcpServers": {"splice": {"command": SPLICE, "args": ["mcp"]}}}
-
-
-def run_agent(agent, prompt, work):
+def run_agent(agent, prompt, work, code=False):
     started = time.time()
+    args = ["mcp", "--code"] if code else ["mcp"]
+    MCP = {"mcpServers": {"splice": {"command": SPLICE, "args": args}}}
     if agent == "codex":
         cmd = ["codex", "exec", "--skip-git-repo-check", "-c", f'mcp_servers.splice.command="{SPLICE}"',
-               "-c", 'mcp_servers.splice.args=["mcp"]', "--json", prompt]
+               "-c", f"mcp_servers.splice.args={json.dumps(args)}", "--json", prompt]
     else:
         cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
                "--mcp-config", json.dumps(MCP), "--strict-mcp-config",
@@ -97,7 +96,7 @@ def run_agent(agent, prompt, work):
     out = sh(cmd, cwd=ROOT, timeout=1800)
     with open(os.path.join(work, "agent.jsonl"), "w") as f:
         f.write(out.stdout)
-    calls = errors = recoveries = 0
+    calls = errors = recoveries = tokens = 0
     failed = {}
     names = {}
     for line in out.stdout.splitlines():
@@ -105,6 +104,10 @@ def run_agent(agent, prompt, work):
             event = json.loads(line)
         except ValueError:
             continue
+        if event.get("type") == "result":
+            usage = event.get("usage") or {}
+            tokens = sum(usage.get(k) or 0 for k in ("input_tokens", "output_tokens",
+                         "cache_creation_input_tokens", "cache_read_input_tokens"))
         for part in (event.get("message") or {}).get("content") or []:
             if not isinstance(part, dict):
                 continue
@@ -118,7 +121,8 @@ def run_agent(agent, prompt, work):
                     failed[name] = True
                 elif failed.pop(name, False):
                     recoveries += 1
-    return {"calls": calls, "errors": errors, "recoveries": recoveries, "wall": round(time.time() - started, 1),
+    return {"calls": calls, "errors": errors, "recoveries": recoveries, "tokens": tokens,
+            "wall": round(time.time() - started, 1),
             "exit": out.returncode}
 
 
@@ -203,7 +207,7 @@ def helpers(project_path, work, seed_hash):
 
     def frame(at):
         out = os.path.join(work, f"frame-{at}.png")
-        splice("frame", project_path, "--at", str(at), out)
+        splice("frame", "--at", str(at), out, project_path)
         return Frame(out)
 
     def words_on_timeline():
@@ -230,17 +234,18 @@ def helpers(project_path, work, seed_hash):
     }
 
 
-def run_task(task, agent, dry):
+def run_task(task, agent, dry, code=False):
     work = tempfile.mkdtemp(prefix=f"splice-eval-{task['id']}-")
     project, assets = seed(task, work)
     seed_hash = splice("check", project).get("stateHash")
     prompt = task["prompt"].format(project=project, assets=json.dumps(assets), **assets_by_stem(assets))
-    stats = {"calls": 0, "errors": 0, "recoveries": 0, "wall": 0, "exit": 0} if dry else run_agent(agent, prompt, work)
+    stats = {"calls": 0, "errors": 0, "recoveries": 0, "tokens": 0, "wall": 0, "exit": 0} if dry else run_agent(agent, prompt, work, code)
     env = helpers(project, work, seed_hash)
     results = []
     for check in task["checks"]:
         try:
-            ok = bool(eval(check["expr"], {"__builtins__": __builtins__, "any": any, "all": all}, env))
+            # Helpers are globals: generator expressions in a check cannot see eval locals.
+            ok = bool(eval(check["expr"], {"__builtins__": __builtins__, **env}))
         except Exception as error:  # a failing probe is a failing check
             ok, check = False, dict(check, error=str(error))
         results.append((check["name"], ok, check.get("error")))
@@ -252,37 +257,43 @@ def assets_by_stem(assets):
 
 
 def main(argv):
-    agent, runs, dry, ids = "claude", 1, False, []
+    # --code runs the agent against `splice mcp --code` (T14.5 A/B); rows record agent "<agent>+code".
+    agent, runs, dry, code, ids = "claude", 1, False, False, []
     it = iter(argv)
     for arg in it:
         if arg == "--agent": agent = next(it)
         elif arg == "--runs": runs = int(next(it))
         elif arg == "--dry": dry = True
+        elif arg == "--code": code = True
         else: ids.append(arg)
     folder = os.path.join(ROOT, "evals", "tasks")
     tasks = [json.load(open(os.path.join(folder, f))) for f in sorted(os.listdir(folder)) if f.endswith(".json")]
     macos = sys.platform == "darwin"
     tasks = [t for t in tasks if (not ids or t["id"] in ids) and (t.get("platform", "any") == "any" or macos)]
-    commit = sh(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT).stdout.strip()
+    # The Mac tree is rsynced without .git; `make mac-run` callers pass SPLICE_COMMIT.
+    commit = os.environ.get("SPLICE_COMMIT") or sh(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT).stdout.strip()
     failed = 0
     for task in tasks:
         for run in range(runs):
-            work, stats, results = run_task(task, agent, dry)
+            work, stats, results = run_task(task, agent, dry, code)
             passed = all(ok for _, ok, _ in results)
             failed += not passed
+            with open(os.path.join(work, "result.json"), "w") as f:
+                json.dump({"task": task["id"], "agent": agent, "code": code, "commit": commit, "passed": passed,
+                           "checks": [{"name": n, "ok": ok, "error": e} for n, ok, e in results], **stats}, f, indent=1)
             for name, ok, error in results:
                 print(f"  {'✓' if ok else '✗'} {task['id']}: {name}" + (f" ({error})" if error else ""))
             print(f"{'PASS' if passed else 'FAIL'} {task['id']} run {run + 1}: {sum(ok for _, ok, _ in results)}/{len(results)} checks, "
                   f"{stats['calls']} calls, {stats['errors']} errors, {stats['recoveries']} recoveries, {stats['wall']} s ({work})")
             if not dry:
-                row = [time.strftime("%Y-%m-%d"), commit, agent, task["id"], "pass" if passed else "fail",
+                row = [time.strftime("%Y-%m-%d"), commit, agent + ("+code" if code else ""), task["id"], "pass" if passed else "fail",
                        f"{sum(ok for _, ok, _ in results)}/{len(results)}", str(stats["calls"]), str(stats["errors"]),
-                       str(stats["recoveries"]), str(stats["wall"])]
+                       str(stats["recoveries"]), str(stats["wall"]), str(stats["tokens"])]
                 path = os.path.join(ROOT, "evals", "results.tsv")
                 new = not os.path.exists(path)
                 with open(path, "a") as f:
                     if new:
-                        f.write("date\tcommit\tagent\ttask\tresult\tchecks\tcalls\terrors\trecoveries\twall_s\n")
+                        f.write("date\tcommit\tagent\ttask\tresult\tchecks\tcalls\terrors\trecoveries\twall_s\ttokens\n")
                     f.write("\t".join(row) + "\n")
     return 1 if failed else 0
 

@@ -145,7 +145,15 @@ fn cli_creates_previews_commits_snapshots_and_checks_a_project() {
     );
 
     let snapshot = success(scratch.run(&["snapshot", package]));
-    assert_eq!(snapshot, project_data(&project));
+    // The snapshot is the replayed checkpoint plus the media table the checkpoint keeps in media.json.
+    let Json::Object(mut fields) = snapshot.clone() else {
+        panic!("snapshot is an object")
+    };
+    assert_eq!(
+        fields.pop(),
+        Some(("media".into(), Json::Array(Vec::new())))
+    );
+    assert_eq!(Json::Object(fields), project_data(&project));
     assert_eq!(snapshot.field("rev").and_then(Json::as_u64), Some(1));
     let items = snapshot.field("items").and_then(Json::as_array).unwrap();
     assert_eq!(items.len(), 1);

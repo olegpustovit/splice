@@ -1,13 +1,31 @@
 {
   "id": "music-duck",
   "platform": "macos",
-  "seed": {"copy": "fixtures/projects/sample.splice"},
-  "assets": {"music.wav": {"tone": 25}},
+  "seed": {
+    "copy": "fixtures/projects/sample.splice"
+  },
+  "assets": {
+    "music.wav": {
+      "tone": 25
+    }
+  },
   "prompt": "Add the music at {music} under the whole Splice project {project} on an audio lane, ducked under the narration, and normalized for social loudness. Use the splice MCP tools only.",
   "checks": [
-    {"name": "audio lane", "expr": "any(l['kind'] == 'audio' for l in lanes)"},
-    {"name": "music item", "expr": "any(media_kind(i['params'].get('media')) == 'audio' for i in items if i['kind'] == 'media')"},
-    {"name": "ducked", "expr": "any(e['type'] == 'duck' for l in lanes for e in l.get('effects', [])) or any('duck' in json.dumps(i) for i in items)"}
+    {
+      "name": "audio lane",
+      "expr": "any(l['kind'] == 'audio' for l in lanes)"
+    },
+    {
+      "name": "music item",
+      "expr": "any(i['kind'] == 'sound' and media_kind(i['params']['media']) == 'audio' for i in items)"
+    },
+    {
+      "name": "ducked",
+      "expr": "any(i['kind'] == 'sound' and 'duck' in i['params'] for i in items)"
+    },
+    {
+      "name": "normalized",
+      "expr": "any(i['kind'] == 'sound' and i['params']['volume'] != 1 for i in items)"
+    }
   ]
 }
-
