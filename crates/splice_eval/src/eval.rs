@@ -856,6 +856,7 @@ impl Evaluator {
         // One backdrop (D14): an incoming backdrop identical to the outgoing one is not drawn
         // again, and the outgoing backdrop never moves with its content.
         let outgoing_backdrop = matches!(out.layers.get(a), Some(Layer::Background { .. }));
+        let mut shared = false;
         if let (
             Some(Layer::Background {
                 bounds: ba,
@@ -872,6 +873,7 @@ impl Evaluator {
             && fa == fb
         {
             out.layers.remove(b);
+            shared = true;
         }
         let end = out.layers.len();
         let content = [a + usize::from(outgoing_backdrop), b];
@@ -891,6 +893,29 @@ impl Evaluator {
                     offset: [0.0, 0.0],
                 });
                 out.group = Some(group(t, 1.15 - 0.15 * t, [0.0, 0.0], None));
+            }
+            // Both sides share a backdrop: dip to it, content only (T36.2).
+            TransitionKind::Dip if shared => {
+                let keep = content[0];
+                if t < 0.5 {
+                    out.layers.truncate(b);
+                    out.group = Some(Group {
+                        layers: [keep, b],
+                        opacity: 1.0 - 2.0 * t,
+                        scale: 1.0,
+                        offset: [0.0, 0.0],
+                        clip: None,
+                    });
+                } else {
+                    out.layers.drain(keep..b);
+                    out.group = Some(Group {
+                        layers: [keep, out.layers.len()],
+                        opacity: 2.0 * t - 1.0,
+                        scale: 1.0,
+                        offset: [0.0, 0.0],
+                        clip: None,
+                    });
+                }
             }
             TransitionKind::Dip => {
                 let color = transition.color;

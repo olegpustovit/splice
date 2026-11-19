@@ -412,12 +412,12 @@ eight places; the board below already carries the changes.
   overlays to the nearest surviving clip (FCP policy); results list what moved and why.
 
 ### T36 · 0.3.1 hotfix: the artifacts users see [L + M]
-- [ ] T36.1 [L] Transitions: Background never blended or moved; backing look applied once (H7); wipe matte multiplies shadow and cursor; push/slide show the backdrop, not black. Accept: 6 kinds × window goldens, backdrop constant ±2/255.
-- [ ] T36.2 [L] Title fades default 0; fades/dips go to the backdrop, not black (T27.5).
+- [x] T36.1 [L] Transitions: Background never blended or moved; backing look applied once (H7); wipe matte multiplies shadow and cursor; push/slide show the backdrop, not black. Accept: 6 kinds × window goldens, backdrop constant ±2/255. (3f078f7: groups + one backdrop; looks pixel test covers dissolve/dip/wipe/push/slide/zoom over a window)
+- [x] T36.2 [L] Title fades default 0; fades/dips go to the backdrop, not black (T27.5). (48cf147 title fades 0; 3f078f7 clip fades and dips go to the backdrop)
 - [ ] T36.3 [L] Transition validation on every path (H9): generic `effect.*`/`param.*`, length ≤ neighbors, not on the first clip, not project/lane scope.
 - [ ] T36.4 [L] No silent keys: every schema param keyed through one `sample(t)` path or refused `NOT_KEYABLE`; enumerate-and-render test; agent keys default `inOut`.
 - [ ] T36.5 [M] Captions: stroke under fill (H8); second line not clipped; active color rendered.
-- [ ] T36.6 [L] Motion items hold `to` after they end; `MOTION_ENDS_ZOOMED` warning when `to ≠ 1`.
+- [x] T36.6 [L] Motion items hold `to` after they end; `MOTION_ENDS_ZOOMED` warning when `to ≠ 1`. (superseded by D12: motion items are camera segments, 48cf147)
 - [ ] T36.7 [L] Errors carry the rule: `{param, got, expected, fix}` on every BAD_ARGS; `UNKNOWN_PARAM` with `didYouMean`.
 - [ ] T36.8 [L] Docs, TS types and ranges generated from `effects.json` and validators; test fails on any mismatch (M8).
 - [ ] T36.9 [L] Build identity: `serverInfo.version = <crate>+<sha>[-dirty]`.
@@ -434,11 +434,11 @@ eight places; the board below already carries the changes.
 - [ ] T37.8 [L] Low list: silent clamps → errors; `marker.add` past end; negative `cut.range from`; SRT hour overflow; friction-log unwrap; `catch_unwind` per request; idle undo reports nothing to undo.
 
 ### T38 · Camera (D12, D13) [L + M]
-- [ ] T38.1 [L] Camera model: timeline segments `{from,to,amount,center|follow,mode,spring}`; analytic spring per channel (focused k205/c33.3/m1.5, smooth ~0.9 s); pre-aim; bounce-out guard; hold-center zoom-out; travel-space clamp. Accept: step golden vs reference; 0 allocations; 2,000 segments p99 < 50 µs.
-- [ ] T38.2 [L] Placement: `content` mode samples UV inside a fixed frame; `frame` mode scales the card. Property test: 10,000 random segments, viewport ⊂ content.
-- [ ] T38.3 [L] Producers: `motion.*`, `zoom.set`/click zoom and `intent.autoZoom` write camera segments; the old click-zoom curve and Picture scale/focus go; load-time migration of motion items.
-- [ ] T38.4 [L] Auto zoom v2: lead 0.3 s, tail 2.5 s, merge ≤ 2.5 s, distance split < 0.25, 1.5× default (warn > 2.5×), dead zone 0.5 × 0.7, edge snap 0.25, `autoZoom.version`.
-- [ ] T38.5 [L] Backing never borrows camera/transform; one pivot convention. Accept: backdrop constant under camera moves.
+- [x] T38.1 [L] Camera model: timeline segments `{from,to,amount,center|follow,mode,spring}`; analytic spring per channel (focused k205/c33.3/m1.5, smooth ~0.9 s); pre-aim; bounce-out guard; hold-center zoom-out; travel-space clamp. Accept: step golden vs reference; 0 allocations; 2,000 segments p99 < 50 µs. (48cf147)
+- [x] T38.2 [L] Placement: `content` mode samples UV inside a fixed frame; `frame` mode scales the card. Property test: 10,000 random segments, viewport ⊂ content. (48cf147)
+- [x] T38.3 [L] Producers: `motion.*`, `zoom.set`/click zoom and `intent.autoZoom` write camera segments; the old click-zoom curve and Picture scale/focus go; load-time migration of motion items. (48cf147)
+- [x] T38.4 [L] Auto zoom v2: lead 0.3 s, tail 2.5 s, merge ≤ 2.5 s, distance split < 0.25, 1.5× default (warn > 2.5×), dead zone 0.5 × 0.7, edge snap 0.25, `autoZoom.version`. (48cf147)
+- [x] T38.5 [L] Backing never borrows camera/transform; one pivot convention. Accept: backdrop constant under camera moves. (5295624: the backing draws its own evaluated values; the camera applies to pictures only)
 - [ ] T38.6 [L] API `zoom.add/set/remove {at,length,amount,center|follow,in,out,mode}`; describe reports `fitSafeScale`.
 
 ### T39 · Cursor [L + M]
@@ -449,8 +449,8 @@ eight places; the board below already carries the changes.
 - [ ] T39.5 [L] Cursor params keyable/size + `hideWhenIdle`, `smoothing`, `clickPulse`, `path`, `arc`, `arriveBefore`.
 
 ### T40 · One backdrop, group transitions (D14) [L + M]
-- [ ] T40.1 [L] Backdrop drawn once per frame; clips render content inside their frame.
-- [ ] T40.2 [M] Group compositing: outgoing stack drawn direct, incoming into one pooled offscreen, composited at t (premultiplied). Accept: dissolve black→black over blue backdrop stays black; 4K warm compose p90 < 16 ms.
+- [x] T40.1 [L] Backdrop drawn once per frame; clips render content inside their frame. (3f078f7)
+- [x] T40.2 [M] Group compositing: outgoing stack drawn direct, incoming into one pooled offscreen, composited at t (premultiplied). Accept: dissolve black→black over blue backdrop stays black; 4K warm compose p90 < 16 ms. (3f078f7: pooled offscreen group, straight alpha like the canvas; 4K compose p90 15.2 ms)
 - [ ] T40.3 [L] Transitions consume handles (no length change); `NO_HANDLES {need, have, fix}`; OTIO invariants (no overlap, no adjacent transitions on one clip).
 - [ ] T40.4 [L] New content-only kinds: `whip`, `zoomPunch`, `swipe`.
 

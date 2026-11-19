@@ -299,6 +299,10 @@ mod looks {
             near(pixel(&composition, 29, [2, 2]), [0, 200, 0], 4),
             "one backdrop through the transition"
         );
+        // A dip between windowed clips goes to the shared backdrop, not black.
+        // At frame 29 (t = 0.475) only 5% of the outgoing content is left over it.
+        let dipped = pixel(&windowed("dip"), 29, [48, 32]);
+        assert!(near(dipped, [11, 192, 2], 4), "dip: {dipped:?}");
         for kind in ["wipe", "push", "slide", "zoom"] {
             let composition = windowed(kind);
             // The backdrop never moves or doubles; inside, every pixel is a clip or the backdrop.
