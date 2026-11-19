@@ -1,0 +1,21 @@
+{
+  "id": "undo-session",
+  "seed": {
+    "copy": "fixtures/projects/sample.splice"
+  },
+  "prompt": "In the Splice project {project}: start a session, make the end card blue, add a marker at frame 200 named Beat, and split the screen take at frame 300. Then the director changes their mind: undo your whole session so the project is exactly as you found it. Use the splice MCP tools only.",
+  "checks": [
+    {
+      "name": "state restored",
+      "expr": "state_hash == seed_hash"
+    },
+    {
+      "name": "no marker left",
+      "expr": "not any(m.get('name') == 'Beat' for m in project['markers'])"
+    },
+    {
+      "name": "agent edited then undid",
+      "expr": "batches >= 2"
+    }
+  ]
+}

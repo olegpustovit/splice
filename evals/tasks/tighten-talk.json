@@ -1,0 +1,12 @@
+{
+  "id": "tighten-talk",
+  "seed": {"copy": "fixtures/projects/sample.splice"},
+  "prompt": "In the Splice project {project}, remove the filler words (um, uh) from the screen take and add captions, two words per caption, in the pop style. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "fillers gone", "expr": "not any(w in ('um', 'uh') for w in words_on_timeline())"},
+    {"name": "other words kept", "expr": "'study' in words_on_timeline()"},
+    {"name": "captions", "expr": "sum(i['kind'] == 'caption' for i in items) >= 5"},
+    {"name": "pop style", "expr": "(effect('captions') or {}).get('preset') == 'pop'"}
+  ]
+}
+

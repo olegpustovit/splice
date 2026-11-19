@@ -1,0 +1,25 @@
+{
+  "id": "crop-and-frame",
+  "seed": {
+    "copy": "fixtures/projects/sample.splice"
+  },
+  "prompt": "In the Splice project {project}, crop the screen take to its left half so it fills the vertical frame, give it a purple gradient background frame with rounded corners, and make the cursor twice as big. Use the splice MCP tools only.",
+  "checks": [
+    {
+      "name": "cropped left half",
+      "expr": "any(c.get('crop') and c['crop']['x'] <= 0.05 and 0.4 <= c['crop']['w'] <= 0.6 for c in take_clips())"
+    },
+    {
+      "name": "fill",
+      "expr": "all(c.get('fit') == 'fill' for c in take_clips())"
+    },
+    {
+      "name": "framed",
+      "expr": "(effect('window', take_clips()[0]['id']) or effect('window') or {}).get('corner', 0) > 0 and (effect('window', take_clips()[0]['id']) or {}).get('color', '#6b5a7d') != '#6b5a7d'"
+    },
+    {
+      "name": "cursor at least 2x",
+      "expr": "(effect('cursor') or {}).get('size', 0) >= 2"
+    }
+  ]
+}

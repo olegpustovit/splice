@@ -4,4 +4,5 @@ name = "editor"
 version = "0.0.1"
 
 [dependencies]
+"github.com/dietrichgebert/ponytail/skills/ponytail" = "main"
 # "github.com/owner/repo/path" = {}

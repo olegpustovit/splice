@@ -1,0 +1,4 @@
+date	commit	agent	task	result	checks	calls	errors	recoveries	wall_s
+2026-11-19	ff8a777	claude	crop-and-frame	pass	4/4	11	1	0	34.3
+2026-11-19	ff8a777	claude	tighten-talk	pass	4/4	15	0	0	42.1
+2026-11-19	ff8a777	claude	undo-session	pass	3/3	16	0	0	38.5

@@ -23,6 +23,11 @@ pub fn snapshot(project: &Project) -> Json {
     project::encode(project)
 }
 
+/// Encodes the media table using the package vocabulary.
+pub fn media_table(project: &Project) -> Json {
+    media::encode(&project.media)
+}
+
 /// Encodes an anchor in the same form used by the package and edit commands.
 pub fn anchor(anchor: splice_model::Anchor) -> Json {
     timeline::encode_anchor(anchor)

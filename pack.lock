@@ -1,5 +1,17 @@
-lockfile_version = 2
+lockfile_version = 3
 
 [meta]
 name = 'editor'
 version = '0.0.1'
+
+[[packages]]
+module = 'github.com/dietrichgebert/ponytail/skills/ponytail'
+direct = true
+kind = 'skill'
+url = 'https://github.com/DietrichGebert/ponytail/tree/main/skills/ponytail'
+owner = 'dietrichgebert'
+repo = 'ponytail'
+path = 'skills/ponytail'
+commit = '96608e078b2d5ea607c5c3b8b5a54d1c1fba6846'
+cache_key = '04bb486d89670e4866481402e3783f5f687e607daf1fc99c96d411793c33eda3'
+content_hash = 'sha256-tree-v1:1856e0bfccfb9fcc348d8a689c4219fedece8a5ad4ac0aae383b3c407047e7f0'

@@ -104,7 +104,13 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
                 return write_json(&result, output);
             }
             let store = Store::open(&path)?;
-            let snapshot = package::snapshot(store.project());
+            let mut snapshot = package::snapshot(store.project());
+            if let (Json::Object(fields), Some(media)) = (
+                &mut snapshot,
+                package::media_table(store.project()).field("media"),
+            ) {
+                fields.push(("media".into(), media.clone()));
+            }
             store.close()?;
             snapshot
         }
