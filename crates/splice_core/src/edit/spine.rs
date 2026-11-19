@@ -71,8 +71,10 @@ impl Editor {
                         let descriptor = media(&self.project, overlay.media)?;
                         let delta = f64::from(subtract(to, from)?) * descriptor.probe.fps
                             / f64::from(self.project.fps);
-                        let source = rounded((f64::from(overlay.source) + delta).max(0.0))?;
-                        if source >= descriptor.probe.frames {
+                        // Extending before the media's first frame would shift the picture
+                        // against its timeline position (M3): refuse instead of clamping.
+                        let source = rounded(f64::from(overlay.source) + delta)?;
+                        if source < 0 || source >= descriptor.probe.frames {
                             return Err(out_of_source());
                         }
                         if let ItemKind::Media(overlay) =
@@ -81,6 +83,11 @@ impl Editor {
                             overlay.source = source;
                         }
                     }
+                }
+                if let ItemKind::Media(overlay) =
+                    self.project.items.data(slot).expect("live item").kind
+                {
+                    overlay_fits(&self.project, overlay, length)?;
                 }
                 self.project
                     .items
@@ -590,7 +597,7 @@ fn subtract(a: Frame, b: Frame) -> Result<Frame, CommandError> {
 }
 
 fn ensure_length(length: Frame) -> Result<(), CommandError> {
-    if length < 3 {
+    if length < MIN_LENGTH {
         return Err(error(
             "TOO_SHORT",
             "The result is shorter than three frames.",
@@ -613,6 +620,28 @@ fn validate_source(project: &Project, slot: Slot, timing: ClipTiming) -> Result<
         if end > f64::from(descriptor.probe.frames) + 0.000_001 {
             return Err(out_of_source());
         }
+    }
+    Ok(())
+}
+
+/// A media overlay stops at its media's last frame (M3).
+pub(super) fn overlay_fits(
+    project: &Project,
+    overlay: Overlay,
+    length: Frame,
+) -> Result<(), CommandError> {
+    let frames = media(project, overlay.media)?.probe.frames;
+    let needed = time::media_frames(project, overlay.media, length)?;
+    if i64::from(overlay.source) + i64::from(needed) > i64::from(frames) {
+        let fit = f64::from(frames - overlay.source) * f64::from(project.fps)
+            / media(project, overlay.media)?.probe.fps;
+        return Err(CommandError::rule(
+            "OUT_OF_SOURCE",
+            "length",
+            Some(Json::Signed(i64::from(length))),
+            &format!("at most {} frames, where the media ends", fit.floor()),
+            "Shorten the overlay or start it earlier in its media.",
+        ));
     }
     Ok(())
 }

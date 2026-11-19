@@ -386,6 +386,30 @@ impl Editor {
         clamp_fades(&mut data.appearance, length);
         self.project.clips.remove(b);
         self.reanchor_clip(id_b, id_a);
+        // Edge anchors at the seam (a's end, b's start) and b's end keep their frames (M5).
+        for index in 0..self.project.items.order().len() {
+            let slot = self.project.items.order()[index];
+            if let Anchor::Item {
+                item: TimelineId::Clip(clip),
+                edge,
+                offset,
+            } = self.project.items.timing(slot).expect("live item").anchor
+                && (clip == id_b || (clip == id_a && edge == Edge::End))
+            {
+                let (edge, offset) = match (clip == id_a, edge) {
+                    (true, _) | (false, Edge::Start) => (Edge::Start, offset + seam),
+                    (false, Edge::End) => (Edge::End, offset),
+                };
+                self.reanchor(
+                    slot,
+                    Anchor::Item {
+                        item: TimelineId::Clip(id_a),
+                        edge,
+                        offset,
+                    },
+                );
+            }
+        }
         Ok(())
     }
 
@@ -436,9 +460,15 @@ impl Editor {
         let length = self.project.clips.timing(slot).expect("live clip").length;
         joins.sort_unstable();
         let mut created = Vec::new();
-        for &at in joins.iter().rev().filter(|&&at| at > 0 && at < length) {
+        // A seam trimmed within MIN_LENGTH of an edge or another seam stays joined (M1).
+        let mut end = length;
+        for &at in joins.iter().rev() {
+            if at < MIN_LENGTH || end - at < MIN_LENGTH {
+                continue;
+            }
             let right = self.split_clip(id, start + at, at)?;
             created.push(Target::Timeline(TimelineId::Clip(right)));
+            end = at;
         }
         Ok(Outcome {
             summary: Summary::Text(format!("Ungrouped {id} into {} clips", created.len() + 1)),
@@ -528,8 +558,8 @@ impl Editor {
         let rate_b = source_rate(&self.project, b)?;
         let source_b = f64::from(tb.source) + f64::from(by) * rate_b;
         let end_a = self.source_at(a, ta.length + by)?;
-        if ta.length + by < 1
-            || tb.length - by < 1
+        if ta.length + by < MIN_LENGTH
+            || tb.length - by < MIN_LENGTH
             || source_b < -0.001
             || self
                 .media_frames(a)
@@ -586,7 +616,9 @@ impl Editor {
                 };
                 let frames = media(&self.project, overlay.media)?.probe.frames;
                 let source = overlay.source + by;
-                if source < 0 || source + length > frames {
+                // `by` is in source frames; the item's length is in timeline frames (M2).
+                let needed = time::media_frames(&self.project, overlay.media, length)?;
+                if source < 0 || source + needed > frames {
                     return Err(no_handles());
                 }
                 if let ItemKind::Media(overlay) =
@@ -615,8 +647,8 @@ impl Editor {
         let tn = self.project.clips.timing(next).expect("live clip");
         let end_p = self.source_at(previous, tp.length + by)?;
         let source_n = f64::from(tn.source) + f64::from(by) * source_rate(&self.project, next)?;
-        if tp.length + by < 1
-            || tn.length - by < 1
+        if tp.length + by < MIN_LENGTH
+            || tn.length - by < MIN_LENGTH
             || source_n < -0.001
             || self
                 .media_frames(previous)
@@ -657,6 +689,7 @@ impl Editor {
         let held = rounded(time::source_value(&self.project, slot, at)?)?;
         let mut data = self.project.clips.data(slot).expect("live clip").clone();
         if at > timing.start {
+            super::edits::check_split(timing.start, timing.start + timing.length, at)?;
             self.split_clip(id, at, at - timing.start)?;
         }
         self.shift_after(at, length, None)?;
@@ -1352,7 +1385,7 @@ impl Editor {
         }
         let mut created = Vec::with_capacity(segments.len());
         for &(start, end, _, focus) in &segments {
-            if end - start < 3 {
+            if end - start < MIN_LENGTH {
                 continue;
             }
             let at = FrameArg::Frame(timing.start + start);
@@ -2073,33 +2106,55 @@ impl Editor {
         // Items anchored inside move with the clips, pinned to the compound's clock. One that
         // runs past the compound stays outside, anchored to the compound clip, so it still plays
         // whole (the nested timeline would cut it at the compound's end).
-        let mut inner_items = Vec::new();
+        // Any anchor counts (M5): clip-source, a clip's edges, and items anchored to an item
+        // that moves inside, found transitively.
+        let mut parents: Vec<TimelineId> = ids.iter().map(|&id| TimelineId::Clip(id)).collect();
+        let mut inner = Vec::new();
         let mut outside = Vec::new();
-        for index in (0..self.project.items.order().len()).rev() {
-            let slot = self.project.items.order()[index];
-            let timing = self.project.items.timing(slot).expect("live item");
-            if let Anchor::ClipSource { clip, .. } = timing.anchor
-                && ids.contains(&clip)
-            {
+        let mut found = true;
+        while found {
+            found = false;
+            for &slot in self.project.items.order() {
+                if inner.iter().chain(&outside).any(|&(s, _)| s == slot) {
+                    continue;
+                }
+                let timing = self.project.items.timing(slot).expect("live item");
+                if !edits::anchor_parent(timing.anchor).is_some_and(|p| parents.contains(&p)) {
+                    continue;
+                }
+                found = true;
                 let span = time::item_span(&self.project, slot)?;
                 if span.start < start || span.end > end {
                     outside.push((slot, span.start - start));
-                    continue;
+                } else {
+                    inner.push((slot, span.start - start));
+                    parents.push(TimelineId::Item(
+                        self.project.items.id(slot).expect("live item"),
+                    ));
                 }
-                let id = self.project.items.id(slot).expect("live item");
-                let data = self.project.items.data(slot).expect("live item").clone();
-                inner_items.push(Item {
-                    id,
-                    timing: ItemTiming {
-                        anchor: Anchor::Pinned(span.start - start),
-                        length: timing.length,
-                    },
-                    data,
-                });
-                self.project.items.remove(slot);
             }
         }
-        inner_items.reverse();
+        let mut inner_items = Vec::with_capacity(inner.len());
+        for &(slot, at) in &inner {
+            inner_items.push(Item {
+                id: self.project.items.id(slot).expect("live item"),
+                timing: ItemTiming {
+                    anchor: Anchor::Pinned(at),
+                    length: self.project.items.timing(slot).expect("live item").length,
+                },
+                data: self.project.items.data(slot).expect("live item").clone(),
+            });
+        }
+        inner_items.sort_by_key(|item| {
+            self.project
+                .items
+                .order()
+                .iter()
+                .position(|&s| self.project.items.id(s) == Some(item.id))
+        });
+        for &(slot, _) in &inner {
+            self.project.items.remove(slot);
+        }
         let lanes = self.project.lanes.clone();
         for &slot in &slots {
             self.project.clips.remove(slot);
@@ -2155,8 +2210,15 @@ impl Editor {
             })
             .ok_or_else(arena_full)?;
         self.project.clips.sort_by_start();
-        for (slot, source) in outside {
-            self.reanchor(slot, Anchor::ClipSource { clip, source });
+        for (slot, offset) in outside {
+            self.reanchor(
+                slot,
+                Anchor::Item {
+                    item: TimelineId::Clip(clip),
+                    edge: Edge::Start,
+                    offset,
+                },
+            );
         }
         Ok(Outcome::create(
             format!("Made compound clip {clip} from {} clip(s)", slots.len()),
@@ -2181,6 +2243,8 @@ impl Editor {
                 "Set clip.speed to 1 first.",
             ));
         }
+        // Outer items on the compound clip land on the clips it held (M5).
+        let kids = self.children(&[TimelineId::Clip(id)])?;
         let compound = self.project.compounds.remove(index);
         self.project.media.retain(|m| Some(m.id) != media_id);
         self.project.clips.remove(slot);
@@ -2207,6 +2271,7 @@ impl Editor {
             self.project.clips.insert(clip).ok_or_else(arena_full)?;
         }
         self.project.clips.sort_by_start();
+        self.reanchor_at(&kids)?;
         for mut inner in compound.items {
             let Anchor::Pinned(at) = inner.timing.anchor else {
                 continue;

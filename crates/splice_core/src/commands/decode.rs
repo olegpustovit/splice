@@ -962,9 +962,15 @@ pub(super) fn intent_fit_duration(a: &Json, _scratch: &mut DecodeScratch) -> Dec
 }
 
 pub(super) fn intent_keep_shots(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
-    Ok(Op::IntentKeepShots {
-        ranges: frames_list(a, "ranges")?,
-    })
+    let ranges = frames_list(a, "ranges")?;
+    // An empty list would keep nothing and delete the whole timeline (M7).
+    if ranges.is_empty() {
+        return Err(Error::bad(
+            "ranges",
+            "at least one [from, to] range to keep",
+        ));
+    }
+    Ok(Op::IntentKeepShots { ranges })
 }
 
 pub(super) fn intent_auto_zoom(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
@@ -1031,8 +1037,8 @@ pub(super) fn item_slide(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
 
 pub(super) fn clip_freeze(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let length = a.opt_int("length")?.unwrap_or(60);
-    if length <= 0 {
-        return Err(Error::bad("length", "positive frames"));
+    if length < 3 {
+        return Err(Error::bad("length", "at least 3 frames"));
     }
     Ok(Op::ClipFreeze {
         item: a.target("item")?,

@@ -837,7 +837,7 @@ fn h4_freeze_near_media_end_stays_editable() {
     let mut project = sample();
     let report = run(
         &mut project,
-        r#"[{"cmd":"clip.freeze","item":"clp_take","at":538,"length":150}]"#,
+        r#"[{"cmd":"clip.freeze","item":"clp_take","at":535,"length":150}]"#,
     )
     .unwrap();
     let freeze = super::tests::created(&report, 0);

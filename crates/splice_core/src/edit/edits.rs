@@ -125,12 +125,7 @@ impl Editor {
         if matches!(id, TimelineId::Marker(_)) {
             return Err(wrong_kind("Split a clip or overlay."));
         }
-        if i64::from(at) - i64::from(span.start) < 2 || i64::from(span.end) - i64::from(at) < 2 {
-            return Err(CommandError::bad(
-                "at",
-                "a frame at least two frames inside the item",
-            ));
-        }
+        check_split(span.start, span.end, at)?;
         let cut = at - span.start;
         let created = match id {
             TimelineId::Clip(id) => TimelineId::Clip(self.split_clip(id, at, cut)?),
@@ -154,6 +149,15 @@ impl Editor {
         let old = self.project.clips.timing(slot).expect("live clip");
         let mut data = self.project.clips.data(slot).expect("live clip").clone();
         let length = old.length - cut;
+        // Join seams stay on the content they mark (M4).
+        data.joins.retain(|&seam| seam > cut);
+        data.joins.iter_mut().for_each(|seam| *seam -= cut);
+        self.project
+            .clips
+            .data_mut(slot)
+            .expect("live clip")
+            .joins
+            .retain(|&seam| seam < cut);
         let source = super::spine::source_for_interval(&self.project, slot, at, length)?;
         let right = ClipId::from_serial(self.mint("clp")?);
         data.appearance.fade_in = 0;
@@ -250,7 +254,9 @@ impl Editor {
         clamp_fades(&mut data.appearance, length);
         shift_keys(&mut data.appearance.effects, cut);
         if let ItemKind::Media(overlay) = &mut data.kind {
-            overlay.source = frame_add(overlay.source, cut)?;
+            // The source is on the media clock (M2).
+            let skipped = time::media_frames(&self.project, overlay.media, cut)?;
+            overlay.source = frame_add(overlay.source, skipped)?;
         }
         let right = ItemId::from_serial(self.mint("ovl")?);
         self.project
@@ -323,7 +329,10 @@ impl Editor {
             }
         };
         let length = length.unwrap_or(default_length);
-        if length < 3 {
+        if let ItemKind::Media(overlay) = kind {
+            super::spine::overlay_fits(&self.project, overlay, length)?;
+        }
+        if length < MIN_LENGTH {
             return Err(error(
                 "TOO_SHORT",
                 "An overlay needs at least three frames.",
@@ -600,6 +609,28 @@ pub(super) fn anchor_parent(anchor: Anchor) -> Option<TimelineId> {
         Anchor::Marker { marker, .. } => Some(TimelineId::Marker(marker)),
         Anchor::Pinned(_) | Anchor::Word { .. } => None,
     }
+}
+
+/// Both pieces of a split keep at least `MIN_LENGTH` frames (M1).
+pub(super) fn check_split(start: Frame, end: Frame, at: Frame) -> Result<(), CommandError> {
+    if i64::from(at) - i64::from(start) < i64::from(MIN_LENGTH)
+        || i64::from(end) - i64::from(at) < i64::from(MIN_LENGTH)
+    {
+        return Err(CommandError::rule(
+            "TOO_SHORT",
+            "at",
+            Some(Json::Signed(i64::from(at))),
+            &format!(
+                "a frame at least {MIN_LENGTH} frames inside {start}–{end}, so both pieces keep {MIN_LENGTH} frames"
+            ),
+            &format!(
+                "Split between frames {} and {}.",
+                start + MIN_LENGTH,
+                end - MIN_LENGTH
+            ),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn clamp_fades(appearance: &mut Appearance, length: Frame) {

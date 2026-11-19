@@ -206,7 +206,7 @@ impl Editor {
                 }
             }
             if let Some(first) = first {
-                let length = (end - first.start).max(3);
+                let length = (end - first.start).max(MIN_LENGTH);
                 *self.project.items.timing_mut(slot).expect("live caption") = ItemTiming {
                     anchor: Anchor::ClipSource {
                         clip: first.clip,

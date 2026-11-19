@@ -380,3 +380,161 @@ fn documented_ranges_match_the_validators() {
     assert!(drift.is_empty(), "{}", drift.join("\n"));
     assert!(checked >= 8, "{checked} ranges checked");
 }
+
+use super::tests::{created, run, start_of};
+
+/// T37.5 M1: no edit leaves a clip shorter than three frames.
+#[test]
+fn m1_every_edit_keeps_clips_three_frames_long() {
+    let mut project = sample();
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"item.split","item":"clp_open","at":2}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "TOO_SHORT");
+    assert!(error.error.rule.is_some());
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"item.roll","item":"clp_open","by":-118}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "NO_HANDLES");
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"clip.freeze","item":"clp_open","at":119,"length":30}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "TOO_SHORT");
+    // A cut that would leave a one-frame sliver takes it along.
+    run(&mut project, r#"[{"cmd":"cut.range","from":1,"to":60}]"#).unwrap();
+    for &slot in project.clips.order() {
+        assert!(project.clips.timing(slot).unwrap().length >= 3);
+    }
+    assert_eq!(start_of(&project, "clp_take"), 60);
+}
+
+/// T37.5 M2: splitting a 60 fps overlay advances its source in media frames.
+#[test]
+fn m2_overlay_split_moves_source_in_media_frames() {
+    let mut project = sample();
+    let mut fast = project
+        .media
+        .iter()
+        .find(|m| m.path.contains("broll"))
+        .unwrap()
+        .clone();
+    fast.id = "med_fast".parse().unwrap();
+    fast.path = "assets/fast.mov".into();
+    fast.probe.fps = 60.0;
+    fast.probe.frames = 480;
+    project.media.push(fast);
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"overlay.add","kind":"media","media":"med_fast","at":200,"length":60}]"#,
+    )
+    .unwrap();
+    let overlay = created(&report, 0);
+    let report = run(
+        &mut project,
+        &format!(r#"[{{"cmd":"item.split","item":"{overlay}","at":230}}]"#),
+    )
+    .unwrap();
+    let right = created(&report, 0);
+    let slot = project.items.find(right.parse().unwrap()).unwrap();
+    let ItemKind::Media(media) = project.items.data(slot).unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(media.source, 60, "30 timeline frames are 60 media frames");
+}
+
+/// T37.5 M3: an overlay stops at its media's end and never slides off its first frame.
+#[test]
+fn m3_overlays_stop_at_media_end_and_keep_sync() {
+    let mut project = sample();
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"overlay.add","kind":"media","media":"med_broll","at":0,"length":300}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "OUT_OF_SOURCE");
+    assert!(error.error.rule.is_some());
+    // ovl_broll starts at media frame 0: extending its head would lose sync.
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"item.trim","item":"ovl_broll","edge":"in","delta":-10}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "OUT_OF_SOURCE");
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"item.trim","item":"ovl_broll","edge":"out","delta":200}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "OUT_OF_SOURCE");
+}
+
+/// T37.5 M4: splitting a joined clip keeps each seam on its content.
+#[test]
+fn m4_join_seams_rebase_on_split() {
+    let mut project = sample();
+    run(
+        &mut project,
+        r#"[{"cmd":"item.split","item":"clp_take","at":300,"ref":"cut"},
+            {"cmd":"clip.join","items":["clp_take","$cut.right"]}]"#,
+    )
+    .unwrap();
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"item.split","item":"clp_take","at":200}]"#,
+    )
+    .unwrap();
+    let right = created(&report, 0);
+    run(
+        &mut project,
+        &format!(r#"[{{"cmd":"clip.ungroup","item":"{right}"}}]"#),
+    )
+    .unwrap();
+    let starts: Vec<Frame> = project
+        .clips
+        .order()
+        .iter()
+        .map(|&s| project.clips.timing(s).unwrap().start)
+        .collect();
+    assert_eq!(starts, [0, 120, 200, 300, 540]);
+}
+
+/// T37.5 M5: clip.compound takes items anchored to a clip's edge.
+#[test]
+fn m5_compound_keeps_edge_anchored_items() {
+    let mut project = sample();
+    run(
+        &mut project,
+        r#"[{"cmd":"item.anchor","item":"ovl_broll","anchor":{"item":"clp_end","edge":"start","offset":10}},
+            {"cmd":"item.anchor","item":"ovl_label","anchor":{"item":"ovl_broll","edge":"end","offset":-20}},
+            {"cmd":"clip.compound","items":["clp_take","clp_end"]}]"#,
+    )
+    .unwrap();
+}
+
+/// T37.5 M6: an item on a clip's end edge stays there when the clip is split.
+#[test]
+fn m6_split_keeps_end_edge_anchors() {
+    let mut project = sample();
+    run(
+        &mut project,
+        r#"[{"cmd":"item.anchor","item":"ovl_broll","anchor":{"item":"clp_take","edge":"end","offset":-80}},
+            {"cmd":"item.split","item":"clp_take","at":300}]"#,
+    )
+    .unwrap();
+    assert_eq!(start_of(&project, "ovl_broll"), 460);
+}
+
+/// T37.5 M7: keeping no shots is refused instead of deleting the timeline.
+#[test]
+fn m7_keep_shots_needs_a_range() {
+    let mut project = sample();
+    let error = run(&mut project, r#"[{"cmd":"intent.keepShots","ranges":[]}]"#).unwrap_err();
+    assert_eq!(error.error.code, "BAD_ARGS");
+    assert_eq!(project.clips.order().len(), 3);
+}

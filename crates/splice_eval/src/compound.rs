@@ -58,10 +58,22 @@ fn expand(flat: &mut Project, slot: Slot) -> Result<(), EvalError> {
     for index in 0..flat.items.order().len() {
         let item = flat.items.order()[index];
         let timing = flat.items.timing_mut(item).ok_or(EvalError::Range)?;
-        if let Anchor::ClipSource { clip, source } = timing.anchor
-            && clip == id
-        {
-            timing.anchor = Anchor::Pinned(outer.start + source - outer.source);
+        match timing.anchor {
+            Anchor::ClipSource { clip, source } if clip == id => {
+                timing.anchor = Anchor::Pinned(outer.start + source - outer.source);
+            }
+            Anchor::Item {
+                item: TimelineId::Clip(clip),
+                edge,
+                offset,
+            } if clip == id => {
+                let base = match edge {
+                    Edge::Start => outer.start,
+                    Edge::End => outer.start + outer.length,
+                };
+                timing.anchor = Anchor::Pinned(base + offset);
+            }
+            _ => {}
         }
     }
     let window = (outer.source, outer.source + outer.length);

@@ -163,7 +163,7 @@ impl Editor {
             Op::ZoomRemove { zoom } => {
                 // Only a zoom: set_zoom with no changes is the kind check.
                 self.set_zoom(&zoom, None, None, None, None)?;
-                self.delete(std::slice::from_ref(&zoom), false, false)
+                self.delete(std::slice::from_ref(&zoom), false, false, None)
             }
             Op::EffectAdd {
                 target,
@@ -501,7 +501,7 @@ impl Editor {
                 / descriptor.probe.fps)
                 .floor(),
         )?;
-        if length < 3 {
+        if length < MIN_LENGTH {
             return Err(error(
                 "TOO_SHORT",
                 "The audio is shorter than three frames.",
@@ -1019,7 +1019,7 @@ impl Editor {
         Ok(kids)
     }
 
-    fn reanchor_at(&mut self, kids: &[(Slot, Frame)]) -> Result<(), CommandError> {
+    pub(super) fn reanchor_at(&mut self, kids: &[(Slot, Frame)]) -> Result<(), CommandError> {
         for &(slot, at) in kids {
             if self.project.items.id(slot).is_some() {
                 let anchor = anchor_at(&self.project, at.max(0))?;
@@ -1039,6 +1039,18 @@ impl Editor {
         ripple: bool,
         connected: Option<Connected>,
     ) -> Result<(), CommandError> {
+        // A surviving sliver shorter than MIN_LENGTH goes with the cut (M1).
+        let (mut from, mut to) = (from, to);
+        for &slot in self.project.clips.order() {
+            let timing = self.project.clips.timing(slot).expect("live clip");
+            let end = timing.start + timing.length;
+            if timing.start < from && from < end && from - timing.start < MIN_LENGTH {
+                from = timing.start;
+            }
+            if timing.start < to && to < end && end - to < MIN_LENGTH {
+                to = end;
+            }
+        }
         // Pieces of clips that survive the cut in part.
         let mut partial = Vec::new();
         for at in [from, to] {
