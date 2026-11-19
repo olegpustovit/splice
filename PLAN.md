@@ -455,11 +455,11 @@ eight places; the board below already carries the changes.
 - [x] T40.4 [L] New content-only kinds: `whip`, `zoomPunch`, `swipe`. (whip: cubic in-out push; zoomPunch: out punches to 1.6×, in settles from it; swipe: in slides over, out drifts a third; all on group/shift so the backdrop stays)
 
 ### T41 · Activity editing for silent takes (D15) [L]
-- [ ] T41.1 [L] `media.analyze {kinds:["activity"]}`: idle/typing/clicks/scroll ranges from events (+ frame diff on macOS), no characters.
-- [ ] T41.2 [L] `intent.steps` (markers or activity bursts as steps; keep [step−lead, last activity+settle]; cut gaps > maxGap; drop `retake:` attempts; dryRun list).
-- [ ] T41.3 [L] `basis` on `cut.pauses`, `intent.pace`, `intent.fitDuration`; `auto` falls back to activity; better NO_TRANSCRIPT fix.
-- [ ] T41.4 [L] `intent.speedTyping {factor, minRun}` as eased speed keys.
-- [ ] T41.5 [L] Free-text caption cues (`text, from, to`) so SRT import and agent captions work on silent takes.
+- [x] T41.1 [L] `media.analyze {kinds:["activity"]}`: idle/typing/clicks/scroll ranges from events (+ frame diff on macOS), no characters. (7ecca6b)
+- [x] T41.2 [L] `intent.steps` (markers or activity bursts as steps; keep [step−lead, last activity+settle]; cut gaps > maxGap; drop `retake:` attempts; dryRun list). (c815d7d)
+- [x] T41.3 [L] `basis` on `cut.pauses`, `intent.pace`, `intent.fitDuration`; `auto` falls back to activity; better NO_TRANSCRIPT fix. (c815d7d)
+- [x] T41.4 [L] `intent.speedTyping {factor, minRun}` as eased speed keys. (c815d7d)
+- [x] T41.5 [L] Free-text caption cues (`text, from, to`) so SRT import and agent captions work on silent takes. (c815d7d)
 
 ### T42 · Text & motion, native (D16, D20) [L + M]
 - [ ] T42.1 [L] Eases: `{spring:{duration,bounce}}` (closed form, settle time reported), `back`, `elastic`, `bounce`, `steps(n)`; keys default `inOut`.
