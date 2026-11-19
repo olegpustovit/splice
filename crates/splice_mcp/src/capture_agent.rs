@@ -153,6 +153,26 @@ pub(super) fn request(method: &str, args: &Json) -> Result<Json, StoreError> {
     exchange(&mut dial()?, method, args)
 }
 
+/// The running capture agent's state for take `id`, without launching an agent (M16): `None`
+/// when no agent runs, `Err(code)` when it cannot answer or failed the take.
+pub(super) fn take_state(id: splice_model::JobId) -> Option<Result<String, &'static str>> {
+    let unavailable = Some(Err("CAPTURE_AGENT_UNAVAILABLE"));
+    let Ok(state) = paths::state_dir() else {
+        return unavailable;
+    };
+    let mut stream = match connect(&state.join("capture")) {
+        Ok(Some(stream)) => stream,
+        Ok(None) => return None,
+        Err(_) => return unavailable,
+    };
+    let args = object(vec![("jobId", text(&id.to_string()))]);
+    Some(
+        exchange(&mut stream, "take.status", &args)
+            .and_then(|status| status.string("state").map(str::to_owned))
+            .map_err(|error| error.code),
+    )
+}
+
 pub(super) fn begin(args: &Json) -> Result<(Json, UnixStream), StoreError> {
     let mut stream = dial()?;
     let result = exchange(&mut stream, "take.begin", args)?;

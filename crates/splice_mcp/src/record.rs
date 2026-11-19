@@ -1,7 +1,7 @@
 use crate::{
     Json, capture_agent, object,
     project::Projects,
-    record_publish::{publish, stage_path, storage},
+    record_publish::{publish, recoverable, retry_stop, stage_path, storage},
     text,
     wire::{Args, bad, display, extend, failure, now, rev, write_options},
 };
@@ -25,6 +25,9 @@ pub(super) struct Job {
     /// Where the take lands (T22.2–T22.3).
     placement: Placement,
     terminal: Option<Json>,
+    /// The agent's `ready` reply once the capture stopped, kept until the take is published so
+    /// a failed publish can be retried (M16).
+    stopped: Option<Json>,
     peer: Option<UnixStream>,
 }
 
@@ -184,6 +187,7 @@ pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreE
         still,
         placement,
         terminal: None,
+        stopped: None,
         peer: Some(peer),
     });
     Ok(reply)
@@ -217,6 +221,10 @@ pub(super) fn recover(projects: &mut Projects, args: &Json) -> Result<Json, Stor
     let store = projects.lookup(args)?;
     let mut recovered = Vec::new();
     for id in staged.into_iter().filter(|id| !busy.contains(id)) {
+        // Another session's capture may still be writing this take (M16).
+        if !recoverable(capture_agent::take_state(id).as_ref()) {
+            continue;
+        }
         let stage = stage_path(store.path(), id);
         let size = fs::read_dir(&stage)
             .map(|d| {
@@ -269,6 +277,7 @@ pub(super) fn command(
     let still = job.still;
     let placement = job.placement.clone();
     let terminal = job.terminal.clone();
+    let stopped = job.stopped.clone().filter(|_| method == "take.stop");
     let store = projects.lookup_id(&owner)?;
     if let Some(reply) = terminal {
         return Ok(reply);
@@ -306,8 +315,13 @@ pub(super) fn command(
         ..Default::default()
     };
     store.check_write(&options)?;
-    let reply = public_status(capture_agent::request(method, &request)?);
+    let reply = match stopped {
+        Some(reply) => reply,
+        None => public_status(capture_agent::request(method, &request)?),
+    };
     let reply = if method == "take.stop" && reply.string("state")? == "ready" {
+        projects.recordings[index].stopped = Some(reply.clone());
+        let store = projects.lookup_id(&owner)?;
         let size = reply
             .field("bytes")
             .and_then(Json::as_u64)
@@ -317,7 +331,8 @@ pub(super) fn command(
             store.project().fps,
             still,
             size,
-        )?;
+        )
+        .map_err(retry_stop)?;
         let silent = descriptor
             .take
             .as_ref()
@@ -335,7 +350,7 @@ pub(super) fn command(
             })
             .collect();
         let ops = placement.ops(store.project(), &markers);
-        let sealed = publish(store, id, insert, descriptor, &options, ops)?;
+        let sealed = publish(store, id, insert, descriptor, &options, ops).map_err(retry_stop)?;
         let Json::Object(mut fields) = reply else {
             unreachable!("job status object")
         };

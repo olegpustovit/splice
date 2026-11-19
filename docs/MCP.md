@@ -229,7 +229,9 @@ pending, recording, ready, done, or cancelled. A timed capture stops automatical
 ready. Call `record.stop {jobId}` to stop a manual capture or publish a ready capture. It returns
 the new revision and `mediaId` and, when inserted, a `clipId`. The media entry and clip form one
 undoable edit. Set `insert:false` at start or stop to save the media without a clip. `jobs.cancel`
-discards a take before publication. `still:true` captures a PNG that inserts as a 5-second
+discards a take before publication. If publishing fails after the capture stopped (a full disk,
+a stale revision), the take stays staged and the job remembers the stop: fix the cause and call
+`record.stop` again to publish it. `still:true` captures a PNG that inserts as a 5-second
 still. A successful still stop also returns its package-relative `output` path.
 
 `record.stop {jobId, pause:true}` pauses a take; `record.start {resume:jobId}` continues it into
@@ -238,7 +240,8 @@ publish). `voiceover:true, at` records only the microphone onto a new audio lane
 `camera:true, screen:false` is a camera-only take. `retakeOf:"clp_…"` places the take right after
 an earlier one, named after it. `exclude:["com.app.id"]` hides apps (Splice's own windows are
 always excluded). Takes write fragmented movies every 2 s; after a crash, `record.start
-{recover:true}` publishes what was staged.
+{recover:true}` publishes what was staged. It skips a take the capture agent is still recording or
+holding for another session (or when the agent cannot say).
 
 ## Code mode profile
 

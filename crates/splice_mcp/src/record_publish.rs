@@ -139,6 +139,28 @@ fn sync_directory(path: &Path) -> Result<(), StoreError> {
         .map_err(storage)
 }
 
+/// A publish that failed after the capture stopped: the take stays staged and the job keeps
+/// the stop, so `record.stop` can publish it again (M16).
+pub(super) fn retry_stop(mut error: StoreError) -> StoreError {
+    error.fix = format!(
+        "{} The take stays staged: call record.stop again to publish it.",
+        error.fix
+    );
+    error
+}
+
+/// Whether `record.start {recover:true}` may publish a staged take, from the capture agent's
+/// answer about it (M16): no agent running (`None`), or an agent that no longer holds the take
+/// (`NOT_FOUND`, failed or cancelled). A take it is still writing or holding (`pending`,
+/// `recording`, `paused`, `ready`), or an agent that cannot answer, is left alone.
+pub(super) fn recoverable(agent: Option<&Result<String, &str>>) -> bool {
+    match agent {
+        None => true,
+        Some(Ok(state)) => state == "cancelled",
+        Some(Err(code)) => *code != "CAPTURE_AGENT_UNAVAILABLE",
+    }
+}
+
 pub(super) fn storage(error: io::Error) -> StoreError {
     failure(
         "IO",
@@ -153,6 +175,21 @@ mod tests {
     use crate::tests::TestDirectory;
     use splice_core::history::{Scope, Source};
     use splice_model::{MediaKind, Probe, Project, TakeComponents};
+
+    #[test]
+    fn m16_recovery_skips_takes_still_being_written_and_stop_can_retry() {
+        for state in ["pending", "recording", "paused", "ready"] {
+            assert!(!recoverable(Some(&Ok(state.into()))), "{state}");
+        }
+        assert!(!recoverable(Some(&Err("CAPTURE_AGENT_UNAVAILABLE"))));
+        assert!(recoverable(None));
+        assert!(recoverable(Some(&Ok("cancelled".into()))));
+        assert!(recoverable(Some(&Err("NOT_FOUND"))));
+        assert!(recoverable(Some(&Err("CAPTURE_FAILED"))));
+        let error = retry_stop(failure("IO", "Disk full.", "Free space."));
+        assert_eq!(error.code, "IO");
+        assert!(error.fix.starts_with("Free space.") && error.fix.contains("record.stop again"));
+    }
 
     #[test]
     fn recording_publication_is_one_undoable_batch_or_a_media_only_edit() {
