@@ -107,7 +107,7 @@ pub struct ApplyReport {
 }
 
 /// An atomic batch rejection, with the failing command index if known.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct ApplyError {
     /// Operation index. A batch-level failure has no index.
     pub op: Option<usize>,
@@ -279,9 +279,18 @@ impl ApplyWorkspace {
         edit.explicit_lanes.clear();
         edit.splits.clear();
         for (index, value) in ops.iter().enumerate() {
-            edit.step(value, index, load).map_err(|error| ApplyError {
-                op: Some(index),
-                error,
+            edit.step(value, index, load).map_err(|mut error| {
+                // The refusing code knows the rule; the op knows what was passed.
+                if let Some(rule) = &mut error.rule
+                    && rule.got.is_none()
+                {
+                    let key = rule.param.split(['.', '[']).next().unwrap_or("");
+                    rule.got = value.field(key).cloned();
+                }
+                ApplyError {
+                    op: Some(index),
+                    error,
+                }
             })?;
         }
         edit.settle(base).map_err(batch_error)?;

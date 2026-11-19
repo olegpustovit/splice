@@ -132,6 +132,8 @@ pub struct StoreError {
     pub valid: Vec<&'static str>,
     /// Current revision and intervening changes for a stale write.
     pub stale: Option<Box<StaleRevision>>,
+    /// The broken rule, for argument errors: `{param, got, expected, didYouMean}`.
+    pub rule: Option<Box<crate::commands::Rule>>,
 }
 
 impl StoreError {
@@ -158,6 +160,7 @@ impl From<CommandError> for StoreError {
             valid: error.valid,
             op: None,
             stale: None,
+            rule: error.rule,
         }
     }
 }

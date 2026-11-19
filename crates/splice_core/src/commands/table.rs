@@ -507,7 +507,7 @@ pub const COMMANDS: &[Command] = &[
             ("direction", "left | right | up | down = left"),
             ("color", "#rrggbb · dip color")],
         ui: &["Edit point menu ▸ Crossfade; today: Lift to Overlay, overlap, fade in"],
-        example: r#"{"cmd":"transition.add","item":"clp_take","kind":"dissolve","length":20}"#, decoder: decode::transition_add,
+        example: r#"{"cmd":"transition.add","item":"clp_end","kind":"dissolve","length":20}"#, decoder: decode::transition_add,
     },
     Command {
         id: "mask.add", title: "Add Mask", group: "Titles, motion and effects",
@@ -703,14 +703,14 @@ pub const COMMANDS: &[Command] = &[
             ("direction", "left | right | up | down"),
             ("color", "#rrggbb")],
         ui: &["Transition inspector"],
-        example: r#"{"cmd":"transition.set","item":"clp_take","kind":"wipe","direction":"left"}"#, decoder: decode::transition_set,
+        example: r#"{"cmd":"transition.set","item":"clp_end","kind":"wipe","direction":"left"}"#, decoder: decode::transition_set,
     },
     Command {
         id: "transition.remove", title: "Remove Transition", group: "Spine and any item",
         risk: "edit", shortcut: "", tier: Tier::Third,
         params: &[("item", "!clp_… · the incoming spine clip")],
         ui: &["Transition menu ▸ Delete"],
-        example: r#"{"cmd":"transition.remove","item":"clp_take"}"#, decoder: decode::transition_remove,
+        example: r#"{"cmd":"transition.remove","item":"clp_end"}"#, decoder: decode::transition_remove,
     },
     Command {
         id: "param.set", title: "Set Parameter", group: "Titles, motion and effects",

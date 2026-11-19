@@ -832,6 +832,9 @@ impl Editor {
             }
         }
         let id = effect.id;
+        if kind == "transition" {
+            self.check_transition(owner)?;
+        }
         let label = self.owner_label(owner);
         self.say(format_args!("Set {path} on {label}"));
         Ok(Outcome::noted(Target::Effect(id)))
@@ -878,13 +881,6 @@ impl Editor {
         add: bool,
     ) -> Result<Outcome, CommandError> {
         let (id, slot) = self.spine_clip(item)?;
-        let previous = self.previous_adjacent(slot).ok_or_else(|| {
-            error(
-                "NO_NEIGHBOR",
-                &format!("{id} has no clip right before it."),
-                "Add transitions between adjacent spine clips; fade the first clip in with item.set.",
-            )
-        })?;
         let owner = Owner::Clip(slot);
         let exists = effects(&self.project, owner)
             .iter()
@@ -893,45 +889,112 @@ impl Editor {
             return Err(no_transition());
         }
         let mut created = Vec::new();
+        // upsert runs check_transition (scope, neighbor, length, handles).
         let fx = self.upsert(owner, "transition", params, Some(true), &mut created)?;
-        let length = effects(&self.project, owner)
-            .iter()
-            .find(|effect| effect.kind == "transition")
-            .and_then(|effect| effect.params.iter().find(|p| p.name == "length"))
-            .and_then(|p| match p.value {
-                EffectValue::Number(n) => Some(n),
-                _ => None,
-            })
-            .unwrap_or(15.0)
-            .round() as Frame;
-        let ta = self.project.clips.timing(previous).expect("live clip");
-        let tb = self.project.clips.timing(slot).expect("live clip");
-        if length > ta.length.min(tb.length) {
-            return Err(error(
-                "TOO_LONG",
-                &format!("A {length}-frame transition is longer than the clips it joins."),
-                "Use a length no longer than the shorter clip.",
-            ));
-        }
-        let head = f64::from(tb.source) / source_rate(&self.project, slot)?;
-        let tail = self.media_frames(previous).map_or(f64::MAX, |frames| {
-            frames - self.source_end(previous).unwrap_or(frames)
-        }) / source_rate(&self.project, previous)?;
-        let held = head < f64::from(length / 2) || tail < f64::from(length - length / 2);
+        let length = transition_length(&self.project, owner);
         let verb = if add { "Added" } else { "Updated" };
-        let held = if held {
-            " (short handles: edge frames hold)"
-        } else {
-            ""
-        };
-        self.say(format_args!(
-            "{verb} a {length}-frame transition into {id}{held}"
-        ));
+        self.say(format_args!("{verb} a {length}-frame transition into {id}"));
         Ok(Outcome {
             summary: Summary::Note,
             primary: Some(Target::Effect(fx)),
             created,
         })
+    }
+
+    /// The rules every path that adds or changes a transition goes through (H9, D14): it
+    /// belongs to a spine clip right after another, is no longer than either clip, and both
+    /// sides have the source handles it consumes (a transition never changes length).
+    pub(super) fn check_transition(&self, owner: Owner) -> Result<(), CommandError> {
+        let Owner::Clip(slot) = owner else {
+            return Err(error(
+                "WRONG_KIND",
+                &format!(
+                    "A transition belongs to the spine clip it leads into, not {}.",
+                    self.owner_label(owner)
+                ),
+                "Use transition.add {item:\"clp_…\", kind, length} on the clip after the cut.",
+            ));
+        };
+        let id = self.project.clips.id(slot).expect("live clip");
+        let previous = self.previous_adjacent(slot).ok_or_else(|| {
+            error(
+                "NO_NEIGHBOR",
+                &format!("{id} has no clip right before it."),
+                "Add transitions between adjacent spine clips; fade the first clip in with item.set {fadeIn}.",
+            )
+        })?;
+        let length = transition_length(&self.project, owner);
+        let ta = self.project.clips.timing(previous).expect("live clip");
+        let tb = self.project.clips.timing(slot).expect("live clip");
+        let longest = ta.length.min(tb.length);
+        if length > longest {
+            return Err(CommandError::rule(
+                "TOO_LONG",
+                "length",
+                Some(Json::Signed(i64::from(length))),
+                &format!("at most {longest} (the shorter clip it joins)"),
+                &format!("Use length ≤ {longest}."),
+            ));
+        }
+        // Handles in timeline frames: unused source before the incoming clip and after the
+        // outgoing one. Stills and gaps have unlimited handles.
+        let still = |slot: Slot| {
+            self.project
+                .clips
+                .data(slot)
+                .and_then(|data| data.media)
+                .and_then(|id| media(&self.project, id).ok())
+                .is_none_or(|m| m.kind == MediaKind::Image)
+        };
+        let head = if still(slot) {
+            f64::MAX
+        } else {
+            f64::from(tb.source) / source_rate(&self.project, slot)?
+        };
+        let tail = match self.media_frames(previous) {
+            Some(frames) if !still(previous) => {
+                (frames - self.source_end(previous)?) / source_rate(&self.project, previous)?
+            }
+            _ => f64::MAX,
+        };
+        let (need_head, need_tail) = (length / 2, length - length / 2);
+        let fits =
+            |head: f64, tail: f64| head >= f64::from(need_head) && tail >= f64::from(need_tail);
+        if !fits(head, tail) {
+            let max = (2 * head.min(tail).max(0.0).floor() as Frame).min(longest);
+            let previous_id = self.project.clips.id(previous).expect("live clip");
+            let fix = if max >= 2 {
+                format!(
+                    "Use length ≤ {max}, or trim {id}'s head / {previous_id}'s tail to free source \
+                     (clip.trim) and retry."
+                )
+            } else {
+                format!(
+                    "Trim at least {need_head} frames off {id}'s head and {need_tail} off \
+                     {previous_id}'s tail (clip.trim), then retry; or fade with item.set {{fadeIn}}."
+                )
+            };
+            return Err(CommandError::rule(
+                "NO_HANDLES",
+                "length",
+                Some(Json::Signed(i64::from(length))),
+                &format!(
+                    "handles of {need_head}+{need_tail} frames (have {} before {id}, {} after {previous_id})",
+                    if head == f64::MAX {
+                        "∞".into()
+                    } else {
+                        (head.max(0.0).floor() as Frame).to_string()
+                    },
+                    if tail == f64::MAX {
+                        "∞".into()
+                    } else {
+                        (tail.max(0.0).floor() as Frame).to_string()
+                    },
+                ),
+                &fix,
+            ));
+        }
+        Ok(())
     }
 
     fn track_mask(
@@ -2229,6 +2292,20 @@ fn no_handles() -> CommandError {
         "The source has no media beyond this edit.",
         "Use a smaller offset, or trim the neighbor first.",
     )
+}
+
+/// A clip's transition length in frames (the schema default when unset).
+fn transition_length(project: &Project, owner: Owner) -> Frame {
+    effects(project, owner)
+        .iter()
+        .find(|effect| effect.kind == "transition")
+        .and_then(|effect| effect.params.iter().find(|p| p.name == "length"))
+        .and_then(|p| match p.value {
+            EffectValue::Number(n) => Some(n),
+            _ => None,
+        })
+        .unwrap_or(15.0)
+        .round() as Frame
 }
 
 fn no_transition() -> CommandError {

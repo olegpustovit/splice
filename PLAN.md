@@ -414,11 +414,11 @@ eight places; the board below already carries the changes.
 ### T36 · 0.3.1 hotfix: the artifacts users see [L + M]
 - [x] T36.1 [L] Transitions: Background never blended or moved; backing look applied once (H7); wipe matte multiplies shadow and cursor; push/slide show the backdrop, not black. Accept: 6 kinds × window goldens, backdrop constant ±2/255. (3f078f7: groups + one backdrop; looks pixel test covers dissolve/dip/wipe/push/slide/zoom over a window)
 - [x] T36.2 [L] Title fades default 0; fades/dips go to the backdrop, not black (T27.5). (48cf147 title fades 0; 3f078f7 clip fades and dips go to the backdrop)
-- [ ] T36.3 [L] Transition validation on every path (H9): generic `effect.*`/`param.*`, length ≤ neighbors, not on the first clip, not project/lane scope.
+- [x] T36.3 [L] Transition validation on every path (H9): generic `effect.*`/`param.*`, length ≤ neighbors, not on the first clip, not project/lane scope. (one check_transition on upsert/effect.set/param.*: scope, neighbor, length, handles)
 - [ ] T36.4 [L] No silent keys: every schema param keyed through one `sample(t)` path or refused `NOT_KEYABLE`; enumerate-and-render test; agent keys default `inOut`.
 - [ ] T36.5 [M] Captions: stroke under fill (H8); second line not clipped; active color rendered.
 - [x] T36.6 [L] Motion items hold `to` after they end; `MOTION_ENDS_ZOOMED` warning when `to ≠ 1`. (superseded by D12: motion items are camera segments, 48cf147)
-- [ ] T36.7 [L] Errors carry the rule: `{param, got, expected, fix}` on every BAD_ARGS; `UNKNOWN_PARAM` with `didYouMean`.
+- [x] T36.7 [L] Errors carry the rule: `{param, got, expected, fix}` on every BAD_ARGS; `UNKNOWN_PARAM` with `didYouMean`. (Rule {param, got, expected, didYouMean} on every BAD_ARGS/UNKNOWN_PARAM/UNKNOWN_COMMAND; apply fills got from the op)
 - [ ] T36.8 [L] Docs, TS types and ranges generated from `effects.json` and validators; test fails on any mismatch (M8).
 - [ ] T36.9 [L] Build identity: `serverInfo.version = <crate>+<sha>[-dirty]`.
 - [ ] T36.10 [M] Recording discoverability: `window:{app}` in descriptions and fixes; dryRun omits titles unless `titles:true`.
@@ -451,7 +451,7 @@ eight places; the board below already carries the changes.
 ### T40 · One backdrop, group transitions (D14) [L + M]
 - [x] T40.1 [L] Backdrop drawn once per frame; clips render content inside their frame. (3f078f7)
 - [x] T40.2 [M] Group compositing: outgoing stack drawn direct, incoming into one pooled offscreen, composited at t (premultiplied). Accept: dissolve black→black over blue backdrop stays black; 4K warm compose p90 < 16 ms. (3f078f7: pooled offscreen group, straight alpha like the canvas; 4K compose p90 15.2 ms)
-- [ ] T40.3 [L] Transitions consume handles (no length change); `NO_HANDLES {need, have, fix}`; OTIO invariants (no overlap, no adjacent transitions on one clip).
+- [x] T40.3 [L] Transitions consume handles (no length change); `NO_HANDLES {need, have, fix}`; OTIO invariants (no overlap, no adjacent transitions on one clip). (length ≤ the shorter clip and handles checked on every path; one transition per clip by construction)
 - [ ] T40.4 [L] New content-only kinds: `whip`, `zoomPunch`, `swipe`.
 
 ### T41 · Activity editing for silent takes (D15) [L]

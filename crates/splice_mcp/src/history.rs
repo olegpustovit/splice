@@ -52,12 +52,11 @@ pub fn apply_batch(
         let fps = store.project().fps;
         store.apply_with_media(ops, options, &mut |path| {
             splice_media::probe(&package, std::path::Path::new(path), fps).map_err(|failure| {
-                splice_core::commands::CommandError {
-                    code: failure.code,
-                    message: failure.message,
-                    fix: failure.fix.into(),
-                    valid: Vec::new(),
-                }
+                splice_core::commands::CommandError::new(
+                    failure.code,
+                    failure.message,
+                    failure.fix.into(),
+                )
             })
         })
     }

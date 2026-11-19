@@ -918,7 +918,7 @@ fn capability_sweep_applies_every_row_and_restores_the_start() {
                 r#"[{"cmd":"clip.compound","items":["clp_take","clp_end"],"ref":"compound"}]"#
             }
             "transition.set" | "transition.remove" => {
-                r#"[{"cmd":"transition.add","item":"clp_take"}]"#
+                r#"[{"cmd":"transition.add","item":"clp_end"}]"#
             }
             "template.set" => {
                 r#"[{"cmd":"template.add","name":"lower-third","at":150,"ref":"lower"}]"#

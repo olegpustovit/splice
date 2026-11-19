@@ -182,7 +182,7 @@ fn decoders_reject_unknown_and_invalid_arguments() {
         ),
         (
             r#"{"cmd":"item.split","item":"clp_take","at":12,"position":0}"#,
-            "BAD_ARGS",
+            "UNKNOWN_PARAM",
             "position",
         ),
         (
@@ -225,7 +225,25 @@ fn decoders_reject_unknown_and_invalid_arguments() {
         assert_eq!(error.code, code, "{input}");
         assert!(error.message.contains(field), "{input}: {error}");
         assert!(!error.fix.is_empty());
+        // T36.7: every BAD_ARGS names the broken rule.
+        if code == "BAD_ARGS" {
+            let rule = error
+                .rule
+                .as_ref()
+                .unwrap_or_else(|| panic!("{input}: no rule"));
+            assert!(
+                !rule.param.is_empty() && !rule.expected.is_empty(),
+                "{input}"
+            );
+        }
     }
+    let typo =
+        decode(&splice_json::parse(r#"{"cmd":"item.split","item":"clp_take","att":12}"#).unwrap())
+            .unwrap_err();
+    assert_eq!(
+        (typo.code, typo.rule.unwrap().did_you_mean.as_deref()),
+        ("UNKNOWN_PARAM", Some("at"))
+    );
     let import = splice_json::parse(r#"{"cmd":"clip.insert","path":"/tmp/clip.mov"}"#).unwrap();
     assert!(
         matches!(decode(&import).unwrap().op, Op::ClipInsert { source: InsertSource::Path(path), .. } if path == "/tmp/clip.mov")

@@ -506,12 +506,13 @@ fn tier_a_magnetic_move_and_ripple_trim_keep_spine_contiguous() {
         clips,
         [
             ("clp_open".into(), 0, 120, 0),
-            ("clp_end".into(), 120, 7, 0),
-            ("clp_take".into(), 127, 400, 20)
+            // 135 source frames after its 15-frame head handle, at 16×.
+            ("clp_end".into(), 120, 8, 15),
+            ("clp_take".into(), 128, 400, 20)
         ]
     );
     let label = "ovl_label".parse().unwrap();
-    assert_eq!(span(&project, TimelineId::Item(label)).unwrap().start, 127);
+    assert_eq!(span(&project, TimelineId::Item(label)).unwrap().start, 128);
 }
 
 #[test]
@@ -548,12 +549,13 @@ fn tier_a_fractional_trim_keeps_the_clip_inside_its_media() {
     let slot = project.clips.find(id).unwrap();
     let timing = project.clips.timing_mut(slot).unwrap();
     timing.speed = 1.5;
-    timing.length = 80;
+    timing.length = 90;
     let op = splice_json::parse(r#"{"cmd":"item.trim","item":"clp_end","edge":"in","delta":1}"#)
         .unwrap();
     apply(&mut project, &[op], Source::Human, false).unwrap();
     let timing = project.clips.timing(slot).unwrap();
-    assert_eq!((timing.length, timing.source), (79, 1));
+    // 15 + 90 × 1.5 = 150 media frames; the fractional trim stays inside them.
+    assert_eq!((timing.length, timing.source), (89, 16));
 }
 
 fn budget_project() -> Project {

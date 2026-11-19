@@ -103,23 +103,26 @@ impl Command {
         let fields = value
             .as_object()
             .ok_or_else(|| CommandError::bad("op", "an object"))?;
-        for (name, hint) in self.params {
-            if let Some(required) = hint.strip_prefix('!')
-                && value.field(name).is_none()
-            {
-                return Err(CommandError::bad(name, required));
-            }
-        }
+        // Unknown names first: a typo of a required argument reads as the typo.
         for (name, _) in fields {
             if name != "cmd" && name != "ref" && !self.params.iter().any(|(key, _)| key == name) {
-                return Err(CommandError::new(
-                    "BAD_ARGS",
+                return Err(CommandError::unknown_name(
+                    "UNKNOWN_PARAM",
                     format!("{} has no argument {name:?}.", self.id),
                     format!(
                         "Call commands.describe with id {:?} for accepted arguments.",
                         self.id
                     ),
+                    name,
+                    &mut self.params.iter().map(|(key, _)| *key),
                 ));
+            }
+        }
+        for (name, hint) in self.params {
+            if let Some(required) = hint.strip_prefix('!')
+                && value.field(name).is_none()
+            {
+                return Err(CommandError::bad(name, required));
             }
         }
         (self.decoder)(value, scratch)
@@ -141,8 +144,22 @@ impl Command {
     }
 }
 
+/// The rule a refused argument broke (D18): the parameter, what was passed and what is
+/// accepted. `got` is filled from the op by `apply` when the refusing code did not have it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rule {
+    /// Argument or effect parameter name.
+    pub param: String,
+    /// The value passed, if any.
+    pub got: Option<Json>,
+    /// What is accepted.
+    pub expected: String,
+    /// The closest known name, for an unknown one.
+    pub did_you_mean: Option<String>,
+}
+
 /// Typed edit or discovery failure with a fix hint.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CommandError {
     /// Stable machine-readable code.
     pub code: &'static str,
@@ -152,25 +169,104 @@ pub struct CommandError {
     pub fix: String,
     /// Suggested registry IDs, if available.
     pub valid: Vec<&'static str>,
+    /// The broken rule, for argument errors and unknown names.
+    pub rule: Option<Box<Rule>>,
 }
 
 impl CommandError {
-    pub(crate) fn new(code: &'static str, message: String, fix: String) -> Self {
+    /// A failure with a code, description and recovery hint.
+    pub fn new(code: &'static str, message: String, fix: String) -> Self {
         Self {
             code,
             message,
             fix,
             valid: Vec::new(),
+            rule: None,
         }
     }
 
+    /// An invalid or missing argument: `name` must be `expected`.
     pub(crate) fn bad(name: &str, expected: &str) -> Self {
-        Self::new(
+        Self::rule(
             "BAD_ARGS",
-            format!("Invalid or missing {name}."),
-            format!("Pass {name} as {expected}."),
+            name,
+            None,
+            expected,
+            &format!("Pass {name} as {expected}."),
         )
     }
+
+    /// A refusal that names the broken rule.
+    pub(crate) fn rule(
+        code: &'static str,
+        param: &str,
+        got: Option<Json>,
+        expected: &str,
+        fix: &str,
+    ) -> Self {
+        let mut error = Self::new(
+            code,
+            match &got {
+                Some(_) => format!("{param} breaks a rule: expected {expected}."),
+                None => format!("Invalid or missing {param}: expected {expected}."),
+            },
+            fix.into(),
+        );
+        error.rule = Some(Box::new(Rule {
+            param: param.into(),
+            got,
+            expected: expected.into(),
+            did_you_mean: None,
+        }));
+        error
+    }
+
+    /// An unknown name among `known`, with the closest one when it is a likely typo.
+    pub(crate) fn unknown_name(
+        code: &'static str,
+        message: String,
+        fix: String,
+        name: &str,
+        known: &mut dyn Iterator<Item = &str>,
+    ) -> Self {
+        let mut error = Self::new(code, message, fix);
+        error.rule = Some(Box::new(Rule {
+            param: name.into(),
+            got: None,
+            expected: "a known name".into(),
+            did_you_mean: closest(name, known),
+        }));
+        error
+    }
+}
+
+/// The candidate within a small edit distance of `name` (case-insensitive), if any.
+pub(crate) fn closest(name: &str, known: &mut dyn Iterator<Item = &str>) -> Option<String> {
+    let name = name.to_ascii_lowercase();
+    let limit = (name.len() / 3).max(2);
+    known
+        .map(|candidate| (distance(&name, &candidate.to_ascii_lowercase()), candidate))
+        .filter(|(d, _)| *d <= limit)
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, candidate)| candidate.to_string())
+}
+
+/// Levenshtein distance over bytes (names are ASCII).
+fn distance(a: &str, b: &str) -> usize {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, &ca) in a.iter().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (above + 1)
+                .min(row[j] + 1)
+                .min(diagonal + usize::from(ca != cb));
+            diagonal = above;
+        }
+    }
+    row[b.len()]
 }
 
 impl fmt::Display for CommandError {
@@ -319,6 +415,12 @@ fn unknown(id: &str) -> CommandError {
                 "Use {replacement}; commands.describe {{id:\"{replacement}\"}} has its arguments."
             ),
             valid: vec![*replacement],
+            rule: Some(Box::new(Rule {
+                param: "cmd".into(),
+                got: Some(text(id)),
+                expected: "a current command".into(),
+                did_you_mean: Some((*replacement).into()),
+            })),
         };
     }
     let prefix = id.split('.').next().unwrap_or("");
@@ -341,6 +443,12 @@ fn unknown(id: &str) -> CommandError {
               export.start or view.frames are called directly, not as edit.apply ops."
             .into(),
         valid,
+        rule: Some(Box::new(Rule {
+            param: "cmd".into(),
+            got: Some(text(id)),
+            expected: "a command ID".into(),
+            did_you_mean: closest(id, &mut COMMANDS.iter().map(|row| row.id)),
+        })),
     }
 }
 
@@ -372,10 +480,16 @@ fn param_spec(kind: &str, name: &str) -> Result<&'static Json, CommandError> {
                     .join(", ")
             })
             .unwrap_or_default();
-        CommandError::new(
-            "BAD_ARGS",
+        CommandError::unknown_name(
+            "UNKNOWN_PARAM",
             format!("{kind} has no parameter {name}."),
             format!("Parameters: {names}."),
+            name,
+            &mut schema
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(key, _)| key.as_str()),
         )
     })
 }

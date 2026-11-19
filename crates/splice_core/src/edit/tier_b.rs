@@ -748,6 +748,9 @@ impl Editor {
         let id = effect.id;
         // The decoded buffer (names kept) goes back for the next op.
         self.decode_scratch.params = params;
+        if kind == "transition" {
+            self.check_transition(owner)?;
+        }
         Ok(id)
     }
 
@@ -811,8 +814,11 @@ impl Editor {
         self.note.clear();
         let reset = if removed { " reset" } else { "" };
         write!(self.note, "{} on {label}{reset}", list[index].kind).expect("writing to a String");
+        let transition = list[index].kind == "transition";
         if removed {
             list.remove(index);
+        } else if transition {
+            self.check_transition(owner)?;
         }
         Ok(Outcome {
             summary: Summary::Note,

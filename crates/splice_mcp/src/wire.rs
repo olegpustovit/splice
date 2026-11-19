@@ -210,6 +210,16 @@ pub fn error_payload(error: StoreError) -> Json {
             Json::Array(error.valid.iter().map(|s| text(s)).collect()),
         ));
     }
+    if let Some(rule) = error.rule {
+        fields.push(("param", Json::String(rule.param)));
+        if let Some(got) = rule.got {
+            fields.push(("got", got));
+        }
+        fields.push(("expected", Json::String(rule.expected)));
+        if let Some(name) = rule.did_you_mean {
+            fields.push(("didYouMean", Json::String(name)));
+        }
+    }
     if let Some(stale) = error.stale {
         fields.push(("current", rev(stale.current)));
         fields.push((

@@ -19,7 +19,7 @@ fn setup(id: &str) -> &'static str {
         "clip.uncompound" => {
             r#"[{"cmd":"clip.compound","items":["clp_take","clp_end"],"ref":"compound"}]"#
         }
-        "transition.set" | "transition.remove" => r#"[{"cmd":"transition.add","item":"clp_take"}]"#,
+        "transition.set" | "transition.remove" => r#"[{"cmd":"transition.add","item":"clp_end"}]"#,
         "template.set" => r#"[{"cmd":"template.add","name":"lower-third","at":150,"ref":"lower"}]"#,
         "item.slide" => r#"[{"cmd":"item.trim","item":"clp_end","edge":"in","delta":12}]"#,
         _ => "[]",
@@ -133,6 +133,17 @@ fn scale_at(project: &Project, at: Frame) -> f64 {
 #[test]
 fn keys_stay_on_their_content_across_split_trim_and_roll() {
     let mut project = sample();
+    // Source handles on both sides of the opener/take cut: a transition consumes them (D14).
+    let opener = "med_opener".parse().unwrap();
+    project
+        .media
+        .iter_mut()
+        .find(|m| m.id == opener)
+        .unwrap()
+        .probe
+        .frames = 150;
+    let take = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    project.clips.timing_mut(take).unwrap().source = 30;
     // clp_take covers 120..540; zoom 1 → 2 over its first 200 frames.
     let ops = splice_json::parse(
         r#"[{"cmd":"param.keys","target":"clp_take","path":"transform.scale","keys":[{"at":0,"value":1},{"at":200,"value":2}]},
@@ -255,4 +266,48 @@ fn compounds_nest_four_deep_and_no_deeper() {
             assert_eq!(result.unwrap_err().error.code, "TOO_DEEP");
         }
     }
+}
+
+/// H9, D14: every path that adds or changes a transition runs one validator; refusals name
+/// the rule and the fix.
+#[test]
+fn transitions_are_validated_on_every_path() {
+    let refused = |ops: &str| {
+        let mut project = sample();
+        let ops = splice_json::parse(ops).unwrap();
+        apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap_err()
+    };
+    // Generic effect paths at the wrong scope.
+    for ops in [
+        r#"[{"cmd":"effect.add","target":"project","type":"transition","params":{"kind":"dissolve"}}]"#,
+        r#"[{"cmd":"param.set","target":"spine","path":"transition.length","value":10}]"#,
+    ] {
+        let error = refused(ops);
+        assert!(
+            matches!(error.error.code, "WRONG_KIND" | "BAD_ARGS"),
+            "{ops}: {error:?}"
+        );
+    }
+    // The first clip has no neighbor, whichever path adds it.
+    let error = refused(
+        r#"[{"cmd":"param.set","target":"clp_open","path":"transition.length","value":10}]"#,
+    );
+    assert_eq!(error.error.code, "NO_NEIGHBOR");
+    // No source handles before clp_take: refused with the rule, never a silent hold.
+    let error = refused(r#"[{"cmd":"transition.add","item":"clp_take","length":10}]"#);
+    assert_eq!(error.error.code, "NO_HANDLES");
+    let rule = error.error.rule.unwrap();
+    assert_eq!(
+        (rule.param.as_str(), rule.got),
+        ("length", Some(splice_json::Value::Signed(10)))
+    );
+    assert!(error.error.fix.contains("clip.trim"));
+    // Longer than the 15-frame head handle of clp_end via the generic path: refused.
+    let error = refused(
+        r#"[{"cmd":"transition.add","item":"clp_end","length":20},
+            {"cmd":"param.set","target":"clp_end","path":"transition.length","value":40}]"#,
+    );
+    assert_eq!((error.op, error.error.code), (Some(1), "NO_HANDLES"));
+    let error = refused(r#"[{"cmd":"transition.add","item":"clp_end","length":200}]"#);
+    assert_eq!(error.error.code, "TOO_LONG");
 }

@@ -6,7 +6,10 @@ use splice_core::{edit, package::journal::Source};
 use splice_model::Project;
 
 fn applied(ops: &str) -> Project {
-    let mut project = sample();
+    applied_to(sample(), ops)
+}
+
+fn applied_to(mut project: Project, ops: &str) -> Project {
     let ops = splice_json::parse(ops).unwrap();
     edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
     project
@@ -60,8 +63,23 @@ fn keys_ease(t: f64) -> f64 {
 
 #[test]
 fn dissolve_blends_both_clips_with_equal_power_audio() {
-    let project =
-        applied(r#"[{"cmd":"transition.add","item":"clp_take","kind":"dissolve","length":20}]"#);
+    // Source handles on both sides of the cut: the opener runs 30 frames past its clip and the
+    // take starts 30 frames into its media (D14: a transition consumes them).
+    let mut project = sample();
+    let opener = "med_opener".parse().unwrap();
+    project
+        .media
+        .iter_mut()
+        .find(|m| m.id == opener)
+        .unwrap()
+        .probe
+        .frames = 150;
+    let take = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    project.clips.timing_mut(take).unwrap().source = 30;
+    let project = applied_to(
+        project,
+        r#"[{"cmd":"transition.add","item":"clp_take","kind":"dissolve","length":20}]"#,
+    );
     let evaluator = Evaluator::prepare(&project).unwrap();
     let cuts = evaluator.breakpoints();
     assert!(cuts.contains(&110) && cuts.contains(&130));
@@ -86,8 +104,8 @@ fn dissolve_blends_both_clips_with_equal_power_audio() {
             .iter()
             .any(|l| matches!(l, Layer::Picture(p) if p.item == clip("clp_open")))
     );
-    // The incoming take starts early on its own clock (held at frame 0, no head handle).
-    assert_eq!(incoming.source_frame, 0.0);
+    // The incoming take starts early on its own clock, inside its head handle.
+    assert_eq!(incoming.source_frame, 29.0);
     // Inside the take, its audio fades in on the equal-power curve.
     evaluator.frame(125, &mut plan);
     let gain = |plan: &FramePlan| -> f64 {
