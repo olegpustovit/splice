@@ -224,6 +224,10 @@ pub(super) fn job(projects: &mut Projects, name: &str, args: &Json) -> Result<Js
         return Err(bad("dryRun", "false or omitted for jobs.cancel"));
     }
     #[cfg(target_os = "macos")]
+    if let Some(result) = super::background::job(projects, id, cancel) {
+        return result;
+    }
+    #[cfg(target_os = "macos")]
     if projects.recordings.iter().any(|job| job.id == id) {
         return super::record::command(
             projects,
@@ -394,15 +398,17 @@ pub(super) fn unavailable(feature: &str) -> StoreError {
 
 /// Transcription needs the native speech backend.
 #[cfg(not(target_os = "macos"))]
-pub(super) fn transcribe(_: &mut Store, _: &Json) -> Result<Json, StoreError> {
+pub(super) fn transcribe(_: &mut Projects, _: &Json) -> Result<Json, StoreError> {
     Err(unavailable("Transcription"))
 }
 
 /// `transcript.get {transcribe:true}`: recognizes the clip's speech on device and commits the
 /// words as `transcript.set` in the caller's session, then answers like `transcript.get`.
 #[cfg(target_os = "macos")]
-pub(super) fn transcribe(store: &mut Store, args: &Json) -> Result<Json, StoreError> {
+pub(super) fn transcribe(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
     let session = args.session()?;
+    let project = args.string("projectId")?.to_owned();
+    let store = projects.lookup(args)?;
     let p = store.project();
     let slot = match args.optional_string("clip")? {
         Some(id) => {
@@ -461,22 +467,61 @@ pub(super) fn transcribe(store: &mut Store, args: &Json) -> Result<Json, StoreEr
         Some(file) => base.with_file_name(file),
         None => base,
     };
-    let language = args.optional_string("language")?.unwrap_or("en-US");
-    let words = apple_sys::speech::transcribe(&audio, language).map_err(|error| {
+    let language = args
+        .optional_string("language")?
+        .unwrap_or("en-US")
+        .to_owned();
+    let (fps, frames) = (media.probe.fps, media.probe.frames);
+    let long = f64::from(frames) / fps > super::background::LONG_SECONDS || args.flag("async")?;
+    let spoken = language.clone();
+    let work = move || recognize(&audio, &spoken, fps, frames);
+    let args = args.clone();
+    let finish = move |store: &mut Store, words: Json| {
+        let op = super::object(vec![
+            ("cmd", super::text("transcript.set")),
+            ("media", display(&media_id)),
+            ("words", words),
+            ("language", super::text(&language)),
+        ]);
+        let options = splice_core::history::WriteOptions {
+            source: splice_core::history::Source::Agent,
+            session: Some(session),
+            if_revision: Some(store.project().rev),
+            label: Some("Agent: Transcribe".into()),
+            time: now(),
+            ..Default::default()
+        };
+        store.apply(std::slice::from_ref(&op), &options)?;
+        super::media::transcript(store.project(), &args)
+    };
+    if long {
+        return Ok(super::background::Background::spawn(
+            projects,
+            "transcribe",
+            &project,
+            Box::new(work),
+            Some(Box::new(finish)),
+        ));
+    }
+    let words = work()?;
+    finish(projects.lookup_id(&project)?, words)
+}
+
+/// Native speech recognition (worker-safe): words in source frames as transcript.set wants.
+#[cfg(target_os = "macos")]
+fn recognize(audio: &Path, language: &str, fps: f64, frames: Frame) -> Result<Json, StoreError> {
+    let words = apple_sys::speech::transcribe(audio, language).map_err(|error| {
         failure(
             "TRANSCRIPTION_FAILED",
             &error.to_string(),
             "Check that the clip has speech; the first run downloads the language model.",
         )
     })?;
-    let fps = media.probe.fps;
     let mut last = 0;
     let mut list = Vec::with_capacity(words.len());
     for apple_sys::speech::Word { text, start, end } in words {
         let from = ((start * fps).round() as Frame).max(last);
-        let to = ((end * fps).round() as Frame)
-            .max(from + 1)
-            .min(media.probe.frames);
+        let to = ((end * fps).round() as Frame).max(from + 1).min(frames);
         if to <= from {
             continue;
         }
@@ -494,22 +539,7 @@ pub(super) fn transcribe(store: &mut Store, args: &Json) -> Result<Json, StoreEr
             "Check the microphone track, or pass language for a non-English take.",
         ));
     }
-    let op = super::object(vec![
-        ("cmd", super::text("transcript.set")),
-        ("media", display(&media_id)),
-        ("words", Json::Array(list)),
-        ("language", super::text(language)),
-    ]);
-    let options = splice_core::history::WriteOptions {
-        source: splice_core::history::Source::Agent,
-        session: Some(session),
-        if_revision: Some(store.project().rev),
-        label: Some("Agent: Transcribe".into()),
-        time: now(),
-        ..Default::default()
-    };
-    store.apply(std::slice::from_ref(&op), &options)?;
-    super::media::transcript(store.project(), args)
+    Ok(Json::Array(list))
 }
 
 // ── 0.3 native analysis and inputs filled by `enrich` (macOS: `native.rs`) ──
@@ -522,7 +552,7 @@ pub(super) use super::native::{
 /// Peaks, beats, sounds, shots, text, faces, people and mattes need native analysis.
 #[cfg(not(target_os = "macos"))]
 pub(super) fn analyze(
-    _: &Store,
+    _: &Path,
     _: &splice_model::Media,
     _: &super::analyze::Window,
     kinds: &[&str],

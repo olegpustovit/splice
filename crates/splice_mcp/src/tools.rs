@@ -692,12 +692,10 @@ fn execute(
         "timeline.snapshot" => timeline::snapshot(projects.lookup(args)?.project(), args),
         "items.inspect" => timeline::inspect(projects.lookup(args)?.project(), args),
         "timeline.find" => timeline::find(projects.lookup(args)?.project(), args),
-        "transcript.get" if args.flag("transcribe")? => {
-            platform::transcribe(projects.lookup(args)?, args)
-        }
+        "transcript.get" if args.flag("transcribe")? => platform::transcribe(projects, args),
         "transcript.get" => media::transcript(projects.lookup(args)?.project(), args),
         "takes.events" => media::events(projects.lookup(args)?, args),
-        "media.analyze" => analyze::analyze(projects.lookup(args)?, args),
+        "media.analyze" => analyze::analyze(projects, args),
         // 0.2 name, kept for one cut (D6).
         "audio.summary" => media::audio(projects.lookup(args)?, args),
         "session.start" => history::start(projects.lookup(args)?, args),

@@ -832,3 +832,37 @@ fn save_as_copies_the_package_and_opens_the_copy() {
     // The copy is held open by the closed server no longer; both packages load.
     assert!(copied.is_ok() && reopened.project().clips.order().len() == 3);
 }
+
+#[test]
+fn takes_events_stream_logs_past_the_old_16_mib_cap() {
+    let root = TestDirectory::new("long-events");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    let take = sample.join("takes/med_screen");
+    fs::create_dir_all(&take).unwrap();
+    // ~19 MB: 80 minutes of pointer moves at 100 Hz, one click at 2.0 s.
+    let mut log = String::with_capacity(19_000_000);
+    log.push_str(r#"{"t0":0,"source":{"kind":"display","rect":{"x":0,"y":0,"width":640,"height":360},"scale":1},"events":["#);
+    for i in 0..480_000u32 {
+        if i > 0 {
+            log.push(',');
+        }
+        let t = f64::from(i) / 100.0;
+        if i == 200 {
+            log.push_str(r#"{"t":2.0,"k":"down","b":0,"x":0.5,"y":0.5},"#);
+        }
+        log.push_str(&format!(r#"{{"t":{t},"k":"move","x":0.25,"y":0.75}}"#));
+    }
+    log.push_str(r#"],"dropped":0}"#);
+    assert!(log.len() > 16 * 1024 * 1024);
+    fs::write(take.join("events.json"), &log).unwrap();
+    drop(log);
+    let store = splice_core::history::Store::open(&sample).unwrap();
+    let events = super::media::events(
+        &store,
+        &splice_json::parse(r#"{"clip":"clp_take","from":120,"to":240}"#).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(events.field("clicks").unwrap().as_array().unwrap().len(), 1);
+    assert!(events.field("cursor").unwrap().as_array().unwrap().len() > 300);
+}

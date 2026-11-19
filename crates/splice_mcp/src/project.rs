@@ -17,6 +17,8 @@ pub(super) struct Projects {
     pub(super) exports: Vec<super::export::Job>,
     #[cfg(target_os = "macos")]
     pub(super) recordings: Vec<super::record::Job>,
+    #[cfg(target_os = "macos")]
+    pub(super) background: Vec<super::background::Background>,
 }
 
 enum OpenProject {
@@ -69,6 +71,8 @@ impl Projects {
             exports: Vec::new(),
             #[cfg(target_os = "macos")]
             recordings: Vec::new(),
+            #[cfg(target_os = "macos")]
+            background: Vec::new(),
         }
     }
 

@@ -5,6 +5,8 @@ use splice_json::Value as Json;
 
 mod analyze;
 #[cfg(target_os = "macos")]
+mod background;
+#[cfg(target_os = "macos")]
 /// The installed application's private headless capture transport.
 pub mod capture_agent;
 mod code;

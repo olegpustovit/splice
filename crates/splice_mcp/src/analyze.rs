@@ -5,7 +5,7 @@
 // The native half (native.rs) is macOS-only; Linux builds keep the portable helpers for tests.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 use super::{Json, object, text, wire::*};
-use splice_core::history::{Store, StoreError};
+use splice_core::history::StoreError;
 use splice_model::*;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,7 @@ pub(super) const KINDS: &[&str] = &[
 ];
 
 /// A clip's source window on its media clock.
+#[derive(Clone, Copy)]
 pub(super) struct Window {
     pub start: Frame,
     pub length: Frame,
@@ -90,7 +91,11 @@ pub(super) fn runs(labels: &[(f64, f64, String)]) -> Vec<(f64, f64, String)> {
     out
 }
 
-pub(super) fn analyze(store: &Store, args: &Json) -> Result<Json, StoreError> {
+pub(super) fn analyze(
+    projects: &mut super::project::Projects,
+    args: &Json,
+) -> Result<Json, StoreError> {
+    let store = projects.lookup(args)?;
     let p = store.project();
     let id: ClipId = args
         .string("clip")?
@@ -158,14 +163,42 @@ pub(super) fn analyze(store: &Store, args: &Json) -> Result<Json, StoreError> {
             rate: timing::source_rate(p, slot).unwrap_or(1.0),
             fps: media.probe.fps,
         };
-        fields.extend(super::platform::analyze(store, media, &window, &native)?);
+        // Long media analyze on a worker (T15.3); the job's result is this same answer.
+        #[cfg(target_os = "macos")]
+        if f64::from(media.probe.frames) / media.probe.fps > super::background::LONG_SECONDS
+            || args.flag("async")?
+        {
+            let package = store.path().to_path_buf();
+            let media = media.clone();
+            let kinds: Vec<String> = native.iter().map(|k| (*k).to_owned()).collect();
+            let project = args.string("projectId")?.to_owned();
+            let work = move || {
+                let kinds: Vec<&str> = kinds.iter().map(String::as_str).collect();
+                let mut fields = fields;
+                fields.extend(super::platform::analyze(&package, &media, &window, &kinds)?);
+                Ok(object(fields))
+            };
+            return Ok(super::background::Background::spawn(
+                projects,
+                "analyze",
+                &project,
+                Box::new(work),
+                None,
+            ));
+        }
+        fields.extend(super::platform::analyze(
+            store.path(),
+            media,
+            &window,
+            &native,
+        )?);
     }
     Ok(object(fields))
 }
 
 /// The file behind a media's video or audio component (takes keep components in a folder).
-pub(super) fn component(store: &Store, media: &Media, audio: bool) -> PathBuf {
-    let base = store.path().join(&media.path);
+pub(super) fn component(package: &Path, media: &Media, audio: bool) -> PathBuf {
+    let base = package.join(&media.path);
     let name = media.take.as_ref().and_then(|take| {
         if audio {
             take.mic.as_deref().or(take.system.as_deref())
@@ -181,8 +214,8 @@ pub(super) fn component(store: &Store, media: &Media, audio: bool) -> PathBuf {
 }
 
 /// `<package>/analysis/<media>/`.
-pub(super) fn cache_dir(store: &Store, media: MediaId) -> PathBuf {
-    store.path().join("analysis").join(media.to_string())
+pub(super) fn cache_dir(package: &Path, media: MediaId) -> PathBuf {
+    package.join("analysis").join(media.to_string())
 }
 
 /// A cached analysis file, valid while the source file's size and mtime match.

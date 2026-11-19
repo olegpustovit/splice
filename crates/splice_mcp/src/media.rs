@@ -9,7 +9,7 @@ use splice_core::{
     history::{Store, StoreError},
 };
 use splice_model::{timing, *};
-use std::{fs, io::Read, path::Path};
+use std::{fs, path::Path};
 
 struct ClipClock {
     timing: ClipTiming,
@@ -404,12 +404,7 @@ pub(super) fn events(store: &Store, args: &Json) -> Result<Json, StoreError> {
     let mut key_index = 0;
     if let Some(events_name) = media.take.as_ref().and_then(|take| take.events.as_deref()) {
         let dir = store.path().join("takes").join(media.id.to_string());
-        let log = read_event_log(&dir, events_name)?;
-        let events = log
-            .field("events")
-            .and_then(Json::as_array)
-            .ok_or_else(events_format)?;
-        for event in events {
+        for_each_event(&dir, events_name, &mut |event| {
             let kind = event
                 .field("k")
                 .and_then(Json::as_str)
@@ -426,7 +421,7 @@ pub(super) fn events(store: &Store, args: &Json) -> Result<Json, StoreError> {
                 key_index += 1;
             }
             if !shown {
-                continue;
+                return Ok(());
             }
             let mut fields = vec![
                 ("kind", text(kind)),
@@ -471,7 +466,8 @@ pub(super) fn events(store: &Store, args: &Json) -> Result<Json, StoreError> {
                 }
                 _ => {}
             }
-        }
+            Ok(())
+        })?;
     }
     Ok(object(vec![
         ("revision", rev(p.rev)),
@@ -490,7 +486,14 @@ fn events_format() -> StoreError {
     )
 }
 
-fn read_event_log(dir: &Path, name: &str) -> Result<Json, StoreError> {
+/// Streams a take's event log (T15.3): each event of the `events` array is parsed and visited
+/// on its own, so memory stays flat however long the take is.
+fn for_each_event(
+    dir: &Path,
+    name: &str,
+    visit: &mut dyn FnMut(&Json) -> Result<(), StoreError>,
+) -> Result<(), StoreError> {
+    use std::io::BufRead;
     let offline = || {
         failure(
             "MEDIA_OFFLINE",
@@ -502,20 +505,91 @@ fn read_event_log(dir: &Path, name: &str) -> Result<Json, StoreError> {
     if !path.starts_with(dir) || !path.is_file() {
         return Err(events_format());
     }
-    let mut buf = String::new();
-    // ponytail: read one bounded capture log until long takes justify a streaming time index.
-    let limit = 16 * 1024 * 1024;
-    fs::File::open(path)
-        .map_err(|_| offline())?
-        .take(limit + 1)
-        .read_to_string(&mut buf)
-        .map_err(|_| events_format())?;
-    if buf.len() as u64 > limit {
-        return Err(failure(
-            "OUT_OF_RANGE",
-            "The take event log exceeds 16 MiB.",
-            "Inspect this take in the editor until indexed event reads are available.",
-        ));
+    let mut reader =
+        std::io::BufReader::with_capacity(65536, fs::File::open(path).map_err(|_| offline())?);
+    // Skip to the events array.
+    let marker = b"\"events\":[";
+    let mut matched = 0;
+    loop {
+        let buf = reader.fill_buf().map_err(|_| events_format())?;
+        if buf.is_empty() {
+            return Err(events_format());
+        }
+        let mut used = 0;
+        for &byte in buf {
+            used += 1;
+            matched = if byte == marker[matched] {
+                matched + 1
+            } else if byte == marker[0] {
+                1
+            } else {
+                0
+            };
+            if matched == marker.len() {
+                break;
+            }
+        }
+        reader.consume(used);
+        if matched == marker.len() {
+            break;
+        }
     }
-    splice_json::parse(&buf).map_err(|_| events_format())
+    // Objects one at a time: depth, strings and escapes decide where each ends.
+    let mut object = String::new();
+    let (mut depth, mut in_string, mut escaped) = (0u32, false, false);
+    let mut bytes = Vec::with_capacity(256);
+    loop {
+        let buf = reader.fill_buf().map_err(|_| events_format())?;
+        if buf.is_empty() {
+            return Err(events_format());
+        }
+        let mut used = 0;
+        let mut done = false;
+        for &byte in buf {
+            used += 1;
+            if depth == 0 {
+                match byte {
+                    b'{' => {
+                        depth = 1;
+                        bytes.clear();
+                        bytes.push(byte);
+                    }
+                    b']' => {
+                        done = true;
+                        break;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            bytes.push(byte);
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match byte {
+                b'"' => in_string = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        object.clear();
+                        object.push_str(std::str::from_utf8(&bytes).map_err(|_| events_format())?);
+                        visit(&splice_json::parse(&object).map_err(|_| events_format())?)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        reader.consume(used);
+        if done {
+            return Ok(());
+        }
+    }
 }
