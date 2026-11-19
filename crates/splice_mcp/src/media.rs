@@ -602,10 +602,10 @@ fn for_each_event(
     }
     let mut reader =
         std::io::BufReader::with_capacity(65536, fs::File::open(path).map_err(|_| offline())?);
-    // Skip to the events array.
-    let marker = b"\"events\":[";
-    let mut matched = 0;
-    loop {
+    // Skip to the events array: the key, then `:` and `[` with any JSON whitespace around.
+    let key = b"\"events\"";
+    let (mut matched, mut colon, mut found) = (0, false, false);
+    while !found {
         let buf = reader.fill_buf().map_err(|_| events_format())?;
         if buf.is_empty() {
             return Err(events_format());
@@ -613,21 +613,27 @@ fn for_each_event(
         let mut used = 0;
         for &byte in buf {
             used += 1;
-            matched = if byte == marker[matched] {
+            if matched == key.len() {
+                match byte {
+                    b' ' | b'\t' | b'\n' | b'\r' => continue,
+                    b':' if !colon => colon = true,
+                    b'[' if colon => {
+                        found = true;
+                        break;
+                    }
+                    _ => (matched, colon) = (0, false),
+                }
+                continue;
+            }
+            matched = if byte == key[matched] {
                 matched + 1
-            } else if byte == marker[0] {
+            } else if byte == key[0] {
                 1
             } else {
                 0
             };
-            if matched == marker.len() {
-                break;
-            }
         }
         reader.consume(used);
-        if matched == marker.len() {
-            break;
-        }
     }
     // Objects one at a time: depth, strings and escapes decide where each ends.
     let mut object = String::new();
@@ -755,4 +761,36 @@ fn not_a_take() -> StoreError {
         "The clip is not a recorded take.",
         "Use a take clip ID from timeline.snapshot.",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A take log written with JSON whitespace (`"events": [`, as most tools write it) parses
+    /// like the recorder's compact form (found by the silent-demo-short eval).
+    #[test]
+    fn event_logs_may_use_json_whitespace() {
+        let dir = crate::tests::TestDirectory::new("events-whitespace");
+        let dir = fs::canonicalize(&dir.0).unwrap();
+        for (name, text) in [
+            (
+                "compact.json",
+                r#"{"events":[{"t":1,"k":"move","x":0.5,"y":0.5}]}"#,
+            ),
+            (
+                "pretty.json",
+                "{\n  \"source\": {\"rect\": {\"width\": 100}},\n  \"events\" : [\n    {\"t\": 1, \"k\": \"move\", \"x\": 0.5, \"y\": 0.5},\n    {\"t\": 2, \"k\": \"key\", \"keyCode\": 4}\n  ]\n}",
+            ),
+        ] {
+            fs::write(dir.join(name), text).unwrap();
+            let mut seen = 0;
+            for_each_event(&dir, name, &mut |_| {
+                seen += 1;
+                Ok(())
+            })
+            .unwrap();
+            assert!(seen >= 1, "{name}");
+        }
+    }
 }
