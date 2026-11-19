@@ -14,7 +14,7 @@ struct Layer {
     float shadow;    // 0..1
     float ring;      // ring width in pixels (kind 3)
     uint kind;       // 0 texture, 1 solid, 2 gradient, 3 ring
-    uint flags;      // 1: the texture holds BGRA bytes
+    uint flags;      // 1: the texture holds BGRA bytes; 2: write BGRA (for an encoder buffer)
 };
 
 struct Out {
@@ -69,13 +69,14 @@ fragment float4 layer_fragment(Out in [[stage_in]], constant Layer &l [[buffer(0
         }
     }
     float alpha = color.a * coverage * l.opacity;
+    float4 result = float4(color.rgb, alpha);
     if (l.shadow > 0.0 && l.kind != 3) {
         float blur = 0.03 * min(l.dest.z, l.dest.w);
         float d = rounded(in.px - float2(0.0, blur / 3.0), c, h, min(l.corner, min(h.x, h.y)));
         float shade = l.shadow * 0.55 * (1.0 - smoothstep(-blur, blur, d)) * l.opacity;
         float under = shade * (1.0 - alpha);
         float out_alpha = alpha + under;
-        return out_alpha > 0.0 ? float4(color.rgb * alpha / out_alpha, out_alpha) : float4(0.0);
+        result = out_alpha > 0.0 ? float4(color.rgb * alpha / out_alpha, out_alpha) : float4(0.0);
     }
-    return float4(color.rgb, alpha);
+    return (l.flags & 2u) ? result.bgra : result;
 }

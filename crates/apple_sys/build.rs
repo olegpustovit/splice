@@ -28,7 +28,6 @@ fn main() {
         "AVFoundation",
         "Carbon",
         "CoreGraphics",
-        "CoreImage",
         "CoreMedia",
         "CoreText",
         "CoreVideo",

@@ -4,16 +4,10 @@ use super::{
     object, platform, text, timeline,
     wire::*,
 };
-use splice_av::{Composition, ExportState};
+use splice_av::{Composition, Export, ExportState};
 use splice_core::history::{Store, StoreError};
-use splice_model::{JobId, Project, SessionId};
-use std::{
-    fs, io,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    thread::{self, JoinHandle},
-    time::Duration,
-};
+use splice_model::{JobId, SessionId};
+use std::{fs, io, path::PathBuf, time::Duration};
 
 enum State {
     Running(f32),
@@ -23,14 +17,17 @@ enum State {
     Failed(StoreError),
 }
 
+/// An export encoded on the owner's main thread (OGPU's Metal handles live there): the MCP server
+/// and the viewer `step` it between requests and frames.
 pub(super) struct Job {
     pub(super) id: JobId,
     pub(super) owner: Option<(String, SessionId)>,
     revision: u64,
     settings: Json,
     path: PathBuf,
-    state: Arc<Mutex<State>>,
-    worker: Option<JoinHandle<()>>,
+    output: Option<Output>,
+    export: Option<Export>,
+    state: State,
 }
 
 /// Exports a snapshot of the current project and waits until the MP4 is published.
@@ -78,30 +75,10 @@ impl Job {
             ("path", Json::String(path.to_string_lossy().into_owned())),
             ("durationFrames", frame(end)),
         ]);
-        let project = project.clone();
-        let package = store.path().to_path_buf();
-        let state = Arc::new(Mutex::new(State::Running(0.0)));
-        let shared = state.clone();
-        let worker = thread::Builder::new()
-            .name(format!("splice-{id}"))
-            .spawn(move || {
-                let result = encode(&project, &package, &output, hevc, &shared);
-                let mut state = shared.lock().expect("export state lock");
-                let next = if matches!(*state, State::Cancelling(_)) {
-                    State::Cancelled
-                } else {
-                    match result {
-                        Ok(true) => match output.publish() {
-                            Ok(()) => State::Done,
-                            Err(error) => State::Failed(error),
-                        },
-                        Ok(false) => State::Cancelled,
-                        Err(error) => State::Failed(error),
-                    }
-                };
-                drop(output);
-                *state = next;
-            })
+        let composition = Composition::prepare(project, store.path())
+            .map_err(|error| super::frames::prepare_error(&error, export_failure))?;
+        let export = composition
+            .start_export(output.staged(), hevc)
             .map_err(|error| export_failure(&error))?;
         Ok(Self {
             id,
@@ -109,8 +86,9 @@ impl Job {
             revision,
             settings,
             path,
-            state,
-            worker: Some(worker),
+            output: Some(output),
+            export: Some(export),
+            state: State::Running(0.0),
         })
     }
 
@@ -123,38 +101,50 @@ impl Job {
     }
 
     pub(super) fn active(&self) -> bool {
-        matches!(
-            *self.state.lock().expect("export state lock"),
-            State::Running(_) | State::Cancelling(_)
-        ) && self.worker_running()
+        matches!(self.state, State::Running(_) | State::Cancelling(_))
     }
 
-    fn worker_running(&self) -> bool {
-        self.worker
-            .as_ref()
-            .is_some_and(|worker| !worker.is_finished())
+    pub(super) fn cancel(&mut self) {
+        if let State::Running(progress) = self.state {
+            self.state = State::Cancelling(progress);
+        }
     }
 
-    pub(super) fn cancel(&self) {
-        let mut state = self.state.lock().expect("export state lock");
-        if let State::Running(progress) = *state {
-            *state = State::Cancelling(progress);
+    /// Encodes for up to `budget`; publishes the file when the export completes.
+    pub(super) fn step(&mut self, budget: Duration) {
+        let Some(export) = self.export.as_mut() else {
+            return;
+        };
+        if matches!(self.state, State::Cancelling(_)) {
+            export.cancel();
+        }
+        self.state = match export.step(budget) {
+            Ok(ExportState::Running(progress)) => match self.state {
+                State::Cancelling(_) => State::Cancelling(progress),
+                _ => State::Running(progress),
+            },
+            Ok(ExportState::Complete) => match self.output.take().map(|output| output.publish()) {
+                Some(Ok(())) => State::Done,
+                Some(Err(error)) => State::Failed(error),
+                None => State::Failed(export_failure(&"The export output was already used.")),
+            },
+            Ok(ExportState::Cancelled) => State::Cancelled,
+            Err(error) => State::Failed(export_failure(&error)),
+        };
+        if !self.active() {
+            // Releases the encoder and its GPU resources here, on the owner's thread.
+            self.export = None;
+            self.output = None;
         }
     }
 
     pub(super) fn status(&self) -> Result<Json, StoreError> {
-        let state = self.state.lock().expect("export state lock");
-        let (name, progress) = match &*state {
-            State::Running(progress) if self.worker_running() => ("running", *progress),
-            State::Cancelling(progress) if self.worker_running() => ("cancelling", *progress),
+        let (name, progress) = match &self.state {
+            State::Running(progress) => ("running", *progress),
+            State::Cancelling(progress) => ("cancelling", *progress),
             State::Done => ("done", 1.0),
             State::Cancelled => ("cancelled", 0.0),
             State::Failed(error) => return Err(failure(error.code, &error.message, &error.fix)),
-            _ => {
-                return Err(export_failure(
-                    &"The encoder thread ended without a result.",
-                ));
-            }
         };
         let mut fields = vec![
             ("jobId", display(&self.id)),
@@ -173,67 +163,21 @@ impl Job {
         Ok(object(fields))
     }
 
+    /// Encodes to the end (the CLI, and owners closing their projects).
     pub(super) fn wait(&mut self) {
-        if let Some(worker) = self.worker.take()
-            && worker.join().is_err()
-        {
-            *self.state.lock().expect("export state lock") =
-                State::Failed(export_failure(&"The encoder thread could not finish."));
+        while self.active() {
+            self.step(Duration::from_millis(100));
         }
     }
 }
 
 impl Drop for Job {
     fn drop(&mut self) {
-        if self.worker.is_some() {
+        if self.active() {
             self.cancel();
             self.wait();
         }
     }
-}
-
-fn encode(
-    project: &Project,
-    package: &Path,
-    output: &Output,
-    hevc: bool,
-    state: &Mutex<State>,
-) -> Result<bool, StoreError> {
-    if cancelling(state) {
-        return Ok(false);
-    }
-    let composition = Composition::prepare(project, package)
-        .map_err(|error| super::frames::prepare_error(&error, export_failure))?;
-    if cancelling(state) {
-        return Ok(false);
-    }
-    let mut job = composition
-        .start_export(output.staged(), hevc)
-        .map_err(|error| export_failure(&error))?;
-    let mut cancelled = false;
-    loop {
-        if !cancelled && cancelling(state) {
-            job.cancel();
-            cancelled = true;
-        }
-        match job.status().map_err(|error| export_failure(&error))? {
-            ExportState::Complete => return Ok(true),
-            ExportState::Cancelled => return Ok(false),
-            ExportState::Running(progress) => {
-                if let State::Running(last) = &mut *state.lock().expect("export state lock") {
-                    *last = last.max(progress);
-                }
-            }
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn cancelling(state: &Mutex<State>) -> bool {
-    matches!(
-        *state.lock().expect("export state lock"),
-        State::Cancelling(_)
-    )
 }
 
 fn destination(store: &Store, path: Option<&str>) -> Result<PathBuf, StoreError> {

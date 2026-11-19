@@ -1,19 +1,38 @@
 #include "platform.h"
 
+#import <CoreVideo/CoreVideo.h>
+
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 
 #include <math.h>
 
+// The color space AVFoundation gives decoded Rec. 709 frames (what the exported MP4 is tagged with).
+static CGColorSpaceRef video_space(void) {
+    static CGColorSpaceRef space;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSDictionary *attachments = @{
+            (id)kCVImageBufferColorPrimariesKey: (id)kCVImageBufferColorPrimaries_ITU_R_709_2,
+            (id)kCVImageBufferTransferFunctionKey: (id)kCVImageBufferTransferFunction_ITU_R_709_2,
+            (id)kCVImageBufferYCbCrMatrixKey: (id)kCVImageBufferYCbCrMatrix_ITU_R_709_2};
+        space = CVImageBufferCreateColorSpaceFromAttachments((__bridge CFDictionaryRef)attachments);
+        if (space == NULL) space = CGColorSpaceCreateWithName(kCGColorSpaceITUR_709);
+    });
+    return space;
+}
+
 void *splice_image_png(const uint8_t *pixels, size_t length, uint32_t width, uint32_t height,
-                       uint32_t max_edge, const uint8_t **data, size_t *size, char **error) {
+                       uint32_t max_edge, bool video, const uint8_t **data, size_t *size, char **error) {
     @autoreleasepool {
         const size_t stride = (size_t)width * 4;
         if (width == 0 || height == 0 || width > 16384 || height > 16384 || length != stride * height) {
             splice_set_error(error, "PNG encoding requires valid RGBA dimensions and a matching buffer.");
             return NULL;
         }
-        CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        // Program frames hold video values (Rec. 709, like the decoded and exported movie); tag
+        // them so color-managed readers see what the MP4 shows.
+        CGColorSpaceRef color = video ? CGColorSpaceRetain(video_space()) : CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, pixels, length, NULL);
         CGBitmapInfo layout = kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast;
         CGImageRef image = provider == NULL ? NULL :

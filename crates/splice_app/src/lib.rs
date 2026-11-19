@@ -393,7 +393,11 @@ fn run_surface(
                 repaint = true;
             }
         }
-        let waiting = program.as_ref().is_some_and(program::Program::wants_frame);
+        // Agent exports encode on this thread between frames (OGPU's handles live here).
+        let exporting = viewer
+            .as_deref_mut()
+            .is_some_and(|viewer| viewer.tick(Duration::from_millis(6)));
+        let waiting = exporting || program.as_ref().is_some_and(program::Program::wants_frame);
         if smoke && Instant::now() >= deadline {
             return Err(viewer_error(
                 &"Timed out presenting the first program frame.",

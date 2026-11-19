@@ -10,6 +10,9 @@ const PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
 const CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
 const SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
+/// Encoding time per turn of the serve loop while an export runs, so requests still get answers.
+#[cfg(target_os = "macos")]
+const EXPORT_SLICE: std::time::Duration = std::time::Duration::from_millis(50);
 
 struct Connection {
     initialized: bool,
@@ -109,7 +112,19 @@ pub(super) fn serve_with_log(
         scope.spawn(move || read_lines(input, &events));
         let mut wire = String::new();
         loop {
-            let line = match incoming.recv() {
+            // Exports encode on this thread (OGPU's Metal handles live here) between requests.
+            #[cfg(target_os = "macos")]
+            let next = if connection.projects.tick_exports(EXPORT_SLICE) {
+                match incoming.recv_timeout(std::time::Duration::ZERO) {
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    other => other.map_err(|_| mpsc::RecvError),
+                }
+            } else {
+                incoming.recv()
+            };
+            #[cfg(not(target_os = "macos"))]
+            let next = incoming.recv();
+            let line = match next {
                 Ok(Event::Line(line)) => line,
                 Ok(Event::End) | Err(_) => return connection.close(),
                 Ok(Event::Failed(error)) => return Err(error),

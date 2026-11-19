@@ -6,7 +6,7 @@ use super::{
     text, timeline,
     wire::*,
 };
-use splice_av::{Composition, encode_png};
+use splice_av::{Composition, encode_frame_png};
 use splice_core::history::{Store, StoreError};
 use splice_model::Frame;
 use std::{
@@ -30,7 +30,8 @@ pub fn grab_frame(store: &Store, at: Frame, file: &Path) -> Result<Json, StoreEr
     composition
         .read_frame(at, &mut pixels)
         .map_err(|error| render_error(&error))?;
-    let png = encode_png(&pixels, composition.size(), 0).map_err(|error| render_error(&error))?;
+    let png =
+        encode_frame_png(&pixels, composition.size(), 0).map_err(|error| render_error(&error))?;
     save(&output, &png)?;
     Ok(extend(
         info(at, composition.size()),
@@ -83,7 +84,7 @@ pub(super) fn render_tool(
         composition
             .read_frame(at, &mut pixels)
             .map_err(|error| render_error(&error))?;
-        let full = encode_png(&pixels, size, 0).map_err(|error| render_error(&error))?;
+        let full = encode_frame_png(&pixels, size, 0).map_err(|error| render_error(&error))?;
         let name = format!("Frame {at}");
         let output = Output::prepare(
             directory_path.join(format!(
@@ -98,7 +99,7 @@ pub(super) fn render_tool(
         let inline = if size[0].max(size[1]) <= INLINE_EDGE {
             full
         } else {
-            encode_png(&pixels, size, INLINE_EDGE).map_err(|error| render_error(&error))?
+            encode_frame_png(&pixels, size, INLINE_EDGE).map_err(|error| render_error(&error))?
         };
         content.push(object(vec![
             ("type", text("image")),

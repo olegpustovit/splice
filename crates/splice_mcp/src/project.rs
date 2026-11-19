@@ -155,6 +155,19 @@ impl Projects {
         entry.into_local().expect("checked local entry").close()
     }
 
+    /// Advances running exports for up to `budget` in total. True while any is running.
+    #[cfg(target_os = "macos")]
+    pub(super) fn tick_exports(&mut self, budget: std::time::Duration) -> bool {
+        let running = self.exports.iter().filter(|job| job.active()).count() as u32;
+        if running == 0 {
+            return false;
+        }
+        for job in self.exports.iter_mut().filter(|job| job.active()) {
+            job.step(budget / running);
+        }
+        self.exports.iter().any(|job| job.active())
+    }
+
     pub(super) fn lookup(&mut self, args: &Json) -> Result<&mut Store, StoreError> {
         self.lookup_id(args.string("projectId")?)
     }

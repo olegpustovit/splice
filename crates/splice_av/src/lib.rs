@@ -2,10 +2,12 @@
 #![cfg(target_os = "macos")]
 #![deny(missing_docs)]
 
+mod export;
 mod gpu;
 mod lower;
 mod takes;
 
+pub use export::{Export, ExportState};
 pub use gpu::GpuProgram;
 
 use apple_sys::composition;
@@ -16,8 +18,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use apple_sys::image::png as encode_png;
-pub use composition::{Export, ExportState, Player};
+pub use apple_sys::image::{png as encode_png, png_video as encode_frame_png};
+pub use composition::Player;
 
 /// A prepared timeline and its native composition for playback and delivery.
 pub struct Composition {
@@ -27,9 +29,65 @@ pub struct Composition {
     end: Frame,
     text: Vec<TimedText>,
     plan: lower::Plan,
+    /// The frame-grab renderer, made on first use.
+    offscreen: std::cell::RefCell<Option<Offscreen>>,
+}
+
+struct Offscreen {
+    /// Keeps the device that owns these resources alive.
+    _device: ogpu_core::backend::Device,
+    queue: ogpu_core::backend::Queue,
+    program: GpuProgram,
+    texture: ogpu_core::backend::Texture,
+    target: ogpu_core::backend::PreparedRenderTarget,
+}
+
+/// A headless OGPU device for frame grabs and export (the viewer shares its window's).
+pub(crate) fn offscreen_device() -> Result<ogpu_core::backend::Device, Error> {
+    let gpu = |error: ogpu_core::error::Error| Error::Input(ogpu_core::error::to_string(&error));
+    ogpu_core::impl_::select(ogpu_metal::impl_::implementation());
+    let driver = ogpu_core::impl_::create_driver().map_err(gpu)?;
+    ogpu_core::backend::create_device(driver).map_err(gpu)
+}
+
+/// An RGBA canvas texture and its prepared render target, cleared to black.
+pub(crate) fn offscreen_target(
+    device: &ogpu_core::backend::Device,
+    [width, height]: [u32; 2],
+) -> Result<
+    (
+        ogpu_core::backend::Texture,
+        ogpu_core::backend::PreparedRenderTarget,
+    ),
+    Error,
+> {
+    use ogpu_core::types::{TextureDescriptor, TextureFormat, TextureUsage};
+    let gpu = |error: ogpu_core::error::Error| Error::Input(ogpu_core::error::to_string(&error));
+    let texture = ogpu_core::backend::create_texture(
+        device,
+        TextureDescriptor {
+            label: Some("Splice canvas".into()),
+            width: i64::from(width),
+            height: i64::from(height),
+            depth: 1,
+            mip_levels: 1,
+            sample_count: 1,
+            format: TextureFormat::Rgba8Unorm,
+            usage: vec![
+                TextureUsage::TextureBinding,
+                TextureUsage::RenderAttachment,
+                TextureUsage::TextureCopySrc,
+            ],
+        },
+    )
+    .map_err(gpu)?;
+    let target =
+        splice_gpu::Compositor::target(device, &texture, [0.0, 0.0, 0.0, 1.0]).map_err(gpu)?;
+    Ok((texture, target))
 }
 
 /// A resolved title or caption shared by the export and viewer.
+#[derive(Clone)]
 pub struct TimedText {
     range: [Frame; 2],
     /// Resolved text, placement, color and opacity ramp.
@@ -91,6 +149,7 @@ impl Composition {
             end,
             text,
             plan,
+            offscreen: std::cell::RefCell::new(None),
         })
     }
 
@@ -121,21 +180,79 @@ impl Composition {
         self.native.player().map_err(Into::into)
     }
 
-    /// Reads one offscreen program frame into a caller-owned RGBA8 buffer.
+    /// Reads one offscreen program frame, text included, into a caller-owned RGBA8 buffer.
     pub fn read_frame(&self, at: Frame, rgba: &mut [u8]) -> Result<(), Error> {
-        self.native.read_frame(at, rgba).map_err(Into::into)
+        self.read(at, rgba, true)
     }
 
     /// Reads the program picture so the viewer can draw text in its own layout.
     pub fn read_picture(&self, at: Frame, rgba: &mut [u8]) -> Result<(), Error> {
-        self.native.read_picture(at, rgba).map_err(Into::into)
+        self.read(at, rgba, false)
     }
 
-    /// Starts encoding the prepared composition and audio mix into a new MP4.
+    fn read(&self, at: Frame, rgba: &mut [u8], text: bool) -> Result<(), Error> {
+        use ogpu_core::backend as b;
+        let gpu =
+            |error: ogpu_core::error::Error| Error::Input(ogpu_core::error::to_string(&error));
+        let [width, height] = self.size.map(|n| n as usize);
+        if !(0..self.end).contains(&at) || rgba.len() != width * height * 4 {
+            return Err(Error::Input(
+                "Provide a frame within the timeline and a matching RGBA buffer.".into(),
+            ));
+        }
+        let mut slot = self.offscreen.borrow_mut();
+        if slot.is_none() {
+            let device = offscreen_device()?;
+            let (texture, target) = offscreen_target(&device, self.size)?;
+            *slot = Some(Offscreen {
+                queue: b::create_queue(&device).map_err(gpu)?,
+                program: GpuProgram::with_plan(&device, &self.plan, &self.text)?,
+                _device: device,
+                texture,
+                target,
+            });
+        }
+        let offscreen = slot.as_mut().expect("offscreen renderer");
+        let device_ptr = offscreen.program.mtl_device();
+        let count = self
+            .native
+            .grab(device_ptr, at, offscreen.program.sources_mut())?;
+        let commands = b::begin_commands(&offscreen.queue).map_err(gpu)?;
+        let native = b::native_commands(&commands)
+            .map_err(gpu)?
+            .mtl_command_buffer;
+        if let Err(error) = offscreen.program.draw(
+            &self.plan,
+            self.size,
+            at,
+            count,
+            native,
+            &commands,
+            &mut offscreen.target,
+            text,
+            false,
+        ) {
+            let _ = b::abandon(&commands);
+            return Err(error);
+        }
+        let receipt = b::commit(&commands).map_err(gpu)?;
+        b::complete_through(&offscreen.queue, receipt.epoch).map_err(gpu)?;
+        b::read_texture_into(&offscreen.texture, (width * 4) as i64, rgba).map_err(gpu)?;
+        Ok(())
+    }
+
+    /// Starts encoding the composition and its audio mix into a new MP4. Advance the returned
+    /// export with `step` on the main thread.
     pub fn start_export(&self, file: &Path, hevc: bool) -> Result<Export, Error> {
-        self.native.start_export(file, hevc).map_err(Into::into)
+        let reader = self.native.reader()?;
+        let writer = composition::Writer::new(&reader, file, hevc)?;
+        Export::start(
+            reader,
+            writer,
+            self.plan.clone(),
+            &self.text,
+            self.size,
+            self.end,
+        )
     }
 }
-
-#[cfg(test)]
-mod tests;

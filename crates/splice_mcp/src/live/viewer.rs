@@ -94,6 +94,12 @@ impl Viewer {
         }
     }
 
+    /// Advances agent exports for up to `budget`; the viewer calls it every frame. True while
+    /// one is running, so the viewer keeps waking.
+    pub fn tick(&mut self, budget: std::time::Duration) -> bool {
+        self.projects.tick_exports(budget)
+    }
+
     /// Finishes requested exports and closes the project writer.
     pub fn close(self) -> io::Result<()> {
         self.projects.close()

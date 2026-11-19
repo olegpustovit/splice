@@ -2,7 +2,6 @@
 
 #import <Accelerate/Accelerate.h>
 #import <AVFoundation/AVFoundation.h>
-#import <CoreImage/CoreImage.h>
 #import <CoreText/CoreText.h>
 #import <CoreVideo/CoreVideo.h>
 #import <ImageIO/ImageIO.h>
@@ -28,16 +27,6 @@ enum { SourceVideo, SourceAudio, SourceStill, SourceColor };
 @implementation SpliceAVTrack
 @end
 
-@interface SpliceAVTextLayer : CALayer
-@property(nonatomic, strong) CIImage *image;
-@property(nonatomic) int32_t firstFrame;
-@property(nonatomic) int32_t endFrame;
-@property(nonatomic) float fromOpacity;
-@property(nonatomic) float toOpacity;
-@end
-
-@implementation SpliceAVTextLayer
-@end
 
 @interface SpliceAVAssembly : NSObject
 @property(nonatomic) CGSize size;
@@ -47,16 +36,14 @@ enum { SourceVideo, SourceAudio, SourceStill, SourceColor };
 @property(nonatomic, strong) AVMutableComposition *asset;
 @property(nonatomic, strong) NSMutableArray<SpliceAVTrack *> *tracks;
 @property(nonatomic, strong) NSMutableArray *instructions;
-@property(nonatomic, strong) NSMutableArray *cursors;
-@property(nonatomic, strong) AVMutableVideoComposition *brokered;
 // Source buffers per frame from brokered requests, newest last (at most 8). Guarded by @synchronized.
 @property(nonatomic, strong) NSMutableArray<NSArray *> *frames;
 @property(nonatomic, strong) NSMutableDictionary<NSURL *, AVURLAsset *> *inputs;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSURL *> *stills;
 @property(nonatomic, strong) NSURL *scratch;
-@property(nonatomic, strong) CALayer *text;
 @property(nonatomic, strong) AVMutableVideoComposition *video;
-@property(nonatomic, strong) AVMutableVideoComposition *offline;
+@property(nonatomic, strong) NSMutableDictionary *surfaces;  // frame grabs' IOSurface views
+@property(nonatomic, strong) NSArray *grabbed;
 @property(nonatomic, strong) AVMutableAudioMix *audio;
 @property(nonatomic, strong) AVAssetImageGenerator *generator;
 @end
@@ -69,10 +56,6 @@ enum { SourceVideo, SourceAudio, SourceStill, SourceColor };
 }
 @end
 
-@interface SpliceAVExport : NSObject
-@property(nonatomic, strong) SpliceAVAssembly *assembly;
-@property(nonatomic, strong) AVAssetExportSession *session;
-@end
 
 @interface SpliceAVPlayer : NSObject
 @property(nonatomic, strong) SpliceAVAssembly *assembly;
@@ -98,15 +81,6 @@ enum { SourceVideo, SourceAudio, SourceStill, SourceColor };
 static void fail(char **error, NSError *native, const char *fallback) {
     const char *description = native.localizedDescription.UTF8String;
     splice_set_error(error, description != NULL ? description : fallback);
-}
-
-static CGRect rect(const double values[4]) {
-    return CGRectMake(values[0], values[1], values[2], values[3]);
-}
-
-static bool valid_rect(const double values[4]) {
-    return isfinite(values[0]) && isfinite(values[1]) &&
-           isfinite(values[2]) && isfinite(values[3]) && values[2] > 0 && values[3] > 0;
 }
 
 static bool positive(CMTime time) {
@@ -419,19 +393,9 @@ static SpliceAVTrack *track_at(SpliceAVAssembly *assembly, int32_t index) {
     return index >= 0 && (NSUInteger)index < assembly.tracks.count ? assembly.tracks[index] : nil;
 }
 
-// ── Compositor (PLAN.md D1): Core Image on Metal, driven by per-interval layer ramps ──
-// ponytail: interim macOS renderer. The plan (ramps, zoom keyframes, cursor tables) is portable Rust;
-// the renderer moves to OGPU (shared device and textures with PXUI, IOSurface/dmabuf import) in T12.7.
-// Upgrade trigger: T12.7, or the 4K viewer budget (8 ms) in window_program_4k.
-
-@interface SpliceCursorTable : NSObject
-@property(nonatomic, strong) NSData *samples;
-@property(nonatomic, strong) NSArray<CIImage *> *images;
-@property(nonatomic, strong) NSData *hotspots;  // double[3] per image: hot x, hot y, pixels per point
-@property(nonatomic) double points;
-@end
-@implementation SpliceCursorTable
-@end
+// ── Broker compositor (PLAN.md D1, T12.7) ──
+// AVFoundation decodes, times and mixes; OGPU (splice_gpu) draws every pixel. This compositor only
+// pins each frame's decoded buffers for Rust to import. Its output buffer carries just the timing.
 
 @interface SpliceInstruction : NSObject <AVVideoCompositionInstruction>
 @property(nonatomic) CMTimeRange timeRange;
@@ -439,73 +403,28 @@ static SpliceAVTrack *track_at(SpliceAVAssembly *assembly, int32_t index) {
 @property(nonatomic) BOOL containsTweening;
 @property(nonatomic, strong, nullable) NSArray<NSValue *> *requiredSourceTrackIDs;
 @property(nonatomic) CMPersistentTrackID passthroughTrackID;
-@property(nonatomic, strong) NSData *layers;
 @property(nonatomic, strong) NSArray<SpliceAVTrack *> *sources;  // one per layer
-@property(nonatomic, strong) NSArray<SpliceCursorTable *> *cursors;
-// Titles, captions and keystroke chips, drawn only by the offline (export) composition: the viewer
-// draws them in PXUI and frame grabs overlay them in splice_av_read_frame.
-@property(nonatomic, strong, nullable) NSArray<SpliceAVTextLayer *> *texts;
-// The player's instructions only collect source frames for the OGPU compositor (T12.7).
-@property(nonatomic, weak) SpliceAVAssembly *broker;
-@property(nonatomic) CGSize canvas;
+@property(nonatomic, weak) SpliceAVAssembly *assembly;
 @property(nonatomic) int32_t fps;
 @end
 @implementation SpliceInstruction
 @end
 
-static double lerp(double a, double b, double t) { return a + (b - a) * t; }
-
-// Converts a top-left canvas rectangle to Core Image's bottom-left coordinates.
-static CGRect flip(CGRect r, double height) {
-    return CGRectMake(r.origin.x, height - r.origin.y - r.size.height, r.size.width, r.size.height);
-}
-
-static const SpliceAVCursorSample *cursor_at(SpliceCursorTable *table, double t, double out[2]) {
-    const SpliceAVCursorSample *samples = table.samples.bytes;
-    size_t count = table.samples.length / sizeof(SpliceAVCursorSample), lo = 0, hi = count;
-    while (lo < hi) {
-        size_t mid = (lo + hi) / 2;
-        if (samples[mid].t <= t) lo = mid + 1; else hi = mid;
-    }
-    if (lo == 0) return NULL;
-    const SpliceAVCursorSample *a = &samples[lo - 1];
-    out[0] = a->x, out[1] = a->y;
-    // Interpolate across short gaps between position samples, so the cursor glides.
-    if (lo < count && samples[lo].t - a->t < 0.25 && samples[lo].t > a->t) {
-        double k = (t - a->t) / (samples[lo].t - a->t);
-        out[0] = lerp(a->x, samples[lo].x, k), out[1] = lerp(a->y, samples[lo].y, k);
-    }
-    return a;
+static NSDictionary *buffer_attributes(void) {
+    return @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+             (id)kCVPixelBufferIOSurfacePropertiesKey: @{}};
 }
 
 @interface SpliceCompositor : NSObject <AVVideoCompositing>
 @end
 
-@implementation SpliceCompositor {
-    CIContext *_context;
-    CGColorSpaceRef _space;
-}
-
-- (instancetype)init {
-    if ((self = [super init])) {
-        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-        NSDictionary *options = @{kCIContextWorkingColorSpace: [NSNull null], kCIContextOutputColorSpace: [NSNull null],
-                                  kCIContextCacheIntermediates: @NO};
-        _context = device != nil ? [CIContext contextWithMTLDevice:device options:options]
-                                 : [CIContext contextWithOptions:options];
-    }
-    return self;
-}
-
+@implementation SpliceCompositor
 - (NSDictionary *)sourcePixelBufferAttributes {
-    return @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
-             (id)kCVPixelBufferMetalCompatibilityKey: @YES};
+    return buffer_attributes();
 }
 
 - (NSDictionary *)requiredPixelBufferAttributesForRenderContext {
-    // CPU-memory output: Core Image reads back on the compositor thread, so the viewer's copy on
-    // the UI thread reads cached memory (a GPU-written IOSurface tripled its 4K copy time).
-    return @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
+    return buffer_attributes();
 }
 
 - (void)renderContextChanged:(AVVideoCompositionRenderContext *)context {
@@ -518,232 +437,87 @@ static const SpliceAVCursorSample *cursor_at(SpliceCursorTable *table, double t,
 - (void)startVideoCompositionRequest:(AVAsynchronousVideoCompositionRequest *)request {
     @autoreleasepool {
         SpliceInstruction *instruction = (SpliceInstruction *)request.videoCompositionInstruction;
+        SpliceAVAssembly *assembly = instruction.assembly;
         CVPixelBufferRef output = [request.renderContext newPixelBuffer];
-        if (output == NULL) {
+        if (output == NULL || assembly == nil) {
+            if (output != NULL) CVPixelBufferRelease(output);
             [request finishWithError:[NSError errorWithDomain:@"Splice" code:1 userInfo:nil]];
             return;
         }
-        SpliceAVAssembly *broker = instruction.broker;
-        if (broker != nil) {
-            // Keep the sources for the viewer; the output buffer only carries the timing.
-            size_t count = instruction.layers.length / sizeof(SpliceAVLayer);
-            NSMutableArray *entry = [NSMutableArray arrayWithCapacity:count + 1];
-            [entry addObject:@((int32_t)llround(CMTimeGetSeconds(request.compositionTime) * instruction.fps))];
-            for (size_t index = 0; index < count; index++) {
-                SpliceAVTrack *source = instruction.sources[index];
-                CVPixelBufferRef pixels = source.fill ? NULL : [request sourceFrameByTrackID:source.track.trackID];
-                [entry addObject:pixels != NULL ? (__bridge id)pixels : (id)[NSNull null]];
-            }
-            @synchronized (broker) {
-                if (broker.frames == nil) broker.frames = [NSMutableArray array];
-                [broker.frames addObject:entry];
-                while (broker.frames.count > 8) [broker.frames removeObjectAtIndex:0];
-            }
-            [request finishWithComposedVideoFrame:output];
-            CVPixelBufferRelease(output);
-            return;
+        NSMutableArray *entry = [NSMutableArray arrayWithCapacity:instruction.sources.count + 1];
+        [entry addObject:@((int32_t)llround(CMTimeGetSeconds(request.compositionTime) * instruction.fps))];
+        for (SpliceAVTrack *source in instruction.sources) {
+            CVPixelBufferRef pixels = source.fill ? NULL : [request sourceFrameByTrackID:source.track.trackID];
+            [entry addObject:pixels != NULL ? (__bridge id)pixels : (id)[NSNull null]];
         }
-        CGSize canvas = instruction.canvas;
-        CGRect bounds = CGRectMake(0, 0, canvas.width, canvas.height);
-        double span = CMTimeGetSeconds(instruction.timeRange.duration);
-        double linear = span > 0 ? CMTimeGetSeconds(CMTimeSubtract(request.compositionTime,
-                                                                   instruction.timeRange.start)) / span : 0;
-        linear = fmin(fmax(linear, 0), 1);
-        CIImage *frame = [[CIImage imageWithColor:[CIColor blackColor]] imageByCroppingToRect:bounds];
-        const SpliceAVLayer *layers = instruction.layers.bytes;
-        size_t count = instruction.layers.length / sizeof(SpliceAVLayer);
-        for (size_t index = 0; index < count; index++) {
-            const SpliceAVLayer *layer = &layers[index];
-            SpliceAVTrack *source = instruction.sources[index];
-            double t = (layer->flags & SpliceAVEase) ? linear * linear * (3 - 2 * linear) : linear;
-            CIImage *image;
-            if (source.fill) {
-                // Same diagonal as still_buffer: colorA top-left to colorB bottom-right.
-                CGFloat a[4], b[4];
-                rgb(source.colorA, a), rgb(source.colorB, b);
-                CGRect area = flip(rect(layer->destination), canvas.height);
-                CIColor *from = [CIColor colorWithRed:a[0] green:a[1] blue:a[2]];
-                CIColor *to = [CIColor colorWithRed:b[0] green:b[1] blue:b[2]];
-                image = source.colorA == source.colorB ? [CIImage imageWithColor:from]
-                    : [CIFilter filterWithName:@"CILinearGradient" withInputParameters:@{
-                        @"inputPoint0": [CIVector vectorWithX:CGRectGetMinX(area) Y:CGRectGetMaxY(area)],
-                        @"inputPoint1": [CIVector vectorWithX:CGRectGetMaxX(area) Y:CGRectGetMinY(area)],
-                        @"inputColor0": from, @"inputColor1": to}].outputImage;
-                image = [image imageByCroppingToRect:area];
-                double opacity = lerp(layer->opacity[0], layer->opacity[1], linear);
-                if (opacity < 1) {
-                    image = [image imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
-                        @"inputRVector": [CIVector vectorWithX:opacity Y:0 Z:0 W:0],
-                        @"inputGVector": [CIVector vectorWithX:0 Y:opacity Z:0 W:0],
-                        @"inputBVector": [CIVector vectorWithX:0 Y:0 Z:opacity W:0],
-                        @"inputAVector": [CIVector vectorWithX:0 Y:0 Z:0 W:opacity]}];
-                }
-                frame = [image imageByCompositingOverImage:frame];
-                continue;
-            }
-            CVPixelBufferRef pixels = [request sourceFrameByTrackID:source.track.trackID];
-            if (pixels == NULL) continue;
-            image = [CIImage imageWithCVPixelBuffer:pixels];
-            // Orient in top-left space, then return to Core Image's bottom-left space.
-            CGSize natural = image.extent.size;
-            CGRect oriented = CGRectApplyAffineTransform(CGRectMake(0, 0, natural.width, natural.height), source.orientation);
-            CGAffineTransform to_top = CGAffineTransformMake(1, 0, 0, -1, 0, natural.height);
-            CGAffineTransform orient = CGAffineTransformConcat(source.orientation,
-                CGAffineTransformMakeTranslation(-oriented.origin.x, -oriented.origin.y));
-            CGAffineTransform to_bottom = CGAffineTransformMake(1, 0, 0, -1, 0, oriented.size.height);
-            image = [image imageByApplyingTransform:CGAffineTransformConcat(CGAffineTransformConcat(to_top, orient), to_bottom)];
-            double W = oriented.size.width, H = oriented.size.height;
-            CGRect crop = CGRectMake(layer->crop[0] * W, layer->crop[1] * H, layer->crop[2] * W, layer->crop[3] * H);
-            CGRect dest = rect(layer->destination);
-            if (layer->center_crop != 0) {
-                double ratio = dest.size.width / dest.size.height;
-                double width = fmin(crop.size.width, crop.size.height * ratio);
-                double height = fmin(crop.size.height, crop.size.width / ratio);
-                crop = CGRectInset(crop, (crop.size.width - width) / 2, (crop.size.height - height) / 2);
-            }
-            double scale = lerp(layer->scale[0], layer->scale[1], t);
-            double fx = lerp(layer->focus[0], layer->focus[2], t), fy = lerp(layer->focus[1], layer->focus[3], t);
-            CGRect placed = CGRectMake(fx + (dest.origin.x - fx) * scale, fy + (dest.origin.y - fy) * scale,
-                                       dest.size.width * scale, dest.size.height * scale);
-            CGRect crop_ci = flip(crop, H), placed_ci = flip(placed, canvas.height);
-            image = [image imageByCroppingToRect:crop_ci];
-            CGAffineTransform fit = CGAffineTransformMakeTranslation(-crop_ci.origin.x, -crop_ci.origin.y);
-            fit = CGAffineTransformConcat(fit, CGAffineTransformMakeScale(placed.size.width / crop.size.width,
-                                                                          placed.size.height / crop.size.height));
-            fit = CGAffineTransformConcat(fit, CGAffineTransformMakeTranslation(placed_ci.origin.x, placed_ci.origin.y));
-            image = [[image imageByApplyingTransform:fit] imageByCroppingToRect:placed_ci];
-            CIImage *mask = nil;
-            double corner = layer->corner * scale;
-            if (corner > 0.5 || layer->shadow > 0) {
-                mask = [CIFilter filterWithName:@"CIRoundedRectangleGenerator" withInputParameters:@{
-                    @"inputExtent": [CIVector vectorWithCGRect:placed_ci], @"inputRadius": @(fmax(corner, 0)),
-                    @"inputColor": [CIColor whiteColor]}].outputImage;
-                if (corner > 0.5) {
-                    image = [image imageByApplyingFilter:@"CISourceInCompositing"
-                                     withInputParameters:@{kCIInputBackgroundImageKey: mask}];
-                }
-            }
-            // Cursor and click rings ride on the picture, so zoom and crop move them with it.
-            SpliceCursorTable *table = layer->cursor >= 0 && (NSUInteger)layer->cursor < instruction.cursors.count
-                                           ? instruction.cursors[layer->cursor] : nil;
-            if (table != nil) {
-                double st = lerp(layer->source[0], layer->source[1], linear), at[2];
-                double per_px = placed.size.width / crop.size.width;  // canvas pixels per source pixel
-                double px_per_point = W / table.points;
-                const SpliceAVCursorSample *samples = table.samples.bytes;
-                size_t total = table.samples.length / sizeof(SpliceAVCursorSample);
-                CGRect clip = placed_ci;
-                if (layer->flags & SpliceAVClickRings) {
-                    for (size_t i = 0; i < total; i++) {
-                        double age = st - samples[i].t;
-                        if (!samples[i].click || age < 0 || age > 0.45) continue;
-                        double cx = placed.origin.x + (samples[i].x * W - crop.origin.x) * per_px;
-                        double cy = placed.origin.y + (samples[i].y * H - crop.origin.y) * per_px;
-                        double radius = (10 + 34 * age / 0.45) * px_per_point * per_px * layer->cursor_scale;
-                        CIImage *ring = [CIFilter filterWithName:@"CIRadialGradient" withInputParameters:@{
-                            @"inputCenter": [CIVector vectorWithX:cx Y:canvas.height - cy],
-                            @"inputRadius0": @(radius * 0.55), @"inputRadius1": @(radius),
-                            @"inputColor0": [CIColor colorWithRed:1 green:1 blue:1 alpha:0.6 * (1 - age / 0.45)],
-                            @"inputColor1": [CIColor colorWithRed:1 green:1 blue:1 alpha:0]}].outputImage;
-                        image = [[ring imageByCroppingToRect:clip] imageByCompositingOverImage:image];
-                    }
-                }
-                const SpliceAVCursorSample *sample = cursor_at(table, st, at);
-                if (sample != NULL && sample->image >= 0 && (NSUInteger)sample->image < table.images.count) {
-                    CIImage *cursor = table.images[sample->image];
-                    const double *hot = &((const double *)table.hotspots.bytes)[sample->image * 3];
-                    double k = layer->cursor_scale * px_per_point * per_px / hot[2];  // canvas px per PNG px
-                    double x = placed.origin.x + (at[0] * W - crop.origin.x) * per_px - hot[0] * k;
-                    double y = placed.origin.y + (at[1] * H - crop.origin.y) * per_px - hot[1] * k;
-                    CGSize size = cursor.extent.size;
-                    CGAffineTransform move = CGAffineTransformMakeScale(k, k);
-                    move = CGAffineTransformConcat(move, CGAffineTransformMakeTranslation(x, canvas.height - y - size.height * k));
-                    image = [[[cursor imageByApplyingTransform:move] imageByCroppingToRect:clip] imageByCompositingOverImage:image];
-                }
-            }
-            double opacity = lerp(layer->opacity[0], layer->opacity[1], linear);
-            if (layer->shadow > 0 && mask != nil) {
-                double blur = 0.03 * fmin(placed.size.width, placed.size.height);
-                CIImage *shadow = [mask imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
-                    @"inputRVector": [CIVector vectorWithX:0 Y:0 Z:0 W:0], @"inputGVector": [CIVector vectorWithX:0 Y:0 Z:0 W:0],
-                    @"inputBVector": [CIVector vectorWithX:0 Y:0 Z:0 W:0],
-                    @"inputAVector": [CIVector vectorWithX:0 Y:0 Z:0 W:0.55 * layer->shadow]}];
-                shadow = [[shadow imageByApplyingGaussianBlurWithSigma:blur / 2]
-                    imageByApplyingTransform:CGAffineTransformMakeTranslation(0, -blur / 3)];
-                image = [image imageByCompositingOverImage:[shadow imageByCroppingToRect:bounds]];
-            }
-            if (opacity < 1) {
-                image = [image imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
-                    @"inputRVector": [CIVector vectorWithX:opacity Y:0 Z:0 W:0],
-                    @"inputGVector": [CIVector vectorWithX:0 Y:opacity Z:0 W:0],
-                    @"inputBVector": [CIVector vectorWithX:0 Y:0 Z:opacity W:0],
-                    @"inputAVector": [CIVector vectorWithX:0 Y:0 Z:0 W:opacity]}];
-            }
-            frame = [image imageByCompositingOverImage:frame];
+        @synchronized (assembly) {
+            if (assembly.frames == nil) assembly.frames = [NSMutableArray array];
+            [assembly.frames addObject:entry];
+            // Bounded: decoders only lend a few buffers, and each entry holds some.
+            while (assembly.frames.count > 12) [assembly.frames removeObjectAtIndex:0];
         }
-        int32_t at = (int32_t)llround(CMTimeGetSeconds(request.compositionTime) * instruction.fps);
-        for (SpliceAVTextLayer *text in instruction.texts) {
-            if (at < text.firstFrame || at >= text.endFrame) continue;
-            if (text.image == nil) text.image = [CIImage imageWithCGImage:(__bridge CGImageRef)text.contents];
-            double progress = (double)(at - text.firstFrame) / (text.endFrame - text.firstFrame);
-            double alpha = text.fromOpacity + (text.toOpacity - text.fromOpacity) * progress;
-            CIImage *glyphs = [text.image imageByApplyingTransform:
-                CGAffineTransformMakeTranslation(text.frame.origin.x, text.frame.origin.y)];
-            if (alpha < 1) {
-                glyphs = [glyphs imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
-                    @"inputRVector": [CIVector vectorWithX:alpha Y:0 Z:0 W:0],
-                    @"inputGVector": [CIVector vectorWithX:0 Y:alpha Z:0 W:0],
-                    @"inputBVector": [CIVector vectorWithX:0 Y:0 Z:alpha W:0],
-                    @"inputAVector": [CIVector vectorWithX:0 Y:0 Z:0 W:alpha]}];
-            }
-            frame = [glyphs imageByCompositingOverImage:frame];
-        }
-        [_context render:[frame imageByCroppingToRect:bounds] toCVPixelBuffer:output bounds:bounds colorSpace:nil];
         [request finishWithComposedVideoFrame:output];
         CVPixelBufferRelease(output);
     }
 }
 @end
 
-int32_t splice_av_cursor(void *raw, const SpliceAVCursorSample *samples, size_t sample_count,
-                         const SpliceAVCursorImage *images, size_t image_count, double points, char **error) {
-    @autoreleasepool {
-        SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
-        if (!(points > 0) || !isfinite(points) || (sample_count > 0 && samples == NULL) ||
-            (image_count > 0 && images == NULL)) {
-            splice_set_error(error, "Invalid cursor track.");
+// Takes the pinned sources for `frame`, dropping it and everything before it.
+static NSArray *take_frame(SpliceAVAssembly *assembly, int32_t frame) {
+    @synchronized (assembly) {
+        NSArray *found = nil;
+        NSMutableIndexSet *done = [NSMutableIndexSet indexSet];
+        for (NSUInteger index = 0; index < assembly.frames.count; index++) {
+            int32_t at = [assembly.frames[index][0] intValue];
+            if (at == frame) found = assembly.frames[index];
+            if (at <= frame) [done addIndex:index];
+        }
+        [assembly.frames removeObjectsAtIndexes:done];
+        return found;
+    }
+}
+
+// RGBA8 views of the entry's decoded BGRA IOSurfaces on `device`, cached per surface. The bytes are
+// unchanged: the compositor swaps red and blue back when it samples (splice_gpu::Layer::BGRA).
+static int64_t fill_sources(NSArray *entry, id<MTLDevice> device, NSMutableDictionary *surfaces,
+                            SpliceAVFrameSource *sources, size_t capacity, char **error) {
+    if (entry.count - 1 > capacity) {
+        splice_set_error(error, "A frame has more layers than the compositor accepts.");
+        return -1;
+    }
+    for (NSUInteger index = 1; index < entry.count; index++) {
+        SpliceAVFrameSource *out = &sources[index - 1];
+        *out = (SpliceAVFrameSource){0};
+        if (entry[index] == [NSNull null]) continue;
+        CVPixelBufferRef pixels = (__bridge CVPixelBufferRef)entry[index];
+        IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixels);
+        if (surface == NULL || CVPixelBufferGetPixelFormatType(pixels) != kCVPixelFormatType_32BGRA) {
+            splice_set_error(error, "A decoded frame is not an IOSurface-backed BGRA buffer.");
             return -1;
         }
-        NSMutableArray<CIImage *> *loaded = [NSMutableArray arrayWithCapacity:image_count];
-        NSMutableData *hotspots = [NSMutableData dataWithLength:image_count * 3 * sizeof(double)];
-        double *hot = hotspots.mutableBytes;
-        for (size_t index = 0; index < image_count; index++) {
-            NSURL *url = [NSURL fileURLWithFileSystemRepresentation:images[index].path isDirectory:NO relativeToURL:nil];
-            CIImage *image = url != nil ? [CIImage imageWithContentsOfURL:url] : nil;
-            if (image == nil || !(images[index].scale > 0)) {
-                splice_set_error(error, "A cursor image could not be loaded.");
+        NSNumber *key = @(IOSurfaceGetID(surface));
+        id<MTLTexture> texture = surfaces[key];
+        size_t width = CVPixelBufferGetWidth(pixels), height = CVPixelBufferGetHeight(pixels);
+        if (texture == nil || texture.width != width || texture.height != height || texture.device != device) {
+            // Decoder pools recycle buffers; drop the cache if a pool keeps turning over.
+            if (surfaces.count >= 64) [surfaces removeAllObjects];
+            MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+                texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:width height:height mipmapped:NO];
+            descriptor.usage = MTLTextureUsageShaderRead;
+            descriptor.storageMode = MTLStorageModeShared;
+            texture = [device newTextureWithDescriptor:descriptor iosurface:surface plane:0];
+            if (texture == nil) {
+                splice_set_error(error, "Metal could not wrap a decoded frame.");
                 return -1;
             }
-            [loaded addObject:image];
-            hot[index * 3] = images[index].hot[0], hot[index * 3 + 1] = images[index].hot[1];
-            hot[index * 3 + 2] = images[index].scale;
+            surfaces[key] = texture;
         }
-        for (size_t index = 0; index < sample_count; index++) {
-            if (!isfinite(samples[index].t) || !isfinite(samples[index].x) || !isfinite(samples[index].y) ||
-                samples[index].image >= (int32_t)image_count || (index > 0 && samples[index].t < samples[index - 1].t)) {
-                splice_set_error(error, "Cursor samples must be finite, ordered and reference loaded images.");
-                return -1;
-            }
-        }
-        SpliceCursorTable *table = [SpliceCursorTable new];
-        table.samples = [NSData dataWithBytes:samples length:sample_count * sizeof(SpliceAVCursorSample)];
-        table.images = loaded;
-        table.hotspots = hotspots;
-        table.points = points;
-        if (assembly.cursors == nil) assembly.cursors = [NSMutableArray array];
-        [assembly.cursors addObject:table];
-        return (int32_t)assembly.cursors.count - 1;
+        out->texture = (__bridge void *)texture;
+        out->surface = (uint32_t)key.unsignedIntValue;
+        out->width = (uint32_t)width;
+        out->height = (uint32_t)height;
     }
+    return (int64_t)entry.count - 1;
 }
 
 bool splice_av_range(void *raw, int32_t from, int32_t to,
@@ -760,19 +534,9 @@ bool splice_av_range(void *raw, int32_t from, int32_t to,
         NSMutableArray<SpliceAVTrack *> *sources = [NSMutableArray arrayWithCapacity:layer_count];
         NSMutableArray<NSValue *> *ids = [NSMutableArray arrayWithCapacity:layer_count];
         for (size_t index = 0; index < layer_count; index++) {
-            const SpliceAVLayer *layer = &layers[index];
-            SpliceAVTrack *source = track_at(assembly, layer->track);
-            bool finite = true;
-            for (size_t k = 0; k < 4; k++) finite = finite && isfinite(layer->focus[k]);
-            if (source == nil || source.mix != nil || !valid_rect(layer->crop) || !valid_rect(layer->destination) ||
-                !isfinite(layer->scale[0]) || !isfinite(layer->scale[1]) || !(layer->scale[0] > 0 && layer->scale[1] > 0) ||
-                !finite || !isfinite(layer->source[0]) || !isfinite(layer->source[1]) ||
-                !(layer->corner >= 0 && isfinite(layer->corner)) || !(layer->shadow >= 0 && layer->shadow <= 1) ||
-                !(layer->cursor_scale > 0 && isfinite(layer->cursor_scale)) ||
-                (layer->cursor >= 0 && (NSUInteger)layer->cursor >= assembly.cursors.count) ||
-                !(layer->opacity[0] >= 0 && layer->opacity[0] <= 1 &&
-                  layer->opacity[1] >= 0 && layer->opacity[1] <= 1)) {
-                splice_set_error(error, "Invalid picture layer in a composition instruction.");
+            SpliceAVTrack *source = track_at(assembly, layers[index].track);
+            if (source == nil || source.mix != nil) {
+                splice_set_error(error, "A picture layer names a missing or audio track.");
                 return false;
             }
             [sources addObject:source];
@@ -791,14 +555,11 @@ bool splice_av_range(void *raw, int32_t from, int32_t to,
         }
         SpliceInstruction *instruction = [SpliceInstruction new];
         instruction.timeRange = interval;
-        instruction.enablePostProcessing = NO;
         instruction.containsTweening = YES;
         instruction.requiredSourceTrackIDs = ids;
         instruction.passthroughTrackID = kCMPersistentTrackID_Invalid;
-        instruction.layers = [NSData dataWithBytes:layers length:layer_count * sizeof(SpliceAVLayer)];
         instruction.sources = sources;
-        instruction.cursors = assembly.cursors ?: @[];
-        instruction.canvas = assembly.size;
+        instruction.assembly = assembly;
         instruction.fps = assembly.fps;
         [assembly.instructions addObject:instruction];
         assembly.covered = to;
@@ -840,36 +601,35 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, uin
     return image;
 }
 
-bool splice_av_text(void *raw, int32_t from, int32_t to, const SpliceAVText *spec, char **error) {
+uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, double font, uint32_t color,
+                          char **error) {
     @autoreleasepool {
-        SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
-        NSString *text = [NSString stringWithUTF8String:spec->text];
-        if (text == nil || from < 0 || to <= from || to > assembly.end ||
-            !valid_rect(spec->bounds) || !isfinite(spec->font) || spec->font <= 0) {
-            splice_set_error(error, "Invalid offline title or caption interval.");
-            return false;
+        NSString *string = [NSString stringWithUTF8String:text];
+        if (string == nil || width == 0 || height == 0 || width > 16384 || height > 16384 ||
+            !isfinite(font) || font <= 0) {
+            splice_set_error(error, "Invalid text raster.");
+            return NULL;
         }
-        if (assembly.text == nil) {
-            assembly.text = [CALayer layer];
-            assembly.text.frame = CGRectMake(0, 0, assembly.size.width, assembly.size.height);
+        CGImageRef image = text_bitmap(string, CGSizeMake(width, height), font, color);
+        uint8_t *pixels = image == NULL ? NULL : calloc((size_t)width * height, 4);
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGContextRef context = pixels == NULL ? NULL : CGBitmapContextCreate(pixels, width, height, 8, width * 4,
+            space, kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+        CGColorSpaceRelease(space);
+        if (context == NULL) {
+            free(pixels);
+            if (image != NULL) CGImageRelease(image);
+            splice_set_error(error, "Could not rasterize the text.");
+            return NULL;
         }
-        SpliceAVTextLayer *layer = [SpliceAVTextLayer layer];
-        layer.firstFrame = from;
-        layer.endFrame = to;
-        layer.fromOpacity = spec->opacity[0];
-        layer.toOpacity = spec->opacity[1];
-        CGRect bounds = rect(spec->bounds);
-        bounds.origin.y = assembly.size.height - bounds.origin.y - bounds.size.height;
-        layer.frame = bounds;
-        CGImageRef image = text_bitmap(text, bounds.size, spec->font, spec->color);
-        if (image == NULL) {
-            splice_set_error(error, "Could not rasterize the title or caption.");
-            return false;
-        }
-        layer.contents = (__bridge id)image;
+        CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+        CGContextRelease(context);
         CGImageRelease(image);
-        [assembly.text addSublayer:layer];
-        return true;
+        for (size_t i = 0; i < (size_t)width * height * 4; i += 4) {
+            uint8_t a = pixels[i + 3];
+            if (a != 0 && a != 255) for (int c = 0; c < 3; c++) pixels[i + c] = (uint8_t)MIN(255, pixels[i + c] * 255 / a);
+        }
+        return pixels;
     }
 }
 
@@ -886,46 +646,6 @@ bool splice_av_finish(void *raw, char **error) {
         video.frameDuration = time_for(assembly, 1);
         video.instructions = assembly.instructions;
         assembly.video = video;
-        NSMutableArray *brokered = [NSMutableArray arrayWithCapacity:assembly.instructions.count];
-        for (SpliceInstruction *source in assembly.instructions) {
-            SpliceInstruction *copy = [SpliceInstruction new];
-            copy.timeRange = source.timeRange;
-            copy.containsTweening = YES;
-            copy.requiredSourceTrackIDs = source.requiredSourceTrackIDs;
-            copy.passthroughTrackID = kCMPersistentTrackID_Invalid;
-            copy.layers = source.layers;
-            copy.sources = source.sources;
-            copy.cursors = source.cursors;
-            copy.canvas = source.canvas;
-            copy.fps = source.fps;
-            copy.broker = assembly;
-            [brokered addObject:copy];
-        }
-        assembly.brokered = [video mutableCopy];
-        assembly.brokered.instructions = brokered;
-        // Export draws text in the compositor; the viewer draws the same evaluator text in PXUI.
-        if (assembly.text != nil) {
-            NSMutableArray *offline = [NSMutableArray arrayWithCapacity:assembly.instructions.count];
-            for (SpliceInstruction *source in assembly.instructions) {
-                SpliceInstruction *copy = [SpliceInstruction new];
-                copy.timeRange = source.timeRange;
-                copy.enablePostProcessing = source.enablePostProcessing;
-                copy.containsTweening = source.containsTweening;
-                copy.requiredSourceTrackIDs = source.requiredSourceTrackIDs;
-                copy.passthroughTrackID = source.passthroughTrackID;
-                copy.layers = source.layers;
-                copy.sources = source.sources;
-                copy.cursors = source.cursors;
-                copy.canvas = source.canvas;
-                copy.fps = source.fps;
-                copy.texts = (NSArray<SpliceAVTextLayer *> *)assembly.text.sublayers;
-                [offline addObject:copy];
-            }
-            assembly.offline = [video mutableCopy];
-            assembly.offline.instructions = offline;
-        } else {
-            assembly.offline = video;
-        }
         NSMutableArray *audio = [NSMutableArray array];
         for (SpliceAVTrack *entry in assembly.tracks) {
             if (entry.mix != nil) [audio addObject:entry.mix];
@@ -936,51 +656,39 @@ bool splice_av_finish(void *raw, char **error) {
     }
 }
 
-bool splice_av_read_frame(void *raw, int32_t frame, uint8_t *rgba, size_t length,
-                         bool draw_text, char **error) {
+int32_t splice_av_grab(void *raw, void *device_raw, int32_t frame, SpliceAVFrameSource *sources, size_t capacity,
+                       size_t *count, char **error) {
     @autoreleasepool {
         SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
-        size_t width = (size_t)assembly.size.width, height = (size_t)assembly.size.height;
-        if (frame < 0 || frame >= assembly.end || length != width * height * 4) {
-            splice_set_error(error, "Provide a frame within the timeline and a matching RGBA buffer.");
-            return false;
+        id<MTLDevice> device = (__bridge id<MTLDevice>)device_raw;
+        if (frame < 0 || frame >= assembly.end || device == nil || sources == NULL || count == NULL) {
+            splice_set_error(error, "Provide a frame within the timeline and a device.");
+            return -1;
         }
         if (assembly.generator == nil) {
             assembly.generator = [AVAssetImageGenerator assetImageGeneratorWithAsset:assembly.asset];
             assembly.generator.videoComposition = assembly.video;
             assembly.generator.requestedTimeToleranceBefore = kCMTimeZero;
             assembly.generator.requestedTimeToleranceAfter = kCMTimeZero;
+            assembly.surfaces = [NSMutableDictionary dictionary];
         }
         NSError *failure = nil;
         CGImageRef image = [assembly.generator copyCGImageAtTime:time_for(assembly, frame) actualTime:NULL error:&failure];
         if (image == NULL) {
             fail(error, failure, "AVFoundation could not read the requested frame.");
-            return false;
+            return -1;
         }
-        CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-        CGContextRef context = CGBitmapContextCreate(rgba, width, height, 8, width * 4, color,
-                                                     kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
-        CGColorSpaceRelease(color);
-        if (context == NULL) {
-            CGImageRelease(image);
-            splice_set_error(error, "Could not map the RGBA frame buffer.");
-            return false;
-        }
-        CGContextSetBlendMode(context, kCGBlendModeCopy);
-        CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
-        // ImageGenerator renders the video instructions. Reuse the offline text bitmaps
-        // and their sampled opacity so grabs include the titles and captions in the MP4.
-        CGContextSetBlendMode(context, kCGBlendModeNormal);
-        for (SpliceAVTextLayer *layer in draw_text ? assembly.text.sublayers : nil) {
-            if (frame >= layer.firstFrame && frame < layer.endFrame) {
-                double progress = (double)(frame - layer.firstFrame) / (layer.endFrame - layer.firstFrame);
-                CGContextSetAlpha(context, layer.fromOpacity + (layer.toOpacity - layer.fromOpacity) * progress);
-                CGContextDrawImage(context, layer.frame, (__bridge CGImageRef)layer.contents);
-            }
-        }
-        CGContextRelease(context);
         CGImageRelease(image);
-        return true;
+        NSArray *entry = take_frame(assembly, frame);
+        if (entry == nil) {
+            splice_set_error(error, "The compositor did not deliver the requested frame.");
+            return -1;
+        }
+        assembly.grabbed = entry;  // keeps the sources until the next grab
+        int64_t filled = fill_sources(entry, device, assembly.surfaces, sources, capacity, error);
+        if (filled < 0) return -1;
+        *count = (size_t)filled;
+        return 1;
     }
 }
 
@@ -988,14 +696,12 @@ void *splice_av_player(void *raw, char **error) {
     @autoreleasepool {
         SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
         AVPlayerItem *item = [AVPlayerItem playerItemWithAsset:assembly.asset];
-        AVPlayerItemVideoOutput *output = [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:@{
-            (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
-        }];
+        AVPlayerItemVideoOutput *output = [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:buffer_attributes()];
         if (item == nil || output == nil) {
             splice_set_error(error, "Could not create AVFoundation's program video output.");
             return NULL;
         }
-        item.videoComposition = assembly.brokered;
+        item.videoComposition = assembly.video;
         item.audioMix = assembly.audio;
         [item addOutput:output];
         AVPlayer *player = [AVPlayer playerWithPlayerItem:item];
@@ -1065,49 +771,12 @@ int32_t splice_av_player_sources(void *raw, void *device_raw, uint32_t slot, Spl
         if (!CMTIME_IS_NUMERIC(display)) display = time;
         int32_t at = (int32_t)MAX(0, MIN(assembly.end - 1,
             CMTimeConvertScale(display, assembly.fps, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value));
-        NSArray *entry = nil;
-        @synchronized (assembly) {
-            for (NSArray *candidate in assembly.frames.reverseObjectEnumerator) {
-                if ([candidate[0] intValue] == at) { entry = candidate; break; }
-            }
-        }
-        if (entry == nil || entry.count - 1 > capacity) return 0;
+        NSArray *entry = take_frame(assembly, at);
+        if (entry == nil) return 0;
         preview.slots[slot] = entry;  // retains this frame's buffers until the slot is reused
-        for (NSUInteger index = 1; index < entry.count; index++) {
-            SpliceAVFrameSource *out = &sources[index - 1];
-            *out = (SpliceAVFrameSource){0};
-            if (entry[index] == [NSNull null]) continue;
-            CVPixelBufferRef pixels = (__bridge CVPixelBufferRef)entry[index];
-            IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixels);
-            if (surface == NULL || CVPixelBufferGetPixelFormatType(pixels) != kCVPixelFormatType_32BGRA) {
-                splice_set_error(error, "A decoded frame is not an IOSurface-backed BGRA buffer.");
-                return -1;
-            }
-            NSNumber *key = @(IOSurfaceGetID(surface));
-            id<MTLTexture> texture = preview.surfaces[key];
-            size_t width = CVPixelBufferGetWidth(pixels), height = CVPixelBufferGetHeight(pixels);
-            if (texture == nil || texture.width != width || texture.height != height) {
-                // Decoder pools recycle buffers; drop the cache if a pool keeps turning over.
-                if (preview.surfaces.count >= 64) [preview.surfaces removeAllObjects];
-                // Viewed as RGBA8 (bytes unchanged) so it copies into OGPU's RGBA textures; the
-                // compositor swaps red and blue back when it samples (splice_gpu::Layer::BGRA).
-                MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
-                    texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:width height:height mipmapped:NO];
-                descriptor.usage = MTLTextureUsageShaderRead;
-                descriptor.storageMode = MTLStorageModeShared;
-                texture = [device newTextureWithDescriptor:descriptor iosurface:surface plane:0];
-                if (texture == nil) {
-                    splice_set_error(error, "Metal could not wrap a decoded frame.");
-                    return -1;
-                }
-                preview.surfaces[key] = texture;
-            }
-            out->texture = (__bridge void *)texture;
-            out->surface = (uint32_t)key.unsignedIntValue;
-            out->width = (uint32_t)width;
-            out->height = (uint32_t)height;
-        }
-        *count = entry.count - 1;
+        int64_t filled = fill_sources(entry, device, preview.surfaces, sources, capacity, error);
+        if (filled < 0) return -1;
+        *count = (size_t)filled;
         *frame = at;
         return 1;
     }
@@ -1173,64 +842,296 @@ uint8_t *splice_image_rgba(const char *path, uint32_t *width, uint32_t *height, 
     }
 }
 
-void *splice_av_export(void *raw, const char *file, bool hevc, char **error) {
+// ── Export: AVAssetReader decodes through the broker, OGPU draws, AVAssetWriter encodes ──
+
+@interface SpliceAVReader : NSObject
+@property(nonatomic, strong) SpliceAVAssembly *assembly;
+@property(nonatomic, strong) AVAssetReader *reader;
+@property(nonatomic, strong) AVAssetReaderVideoCompositionOutput *video;
+@property(nonatomic, strong) AVAssetReaderAudioMixOutput *audio;
+@property(nonatomic, strong) NSMutableDictionary *surfaces;
+@property(nonatomic, strong) NSArray *held;
+@end
+@implementation SpliceAVReader
+@end
+
+void *splice_av_reader(void *raw, char **error) {
     @autoreleasepool {
         SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
-        NSURL *url = [NSURL fileURLWithFileSystemRepresentation:file isDirectory:NO relativeToURL:nil];
-        NSString *preset = hevc ? AVAssetExportPresetHEVCHighestQuality : AVAssetExportPresetHighestQuality;
-        AVAssetExportSession *session = [[AVAssetExportSession alloc] initWithAsset:assembly.asset presetName:preset];
-        if (url == nil || ![session.supportedFileTypes containsObject:AVFileTypeMPEG4]) {
-            splice_set_error(error, "The native MP4 export preset is unavailable for this composition.");
+        NSError *failure = nil;
+        AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:assembly.asset error:&failure];
+        if (reader == nil) {
+            fail(error, failure, "AVFoundation could not read the composition.");
             return NULL;
         }
-        session.outputURL = url;
-        session.outputFileType = AVFileTypeMPEG4;
-        session.videoComposition = assembly.offline;
-        session.audioMix = assembly.audio;
-        session.timeRange = CMTimeRangeMake(kCMTimeZero, time_for(assembly, assembly.end));
-        SpliceAVExport *job = [SpliceAVExport new];
-        job.session = session;
-        job.assembly = assembly;
-        [session exportAsynchronouslyWithCompletionHandler:^{
-            // Retain static picture tracks until AVFoundation completes or acknowledges cancellation.
-            (void)job.assembly;
-        }];
-        return (__bridge_retained void *)job;
+        NSArray *videoTracks = [assembly.asset tracksWithMediaType:AVMediaTypeVideo];
+        AVAssetReaderVideoCompositionOutput *video =
+            [AVAssetReaderVideoCompositionOutput assetReaderVideoCompositionOutputWithVideoTracks:videoTracks
+                                                                                    videoSettings:buffer_attributes()];
+        video.videoComposition = assembly.video;
+        video.alwaysCopiesSampleData = NO;
+        if (![reader canAddOutput:video]) {
+            splice_set_error(error, "The composition's video cannot be read.");
+            return NULL;
+        }
+        [reader addOutput:video];
+        AVAssetReaderAudioMixOutput *audio = nil;
+        NSArray *audioTracks = [assembly.asset tracksWithMediaType:AVMediaTypeAudio];
+        if (audioTracks.count > 0) {
+            audio = [AVAssetReaderAudioMixOutput assetReaderAudioMixOutputWithAudioTracks:audioTracks audioSettings:@{
+                AVFormatIDKey: @(kAudioFormatLinearPCM), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2,
+                AVLinearPCMBitDepthKey: @32, AVLinearPCMIsFloatKey: @YES, AVLinearPCMIsNonInterleaved: @NO,
+                AVLinearPCMIsBigEndianKey: @NO}];
+            audio.audioMix = assembly.audio;
+            if (![reader canAddOutput:audio]) {
+                splice_set_error(error, "The composition's audio cannot be read.");
+                return NULL;
+            }
+            [reader addOutput:audio];
+        }
+        if (![reader startReading]) {
+            fail(error, reader.error, "AVFoundation could not start reading the composition.");
+            return NULL;
+        }
+        SpliceAVReader *out = [SpliceAVReader new];
+        out.assembly = assembly;
+        out.reader = reader;
+        out.video = video;
+        out.audio = audio;
+        out.surfaces = [NSMutableDictionary dictionary];
+        return (__bridge_retained void *)out;
     }
 }
 
-int32_t splice_av_export_status(void *raw, float *progress, char **error) {
+int32_t splice_av_reader_next(void *raw, void *device_raw, SpliceAVFrameSource *sources, size_t capacity,
+                              size_t *count, int32_t *frame, char **error) {
     @autoreleasepool {
-        AVAssetExportSession *session = ((__bridge SpliceAVExport *)raw).session;
-        *progress = session.progress;
-        switch (session.status) {
-            case AVAssetExportSessionStatusCompleted: return 1;
-            case AVAssetExportSessionStatusCancelled: return 2;
-            case AVAssetExportSessionStatusFailed:
-                fail(error, session.error, "AVFoundation export failed.");
+        SpliceAVReader *reader = (__bridge SpliceAVReader *)raw;
+        id<MTLDevice> device = (__bridge id<MTLDevice>)device_raw;
+        CMSampleBufferRef sample = [reader.video copyNextSampleBuffer];
+        if (sample == NULL) {
+            if (reader.reader.status == AVAssetReaderStatusFailed) {
+                fail(error, reader.reader.error, "AVFoundation stopped reading the composition.");
                 return -1;
-            default: return 0;
+            }
+            return 0;
         }
-    }
-}
-
-void splice_av_export_cancel(void *raw) {
-    @autoreleasepool {
-        [((__bridge SpliceAVExport *)raw).session cancelExport];
-    }
-}
-
-void splice_av_export_release(void *raw) {
-    @autoreleasepool {
-        SpliceAVExport *job = CFBridgingRelease(raw);
-        if (job.session.status == AVAssetExportSessionStatusExporting ||
-            job.session.status == AVAssetExportSessionStatusWaiting) {
-            [job.session cancelExport];
+        CMTime at = CMSampleBufferGetPresentationTimeStamp(sample);
+        CFRelease(sample);
+        int32_t index = (int32_t)llround(CMTimeGetSeconds(at) * reader.assembly.fps);
+        NSArray *entry = take_frame(reader.assembly, index);
+        if (entry == nil) {
+            splice_set_error(error, "The compositor did not deliver a frame being exported.");
+            return -1;
         }
+        reader.held = entry;  // the GPU copy of this frame completes before the next call
+        int64_t filled = fill_sources(entry, device, reader.surfaces, sources, capacity, error);
+        if (filled < 0) return -1;
+        *count = (size_t)filled;
+        *frame = index;
+        return 1;
     }
 }
 
-@implementation SpliceAVExport
+void splice_av_reader_release(void *raw) {
+    @autoreleasepool {
+        SpliceAVReader *reader = (__bridge_transfer SpliceAVReader *)raw;
+        if (reader.reader.status == AVAssetReaderStatusReading) [reader.reader cancelReading];
+    }
+}
+
+@interface SpliceAVWriter : NSObject
+@property(nonatomic, strong) SpliceAVReader *reader;
+@property(nonatomic, strong) AVAssetWriter *writer;
+@property(nonatomic, strong) AVAssetWriterInput *video;
+@property(nonatomic, strong) AVAssetWriterInputPixelBufferAdaptor *adaptor;
+@property(nonatomic, strong) AVAssetWriterInput *audio;
+@property(nonatomic, strong) dispatch_queue_t queue;
+@property(nonatomic, strong) dispatch_semaphore_t audioDone;
+@property(nonatomic, strong) NSMutableDictionary *surfaces;
+@property(nonatomic, strong) NSURL *url;
+@property(nonatomic) CVPixelBufferRef pending;
 @end
+@implementation SpliceAVWriter
+- (void)dealloc {
+    if (_pending != NULL) CVPixelBufferRelease(_pending);
+}
+@end
+
+void *splice_av_writer(void *reader_raw, const char *file, bool hevc, char **error) {
+    @autoreleasepool {
+        SpliceAVReader *reader = (__bridge SpliceAVReader *)reader_raw;
+        SpliceAVAssembly *assembly = reader.assembly;
+        NSURL *url = [NSURL fileURLWithFileSystemRepresentation:file isDirectory:NO relativeToURL:nil];
+        NSError *failure = nil;
+        AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:url fileType:AVFileTypeMPEG4 error:&failure];
+        if (writer == nil) {
+            fail(error, failure, "AVFoundation could not create the export file.");
+            return NULL;
+        }
+        double pixels = assembly.size.width * assembly.size.height;
+        AVAssetWriterInput *video = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:@{
+            AVVideoCodecKey: hevc ? AVVideoCodecTypeHEVC : AVVideoCodecTypeH264,
+            AVVideoColorPropertiesKey: @{AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                                         AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                                         AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2},
+            AVVideoWidthKey: @(assembly.size.width), AVVideoHeightKey: @(assembly.size.height),
+            AVVideoCompressionPropertiesKey: @{
+                // About the "highest quality" export preset's rate: 22 Mbps H.264, 16 Mbps HEVC at 1080p30.
+                AVVideoAverageBitRateKey: @((long long)(pixels * assembly.fps * (hevc ? 0.25 : 0.35))),
+                AVVideoExpectedSourceFrameRateKey: @(assembly.fps)}}];
+        video.expectsMediaDataInRealTime = NO;
+        AVAssetWriterInputPixelBufferAdaptor *adaptor = [AVAssetWriterInputPixelBufferAdaptor
+            assetWriterInputPixelBufferAdaptorWithAssetWriterInput:video sourcePixelBufferAttributes:@{
+                (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+                (id)kCVPixelBufferWidthKey: @(assembly.size.width), (id)kCVPixelBufferHeightKey: @(assembly.size.height),
+                (id)kCVPixelBufferIOSurfacePropertiesKey: @{}}];
+        if (![writer canAddInput:video]) {
+            splice_set_error(error, "The export cannot take this video format.");
+            return NULL;
+        }
+        [writer addInput:video];
+        AVAssetWriterInput *audio = nil;
+        if (reader.audio != nil) {
+            audio = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:@{
+                AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2,
+                AVEncoderBitRateKey: @192000}];
+            audio.expectsMediaDataInRealTime = NO;
+            if (![writer canAddInput:audio]) {
+                splice_set_error(error, "The export cannot take this audio format.");
+                return NULL;
+            }
+            [writer addInput:audio];
+        }
+        if (![writer startWriting]) {
+            fail(error, writer.error, "AVFoundation could not start writing the export.");
+            return NULL;
+        }
+        [writer startSessionAtSourceTime:kCMTimeZero];
+        SpliceAVWriter *out = [SpliceAVWriter new];
+        out.reader = reader;
+        out.writer = writer;
+        out.video = video;
+        out.adaptor = adaptor;
+        out.audio = audio;
+        out.url = url;
+        out.surfaces = [NSMutableDictionary dictionary];
+        out.audioDone = dispatch_semaphore_create(0);
+        out.queue = dispatch_queue_create("splice.export.audio", DISPATCH_QUEUE_SERIAL);
+        if (audio != nil) {
+            AVAssetReaderAudioMixOutput *source = reader.audio;
+            dispatch_semaphore_t done = out.audioDone;
+            [audio requestMediaDataWhenReadyOnQueue:out.queue usingBlock:^{
+                while (audio.readyForMoreMediaData) {
+                    CMSampleBufferRef sample = [source copyNextSampleBuffer];
+                    if (sample == NULL || ![audio appendSampleBuffer:sample]) {
+                        if (sample != NULL) CFRelease(sample);
+                        [audio markAsFinished];
+                        dispatch_semaphore_signal(done);
+                        return;
+                    }
+                    CFRelease(sample);
+                }
+            }];
+        } else {
+            dispatch_semaphore_signal(out.audioDone);
+        }
+        return (__bridge_retained void *)out;
+    }
+}
+
+void *splice_av_writer_target(void *raw, void *device_raw, char **error) {
+    @autoreleasepool {
+        SpliceAVWriter *writer = (__bridge SpliceAVWriter *)raw;
+        id<MTLDevice> device = (__bridge id<MTLDevice>)device_raw;
+        if (writer.pending != NULL) {
+            CVPixelBufferRelease(writer.pending);
+            writer.pending = NULL;
+        }
+        CVPixelBufferRef pixels = NULL;
+        if (writer.adaptor.pixelBufferPool == NULL ||
+            CVPixelBufferPoolCreatePixelBuffer(NULL, writer.adaptor.pixelBufferPool, &pixels) != kCVReturnSuccess) {
+            splice_set_error(error, "The export ran out of frame buffers.");
+            return NULL;
+        }
+        writer.pending = pixels;
+        IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixels);
+        NSNumber *key = @(IOSurfaceGetID(surface));
+        id<MTLTexture> texture = writer.surfaces[key];
+        if (texture == nil) {
+            if (writer.surfaces.count >= 64) [writer.surfaces removeAllObjects];
+            MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+                texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:CVPixelBufferGetWidth(pixels)
+                                            height:CVPixelBufferGetHeight(pixels) mipmapped:NO];
+            descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+            descriptor.storageMode = MTLStorageModeShared;
+            texture = [device newTextureWithDescriptor:descriptor iosurface:surface plane:0];
+            if (texture == nil) {
+                splice_set_error(error, "Metal could not wrap an export frame.");
+                return NULL;
+            }
+            writer.surfaces[key] = texture;
+        }
+        return (__bridge void *)texture;
+    }
+}
+
+bool splice_av_writer_append(void *raw, int32_t frame, char **error) {
+    @autoreleasepool {
+        SpliceAVWriter *writer = (__bridge SpliceAVWriter *)raw;
+        if (writer.pending == NULL) {
+            splice_set_error(error, "No export frame was drawn.");
+            return false;
+        }
+        for (int waited = 0; !writer.video.readyForMoreMediaData; waited++) {
+            if (writer.writer.status != AVAssetWriterStatusWriting || waited > 10000) {
+                fail(error, writer.writer.error, "The encoder stopped taking frames.");
+                return false;
+            }
+            usleep(1000);
+        }
+        CMTime at = CMTimeMake(frame, writer.reader.assembly.fps);
+        if (![writer.adaptor appendPixelBuffer:writer.pending withPresentationTime:at]) {
+            fail(error, writer.writer.error, "The encoder rejected a frame.");
+            return false;
+        }
+        CVPixelBufferRelease(writer.pending);
+        writer.pending = NULL;
+        return true;
+    }
+}
+
+int32_t splice_av_writer_finish(void *raw, bool cancel, char **error) {
+    @autoreleasepool {
+        SpliceAVWriter *writer = (__bridge SpliceAVWriter *)raw;
+        if (cancel) {
+            [writer.reader.reader cancelReading];
+            [writer.writer cancelWriting];
+            [[NSFileManager defaultManager] removeItemAtURL:writer.url error:NULL];
+            return 0;
+        }
+        [writer.video markAsFinished];
+        if (dispatch_semaphore_wait(writer.audioDone, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC)) != 0) {
+            [writer.writer cancelWriting];
+            splice_set_error(error, "The export's audio did not finish.");
+            return -1;
+        }
+        dispatch_semaphore_t finished = dispatch_semaphore_create(0);
+        [writer.writer finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(finished); }];
+        dispatch_semaphore_wait(finished, DISPATCH_TIME_FOREVER);
+        if (writer.writer.status != AVAssetWriterStatusCompleted) {
+            fail(error, writer.writer.error, "AVFoundation could not finish the export.");
+            return -1;
+        }
+        return 1;
+    }
+}
+
+void splice_av_writer_release(void *raw) {
+    @autoreleasepool {
+        SpliceAVWriter *writer = (__bridge_transfer SpliceAVWriter *)raw;
+        if (writer.writer.status == AVAssetWriterStatusWriting) [writer.writer cancelWriting];
+    }
+}
 
 #pragma clang diagnostic pop

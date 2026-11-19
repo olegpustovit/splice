@@ -206,7 +206,7 @@ pub(super) fn job(projects: &mut Projects, name: &str, args: &Json) -> Result<Js
                 store.check_write(&options)?;
             }
         }
-        let job = &projects.exports[index];
+        let job = &mut projects.exports[index];
         if cancel {
             job.cancel();
         }

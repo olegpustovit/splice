@@ -67,6 +67,8 @@ impl Layer {
     pub const RING: u32 = 3;
     /// Flag: swap red and blue when sampling.
     pub const BGRA: u32 = 1;
+    /// Flag: write blue, green, red, alpha (the target's bytes feed a BGRA encoder buffer).
+    pub const OUT_BGRA: u32 = 2;
 
     /// An opaque, square-cornered layer of `kind` filling `dest`.
     pub fn new(kind: u32, dest: [f32; 4], target: [f32; 2]) -> Self {

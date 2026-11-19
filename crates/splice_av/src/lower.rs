@@ -19,7 +19,7 @@ enum Key {
 }
 
 /// The lowered layer plan, kept for the OGPU compositor (T12.7).
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Plan {
     /// Instruction intervals in order, each with its layers back to front.
     pub intervals: Vec<([Frame; 2], Vec<VideoLayer>)>,
@@ -311,9 +311,12 @@ impl Lowering {
                 Some(table) => Some(table),
                 None => match &self.takes[index].1 {
                     Some(events) if !events.samples.is_empty() => {
-                        let table =
-                            self.builder
-                                .cursor(&events.samples, &events.images, events.points)?;
+                        let table = self.plan.cursors.len() as i32;
+                        self.plan.cursors.push((
+                            events.samples.clone(),
+                            events.images.clone(),
+                            events.points,
+                        ));
                         self.takes[index].2 = Some(table);
                         Some(table)
                     }
@@ -361,9 +364,14 @@ impl Lowering {
             return Ok(self.takes[index].1.is_some().then_some(index));
         }
         let media = Self::media(project, id)?;
-        let events = match media.take.as_ref().and_then(|take| take.events.as_deref()) {
-            Some(file) => {
-                let path = media_path(package, media, Some(file))?;
+        // Events only enrich a take (cursor, zoom, chips): a missing log renders without them.
+        let events = match media
+            .take
+            .as_ref()
+            .and_then(|take| take.events.as_deref())
+            .and_then(|file| media_path(package, media, Some(file)).ok())
+        {
+            Some(path) => {
                 let cursors = media
                     .take
                     .as_ref()
@@ -448,7 +456,6 @@ impl Lowering {
     }
 
     fn add_text(&mut self, range: [Frame; 2], layer: TextLayer) -> Result<(), Error> {
-        self.builder.text(range, &layer)?;
         self.text.push(TimedText { range, layer });
         Ok(())
     }

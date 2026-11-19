@@ -142,9 +142,8 @@ typedef struct {
     uint32_t kind, index, colors[2];
 } SpliceAVSource;
 
-// Ramp values run from the start to the end of the instruction interval. `focus` is the canvas
-// point the scale keeps fixed (x, y at the start, then at the end). `source` is the source clock
-// in seconds, for cursor lookups. `corner` is a radius in canvas pixels; `shadow` is 0…1.
+// One picture layer of an instruction interval. Natively only `track` is read (to pin that
+// track's decoded frames); the rest is the plan splice_gpu draws (see splice_av::gpu).
 typedef struct {
     double crop[4], destination[4], scale[2], opacity[2], focus[4], source[2];
     double corner, shadow, cursor_scale;
@@ -154,39 +153,22 @@ typedef struct {
     uint32_t flags;
 } SpliceAVLayer;
 
-enum { SpliceAVEase = 1, SpliceAVClickRings = 2 };
-
-// One cursor state on the take's source clock. x and y are normalized to the captured source,
-// top-left origin. `image` indexes the table's images, or -1 when hidden.
-typedef struct {
-    double t, x, y;
-    int32_t image;
-    uint32_t click;
-} SpliceAVCursorSample;
-
-typedef struct {
-    const char *path;
-    double hot[2], scale;
-} SpliceAVCursorImage;
-
 typedef struct {
     int32_t track;
     float gain[2];
 } SpliceAVGain;
 
+// One layer's decoded source for the OGPU compositor (T12.7). `texture` is an RGBA8 view of the
+// decoded BGRA IOSurface (`surface`) on the caller's device; NULL for fills or a missing frame.
 typedef struct {
-    const char *text;
-    double bounds[4], font;
-    float opacity[2];
-    uint32_t color;
-} SpliceAVText;
+    void *texture;
+    uint32_t surface, width, height, pad;
+} SpliceAVFrameSource;
 
 _Static_assert(sizeof(SpliceAVSource) == 64 && offsetof(SpliceAVSource, timeline) == 40, "source ABI");
 _Static_assert(sizeof(SpliceAVLayer) == 184 && offsetof(SpliceAVLayer, flags) == 180, "layer ABI");
-_Static_assert(sizeof(SpliceAVCursorSample) == 32 && offsetof(SpliceAVCursorSample, click) == 28, "cursor ABI");
-_Static_assert(sizeof(SpliceAVCursorImage) == 32 && offsetof(SpliceAVCursorImage, scale) == 24, "cursor image ABI");
 _Static_assert(sizeof(SpliceAVGain) == 12 && offsetof(SpliceAVGain, gain) == 4, "gain ABI");
-_Static_assert(sizeof(SpliceAVText) == 64 && offsetof(SpliceAVText, color) == 56, "text ABI");
+_Static_assert(sizeof(SpliceAVFrameSource) == 24, "frame source ABI");
 
 void *splice_av_create(uint32_t width, uint32_t height, uint32_t fps, int32_t end, char **error);
 void splice_av_release(void *composition);
@@ -194,47 +176,47 @@ int32_t splice_av_source(void *composition, const SpliceAVSource *source, char *
 bool splice_av_range(void *composition, int32_t from, int32_t to,
                      const SpliceAVLayer *layers, size_t layer_count,
                      const SpliceAVGain *gains, size_t gain_count, char **error);
-bool splice_av_text(void *composition, int32_t from, int32_t to, const SpliceAVText *text, char **error);
-// One layer's decoded source for the OGPU compositor (T12.7). `texture` is an RGBA8 view of the
-// decoded BGRA IOSurface (`surface`) on the viewer's device; NULL for fills or a missing frame.
-typedef struct {
-    void *texture;
-    uint32_t surface, width, height, pad;
-} SpliceAVFrameSource;
-_Static_assert(sizeof(SpliceAVFrameSource) == 24, "frame source ABI");
-
-// Takes the player's newest displayed frame for the compositor: one source per layer of that
-// frame's instruction. Returns 1 with *frame and *count set, 0 when nothing new, -1 on error.
-// `slot` (0…2) keeps that frame's buffers alive until the same slot is used again.
-int32_t splice_av_player_sources(void *player, void *device, uint32_t slot, SpliceAVFrameSource *sources,
-                                 size_t capacity, size_t *count, int32_t *frame, char **error);
-// Encodes GPU copies of whole textures (decoded frames into the compositor's own textures) into a
-// caller's MTLCommandBuffer, ahead of the pass that samples them. Same size and format per pair.
-bool splice_av_blit(void *command_buffer, void *const *sources, void *const *destinations, size_t count,
-                    char **error);
-// Decodes an image file to straight RGBA8. Free the pixels with free().
-uint8_t *splice_image_rgba(const char *path, uint32_t *width, uint32_t *height, char **error);
-
-// Registers a take's cursor track. `points` is the source width in screen points. Returns its index.
-int32_t splice_av_cursor(void *composition, const SpliceAVCursorSample *samples, size_t sample_count,
-                         const SpliceAVCursorImage *images, size_t image_count, double points, char **error);
 bool splice_av_finish(void *composition, char **error);
-bool splice_av_read_frame(void *composition, int32_t frame, uint8_t *rgba, size_t length,
-                         bool draw_text, char **error);
+
+// Decodes one frame through the broker: one source per layer of its instruction, valid until the
+// next grab. Returns 1, or -1 on error.
+int32_t splice_av_grab(void *composition, void *device, int32_t frame, SpliceAVFrameSource *sources,
+                       size_t capacity, size_t *count, char **error);
+
 void *splice_av_player(void *composition, char **error);
 void splice_av_player_play(void *player, bool playing);
 bool splice_av_player_ended(void *player);
 bool splice_av_player_seek(void *player, int32_t frame);
+// Takes the player's newest displayed frame for the compositor. Returns 1 with *frame and *count
+// set, 0 when nothing new, -1 on error. `slot` (0…2) keeps the frame's buffers until reused.
+int32_t splice_av_player_sources(void *player, void *device, uint32_t slot, SpliceAVFrameSource *sources,
+                                 size_t capacity, size_t *count, int32_t *frame, char **error);
 
+// Export: a reader decodes through the broker; the caller draws each frame and a writer encodes it.
+void *splice_av_reader(void *composition, char **error);
+// Next frame in order: 1 with *frame and sources (valid until the next call), 0 at the end, -1 on error.
+int32_t splice_av_reader_next(void *reader, void *device, SpliceAVFrameSource *sources, size_t capacity,
+                              size_t *count, int32_t *frame, char **error);
+void splice_av_reader_release(void *reader);
+void *splice_av_writer(void *reader, const char *file, bool hevc, char **error);
+// An RGBA8 view (BGRA bytes) of a fresh encoder buffer to draw the next frame into.
+void *splice_av_writer_target(void *writer, void *device, char **error);
+bool splice_av_writer_append(void *writer, int32_t frame, char **error);
+// 1 when written, 0 when cancelled (the file is removed), -1 on error.
+int32_t splice_av_writer_finish(void *writer, bool cancel, char **error);
+void splice_av_writer_release(void *writer);
 
-
-void *splice_av_export(void *composition, const char *file, bool hevc, char **error);
-int32_t splice_av_export_status(void *job, float *progress, char **error);
-void splice_av_export_cancel(void *job);
-void splice_av_export_release(void *job);
+// Encodes GPU copies of whole textures into a caller's MTLCommandBuffer. Same size and format per pair.
+bool splice_av_blit(void *command_buffer, void *const *sources, void *const *destinations, size_t count,
+                    char **error);
+// Decodes an image file to straight RGBA8. Free the pixels with free().
+uint8_t *splice_image_rgba(const char *path, uint32_t *width, uint32_t *height, char **error);
+// Rasterizes centered bold text to straight RGBA8. Free the pixels with free().
+uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, double font, uint32_t color,
+                          char **error);
 
 void *splice_image_png(const uint8_t *pixels, size_t length, uint32_t width, uint32_t height,
-                       uint32_t max_edge, const uint8_t **data, size_t *size, char **error);
+                       uint32_t max_edge, bool video, const uint8_t **data, size_t *size, char **error);
 void splice_image_release(void *data);
 
 typedef struct {

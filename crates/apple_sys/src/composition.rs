@@ -180,6 +180,7 @@ pub fn blit(
 }
 
 /// A recorded cursor image with its hotspot in PNG pixels and its pixels per point.
+#[derive(Clone, Debug)]
 pub struct CursorImage {
     /// PNG file.
     pub path: std::path::PathBuf,
@@ -187,13 +188,6 @@ pub struct CursorImage {
     pub hot: [f64; 2],
     /// PNG pixels per screen point.
     pub scale: f64,
-}
-
-#[repr(C)]
-struct RawCursorImage {
-    path: *const c_char,
-    hot: [f64; 2],
-    scale: f64,
 }
 
 /// A linear volume ramp for a native audio track.
@@ -205,7 +199,8 @@ pub struct AudioRamp {
     pub gain: [f32; 2],
 }
 
-/// A timed layer of caption or title text for offline rendering.
+/// A timed layer of title, caption or keystroke text.
+#[derive(Clone, Debug)]
 pub struct TextLayer {
     /// Content for the current interval.
     pub text: String,
@@ -219,23 +214,11 @@ pub struct TextLayer {
     pub color: u32,
 }
 
-#[repr(C)]
-struct RawText {
-    text: *const c_char,
-    bounds: [f64; 4],
-    font: f64,
-    opacity: [f32; 2],
-    color: u32,
-}
-
 const _: () = {
     assert!(size_of::<RawSource>() == 64 && offset_of!(RawSource, timeline) == 40);
     assert!(size_of::<VideoLayer>() == 184 && offset_of!(VideoLayer, flags) == 180);
     assert!(size_of::<FrameSource>() == 24);
-    assert!(size_of::<CursorSample>() == 32 && offset_of!(CursorSample, click) == 28);
-    assert!(size_of::<RawCursorImage>() == 32 && offset_of!(RawCursorImage, scale) == 24);
     assert!(size_of::<AudioRamp>() == 12 && offset_of!(AudioRamp, gain) == 4);
-    assert!(size_of::<RawText>() == 64 && offset_of!(RawText, color) == 56);
 };
 
 unsafe extern "C" {
@@ -262,13 +245,6 @@ unsafe extern "C" {
         audios: usize,
         error: *mut *mut c_char,
     ) -> bool;
-    fn splice_av_text(
-        composition: *mut c_void,
-        from: i32,
-        to: i32,
-        text: *const RawText,
-        error: *mut *mut c_char,
-    ) -> bool;
     fn splice_av_finish(composition: *mut c_void, error: *mut *mut c_char) -> bool;
     fn splice_av_blit(
         command_buffer: *mut c_void,
@@ -287,40 +263,53 @@ unsafe extern "C" {
         frame: *mut i32,
         error: *mut *mut c_char,
     ) -> i32;
-    fn splice_av_cursor(
-        composition: *mut c_void,
-        samples: *const CursorSample,
-        sample_count: usize,
-        images: *const RawCursorImage,
-        image_count: usize,
-        points: f64,
-        error: *mut *mut c_char,
-    ) -> i32;
-    fn splice_av_read_frame(
-        composition: *mut c_void,
-        frame: i32,
-        rgba: *mut u8,
-        length: usize,
-        draw_text: bool,
-        error: *mut *mut c_char,
-    ) -> bool;
     fn splice_av_player(composition: *mut c_void, error: *mut *mut c_char) -> *mut c_void;
     fn splice_av_player_play(player: *mut c_void, playing: bool);
     fn splice_av_player_ended(player: *mut c_void) -> bool;
     fn splice_av_player_seek(player: *mut c_void, frame: i32) -> bool;
-    fn splice_av_export(
+    fn splice_av_grab(
         composition: *mut c_void,
+        device: *mut c_void,
+        frame: i32,
+        sources: *mut FrameSource,
+        capacity: usize,
+        count: *mut usize,
+        error: *mut *mut c_char,
+    ) -> i32;
+    fn splice_av_reader(composition: *mut c_void, error: *mut *mut c_char) -> *mut c_void;
+    fn splice_av_reader_next(
+        reader: *mut c_void,
+        device: *mut c_void,
+        sources: *mut FrameSource,
+        capacity: usize,
+        count: *mut usize,
+        frame: *mut i32,
+        error: *mut *mut c_char,
+    ) -> i32;
+    fn splice_av_reader_release(reader: *mut c_void);
+    fn splice_av_writer(
+        reader: *mut c_void,
         file: *const c_char,
         hevc: bool,
         error: *mut *mut c_char,
     ) -> *mut c_void;
-    fn splice_av_export_status(
-        job: *mut c_void,
-        progress: *mut f32,
+    fn splice_av_writer_target(
+        writer: *mut c_void,
+        device: *mut c_void,
         error: *mut *mut c_char,
-    ) -> i32;
-    fn splice_av_export_cancel(job: *mut c_void);
-    fn splice_av_export_release(job: *mut c_void);
+    ) -> *mut c_void;
+    fn splice_av_writer_append(writer: *mut c_void, frame: i32, error: *mut *mut c_char) -> bool;
+    fn splice_av_writer_finish(writer: *mut c_void, cancel: bool, error: *mut *mut c_char) -> i32;
+    fn splice_av_writer_release(writer: *mut c_void);
+    fn splice_text_rgba(
+        text: *const c_char,
+        width: u32,
+        height: u32,
+        font: f64,
+        color: u32,
+        error: *mut *mut c_char,
+    ) -> *mut u8;
+    fn free(pointer: *mut c_void);
 }
 
 /// Owns a composition during construction.
@@ -331,20 +320,6 @@ pub struct Composition(NonNull<c_void>);
 
 /// An AVPlayer and its output for one immutable composition.
 pub struct Player(NonNull<c_void>);
-
-/// A native encoder job retaining the composition until encoding completes.
-pub struct Export(NonNull<c_void>);
-
-/// Latest observation of a native export.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ExportState {
-    /// The encoder is running or queued, with fractional progress.
-    Running(f32),
-    /// A finished file is available.
-    Complete,
-    /// Cancellation completed.
-    Cancelled,
-}
 
 impl Drop for Composition {
     fn drop(&mut self) {
@@ -421,63 +396,8 @@ impl Builder {
     }
 
     /// Adds an offline Core Animation text layer.
-    pub fn text(&mut self, [from, to]: [i32; 2], layer: &TextLayer) -> Result<(), Error> {
-        // A native display string ends at NUL. Replace embedded NULs, preserving the rest.
-        let text = CString::new(layer.text.replace('\0', "�")).unwrap();
-        let raw = RawText {
-            text: text.as_ptr(),
-            bounds: layer.bounds,
-            font: layer.font,
-            opacity: layer.opacity,
-            color: layer.color,
-        };
-        let mut error = ptr::null_mut();
-        // SAFETY: both the descriptor and its text are borrowed until the call returns.
-        let ok = unsafe { splice_av_text(self.0.0.as_ptr(), from, to, &raw, &mut error) };
-        if ok { Ok(()) } else { Err(diagnostic(error)) }
-    }
 
     /// Publishes the native composition after all ranges have been added.
-    /// Registers a take's cursor track. `points` is the captured source width in screen points.
-    pub fn cursor(
-        &mut self,
-        samples: &[CursorSample],
-        images: &[CursorImage],
-        points: f64,
-    ) -> Result<i32, Error> {
-        let paths = images
-            .iter()
-            .map(|image| CString::new(image.path.as_os_str().as_bytes()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| Error::message("A cursor image path contains NUL."))?;
-        let raw: Vec<RawCursorImage> = images
-            .iter()
-            .zip(&paths)
-            .map(|(image, path)| RawCursorImage {
-                path: path.as_ptr(),
-                hot: image.hot,
-                scale: image.scale,
-            })
-            .collect();
-        let mut error = ptr::null_mut();
-        // SAFETY: the slices and their C strings stay alive for the duration of the call.
-        let index = unsafe {
-            splice_av_cursor(
-                self.0.0.as_ptr(),
-                samples.as_ptr(),
-                samples.len(),
-                raw.as_ptr(),
-                raw.len(),
-                points,
-                &mut error,
-            )
-        };
-        if index < 0 {
-            Err(diagnostic(error))
-        } else {
-            Ok(index)
-        }
-    }
 
     /// Completes the composition.
     pub fn finish(self) -> Result<Composition, Error> {
@@ -502,41 +422,42 @@ impl Composition {
             .map(Player)
             .ok_or_else(|| diagnostic(error))
     }
-    /// Reads an offscreen program frame into an exact-size RGBA8 buffer.
-    pub fn read_frame(&self, frame: i32, rgba: &mut [u8]) -> Result<(), Error> {
-        self.read(frame, rgba, true)
-    }
-
-    /// Reads the program picture for a caller that draws its own text.
-    pub fn read_picture(&self, frame: i32, rgba: &mut [u8]) -> Result<(), Error> {
-        self.read(frame, rgba, false)
-    }
-
-    fn read(&self, frame: i32, rgba: &mut [u8], draw_text: bool) -> Result<(), Error> {
+    /// Decodes one frame through the broker into `out` (RGBA8 views on `device`, an
+    /// `id<MTLDevice>`), one per layer of its instruction, valid until the next grab.
+    pub fn grab(
+        &self,
+        device: *mut c_void,
+        frame: i32,
+        out: &mut [FrameSource],
+    ) -> Result<usize, Error> {
+        let mut count = 0;
         let mut error = ptr::null_mut();
-        // SAFETY: the C bridge checks the buffer length and writes only during this call.
-        let ok = unsafe {
-            splice_av_read_frame(
+        // SAFETY: `out` is writable for its length; native validates the frame and device.
+        let result = unsafe {
+            splice_av_grab(
                 self.0.as_ptr(),
+                device,
                 frame,
-                rgba.as_mut_ptr(),
-                rgba.len(),
-                draw_text,
+                out.as_mut_ptr(),
+                out.len(),
+                &mut count,
                 &mut error,
             )
         };
-        if ok { Ok(()) } else { Err(diagnostic(error)) }
+        if result == 1 {
+            Ok(count)
+        } else {
+            Err(diagnostic(error))
+        }
     }
 
-    /// Encodes the same composition and audio mix into a new MP4 at the supplied path.
-    pub fn start_export(&self, file: &Path, hevc: bool) -> Result<Export, Error> {
-        let path = CString::new(file.as_os_str().as_bytes())
-            .map_err(|_| Error::message("The export path contains NUL."))?;
+    /// Starts decoding the whole composition in order, for export.
+    pub fn reader(&self) -> Result<Reader, Error> {
         let mut error = ptr::null_mut();
-        // SAFETY: both the path and diagnostic storage live through the call.
-        let job = unsafe { splice_av_export(self.0.as_ptr(), path.as_ptr(), hevc, &mut error) };
-        NonNull::new(job)
-            .map(Export)
+        // SAFETY: the reader retains the composition; the diagnostic storage outlives the call.
+        let reader = unsafe { splice_av_reader(self.0.as_ptr(), &mut error) };
+        NonNull::new(reader)
+            .map(Reader)
             .ok_or_else(|| diagnostic(error))
     }
 }
@@ -606,32 +527,127 @@ impl Drop for Player {
     }
 }
 
-impl Export {
-    /// Polls encoder progress or returns the terminal result.
-    pub fn status(&self) -> Result<ExportState, Error> {
+/// Decodes a composition in order for export, through the broker compositor.
+pub struct Reader(NonNull<c_void>);
+
+// SAFETY: the native reader and its AVFoundation objects may be driven from any one thread at a
+// time; this handle is moved to the export thread and used only there.
+unsafe impl Send for Reader {}
+
+impl Reader {
+    /// The next frame's sources (RGBA8 views on `device`), valid until the next call, or `None`
+    /// at the end.
+    pub fn next(
+        &mut self,
+        device: *mut c_void,
+        out: &mut [FrameSource],
+    ) -> Result<Option<(i32, usize)>, Error> {
+        let (mut frame, mut count) = (0, 0);
         let mut error = ptr::null_mut();
-        let mut progress = 0.0;
-        // SAFETY: this handle retains the session and the diagnostic outputs are writable.
-        match unsafe { splice_av_export_status(self.0.as_ptr(), &mut progress, &mut error) } {
-            0 => Ok(ExportState::Running(progress.clamp(0.0, 1.0))),
-            1 => Ok(ExportState::Complete),
-            2 => Ok(ExportState::Cancelled),
+        // SAFETY: `out` is writable for its length; the reader is retained by this handle.
+        match unsafe {
+            splice_av_reader_next(
+                self.0.as_ptr(),
+                device,
+                out.as_mut_ptr(),
+                out.len(),
+                &mut count,
+                &mut frame,
+                &mut error,
+            )
+        } {
+            1 => Ok(Some((frame, count))),
+            0 => Ok(None),
             _ => Err(diagnostic(error)),
         }
     }
+}
 
-    /// Requests cancellation of an active encoding.
-    pub fn cancel(&mut self) {
-        // SAFETY: this handle retains the session through the call.
-        unsafe { splice_av_export_cancel(self.0.as_ptr()) };
+impl Drop for Reader {
+    fn drop(&mut self) {
+        // SAFETY: the handle owns one native reference, consumed here.
+        unsafe { splice_av_reader_release(self.0.as_ptr()) };
     }
 }
 
-impl Drop for Export {
-    fn drop(&mut self) {
-        // SAFETY: the handle owns one native reference, which is consumed by this call.
-        unsafe { splice_av_export_release(self.0.as_ptr()) };
+/// Encodes drawn frames and the reader's audio mix into an MP4.
+pub struct Writer(NonNull<c_void>);
+
+// SAFETY: as for `Reader`: used from one thread at a time.
+unsafe impl Send for Writer {}
+
+impl Writer {
+    /// Opens `file` (which must not exist) for H.264 or HEVC, pumping the reader's audio.
+    pub fn new(reader: &Reader, file: &Path, hevc: bool) -> Result<Self, Error> {
+        let path = CString::new(file.as_os_str().as_bytes())
+            .map_err(|_| Error::message("The export path contains NUL."))?;
+        let mut error = ptr::null_mut();
+        // SAFETY: the path and diagnostic storage live through the call; the writer retains the reader.
+        let writer =
+            unsafe { splice_av_writer(reader.0.as_ptr(), path.as_ptr(), hevc, &mut error) };
+        NonNull::new(writer)
+            .map(Self)
+            .ok_or_else(|| diagnostic(error))
     }
+
+    /// A fresh encoder buffer as an RGBA8 `id<MTLTexture>` on `device` (holding BGRA bytes).
+    pub fn target(&mut self, device: *mut c_void) -> Result<*mut c_void, Error> {
+        let mut error = ptr::null_mut();
+        // SAFETY: the writer is retained by this handle and returns a borrowed texture or null.
+        let texture = unsafe { splice_av_writer_target(self.0.as_ptr(), device, &mut error) };
+        if texture.is_null() {
+            Err(diagnostic(error))
+        } else {
+            Ok(texture)
+        }
+    }
+
+    /// Appends the drawn target at `frame`, once the GPU has finished drawing it.
+    pub fn append(&mut self, frame: i32) -> Result<(), Error> {
+        let mut error = ptr::null_mut();
+        // SAFETY: the writer is retained by this handle.
+        if unsafe { splice_av_writer_append(self.0.as_ptr(), frame, &mut error) } {
+            Ok(())
+        } else {
+            Err(diagnostic(error))
+        }
+    }
+
+    /// Finishes the file (`Ok(true)`), or cancels and removes it (`Ok(false)`).
+    pub fn finish(&mut self, cancel: bool) -> Result<bool, Error> {
+        let mut error = ptr::null_mut();
+        // SAFETY: the writer is retained by this handle.
+        match unsafe { splice_av_writer_finish(self.0.as_ptr(), cancel, &mut error) } {
+            1 => Ok(true),
+            0 => Ok(false),
+            _ => Err(diagnostic(error)),
+        }
+    }
+}
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        // SAFETY: the handle owns one native reference, consumed here.
+        unsafe { splice_av_writer_release(self.0.as_ptr()) };
+    }
+}
+
+/// Rasterizes centered bold `text` in `color` into straight RGBA8 of `size`.
+pub fn text_rgba(text: &str, size: [u32; 2], font: f64, color: u32) -> Result<Vec<u8>, Error> {
+    let text = CString::new(text.replace('\0', "\u{FFFD}")).expect("NUL replaced");
+    let mut error = ptr::null_mut();
+    // SAFETY: the string lives for the call; native returns a malloc'd width*height*4 buffer.
+    let pixels =
+        unsafe { splice_text_rgba(text.as_ptr(), size[0], size[1], font, color, &mut error) };
+    if pixels.is_null() {
+        return Err(diagnostic(error));
+    }
+    let length = size[0] as usize * size[1] as usize * 4;
+    // SAFETY: the buffer holds `length` initialized bytes until freed below.
+    let bytes = unsafe { std::slice::from_raw_parts(pixels, length) }.to_vec();
+    // SAFETY: the allocation came from calloc and is not used again.
+    unsafe { free(pixels.cast()) };
+    Ok(bytes)
 }
 
 fn diagnostic(value: *mut c_char) -> Error {

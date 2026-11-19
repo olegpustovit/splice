@@ -1,7 +1,7 @@
 //! The OGPU compositor's frame path (PLAN.md T12.7): evaluates the lowered layer plan at one frame
-//! into `splice_gpu` layers over decoded sources imported without copies. The per-interval math
-//! matches the interim Core Image compositor in `apple_sys/native/composition.m`.
-use crate::{Composition, Error};
+//! into `splice_gpu` layers over the decoded sources. The viewer, frame grabs and export all draw
+//! through `GpuProgram::draw`.
+use crate::{Composition, Error, TimedText, lower::Plan};
 use apple_sys::composition::{CursorSample, FrameSource, Player, VideoLayer};
 use ogpu_core::backend::{self as b, Commands, Device, PreparedRenderTarget, Texture};
 use ogpu_core::types::{Extent, Origin, TextureDescriptor, TextureFormat, TextureUsage};
@@ -27,6 +27,9 @@ pub struct GpuProgram {
     sources: Vec<FrameSource>,
     layers: Vec<Layer>,
     textures: Vec<Option<Texture>>,
+    /// Rasterized titles, captions and chips (export and grabs; the viewer draws text in PXUI):
+    /// range, texture, destination and opacity ramp.
+    texts: Vec<([Frame; 2], Texture, [f32; 4], [f32; 2])>,
 }
 
 fn gpu(error: ogpu_core::error::Error) -> Error {
@@ -34,41 +37,72 @@ fn gpu(error: ogpu_core::error::Error) -> Error {
 }
 
 impl GpuProgram {
-    /// Prepares the compositor for `composition` on `device`, uploading its cursor images.
+    /// Prepares the viewer's compositor for `composition` on `device` (text stays in PXUI).
     pub fn new(device: &Device, composition: &Composition) -> Result<Self, Error> {
+        Self::with_plan(device, &composition.plan, &[])
+    }
+
+    /// Prepares a compositor for `plan`, uploading its cursor images and rasterizing `text`.
+    pub(crate) fn with_plan(
+        device: &Device,
+        plan: &Plan,
+        text: &[TimedText],
+    ) -> Result<Self, Error> {
         let mtl_device = b::native_leased(device).map_err(gpu)?.mtl_device;
-        let mut cursors = Vec::with_capacity(composition.plan.cursors.len());
-        for (_, images, _) in &composition.plan.cursors {
+        let upload = |pixels: &[u8], [w, h]: [u32; 2], label: &str| -> Result<Texture, Error> {
+            let texture = b::create_texture(
+                device,
+                TextureDescriptor {
+                    label: Some(label.into()),
+                    width: i64::from(w),
+                    height: i64::from(h),
+                    depth: 1,
+                    mip_levels: 1,
+                    sample_count: 1,
+                    format: TextureFormat::Rgba8Unorm,
+                    usage: vec![TextureUsage::TextureBinding, TextureUsage::TextureCopyDst],
+                },
+            )
+            .map_err(gpu)?;
+            b::write_texture(
+                &texture,
+                None,
+                Origin { x: 0, y: 0, z: 0 },
+                Extent {
+                    width: i64::from(w),
+                    height: i64::from(h),
+                    depth: 1,
+                },
+                i64::from(w) * 4,
+                pixels,
+            )
+            .map_err(gpu)?;
+            Ok(texture)
+        };
+        let mut texts = Vec::with_capacity(text.len());
+        for cue in text {
+            let [x, y, w, h] = cue.layer.bounds;
+            let size = [w.ceil().max(1.0) as u32, h.ceil().max(1.0) as u32];
+            let pixels = apple_sys::composition::text_rgba(
+                &cue.layer.text,
+                size,
+                cue.layer.font,
+                cue.layer.color,
+            )?;
+            let dest = [x as f32, y as f32, size[0] as f32, size[1] as f32];
+            texts.push((
+                cue.range,
+                upload(&pixels, size, "Splice text")?,
+                dest,
+                cue.layer.opacity,
+            ));
+        }
+        let mut cursors = Vec::with_capacity(plan.cursors.len());
+        for (_, images, _) in &plan.cursors {
             let mut table = Vec::with_capacity(images.len());
             for image in images {
                 let (pixels, [w, h]) = apple_sys::image::decode_rgba(&image.path)?;
-                let texture = b::create_texture(
-                    device,
-                    TextureDescriptor {
-                        label: Some("Splice cursor".into()),
-                        width: i64::from(w),
-                        height: i64::from(h),
-                        depth: 1,
-                        mip_levels: 1,
-                        sample_count: 1,
-                        format: TextureFormat::Rgba8Unorm,
-                        usage: vec![TextureUsage::TextureBinding, TextureUsage::TextureCopyDst],
-                    },
-                )
-                .map_err(gpu)?;
-                b::write_texture(
-                    &texture,
-                    None,
-                    Origin { x: 0, y: 0, z: 0 },
-                    Extent {
-                        width: i64::from(w),
-                        height: i64::from(h),
-                        depth: 1,
-                    },
-                    i64::from(w) * 4,
-                    &pixels,
-                )
-                .map_err(gpu)?;
+                let texture = upload(&pixels, [w, h], "Splice cursor")?;
                 table.push((texture, [f64::from(w), f64::from(h)]));
             }
             cursors.push(table);
@@ -84,7 +118,18 @@ impl GpuProgram {
             sources: vec![FrameSource::default(); MAX_LAYERS],
             layers: Vec::with_capacity(MAX_LAYERS),
             textures: Vec::with_capacity(MAX_LAYERS),
+            texts,
         })
+    }
+
+    /// The `id<MTLDevice>` decoded frames must be imported on.
+    pub(crate) fn mtl_device(&self) -> *mut std::ffi::c_void {
+        self.mtl_device
+    }
+
+    /// Where a reader or grab writes the frame's sources before `draw`.
+    pub(crate) fn sources_mut(&mut self) -> &mut [FrameSource] {
+        &mut self.sources
     }
 
     /// Composites the player's newest displayed frame into `target`. The frame's sources are
@@ -103,6 +148,37 @@ impl GpuProgram {
         let Some((at, count)) = player.sources(self.mtl_device, slot, &mut self.sources)? else {
             return Ok(None);
         };
+        let drawn = self.draw(
+            &composition.plan,
+            composition.size,
+            at,
+            count,
+            native_commands,
+            commands,
+            target,
+            false,
+            false,
+        )?;
+        Ok(drawn.then_some(at))
+    }
+
+    /// Draws frame `at` from the `count` sources in `sources_mut`: copies them in
+    /// `native_commands` (the `id<MTLCommandBuffer>` behind `commands`), then encodes the layers.
+    /// `text` adds the title, caption and chip layers; `bgra` writes BGRA bytes for an encoder
+    /// buffer. False when `at` has no instruction.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw(
+        &mut self,
+        plan: &Plan,
+        size: [u32; 2],
+        at: Frame,
+        count: usize,
+        native_commands: *mut std::ffi::c_void,
+        commands: &Commands,
+        target: &mut PreparedRenderTarget,
+        text: bool,
+        bgra: bool,
+    ) -> Result<bool, Error> {
         self.blit_from.clear();
         self.blit_to.clear();
         for i in 0..count {
@@ -140,10 +216,10 @@ impl GpuProgram {
             self.blit_to.push(*native as *mut std::ffi::c_void);
         }
         apple_sys::composition::blit(native_commands, &self.blit_from, &self.blit_to)?;
-        let intervals = &composition.plan.intervals;
+        let intervals = &plan.intervals;
         let index = intervals.partition_point(|(range, _)| range[1] <= at);
         let Some((range, layers)) = intervals.get(index) else {
-            return Ok(None);
+            return Ok(false);
         };
         if layers.len() != count {
             return Err(Error::Input(format!(
@@ -153,11 +229,10 @@ impl GpuProgram {
         }
         self.layers.clear();
         self.textures.clear();
-        let size = composition.size.map(f64::from);
+        let canvas = size.map(f64::from);
         for (i, layer) in layers.iter().enumerate() {
             let source = self.sources[i];
-            let fill = composition
-                .plan
+            let fill = plan
                 .fills
                 .iter()
                 .find(|(track, _)| *track == layer.track)
@@ -168,28 +243,40 @@ impl GpuProgram {
                 }
                 _ => None,
             };
-            self.layer(composition, layer, *range, at, size, fill, source, texture)?;
+            self.layer(plan, layer, *range, at, canvas, fill, source, texture)?;
+        }
+        if text {
+            for (range, texture, dest, opacity) in &self.texts {
+                if at < range[0] || at >= range[1] {
+                    continue;
+                }
+                let k = (at - range[0]) as f32 / (range[1] - range[0]).max(1) as f32;
+                let mut text =
+                    Layer::new(Layer::TEXTURE, *dest, [canvas[0] as f32, canvas[1] as f32]);
+                text.opacity = opacity[0] + (opacity[1] - opacity[0]) * k;
+                self.layers.push(text);
+                self.textures.push(Some(texture.clone()));
+            }
+        }
+        if bgra {
+            for layer in &mut self.layers {
+                layer.flags |= Layer::OUT_BGRA;
+            }
         }
         if self.layers.len() > MAX_LAYERS {
             self.layers.truncate(MAX_LAYERS);
             self.textures.truncate(MAX_LAYERS);
         }
         self.compositor
-            .encode(
-                commands,
-                target,
-                composition.size,
-                &self.layers,
-                &self.textures,
-            )
+            .encode(commands, target, size, &self.layers, &self.textures)
             .map_err(gpu)?;
-        Ok(Some(at))
+        Ok(true)
     }
 
     #[allow(clippy::too_many_arguments)]
     fn layer(
         &mut self,
-        composition: &Composition,
+        plan: &Plan,
         layer: &VideoLayer,
         [from, to]: [Frame; 2],
         at: Frame,
@@ -261,7 +348,7 @@ impl GpuProgram {
         self.push(picture, Some(texture));
         let Some((samples, _, points)) = usize::try_from(layer.cursor)
             .ok()
-            .and_then(|i| composition.plan.cursors.get(i))
+            .and_then(|i| plan.cursors.get(i))
         else {
             return Ok(());
         };
@@ -295,7 +382,7 @@ impl GpuProgram {
             }
         }
         let table = usize::try_from(layer.cursor).unwrap_or(0);
-        let images = &composition.plan.cursors[table].1;
+        let images = &plan.cursors[table].1;
         let sprite = cursor_at(samples, st).and_then(|(sample, at)| {
             let image = usize::try_from(sample.image).ok()?;
             let (texture, size) = self.cursors[table].get(image)?;
