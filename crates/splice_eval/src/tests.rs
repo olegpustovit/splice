@@ -250,7 +250,7 @@ fn effect_parameters_merge_by_scope_and_enable_override() {
 }
 
 #[test]
-fn take_fade_applies_to_audio_and_behind_presenter_layers() {
+fn m15_take_fade_is_one_group_and_behind_overlays_draw_once() {
     use splice_model::ItemKind;
     let mut project = sample();
     let id = "clp_take".parse().unwrap();

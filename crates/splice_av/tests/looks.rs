@@ -647,8 +647,36 @@ mod looks {
 
     /// H8, T36.5: a thick caption stroke outlines the glyphs instead of covering them, two
     /// lines that do not fit shrink instead of dropping the second, and the spoken word draws
+    /// H7: a window backing draws its own evaluated values; the picture's look (here half
+    /// opacity) never applies to it a second time.
+    pub(super) fn h7_the_backing_never_borrows_the_picture_look() {
+        let dir = scratch("backing");
+        let red = still(&dir.0, 1, [220, 30, 30]);
+        let mut project = project(
+            vec![red],
+            vec![(1, 10, vec![fx(1, "transform", vec![("opacity", n(0.5))])])],
+        );
+        project.effects.push(fx(
+            2,
+            "window",
+            vec![
+                ("padding", n(0.2)),
+                ("corner", n(0.0)),
+                ("shadow", n(0.0)),
+                ("background", s("color")),
+                ("color", s("#00c800")),
+            ],
+        ));
+        let composition = Composition::prepare(&project, &dir.0).unwrap();
+        let corner = pixel(&composition, 5, [2, 2]);
+        assert!(near(corner, [0, 200, 0], 4), "backdrop {corner:?}");
+        // The card itself is half red over the green backdrop.
+        let card = pixel(&composition, 5, [48, 32]);
+        assert!(near(card, [110, 115, 15], 8), "card {card:?}");
+    }
+
     /// in the active color.
-    pub(super) fn caption_stroke_sits_under_the_fill_and_the_active_word_is_colored() {
+    pub(super) fn h8_caption_stroke_sits_under_the_fill_and_the_active_word_is_colored() {
         use apple_sys::composition::{TextLayer, TextStyle, text_rgba};
         let size = [400u32, 120];
         let layer = |text: &str, active: Option<([usize; 2], u32)>| TextLayer {
@@ -1168,8 +1196,12 @@ fn main() {
             looks::ocr_reads_text_and_a_blur_mask_hides_it,
         ),
         (
-            "looks_caption_stroke_sits_under_the_fill_and_the_active_word_is_colored",
-            looks::caption_stroke_sits_under_the_fill_and_the_active_word_is_colored,
+            "looks_h7_the_backing_never_borrows_the_picture_look",
+            looks::h7_the_backing_never_borrows_the_picture_look,
+        ),
+        (
+            "looks_h8_caption_stroke_sits_under_the_fill_and_the_active_word_is_colored",
+            looks::h8_caption_stroke_sits_under_the_fill_and_the_active_word_is_colored,
         ),
         (
             "looks_exports_alpha_audio_ranges_and_chapters",

@@ -168,14 +168,31 @@ struct Visual {
 }
 
 impl Visual {
-    fn draw(&self, at: f64, fade: f64, look: Look, out: &mut FramePlan) {
+    /// `card`: an overlay's backing frames its card and moves, scales and fades with it; a
+    /// spine clip's backing is the canvas backdrop and never borrows the clip's look (H7, D14).
+    fn draw(&self, at: f64, fade: f64, look: Look, card: bool, out: &mut FramePlan) {
         if let Some(window) = self.picture.window
             && window.background != Background::None
         {
+            let (bounds, opacity) = if card {
+                // Scaled about the picture's own pivot, so card and backing stay aligned.
+                let d = self.picture.destination;
+                let pivot = [d.x + look.anchor[0] * d.w, d.y + look.anchor[1] * d.h];
+                let b = self.bounds;
+                let bounds = Rect {
+                    x: pivot[0] + (b.x - pivot[0]) * look.scale + look.offset[0],
+                    y: pivot[1] + (b.y - pivot[1]) * look.scale + look.offset[1],
+                    w: b.w * look.scale,
+                    h: b.h * look.scale,
+                };
+                (bounds, fade * look.opacity)
+            } else {
+                (self.bounds, fade)
+            };
             out.layers.push(Layer::Background {
-                bounds: self.bounds,
+                bounds,
                 fill: window.background,
-                opacity: fade * look.opacity,
+                opacity,
             });
         }
         if self.visible {
@@ -757,7 +774,7 @@ impl Evaluator {
         let look = clip.rig.look(local, self.size.map(f64::from));
         let picture_source = source.clamp(0.0, (input.frames - 1.0).max(0.0));
         if let Some(visual) = &clip.visual {
-            visual.draw(picture_source, 1.0, look, out);
+            visual.draw(picture_source, 1.0, look, false, out);
             if let Some(Layer::Picture(picture)) = out.layers.last_mut()
                 && let Some(view) = usize::try_from(frame).ok().and_then(|f| self.camera.get(f))
             {
@@ -801,6 +818,7 @@ impl Evaluator {
                 source.min((overlay.input.frames - 1.0).max(0.0)),
                 opacity,
                 overlay.rig.look(local, self.size.map(f64::from)),
+                true,
                 out,
             );
             let (gain, pan) = self.mix(overlay.mix.as_ref(), local);

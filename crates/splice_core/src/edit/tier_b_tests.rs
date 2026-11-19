@@ -977,3 +977,26 @@ fn zoom_remove_deletes_only_zooms() {
     let error = apply(&mut sample(), ops.as_array().unwrap(), Source::Agent, false).unwrap_err();
     assert_eq!(error.error.code, "WRONG_KIND");
 }
+
+/// M9: a zoom made by overlay.add carries the validated default amount (it takes no amount,
+/// so nothing unchecked can reach the camera).
+#[test]
+fn m9_overlay_add_zoom_is_a_validated_default() {
+    let mut project = sample();
+    let ops = splice_json::parse(r#"[{"cmd":"overlay.add","kind":"zoom","at":200}]"#).unwrap();
+    let report = apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let Some(crate::commands::Target::Timeline(TimelineId::Item(id))) =
+        report.changes[0].created.first().cloned()
+    else {
+        panic!("zoom created");
+    };
+    let slot = project.items.find(id).unwrap();
+    let ItemKind::Zoom(zoom) = project.items.data(slot).unwrap().kind else {
+        panic!("a zoom")
+    };
+    assert!((Zoom::AMOUNT[0]..=Zoom::AMOUNT[1]).contains(&zoom.amount));
+    let ops =
+        splice_json::parse(r#"[{"cmd":"overlay.add","kind":"zoom","at":200,"amount":9}]"#).unwrap();
+    let error = apply(&mut sample(), ops.as_array().unwrap(), Source::Agent, false).unwrap_err();
+    assert_eq!(error.error.code, "UNKNOWN_PARAM");
+}

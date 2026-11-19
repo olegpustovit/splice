@@ -62,7 +62,7 @@ fn keys_ease(t: f64) -> f64 {
 }
 
 #[test]
-fn dissolve_blends_both_clips_with_equal_power_audio() {
+fn h6_dissolve_composites_the_incoming_side_as_one_group() {
     // Source handles on both sides of the cut: the opener runs 30 frames past its clip and the
     // take starts 30 frames into its media (D14: a transition consumes them).
     let mut project = sample();
@@ -307,7 +307,7 @@ fn many_sibling_compounds_render_like_their_clips() {
 /// is keyed, and nothing else accepts keys. A keyed parameter that renders its constant would
 /// fail here.
 #[test]
-fn every_keyable_parameter_renders_its_keys() {
+fn m20_every_keyable_parameter_renders_its_keys() {
     use splice_core::commands::{effect_schemas, keyable};
     use splice_json::Value as Json;
     let render = |ops: &str| {

@@ -183,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn the_focused_spring_settles_like_caps_and_never_snaps_back() {
+    fn h11_the_focused_spring_settles_like_caps_and_never_snaps_back() {
         let views = solve(&[segment(30, 90, 2.0, [0.5, 0.5])], 180, 60);
         // 90% of the way in about 0.32 s (19 frames at 60 fps) after the segment starts.
         let reached = views.iter().position(|v| v.amount >= 1.9).unwrap();

@@ -271,7 +271,7 @@ fn compounds_nest_four_deep_and_no_deeper() {
 /// H9, D14: every path that adds or changes a transition runs one validator; refusals name
 /// the rule and the fix.
 #[test]
-fn transitions_are_validated_on_every_path() {
+fn h9_transitions_are_validated_on_every_path() {
     let refused = |ops: &str| {
         let mut project = sample();
         let ops = splice_json::parse(ops).unwrap();
@@ -316,7 +316,7 @@ fn transitions_are_validated_on_every_path() {
 /// is the validator's range: the bounds apply, and just outside them is refused naming the
 /// argument. Docs and validator cannot drift apart silently.
 #[test]
-fn documented_ranges_match_the_validators() {
+fn m8_documented_ranges_match_the_validators() {
     let mut checked = 0;
     let mut drift = Vec::new();
     for row in crate::commands::COMMANDS {
