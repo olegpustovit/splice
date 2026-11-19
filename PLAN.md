@@ -277,7 +277,13 @@ cut logs one "try it as a user" line.
   golden-locked; optional fields omittable, never `null`.
 - [x] T14.4 (b9835d6) Adversarial tests: infinite loop, memory bomb, deep recursion, `SpliceError` keeps
   `fix`, line numbers map to the user's source.
-- [ ] T14.5 A/B the T3.6 evals with and without code mode (calls, tokens, wall, pass rate).
+- [x] T14.5 A/B the T3.6 evals with and without code mode: 45 runs, 5 tasks, n=3, all pass. Code mode
+  -49% turns, -63% calls, -16% wall, +4% cost (cache writes are 67% of cost and grow with the up-front
+  .d.ts). Round 1 found five code-mode defects, fixed in a4218a3 (tiktok-textedit -24% cost, -29% wall).
+  Study: https://artifacts.microapps.space/a/f0hfkms3e4d0 · archive: https://artifacts.microapps.space/a/rs6zd6dc2ryj
+- [ ] T14.6 Progressive declarations: code.run's description carries a compact index, and the agent pulls
+  `describe(query)` slices instead of the whole .d.ts. Accept: code-mode cache writes at or below direct
+  and cost below direct on the T14.5 tasks, with no pass-rate loss.
 
 ## Log
 
@@ -343,3 +349,8 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-19 · T12.1–T12.5 · done (interim renderer) · 5cc7409 · Cursor, click rings, eased click zoom toward the click, window corners and shadow, keystroke chips and export text render through a custom compositor. `cargo t -p splice_av native_take` 0.30 s on the Mini. `make mac-check` green; window_program_4k 8.2 ms against an 8 ms budget (4.1–4.5 ms before, measured side by side), which T12.7 fixes by moving the renderer to OGPU.
 - 2026-11-19 · T14 merged · da57597 · Code mode on QuickJS-NG; goldens re-blessed against the 0.2 command table. `make check` 3.36 s (98 tests); `make mac-check` green.
 - 2026-11-19 · T12.7 · done · ef451c1, eea9f2c · One OGPU renderer (`splice_gpu`) for the viewer, frame grabs and export; the custom compositor only pins decoded buffers. Export is a main-thread stepper (OGPU's Metal handles live there): AVAssetReader → OGPU → AVAssetWriter with the audio mix alongside. Rec. 709 tagging keeps grabs and MP4s equal: check-macos-export.sh 0.23–0.56/255 (was 1.55). window_program_4k 7.6–7.9 ms at load 8.5–9.5, zero warm allocations. `make mac-check` green. Open: decoded frames are copied once on the GPU (an OGPU `rewrap_texture` would make it zero-copy); MSL only until Linux gets a decoder.
+- 2026-11-19 · T13 · done · eecd6c1 · Audio lanes, sound items, ducking under speech, BS.1770 loudness at import, normalize, system audio on by default. Music reaches the exported mix (native test).
+- 2026-11-19 · T9.1–9.2 · done · a4ac72e · SpeechAnalyzer through a Swift `@_cdecl` shim in apple_sys; `transcript.get {transcribe:true}` commits `transcript.set`. Cargo links at macOS 15.0 so the Swift runtime resolves from the OS. E2E on the Mini: 10 words in 0.2 s, captions and SRT.
+- 2026-11-19 · T6.3 · done · 2b5cd03 · `UndoStack::gesture`: a drag is one undo step; cancel restores without redo.
+- 2026-11-19 · gate fix · 1c32dc1 · `make check` had been red since ff8a777 (tier-b goldens ended in a newline; CLI snapshot test predated the media table); my gate greps hid it. Fixed; gate exit codes are now checked, not grepped.
+- 2026-11-19 · T14.5 · done · a4218a3, c6dca9f · Code-mode A/B: 45 runs, all pass; -49% turns, -63% calls, -16% wall, +4% cost. Five code-mode defects found by round 1 and fixed (export polling inside code.run, loose .d.ts types, trace bloat, planned rows, tool-as-op hint); two cross-arm defects fixed after round 2. Study f0hfkms3e4d0, archive rs6zd6dc2ryj.
