@@ -919,6 +919,69 @@ fn m13_consolidate_copies_only_on_commit_and_verifies_existing_files() {
 }
 
 #[test]
+fn m11_caption_sidecars_follow_the_export_range_and_overwrite() {
+    let root = TestDirectory::new("sidecar");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    let store = splice_core::history::Store::open(&sample).unwrap();
+    let p = store.project();
+    let all = super::media::captions(p, &object(vec![]), "json", None).unwrap();
+    let all = all.field("cues").unwrap().as_array().unwrap();
+    let frame = |cue: &Json, key: &str| cue.field(key).and_then(Json::as_i64).unwrap();
+    // Export a window starting inside the second cue: the first is dropped, the second is
+    // clipped to the window, and every time is relative to the window's start.
+    let second = &all[1];
+    let from = frame(second, "from") + 3;
+    let window = [from as i32, frame(second, "to") as i32 + 30];
+    let ranged = super::media::captions(p, &object(vec![]), "json", Some(window)).unwrap();
+    let ranged = ranged.field("cues").unwrap().as_array().unwrap();
+    assert_eq!(frame(&ranged[0], "from"), 0);
+    assert_eq!(frame(&ranged[0], "to"), frame(second, "to") - from);
+    assert!(
+        ranged
+            .iter()
+            .all(|cue| frame(cue, "to") <= i64::from(window[1] - window[0]))
+    );
+    let srt = super::media::captions(p, &object(vec![]), "srt", Some(window)).unwrap();
+    let srt = srt.field("text").and_then(Json::as_str).unwrap();
+    assert!(srt.starts_with("1\n00:00:00,000 --> "), "{srt}");
+    // An existing sidecar is replaced only with overwrite.
+    let path = root.0.join("out.srt");
+    super::export_file::write_sidecar(&path, "first", false).unwrap();
+    let error = super::export_file::write_sidecar(&path, "second", false).unwrap_err();
+    assert_eq!(error.code, "EXISTS");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "first");
+    super::export_file::write_sidecar(&path, "second", true).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+}
+
+#[test]
+fn low_a_sessionless_failed_export_closes_its_session() {
+    let root = TestDirectory::new("export-session");
+    let package = root.0.join("Export.splice");
+    let mut projects = project::Projects::default();
+    let opened = projects
+        .info(&object(vec![
+            ("path", text(package.to_str().unwrap())),
+            ("create", Json::Bool(true)),
+        ]))
+        .unwrap();
+    let id = opened.field("projectId").and_then(Json::as_str).unwrap();
+    for preset in ["no-such-preset", "youtube-1080"] {
+        let args = object(vec![
+            ("projectId", text(id)),
+            ("ifRevision", Json::Unsigned(0)),
+            ("preset", text(preset)),
+        ]);
+        assert!(platform::export(&mut projects, &args).is_err());
+    }
+    let store = projects.lookup_id(id).unwrap();
+    assert!(!store.sessions().is_empty());
+    assert!(store.sessions().iter().all(|session| !session.open));
+    projects.close().unwrap();
+}
+
+#[test]
 fn save_as_copies_the_package_and_opens_the_copy() {
     let root = TestDirectory::new("save-as");
     let sample = root.0.join("sample.splice");

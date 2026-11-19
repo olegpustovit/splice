@@ -226,15 +226,19 @@ impl Job {
         let output = Output::prepare(target, overwrite)?;
         let path = output.file().to_path_buf();
         if let Some(format) = request.sidecar {
-            let cues = super::media::captions(store.project(), &Json::Object(vec![]), format)?;
-            let sidecar = path.with_extension(format);
-            fs::write(
-                &sidecar,
+            let cues = super::media::captions(
+                store.project(),
+                &Json::Object(vec![]),
+                format,
+                Some(request.range),
+            )?;
+            super::export_file::write_sidecar(
+                &path.with_extension(format),
                 cues.field("text")
                     .and_then(Json::as_str)
                     .unwrap_or_default(),
-            )
-            .map_err(|e| path_error(&sidecar, &e))?;
+                overwrite,
+            )?;
         }
         let settings = object(vec![
             ("preset", text(request.preset)),

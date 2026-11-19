@@ -188,17 +188,22 @@ By default, publishing a new filename uses a hard link on the destination volume
 
 `preset` is one of `social-hevc`, `social-h264`, `youtube`, `shorts`, `reels`, `tiktok`,
 `linkedin`, `prores-422`, `prores-4444`, `hevc-alpha`, `audio-m4a`, `audio-wav`, `gif` or
-`poster` (a PNG still). `range:{from, to}` exports part of the timeline; `bitrate` and `size`
-override the preset (the frame rate is the project's). `variants:[{aspect, preset?}]` exports
-reframed copies in one job. Markers become a chapter track; `captions:"srt"|"vtt"` writes a
-sidecar and burned-in captions stay as they are. `format:"fcpxml"` writes FCPXML 1.10 for Final
+`poster` (a PNG still). `from`/`to` (whole frames from 0 to the timeline's end; anything else is
+refused with the broken rule, never clamped) or `marker` export part of the timeline; `bitrate`
+overrides the preset (the frame rate is the project's). `variants:[{aspect, preset?}]` exports
+reframed copies, one job each; variants that would write the same file (same size and container)
+are refused, and if one variant cannot start, the ones already started are cancelled. Markers
+become a chapter track; `captions:"srt"|"vtt"` writes a sidecar with the cues inside the exported
+range, timed from its start, and replaces an existing sidecar only with `overwrite:true`; burned-in
+captions stay as they are. Without a `sessionId` the export opens its own session, and closes it
+again when the export fails to start. `format:"fcpxml"` writes FCPXML 1.10 for Final
 Cut Pro instead of encoding. Two exports encode at once and later ones queue (`queued` in
 `jobs.status`, with `fps` and `eta` while running). A full disk fails early with `DISK_FULL`, and
 cancelling removes the partial file.
 
 Clients that pass `_meta.progressToken` on `export.start` receive `notifications/progress`
 (`progress` 0–1, `total` 1) as frames encode. `notifications/cancelled` with the request's ID
-cancels the job that request started.
+cancels the job that request started (never one a `jobs.status` or `jobs.cancel` call only names).
 
 The server publishes the finished MP4 even when the client makes no status calls. Use
 `jobs.status {jobId}` for progress and the final path. `jobs.cancel {jobId}` requests cancellation,

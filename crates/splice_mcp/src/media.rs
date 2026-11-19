@@ -83,7 +83,7 @@ fn clip_transcript(p: &Project, slot: Slot) -> Option<&Transcript> {
 
 pub(super) fn transcript(p: &Project, args: &Json) -> Result<Json, StoreError> {
     if let Some(format) = args.optional_string("captions")? {
-        return captions(p, args, format);
+        return captions(p, args, format, None);
     }
     if args.field("item").is_some() {
         return item_transcript(p, args);
@@ -267,7 +267,14 @@ fn no_transcript() -> StoreError {
     )
 }
 
-pub(super) fn captions(p: &Project, args: &Json, format: &str) -> Result<Json, StoreError> {
+/// Caption cues as JSON, SRT or WebVTT. With `window` (an export's `[from, to)`), only cues
+/// inside it, clipped to it and timed from its start (M11).
+pub(super) fn captions(
+    p: &Project,
+    args: &Json,
+    format: &str,
+    window: Option<[Frame; 2]>,
+) -> Result<Json, StoreError> {
     if !matches!(format, "json" | "srt" | "vtt") {
         return Err(bad("captions", "json, srt or vtt"));
     }
@@ -293,9 +300,14 @@ pub(super) fn captions(p: &Project, args: &Json, format: &str) -> Result<Json, S
         }
         let id = p.items.id(slot).unwrap();
         let interval = span(p, TimelineId::Item(id))?;
+        let [from, to] = window.unwrap_or([interval.start, interval.end]);
+        let (start, end) = (interval.start.max(from), interval.end.min(to));
+        if start >= end {
+            continue;
+        }
         cues.push((
-            interval.start,
-            interval.end,
+            start - window.map_or(0, |[from, _]| from),
+            end - window.map_or(0, |[from, _]| from),
             id,
             data.lane,
             timeline::tokens(p, slot)?,

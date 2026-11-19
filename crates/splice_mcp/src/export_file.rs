@@ -1,8 +1,8 @@
 use super::wire::failure;
 use splice_core::history::StoreError;
 use std::{
-    fs::{self, DirBuilder, File},
-    io,
+    fs::{self, DirBuilder, File, OpenOptions},
+    io::{self, Write},
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -89,6 +89,23 @@ impl Drop for Output {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.directory);
     }
+}
+
+/// Writes a caption sidecar beside the export; an existing file is replaced only with
+/// `overwrite` (M11).
+pub(super) fn write_sidecar(path: &Path, text: &str, overwrite: bool) -> Result<(), StoreError> {
+    check_destination(path, overwrite)?;
+    let mut options = OpenOptions::new();
+    options.write(true);
+    if overwrite {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    options
+        .open(path)
+        .and_then(|mut file| file.write_all(text.as_bytes()))
+        .map_err(|error| path_error(path, &error))
 }
 
 fn check_destination(path: &Path, overwrite: bool) -> Result<(), StoreError> {

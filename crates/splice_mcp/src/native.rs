@@ -460,6 +460,7 @@ pub(super) fn translate_captions(
         p,
         &Json::Object(vec![("lane".into(), Json::String(lane))]),
         "json",
+        None,
     )?;
     let texts: Vec<String> = cues
         .field("cues")

@@ -155,19 +155,28 @@ fn export_fcpxml(store: &Store, path: Option<&str>) -> Result<Json, StoreError> 
 
 pub(super) fn export(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
     let owner = args.string("projectId")?;
+    if args.field("sessionId").is_some() {
+        return export_in_session(projects, owner, args);
+    }
     // An export reads one revision; without a session it gets its own, so the first call works
-    // (a missing session cost agents a round trip).
-    let mut implicit;
-    let args = if args.field("sessionId").is_none() {
-        let session = projects.lookup_id(owner)?.start_session("export", now())?;
-        implicit = args.clone();
-        if let Json::Object(fields) = &mut implicit {
-            fields.push(("sessionId".into(), Json::String(session.id.to_string())));
-        }
-        &implicit
-    } else {
-        args
-    };
+    // (a missing session cost agents a round trip). A failed export closes it again.
+    let session = projects.lookup_id(owner)?.start_session("export", now())?;
+    let mut implicit = args.clone();
+    if let Json::Object(fields) = &mut implicit {
+        fields.push(("sessionId".into(), Json::String(session.id.to_string())));
+    }
+    let result = export_in_session(projects, owner, &implicit);
+    if result.is_err() {
+        let _ = projects.lookup_id(owner)?.end_session(session.id);
+    }
+    result
+}
+
+fn export_in_session(
+    projects: &mut Projects,
+    owner: &str,
+    args: &Json,
+) -> Result<Json, StoreError> {
     let store = projects.lookup_id(owner)?;
     let path = args.optional_string("path")?;
     let overwrite = args.flag("overwrite")?;
@@ -202,6 +211,9 @@ pub(super) fn export(projects: &mut Projects, args: &Json) -> Result<Json, Store
     #[cfg(target_os = "macos")]
     {
         let mut receipts = Vec::with_capacity(outputs.len());
+        // Jobs join the project only once every variant started: if one fails, dropping the
+        // others cancels them instead of orphaning running jobs nobody was told about (M12).
+        let mut started = Vec::with_capacity(outputs.len());
         for output in outputs {
             let store = projects.lookup_id(owner)?;
             match output.kind {
@@ -221,10 +233,11 @@ pub(super) fn export(projects: &mut Projects, args: &Json) -> Result<Json, Store
                         overwrite,
                     )?;
                     receipts.push(job.started());
-                    projects.exports.push(job);
+                    started.push(job);
                 }
             }
         }
+        projects.exports.append(&mut started);
         Ok(match receipts.len() {
             1 => receipts.pop().expect("one receipt"),
             _ => super::object(vec![

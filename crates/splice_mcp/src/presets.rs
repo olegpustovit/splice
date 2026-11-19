@@ -1,7 +1,7 @@
 //! Export requests (PLAN.md T21.1–T21.2): presets, ranges, bitrate, chapters, caption sidecars
 //! and aspect variants. Portable: the macOS job encodes what this resolves; Linux tests it.
 use super::{Json, wire::*};
-use splice_core::history::StoreError;
+use splice_core::{commands::CommandError, history::StoreError};
 use splice_model::*;
 
 /// Output kinds the native writer knows (mirrors `apple_sys::composition::Codec`).
@@ -221,12 +221,8 @@ pub(super) fn resolve(
             [project.markers[index].at, to]
         }
         (from, to, None) => [
-            from.and_then(Json::as_i64)
-                .map_or(0, |v| v as Frame)
-                .clamp(0, end),
-            to.and_then(Json::as_i64)
-                .map_or(end, |v| v as Frame)
-                .clamp(0, end),
+            range_frame("from", from, 0, end)?,
+            range_frame("to", to, end, end)?,
         ],
     };
     if range[1] <= range[0] {
@@ -287,19 +283,64 @@ pub(super) fn resolve(
             args.optional_string("preset")?.unwrap_or("social-hevc"),
             None,
         )?]),
-        Some(list) => {
-            let list = list
+        Some(value) => {
+            let list = value
                 .as_array()
                 .filter(|l| (1..=6).contains(&l.len()))
                 .ok_or_else(|| bad("variants", "1 to 6 {aspect, preset} objects"))?;
-            list.iter()
+            let outputs = list
+                .iter()
                 .map(|v| {
                     let preset = v.optional_string("preset")?.unwrap_or("social-h264");
                     output(preset, Some(v.string("aspect")?))
                 })
-                .collect()
+                .collect::<Result<Vec<_>, _>>()?;
+            // Files are named by size and container: two variants that share both would
+            // write the same file (M12).
+            for (index, a) in outputs.iter().enumerate() {
+                if outputs[..index]
+                    .iter()
+                    .any(|b| a.size == b.size && a.extension == b.extension)
+                {
+                    return Err(CommandError::rule(
+                        "BAD_ARGS",
+                        "variants",
+                        Some(value.clone()),
+                        "variants that each make a different file (size and container)",
+                        "Give each variant a different aspect, or export the other preset in a second export.start.",
+                    )
+                    .into());
+                }
+            }
+            Ok(outputs)
         }
     }
+}
+
+/// An export bound: a whole frame inside the timeline, never clamped or wrapped.
+fn range_frame(
+    key: &str,
+    value: Option<&Json>,
+    default: Frame,
+    end: Frame,
+) -> Result<Frame, StoreError> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    value
+        .as_i64()
+        .and_then(|frame| Frame::try_from(frame).ok())
+        .filter(|frame| (0..=end).contains(frame))
+        .ok_or_else(|| {
+            CommandError::rule(
+                "BAD_ARGS",
+                key,
+                Some(value.clone()),
+                &format!("a whole frame from 0 to {end}"),
+                &format!("Pass {key} as an integer frame inside the timeline (0 to {end})."),
+            )
+            .into()
+        })
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -364,6 +405,34 @@ pub(super) fn reframed(project: &Project, size: [u32; 2]) -> Result<Option<Proje
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn refused(args: &str) -> Box<splice_core::commands::Rule> {
+        let args = splice_json::parse(args).unwrap();
+        resolve(&Project::default(), 120, &args)
+            .err()
+            .and_then(|error| error.rule)
+            .expect("a refusal with its rule")
+    }
+
+    #[test]
+    fn m12_variants_that_would_share_a_file_are_refused() {
+        let rule =
+            refused(r#"{"variants":[{"aspect":"9:16"},{"aspect":"9:16","preset":"social-hevc"}]}"#);
+        assert_eq!(rule.param, "variants");
+    }
+
+    #[test]
+    fn low_export_bounds_are_whole_frames_inside_the_timeline() {
+        assert_eq!(refused(r#"{"from":1.5}"#).param, "from");
+        assert_eq!(refused(r#"{"to":4294967336}"#).param, "to");
+        assert_eq!(refused(r#"{"to":121}"#).param, "to");
+        assert_eq!(refused(r#"{"from":-1}"#).param, "from");
+        let args = splice_json::parse(r#"{"from":0,"to":120}"#).unwrap();
+        assert_eq!(
+            resolve(&Project::default(), 120, &args).unwrap()[0].range,
+            [0, 120]
+        );
+    }
 
     #[test]
     fn presets_ranges_variants_and_reframing_resolve() {
