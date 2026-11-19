@@ -67,6 +67,7 @@ fn check_png_path(file: &Path) -> Result<(), StoreError> {
 pub(super) fn render_tool(
     store: &Store,
     selection: FrameSelection,
+    sheet: bool,
     content: &mut Vec<Json>,
 ) -> Result<Json, StoreError> {
     let requested = selection.resolve(timeline::duration(store.project())?)?;
@@ -80,10 +81,16 @@ pub(super) fn render_tool(
     let size = composition.size();
     let mut pixels = buffer(size)?;
     let mut frames = Vec::with_capacity(requested.len());
+    let mut thumbs = Vec::new();
     for at in requested {
         composition
             .read_frame(at, &mut pixels)
             .map_err(|error| render_error(&error))?;
+        if sheet {
+            thumbs.push(pixels.clone());
+            frames.push(info(at, size));
+            continue;
+        }
         let full = encode_frame_png(&pixels, size, 0).map_err(|error| render_error(&error))?;
         let name = format!("Frame {at}");
         let output = Output::prepare(
@@ -111,6 +118,28 @@ pub(super) fn render_tool(
             ("name", text(&name)),
             ("uri", text(&uri)),
             ("mimeType", text("image/png")),
+        ]));
+    }
+    if sheet {
+        let (pixels, sheet_size) = super::sheet::tile(&thumbs, size, 360);
+        let png = encode_frame_png(&pixels, sheet_size, 0).map_err(|error| render_error(&error))?;
+        let output = Output::prepare(
+            directory_path.join(format!(
+                "r{revision}-{:016x}-sheet.png",
+                store.project().hash
+            )),
+            true,
+        )?;
+        save(&output, &png)?;
+        content.push(object(vec![
+            ("type", text("image")),
+            ("mimeType", text("image/png")),
+            ("data", Json::String(base64(&png))),
+        ]));
+        return Ok(object(vec![
+            ("revision", rev(revision)),
+            ("frames", Json::Array(frames)),
+            ("sheet", text(&file_uri(output.file()))),
         ]));
     }
     Ok(object(vec![

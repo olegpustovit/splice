@@ -127,8 +127,16 @@ fn index() -> String {
         "   * their types in one call: splice.describe(\"clip.crop,effect.add\") (or commands.describe\n",
         "   * {format:\"ts\", query}); \"*\" returns everything. Commands:\n",
     ));
+    // One line per group keeps discovery small as rows grow (T23.1).
+    let mut by_group: Vec<(&str, Vec<&str>)> = Vec::new();
     for row in COMMANDS.iter().filter(|row| row.tier != Tier::Planned) {
-        let _ = writeln!(out, "   *   {} — {}", row.id, row.title);
+        match by_group.iter_mut().find(|(group, _)| *group == row.group) {
+            Some((_, ids)) => ids.push(row.id),
+            None => by_group.push((row.group, vec![row.id])),
+        }
+    }
+    for (group, ids) in by_group {
+        let _ = writeln!(out, "   *   {group}: {}", ids.join(", "));
     }
     out.push_str(
         "   */\n  type Op = { cmd: string; ref?: `$${string}`; [param: string]: unknown };\n}\n",

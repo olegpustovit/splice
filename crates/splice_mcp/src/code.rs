@@ -253,13 +253,11 @@ fn dispatch(
     Ok(payload.clone())
 }
 
-/// The first project the code touched: its revision before the first call and after the last.
-// ponytail: one project per run. Report revisions per project if evals show multi-project code.
+/// Each project the code touched: its revision before the first call and after the last
+/// (T23.2). The first project's range is the top-level `from`/`to`; others are listed by ID.
 #[derive(Default)]
 struct Revisions {
-    project: Option<String>,
-    from: Option<Json>,
-    to: Option<Json>,
+    seen: Vec<(String, Json, Json)>,
 }
 
 impl Revisions {
@@ -271,24 +269,33 @@ impl Revisions {
         else {
             return;
         };
-        if self.project.get_or_insert_with(|| project.into()) != project {
-            return;
-        }
         let Some(revision) = payload.field("revision") else {
             return;
         };
-        if self.from.is_none() {
+        match self.seen.iter_mut().find(|(id, ..)| id == project) {
+            Some((_, _, to)) => *to = revision.clone(),
             // An edit's precondition is the state it started from.
-            self.from = Some(args.field("ifRevision").unwrap_or(revision).clone());
+            None => self.seen.push((
+                project.into(),
+                args.field("ifRevision").unwrap_or(revision).clone(),
+                revision.clone(),
+            )),
         }
-        self.to = Some(revision.clone());
     }
 
     fn json(self) -> Json {
-        match (self.from, self.to) {
-            (Some(from), Some(to)) => object(vec![("from", from), ("to", to)]),
-            _ => Json::Null,
+        let mut seen = self.seen.into_iter();
+        let Some((_, from, to)) = seen.next() else {
+            return Json::Null;
+        };
+        let mut fields = vec![("from".to_owned(), from), ("to".to_owned(), to)];
+        let others: Vec<(String, Json)> = seen
+            .map(|(id, from, to)| (id, object(vec![("from", from), ("to", to)])))
+            .collect();
+        if !others.is_empty() {
+            fields.push(("projects".to_owned(), Json::Object(others)));
         }
+        Json::Object(fields)
     }
 }
 

@@ -228,15 +228,20 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "view.frames",
-        description: "Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM.",
+        description: "Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count; sheet:true returns one contact-sheet image of them all. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM.",
         read_only: true,
         input: &[
             ("projectId", "string"),
             ("at", FRAMES),
             ("count", FILMSTRIP),
+            ("sheet", "boolean"),
         ],
         required: &["projectId"],
-        output: &[("revision", REVISION), ("frames", "array")],
+        output: &[
+            ("revision", REVISION),
+            ("frames", "array"),
+            ("sheet", "string"),
+        ],
         success: &[&["revision", "frames"]],
     },
     Tool {

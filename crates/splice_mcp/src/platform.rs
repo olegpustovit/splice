@@ -80,13 +80,14 @@ pub(super) fn frames(
     content: &mut Vec<Json>,
 ) -> Result<Json, StoreError> {
     let selection = FrameSelection::parse(args)?;
+    let sheet = args.flag("sheet")?;
     #[cfg(target_os = "macos")]
     {
-        super::frames::render_tool(store, selection, content)
+        super::frames::render_tool(store, selection, sheet, content)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (store, content);
+        let _ = (store, content, sheet);
         // Keep argument validation common and leave timeline and media handling to the native renderer.
         match selection {
             FrameSelection::Explicit(values) => {

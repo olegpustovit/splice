@@ -161,7 +161,24 @@ impl Projects {
 
     /// Advances running exports for up to `budget` in total. True while any is running.
     #[cfg(target_os = "macos")]
+    /// An export's activity and progress, for progress notifications.
+    #[cfg(target_os = "macos")]
+    pub(super) fn progress(&self, id: splice_model::JobId) -> Option<(bool, f64)> {
+        let job = self.exports.iter().find(|job| job.id == id)?;
+        Some((job.active(), job.progress()))
+    }
+
+    /// Cancels an export or background job.
+    #[cfg(target_os = "macos")]
+    pub(super) fn cancel(&mut self, id: splice_model::JobId) {
+        if let Some(job) = self.exports.iter_mut().find(|job| job.id == id) {
+            job.cancel();
+        }
+        let _ = super::background::job(self, id, true);
+    }
+
     /// Steps the first `CONCURRENT_EXPORTS` active exports; later ones queue.
+    #[cfg(target_os = "macos")]
     pub(super) fn tick_exports(&mut self, budget: std::time::Duration) -> bool {
         let running = self
             .exports

@@ -1067,8 +1067,8 @@ declare const splice: {
     analyze(args: { projectId?: string; clip: string; kinds?: "loudness" | "pauses" | "peaks" | "beats" | "sounds" | "shots" | "text" | "faces" | "people" | "matte"[]; }): { revision: Splice.Revision; clip: string; components?: unknown[]; pauses?: unknown[]; peaks?: Record<string, unknown>; beats?: unknown[]; sounds?: unknown[]; shots?: unknown[]; text?: unknown[]; faces?: unknown[]; people?: unknown[]; matte?: string; };
   };
   view: {
-    /** Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */
-    frames(args?: { projectId?: string; at?: number[]; count?: number; }): { revision: Splice.Revision; frames: unknown[]; };
+    /** Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count; sheet:true returns one contact-sheet image of them all. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */
+    frames(args?: { projectId?: string; at?: number[]; count?: number; sheet?: boolean; }): { revision: Splice.Revision; frames: unknown[]; sheet?: string; };
   };
   commands: {
     /** Search the command registry. Pass an exact ID to see parameters, release tier and an example. */

@@ -282,6 +282,15 @@ impl Job {
         ])
     }
 
+    /// Fraction of frames encoded.
+    pub(super) fn progress(&self) -> f64 {
+        match self.state {
+            State::Running(progress) | State::Cancelling(progress) => f64::from(progress),
+            State::Done => 1.0,
+            _ => 0.0,
+        }
+    }
+
     pub(super) fn active(&self) -> bool {
         matches!(self.state, State::Running(_) | State::Cancelling(_))
     }

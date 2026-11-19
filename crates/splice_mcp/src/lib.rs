@@ -43,6 +43,7 @@ mod record_options;
 #[cfg(any(target_os = "macos", test))]
 mod record_publish;
 mod rpc;
+mod sheet;
 mod timeline;
 mod tools;
 mod typescript;

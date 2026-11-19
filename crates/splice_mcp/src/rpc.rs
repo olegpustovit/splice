@@ -27,6 +27,9 @@ struct Connection {
     holders: Vec<super::live::Server>,
     #[cfg(target_os = "macos")]
     events: Option<Sender<Event>>,
+    /// Jobs started by requests (T23.3): job ID, the request ID, the client's progress token
+    /// and the last progress sent.
+    watched: Vec<(String, Json, Option<Json>, f64)>,
 }
 
 enum Event {
@@ -50,6 +53,7 @@ pub(super) fn record_project(
         routes: Default::default(),
         holders: Vec::new(),
         events: None,
+        watched: Vec::new(),
     };
     let reply = super::record_cli::run(args, stop, &mut |name, arguments| {
         let reply = connection
@@ -106,6 +110,7 @@ pub(super) fn serve_with_log(
         holders: Vec::new(),
         #[cfg(target_os = "macos")]
         events: Some(events.clone()),
+        watched: Vec::new(),
     };
     // Stdin is read on its own thread so a viewer's handoff request is served while idle.
     thread::scope(|scope| {
@@ -113,6 +118,14 @@ pub(super) fn serve_with_log(
         let mut wire = String::new();
         loop {
             // Exports encode on this thread (OGPU's Metal handles live here) between requests.
+            #[cfg(target_os = "macos")]
+            for note in connection.progress() {
+                wire.clear();
+                splice_json::write(&note, &mut wire).map_err(io::Error::other)?;
+                wire.push('\n');
+                output.write_all(wire.as_bytes())?;
+                output.flush()?;
+            }
             #[cfg(target_os = "macos")]
             let next = if connection.projects.tick_exports(EXPORT_SLICE) {
                 match incoming.recv_timeout(std::time::Duration::ZERO) {
@@ -257,7 +270,14 @@ fn handle_line(line: &[u8], connection: &mut Connection) -> Option<Json> {
             "Invalid request",
         ));
     }
-    // Notification messages have no reply and never invoke a request handler.
+    // Notification messages have no reply and never invoke a request handler; a cancellation
+    // stops the job its request started.
+    if id.is_none() && method == Some("notifications/cancelled") {
+        if let Some(request) = request.field("params").and_then(|p| p.field("requestId")) {
+            connection.cancel(request);
+        }
+        return None;
+    }
     let id = id?;
     let method = method.expect("checked method");
     let params = request.field("params").unwrap_or(&EMPTY_OBJECT);
@@ -381,7 +401,21 @@ fn dispatch(id: &Json, method: &str, params: &Json, connection: &mut Connection)
                 return rpc_error(id, -32602, &format!("Unknown tool: {name}"));
             }
             match connection.call(name, args, modern.then_some(meta)) {
-                Ok(result) => result,
+                Ok(result) => {
+                    if let Some(job) = result
+                        .field("structuredContent")
+                        .and_then(|content| content.field("jobId"))
+                        .and_then(Json::as_str)
+                    {
+                        connection.watched.push((
+                            job.to_owned(),
+                            id.clone(),
+                            meta.field("progressToken").cloned(),
+                            0.0,
+                        ));
+                    }
+                    result
+                }
                 Err(_) => return rpc_error(id, -32603, "Tool returned invalid JSON"),
             }
         }
@@ -398,6 +432,53 @@ fn dispatch(id: &Json, method: &str, params: &Json, connection: &mut Connection)
 }
 
 impl Connection {
+    /// Progress notifications for watched jobs that moved (and forgets finished ones).
+    #[cfg(target_os = "macos")]
+    fn progress(&mut self) -> Vec<Json> {
+        let mut notes = Vec::new();
+        let projects = &mut self.projects;
+        self.watched.retain_mut(|(job, _, token, last)| {
+            let Some((active, progress)) = job.parse().ok().and_then(|id| projects.progress(id))
+            else {
+                return false;
+            };
+            if let Some(token) = token
+                && (progress - *last >= 0.01 || !active)
+            {
+                *last = progress;
+                notes.push(object(vec![
+                    ("jsonrpc", text("2.0")),
+                    ("method", text("notifications/progress")),
+                    (
+                        "params",
+                        object(vec![
+                            ("progressToken", token.clone()),
+                            (
+                                "progress",
+                                Json::Float((progress * 1000.0).round() / 1000.0),
+                            ),
+                            ("total", Json::Unsigned(1)),
+                        ]),
+                    ),
+                ]));
+            }
+            active
+        });
+        notes
+    }
+
+    /// `notifications/cancelled`: cancels the job the request started, if any.
+    fn cancel(&mut self, request: &Json) {
+        if let Some((job, ..)) = self.watched.iter().find(|(_, id, ..)| id == request) {
+            #[cfg(target_os = "macos")]
+            if let Ok(id) = job.parse() {
+                self.projects.cancel(id);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = job;
+        }
+    }
+
     fn call(
         &mut self,
         name: &str,

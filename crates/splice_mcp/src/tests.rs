@@ -601,6 +601,8 @@ fn write_arguments_distinguish_missing_from_invalid() {
 fn code_mode_declarations_index_and_multi_query() {
     let index = typescript::declarations(None);
     let full = typescript::declarations(Some("*"));
+    // T23.1: discovery stays small as rows grow.
+    assert!(index.len() <= 12_000, "index is {} chars", index.len());
     assert!(
         index.len() * 2 < full.len(),
         "index {} vs full {}",
@@ -608,7 +610,9 @@ fn code_mode_declarations_index_and_multi_query() {
         full.len()
     );
     for row in splice_core::commands::COMMANDS {
-        let listed = index.contains(&format!("   *   {} — ", row.id));
+        let listed = index.lines().any(|line| {
+            line.starts_with("   *   ") && line.split([':', ',']).any(|id| id.trim() == row.id)
+        });
         assert_eq!(
             listed,
             row.tier != splice_core::commands::Tier::Planned,
@@ -865,4 +869,34 @@ fn takes_events_stream_logs_past_the_old_16_mib_cap() {
     .unwrap();
     assert_eq!(events.field("clicks").unwrap().as_array().unwrap().len(), 1);
     assert!(events.field("cursor").unwrap().as_array().unwrap().len() > 300);
+}
+
+#[test]
+fn code_run_reports_revisions_for_every_project_it_touched() {
+    let args = splice_json::parse(
+        r#"{"code":"splice.edit.apply({projectId:\"prj_1\", ifRevision:\"r3\", ops:[]}); splice.edit.apply({projectId:\"prj_2\", ifRevision:\"r7\", ops:[]}); splice.edit.apply({projectId:\"prj_1\", ifRevision:\"r4\", ops:[]}); return 1;"}"#,
+    )
+    .unwrap();
+    let mut revision = 3;
+    let reply = code::run(&args, &mut |_, args| {
+        let project = args.field("projectId").and_then(Json::as_str).unwrap_or("");
+        revision += 1;
+        let next = if project == "prj_2" { 8 } else { revision };
+        Ok(object(vec![(
+            "structuredContent",
+            object(vec![("revision", text(&format!("r{next}")))]),
+        )]))
+    })
+    .unwrap();
+    let revisions = reply.field("revisions").unwrap();
+    let get = |value: &Json, key: &str| value.field(key).and_then(Json::as_str).unwrap().to_owned();
+    assert_eq!(
+        (get(revisions, "from"), get(revisions, "to")),
+        ("r3".into(), "r6".into())
+    );
+    let other = revisions.field("projects").unwrap().field("prj_2").unwrap();
+    assert_eq!(
+        (get(other, "from"), get(other, "to")),
+        ("r7".into(), "r8".into())
+    );
 }

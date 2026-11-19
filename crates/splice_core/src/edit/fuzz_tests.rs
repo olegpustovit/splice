@@ -41,7 +41,7 @@ fn mutate(rng: &mut Xorshift, value: &Json) -> Json {
 #[test]
 fn mutated_arguments_for_every_row_fail_typed_never_panic() {
     let base = sample();
-    let mut rng = Xorshift::new(15_5);
+    let mut rng = Xorshift::new(155);
     let mut errors = 0;
     for _ in 0..12 {
         for row in commands::COMMANDS {
