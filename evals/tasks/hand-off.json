@@ -1,0 +1,11 @@
+{
+  "id": "hand-off",
+  "platform": "macos",
+  "seed": {"record": {"app": "TextEdit", "duration": 6}},
+  "prompt": "Hand off the Splice project {project} to an editor who uses Final Cut Pro: export it as FCPXML, and also export a ProRes 422 master of the video. Wait for the exports to finish. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "fcpxml", "expr": "len(exports('.fcpxml')) == 1"},
+    {"name": "prores master", "expr": "len(exports('.mov')) == 1"},
+    {"name": "no edits", "expr": "state_hash == seed_hash"}
+  ]
+}

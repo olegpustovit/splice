@@ -1,0 +1,12 @@
+{
+  "id": "talking-head",
+  "platform": "macos",
+  "seed": {"copy": "fixtures/projects/sample.splice"},
+  "prompt": "In the Splice project {project}, cut the person in the screen take out of their background and blur what is behind them, give the whole video a warmer and more saturated color grade, and add a half-second dissolve into the end card. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "background blurred", "expr": "any(e['type'] == 'cutout' and e['params'].get('background', 'remove') == 'blur' for c in take_clips() for e in c['effects'])"},
+    {"name": "warmer", "expr": "any((e['params'].get('temperature') or 0) > 0 for e in project['effects'] + [e for c in clips for e in c['effects']] if e['type'] == 'color')"},
+    {"name": "more saturated", "expr": "any((e['params'].get('saturation') or 1) > 1 for e in project['effects'] + [e for c in clips for e in c['effects']] if e['type'] == 'color')"},
+    {"name": "dissolve into end card", "expr": "any(e['type'] == 'transition' and e['params'].get('kind', 'dissolve') == 'dissolve' and 10 <= e['params'].get('length', 15) <= 20 for c in clips if c['media'] == 'med_endcard' for e in c['effects'])"}
+  ]
+}

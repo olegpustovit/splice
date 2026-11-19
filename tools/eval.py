@@ -7,12 +7,12 @@ against `splice mcp`, checks the end state, and appends a row to evals/results.t
 A task file:
     {"id": "...", "platform": "any"|"macos",
      "seed": {"copy": "fixtures/projects/sample.splice"} | {"new": true} | {"record": {...}},
-     "assets": {"music.wav": {"tone": 12}},          # optional generated inputs
+     "assets": {"music.wav": {"tone": 12}, "photo.png": {"png": [1600, 1200]}},  # generated inputs
      "prompt": "... {project} ... {assets} ...",
      "checks": [{"name": "...", "expr": "python expression over the helpers below"}]}
 
 Check helpers: project (`splice snapshot`, journal included), clips, items, lanes, media_kind(id), effect(kind, owner=None),
-take_clips(), frame(at) -> Frame with .bands(), exports(), words_on_timeline(), seed_hash, state_hash,
+take_clips(), frame(at) -> Frame with .bands(), exports(ext=".mp4"), words_on_timeline(), seed_hash, state_hash,
 batches (journal batches).
 Task files are trusted repository content.
 """
@@ -51,6 +51,16 @@ def tone(path, seconds):
         w.writeframes(bytes(frames))
 
 
+def png(path, w, h):
+    """A diagonal sky-to-sand gradient RGBA PNG, so evals need no downloaded photos."""
+    rows = b"".join(b"\0" + bytes(c for x in range(w) for c in (
+        40 + 180 * y // h, 90 + 120 * x // w, 200 - 120 * y // h, 255)) for y in range(h))
+    chunk = lambda kind, body: struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b""))
+
+
 def record_seed(project, spec):
     """Records a real window on macOS: opens a text in TextEdit and captures it."""
     # A unique name per run makes the title selector match exactly one window.
@@ -81,7 +91,10 @@ def seed(task, work):
     assets = {}
     for name, spec in task.get("assets", {}).items():
         path = os.path.join(work, name)
-        tone(path, spec.get("tone", 10))
+        if "png" in spec:
+            png(path, *spec["png"])
+        else:
+            tone(path, spec.get("tone", 10))
         assets[name] = path
     return project, assets
 
@@ -235,8 +248,8 @@ def helpers(project_path, work, seed_hash):
         "media_kind": lambda mid: media.get(mid, {}).get("kind"),
         "take_clips": lambda: [c for c in clips if media.get(c.get("media"), {}).get("kind") == "take"],
         "effect": effect, "frame": frame, "words_on_timeline": words_on_timeline,
-        "exports": lambda: sorted(f for f in os.listdir(os.path.join(project_path, "exports"))
-                                  if f.endswith(".mp4")) if os.path.isdir(os.path.join(project_path, "exports")) else [],
+        "exports": lambda ext=".mp4": sorted(f for f in os.listdir(os.path.join(project_path, "exports"))
+                                  if f.endswith(ext)) if os.path.isdir(os.path.join(project_path, "exports")) else [],
         "seed_hash": seed_hash, "state_hash": state.get("stateHash"), "batches": state.get("batches", 0),
     }
 

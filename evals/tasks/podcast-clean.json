@@ -1,0 +1,12 @@
+{
+  "id": "podcast-clean",
+  "platform": "macos",
+  "seed": {"copy": "fixtures/projects/sample.splice"},
+  "prompt": "Clean up the narration in the Splice project {project}: isolate the voice from background noise, add a compressor to even out its level, and remove the long pauses (longer than about 0.6 seconds) from the screen take. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "voice isolated", "expr": "effect('voiceIsolation') is not None"},
+    {"name": "compressed", "expr": "effect('compressor') is not None"},
+    {"name": "pauses removed", "expr": "sum(c['length'] for c in take_clips()) < 410"},
+    {"name": "words kept", "expr": "len(words_on_timeline()) >= 20"}
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "broll-story",
+  "platform": "macos",
+  "seed": {"copy": "fixtures/projects/sample.splice"},
+  "assets": {"photo.png": {"png": [1600, 1200]}},
+  "prompt": "In the Splice project {project}, insert the photo at {photo} as a 3-second still right after the opener, give it a slow Ken Burns zoom from 1x to 1.2x across those 3 seconds, and add an arrow shape on the screen take for about 1.5 seconds. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "still inserted", "expr": "any(media_kind(c['media']) == 'image' and 80 <= c['length'] <= 100 and abs(c['start'] - 120) <= 2 for c in clips)"},
+    {"name": "ken burns", "expr": "any(media_kind(c['media']) == 'image' and e['type'] == 'transform' and isinstance(e['params'].get('scale'), dict) and max(k['value'] for k in e['params']['scale']['keys']) >= 1.15 for c in clips for e in c['effects'])"},
+    {"name": "arrow", "expr": "any(i['kind'] == 'shape' and i['params'].get('shape') == 'arrow' and 30 <= i['length'] <= 60 for i in items)"}
+  ]
+}

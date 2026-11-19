@@ -1,0 +1,12 @@
+{
+  "id": "voiceover",
+  "platform": "macos",
+  "seed": {"copy": "fixtures/projects/sample.splice"},
+  "prompt": "Record a 3-second voice-over from the microphone (no screen recording) into the Splice project {project}, placed where the screen take starts, then lower its volume to 80%. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "voice-over on an audio lane", "expr": "any(l['kind'] == 'audio' for l in lanes) and any(i['kind'] == 'sound' for i in items)"},
+    {"name": "about 3 seconds", "expr": "any(i['kind'] == 'sound' and 60 <= i['length'] <= 110 for i in items)"},
+    {"name": "volume 80%", "expr": "any(i['kind'] == 'sound' and abs(i['params'].get('volume', 1) - 0.8) < 0.05 for i in items)"},
+    {"name": "spine untouched", "expr": "len(take_clips()) == 1 and len(clips) == 3"}
+  ]
+}
