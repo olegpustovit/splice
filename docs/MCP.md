@@ -234,7 +234,7 @@ Inside the code, the global `splice` has:
 - `splice.<group>.<name>(args)` for every default-profile tool, e.g.
   `splice.project.info({path})`, `splice.edit.apply({...})`, `splice.timeline.snapshot()`.
   `splice.call(name, args)` is the same by name. Calls are synchronous and return the tool's
-  structured result; `view.frames` returns paths only (no image content). `projectId` and
+  structured result; `view.frames` returns paths, and the code.run reply carries its preview images (at most 6 per run, 640 px). `projectId` and
   `sessionId` default to the ones passed to `code.run` (`splice.projectId`, `splice.sessionId`).
 - `splice.op.<group>.<name>(fields)` builds a registry op, e.g. `splice.op.item.split({item, at})`
   is `{cmd:"item.split", item, at}`.

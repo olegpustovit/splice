@@ -488,10 +488,13 @@ impl Connection {
         if name == "code.run" {
             // Each tool call inside the code takes the same path, so viewer forwarding and
             // friction logging work unchanged.
-            let payload = super::code::run(args, &mut |tool, tool_args| {
-                self.call(tool, tool_args, meta)
-            });
-            let result = super::code::reply(payload)?;
+            let mut images = Vec::new();
+            let payload = super::code::run_with_images(
+                args,
+                &mut |tool, tool_args| self.call(tool, tool_args, meta),
+                &mut images,
+            );
+            let result = super::code::reply(payload, images)?;
             self.friction
                 .call(&self.projects, name, args, &result, meta);
             return Ok(result);

@@ -1035,3 +1035,42 @@ fn inspect_takes_items_reads_effects_and_labels_shapes() {
         "{reply:?}"
     );
 }
+
+/// T23.5: code.run passes view.frames previews back as images (capped), so code-mode agents
+/// do not read full-size frame PNGs from disk.
+#[test]
+fn code_run_returns_frame_previews_as_images() {
+    let args = splice_json::parse(
+        r#"{"code":"for (let i = 0; i < 4; i++) splice.view.frames({projectId:\"prj_1\", count:2}); return 1;"}"#,
+    )
+    .unwrap();
+    let mut images = Vec::new();
+    let payload = code::run_with_images(
+        &args,
+        &mut |_, _| {
+            let image = object(vec![
+                ("type", text("image")),
+                ("mimeType", text("image/png")),
+                ("data", text("AA==")),
+            ]);
+            Ok(object(vec![
+                (
+                    "structuredContent",
+                    object(vec![("frames", Json::Array(vec![]))]),
+                ),
+                ("content", Json::Array(vec![image.clone(), image])),
+            ]))
+        },
+        &mut images,
+    );
+    assert_eq!(images.len(), 6);
+    let reply = code::reply(payload, images).unwrap();
+    let content = reply.field("content").and_then(Json::as_array).unwrap();
+    assert_eq!(
+        content
+            .iter()
+            .filter(|c| c.field("type").and_then(Json::as_str) == Some("image"))
+            .count(),
+        6
+    );
+}

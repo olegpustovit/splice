@@ -57,9 +57,23 @@ fn callable(name: &str) -> bool {
 }
 
 /// Runs `args.code`; `call` dispatches one tool exactly like a top-level `tools/call`.
+#[cfg(test)]
 pub(super) fn run(
     args: &Json,
     call: &mut dyn FnMut(&str, &Json) -> Result<Json, splice_json::NonFiniteNumber>,
+) -> Result<Json, StoreError> {
+    run_with_images(args, call, &mut Vec::new())
+}
+
+/// Most frame images a run passes back (the same ≤ 640 px previews `view.frames` returns
+/// directly), so agents see frames without reading full-size PNGs from disk.
+const MAX_IMAGES: usize = 6;
+
+/// Runs `code`, collecting the image content of its tool calls into `images`.
+pub(super) fn run_with_images(
+    args: &Json,
+    call: &mut dyn FnMut(&str, &Json) -> Result<Json, splice_json::NonFiniteNumber>,
+    images: &mut Vec<Json>,
 ) -> Result<Json, StoreError> {
     let code = args.string("code")?;
     let project = args.optional_string("projectId")?;
@@ -69,7 +83,15 @@ pub(super) fn run(
     let mut revisions = Revisions::default();
     let mut jobs = Vec::new();
     let outcome = quickjs_sys::run(&prelude, code, &LIMITS, &mut |name, args| {
-        host(name, args, call, &mut calls, &mut revisions, &mut jobs)
+        host(
+            name,
+            args,
+            call,
+            &mut calls,
+            &mut revisions,
+            &mut jobs,
+            images,
+        )
     });
     let parse = |json: &str| splice_json::parse(json).unwrap_or(Json::Null);
     let mut fields = vec![
@@ -94,11 +116,12 @@ pub(super) fn run(
 /// Sets `isError` when the code failed, keeping its logs and calls in the payload.
 pub(super) fn reply(
     payload: Result<Json, StoreError>,
+    images: Vec<Json>,
 ) -> Result<Json, splice_json::NonFiniteNumber> {
     let failed = payload
         .as_ref()
         .is_ok_and(|payload| payload.field("error").is_some());
-    let mut reply = tools::reply(payload, Vec::new())?;
+    let mut reply = tools::reply(payload, images)?;
     if failed && let Json::Object(fields) = &mut reply {
         for (key, value) in fields {
             if key == "isError" {
@@ -173,9 +196,10 @@ fn host(
     calls: &mut Vec<Call>,
     revisions: &mut Revisions,
     jobs: &mut Vec<Json>,
+    images: &mut Vec<Json>,
 ) -> Result<String, String> {
     let began = Instant::now();
-    let result = dispatch(name, args, call, revisions);
+    let result = dispatch(name, args, call, revisions, images);
     if let Some(job) = result
         .as_ref()
         .ok()
@@ -214,6 +238,7 @@ fn dispatch(
     args: &str,
     call: &mut dyn FnMut(&str, &Json) -> Result<Json, splice_json::NonFiniteNumber>,
     revisions: &mut Revisions,
+    images: &mut Vec<Json>,
 ) -> Result<Json, Json> {
     if !callable(name) {
         let valid = tools::TOOLS.iter().filter(|tool| callable(tool.name));
@@ -242,6 +267,18 @@ fn dispatch(
         ))
     };
     let reply = call(name, &args).map_err(|_| invalid())?;
+    let content = reply
+        .field("content")
+        .and_then(Json::as_array)
+        .unwrap_or(&[]);
+    for image in content
+        .iter()
+        .filter(|part| part.field("type").and_then(Json::as_str) == Some("image"))
+    {
+        if images.len() < MAX_IMAGES {
+            images.push(image.clone());
+        }
+    }
     let payload = reply.field("structuredContent").ok_or_else(invalid)?;
     if let Some(error) = payload.field("error") {
         return Err(error.clone());
