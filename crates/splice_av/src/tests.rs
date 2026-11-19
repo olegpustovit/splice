@@ -253,8 +253,154 @@ fn native_composition_covers_a_title_and_audio_without_spine_video() {
     let delivered = Composition::prepare(&delivered, &scratch.0).unwrap();
     let mut pixels = vec![0; size[0] as usize * size[1] as usize * 4];
     delivered.read_frame(0, &mut pixels).unwrap();
-    assert!(pixels.chunks_exact(4).all(|pixel| pixel[0] < 40));
+    let first = pixels.chunks_exact(4).map(|pixel| pixel[0]).max().unwrap();
+    let lit = pixels
+        .chunks_exact(4)
+        .filter(|pixel| pixel[0] >= 40)
+        .count();
+    assert!(
+        first < 40,
+        "frame 0 brightest {first}, {lit} lit pixels of {}",
+        pixels.len() / 4
+    );
     delivered.read_frame(5, &mut pixels).unwrap();
     let brightest = pixels.chunks_exact(4).map(|pixel| pixel[0]).max().unwrap();
     assert!(brightest > 120, "brightest title pixel was {brightest}");
+}
+
+/// T12.2–T12.3 on a take with recorded events: the cursor draws where the events put it, scaled
+/// by the Cursor effect, and a click zooms the picture in toward it.
+#[test]
+fn native_take_draws_the_recorded_cursor_and_zooms_on_click() {
+    let scratch =
+        Output(std::env::temp_dir().join(format!("splice-av-take-{}", std::process::id())));
+    let take = scratch.0.join("takes/med_1");
+    fs::create_dir_all(take.join("cursors")).unwrap();
+    fs::copy(fixture().join("probe.mov"), take.join("screen.mov")).unwrap();
+    // An 8×8 red cursor whose hotspot is its top-left pixel.
+    let red: Vec<u8> = [255, 0, 0, 255].repeat(64);
+    fs::write(
+        take.join("cursors/c.png"),
+        encode_png(&red, [8, 8], 0).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        take.join("cursors/c.json"),
+        r#"{"hotX":0,"hotY":0,"scale":1}"#,
+    )
+    .unwrap();
+    // The source is 96 points wide, one pixel per point. Click on the right at 0.6 s, far enough
+    // from the first move that the cursor does not glide between them.
+    fs::write(
+        take.join("events.json"),
+        r#"{"t0":0,"source":{"kind":"display","rect":{"x":0,"y":0,"width":96,"height":64},"scale":1},"events":[
+            {"t":0.0,"k":"cursor","id":"c"},{"t":0.0,"k":"move","x":0.25,"y":0.25},
+            {"t":0.6,"k":"down","x":0.75,"y":0.5,"b":0},{"t":0.65,"k":"up","x":0.75,"y":0.5,"b":0}]}"#,
+    )
+    .unwrap();
+    let mut media = video();
+    media.kind = MediaKind::Take;
+    media.path = "takes/med_1".into();
+    media.take = Some(TakeComponents {
+        screen: Some("screen.mov".into()),
+        events: Some("events.json".into()),
+        cursors: Some("cursors".into()),
+        ..TakeComponents::default()
+    });
+    let effect = |id, kind: &str, params: Vec<(&str, EffectValue)>| Effect {
+        id: EffectId::from_serial(id),
+        kind: kind.into(),
+        enabled: None,
+        params: params
+            .into_iter()
+            .map(|(name, value)| EffectParam {
+                name: name.into(),
+                value,
+            })
+            .collect(),
+    };
+    let mut project = Project {
+        size: [96, 64],
+        media: vec![media],
+        effects: vec![
+            effect(
+                1,
+                "cursor",
+                vec![
+                    ("size", EffectValue::Number(1.0)),
+                    ("clickRings", EffectValue::Bool(false)),
+                ],
+            ),
+            effect(
+                2,
+                "clickZoom",
+                vec![
+                    ("scale", EffectValue::Number(2.0)),
+                    ("hold", EffectValue::Number(30.0)),
+                ],
+            ),
+        ],
+        ..Project::default()
+    };
+    project
+        .clips
+        .insert(Clip {
+            id: ClipId::from_serial(1),
+            timing: ClipTiming {
+                start: 0,
+                length: 30,
+                source: 0,
+                speed: 1.0,
+            },
+            data: ClipData {
+                media: Some(MediaId::from_serial(1)),
+                enabled: ComponentStates {
+                    screen: Some(true),
+                    pointer: Some(true),
+                    ..ComponentStates::default()
+                },
+                ..ClipData::default()
+            },
+        })
+        .unwrap();
+    let composition = Composition::prepare(&project, &scratch.0).unwrap();
+    let red_at = |frame| {
+        let [w, h] = composition.size().map(|n| n as usize);
+        let mut rgba = vec![0; w * h * 4];
+        composition.read_frame(frame, &mut rgba).unwrap();
+        let (mut sum, mut n) = ([0usize; 2], 0);
+        for y in 0..h {
+            for x in 0..w {
+                let p = &rgba[(y * w + x) * 4..][..3];
+                if p[0] > 200 && p[1] < 60 && p[2] < 60 {
+                    sum[0] += x;
+                    sum[1] += y;
+                    n += 1;
+                }
+            }
+        }
+        (
+            n,
+            if n > 0 {
+                [sum[0] / n, sum[1] / n]
+            } else {
+                [0, 0]
+            },
+        )
+    };
+    // Frame 2 (0.067 s): no zoom yet; the cursor's top-left sits at a quarter of the picture.
+    let (before, at) = red_at(2);
+    assert!(before >= 30, "cursor pixels before the click: {before}");
+    assert!(
+        (20..=34).contains(&at[0]) && (12..=24).contains(&at[1]),
+        "cursor center {at:?}"
+    );
+    // Frame 19 (0.63 s, just after the click): zoomed 2× about the click point, so the cursor is
+    // drawn at the click (right half) at about four times the area.
+    let (zoomed, at) = red_at(19);
+    assert!(
+        zoomed >= before * 3,
+        "cursor pixels at the zoomed click: {zoomed} vs {before}"
+    );
+    assert!(at[0] >= 60, "cursor center after zoom {at:?}");
 }

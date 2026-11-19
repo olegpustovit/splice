@@ -162,6 +162,7 @@ version = "0.1.0"
 dependencies = [
  "apple_sys",
  "splice_eval",
+ "splice_json",
  "splice_model",
 ]
 

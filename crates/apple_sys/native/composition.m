@@ -2,6 +2,7 @@
 
 #import <Accelerate/Accelerate.h>
 #import <AVFoundation/AVFoundation.h>
+#import <CoreImage/CoreImage.h>
 #import <CoreText/CoreText.h>
 #import <CoreVideo/CoreVideo.h>
 #import <ImageIO/ImageIO.h>
@@ -17,6 +18,9 @@ enum { SourceVideo, SourceAudio, SourceStill, SourceColor };
 
 @interface SpliceAVTrack : NSObject
 @property(nonatomic, strong) AVMutableCompositionTrack *track;
+// A solid or gradient fill: the compositor draws it instead of decoding its still movie.
+@property(nonatomic) BOOL fill;
+@property(nonatomic) uint32_t colorA, colorB;
 @property(nonatomic, strong) AVMutableAudioMixInputParameters *mix;
 @property(nonatomic) CGSize size;
 @property(nonatomic) CGAffineTransform orientation;
@@ -25,6 +29,7 @@ enum { SourceVideo, SourceAudio, SourceStill, SourceColor };
 @end
 
 @interface SpliceAVTextLayer : CALayer
+@property(nonatomic, strong) CIImage *image;
 @property(nonatomic) int32_t firstFrame;
 @property(nonatomic) int32_t endFrame;
 @property(nonatomic) float fromOpacity;
@@ -41,7 +46,8 @@ enum { SourceVideo, SourceAudio, SourceStill, SourceColor };
 @property(nonatomic) int32_t covered;
 @property(nonatomic, strong) AVMutableComposition *asset;
 @property(nonatomic, strong) NSMutableArray<SpliceAVTrack *> *tracks;
-@property(nonatomic, strong) NSMutableArray<AVVideoCompositionInstruction *> *instructions;
+@property(nonatomic, strong) NSMutableArray *instructions;
+@property(nonatomic, strong) NSMutableArray *cursors;
 @property(nonatomic, strong) NSMutableDictionary<NSURL *, AVURLAsset *> *inputs;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSURL *> *stills;
 @property(nonatomic, strong) NSURL *scratch;
@@ -371,6 +377,7 @@ int32_t splice_av_source(void *raw, const SpliceAVSource *spec, char **error) {
             assembly.inputs[url] = asset;
         }
         bool audio = spec->kind == SourceAudio;
+        bool fill = spec->kind == SourceColor;
         AVMediaType type = audio ? AVMediaTypeAudio : AVMediaTypeVideo;
         NSArray<AVAssetTrack *> *inputs = [asset tracksWithMediaType:type];
         if (spec->index >= inputs.count || assembly.tracks.count >= INT32_MAX) {
@@ -391,6 +398,9 @@ int32_t splice_av_source(void *raw, const SpliceAVSource *spec, char **error) {
         if (!place(assembly, track, input, spec, error)) return -1;
         SpliceAVTrack *entry = [SpliceAVTrack new];
         entry.track = track;
+        entry.fill = fill;
+        entry.colorA = spec->colors[0];
+        entry.colorB = spec->colors[1];
         if (audio) {
             entry.mix = [AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:track];
         } else {
@@ -407,32 +417,313 @@ int32_t splice_av_source(void *raw, const SpliceAVSource *spec, char **error) {
     }
 }
 
-static CGAffineTransform placement(SpliceAVTrack *source, CGSize canvas, const SpliceAVLayer *layer,
-                                   double scale, CGRect *raw_crop) {
-    CGRect oriented = CGRectApplyAffineTransform(CGRectMake(0, 0, source.size.width, source.size.height),
-                                                 source.orientation);
-    CGAffineTransform origin = CGAffineTransformConcat(source.orientation,
-        CGAffineTransformMakeTranslation(-oriented.origin.x, -oriented.origin.y));
-    CGRect crop = CGRectMake(layer->crop[0] * oriented.size.width, layer->crop[1] * oriented.size.height,
-                             layer->crop[2] * oriented.size.width, layer->crop[3] * oriented.size.height);
-    CGRect dest = rect(layer->destination);
-    if (layer->center_crop != 0) {
-        double ratio = dest.size.width / dest.size.height;
-        double width = fmin(crop.size.width, crop.size.height * ratio);
-        double height = fmin(crop.size.height, crop.size.width / ratio);
-        crop = CGRectInset(crop, (crop.size.width - width) / 2, (crop.size.height - height) / 2);
-    }
-    *raw_crop = CGRectApplyAffineTransform(crop, CGAffineTransformInvert(origin));
-    dest.origin.x = canvas.width / 2 + (dest.origin.x - canvas.width / 2) * scale;
-    dest.origin.y = canvas.height / 2 + (dest.origin.y - canvas.height / 2) * scale;
-    CGAffineTransform location = CGAffineTransformConcat(origin, CGAffineTransformMakeTranslation(-crop.origin.x, -crop.origin.y));
-    location = CGAffineTransformConcat(location, CGAffineTransformMakeScale(dest.size.width * scale / crop.size.width,
-                                                                            dest.size.height * scale / crop.size.height));
-    return CGAffineTransformConcat(location, CGAffineTransformMakeTranslation(dest.origin.x, dest.origin.y));
-}
-
 static SpliceAVTrack *track_at(SpliceAVAssembly *assembly, int32_t index) {
     return index >= 0 && (NSUInteger)index < assembly.tracks.count ? assembly.tracks[index] : nil;
+}
+
+// ── Compositor (PLAN.md D1): Core Image on Metal, driven by per-interval layer ramps ──
+// ponytail: interim macOS renderer. The plan (ramps, zoom keyframes, cursor tables) is portable Rust;
+// the renderer moves to OGPU (shared device and textures with PXUI, IOSurface/dmabuf import) in T12.7.
+// Upgrade trigger: T12.7, or the 4K viewer budget (8 ms) in window_program_4k.
+
+@interface SpliceCursorTable : NSObject
+@property(nonatomic, strong) NSData *samples;
+@property(nonatomic, strong) NSArray<CIImage *> *images;
+@property(nonatomic, strong) NSData *hotspots;  // double[3] per image: hot x, hot y, pixels per point
+@property(nonatomic) double points;
+@end
+@implementation SpliceCursorTable
+@end
+
+@interface SpliceInstruction : NSObject <AVVideoCompositionInstruction>
+@property(nonatomic) CMTimeRange timeRange;
+@property(nonatomic) BOOL enablePostProcessing;
+@property(nonatomic) BOOL containsTweening;
+@property(nonatomic, strong, nullable) NSArray<NSValue *> *requiredSourceTrackIDs;
+@property(nonatomic) CMPersistentTrackID passthroughTrackID;
+@property(nonatomic, strong) NSData *layers;
+@property(nonatomic, strong) NSArray<SpliceAVTrack *> *sources;  // one per layer
+@property(nonatomic, strong) NSArray<SpliceCursorTable *> *cursors;
+// Titles, captions and keystroke chips, drawn only by the offline (export) composition: the viewer
+// draws them in PXUI and frame grabs overlay them in splice_av_read_frame.
+@property(nonatomic, strong, nullable) NSArray<SpliceAVTextLayer *> *texts;
+@property(nonatomic) CGSize canvas;
+@property(nonatomic) int32_t fps;
+@end
+@implementation SpliceInstruction
+@end
+
+static double lerp(double a, double b, double t) { return a + (b - a) * t; }
+
+// Converts a top-left canvas rectangle to Core Image's bottom-left coordinates.
+static CGRect flip(CGRect r, double height) {
+    return CGRectMake(r.origin.x, height - r.origin.y - r.size.height, r.size.width, r.size.height);
+}
+
+static const SpliceAVCursorSample *cursor_at(SpliceCursorTable *table, double t, double out[2]) {
+    const SpliceAVCursorSample *samples = table.samples.bytes;
+    size_t count = table.samples.length / sizeof(SpliceAVCursorSample), lo = 0, hi = count;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (samples[mid].t <= t) lo = mid + 1; else hi = mid;
+    }
+    if (lo == 0) return NULL;
+    const SpliceAVCursorSample *a = &samples[lo - 1];
+    out[0] = a->x, out[1] = a->y;
+    // Interpolate across short gaps between position samples, so the cursor glides.
+    if (lo < count && samples[lo].t - a->t < 0.25 && samples[lo].t > a->t) {
+        double k = (t - a->t) / (samples[lo].t - a->t);
+        out[0] = lerp(a->x, samples[lo].x, k), out[1] = lerp(a->y, samples[lo].y, k);
+    }
+    return a;
+}
+
+@interface SpliceCompositor : NSObject <AVVideoCompositing>
+@end
+
+@implementation SpliceCompositor {
+    CIContext *_context;
+    CGColorSpaceRef _space;
+}
+
+- (instancetype)init {
+    if ((self = [super init])) {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        NSDictionary *options = @{kCIContextWorkingColorSpace: [NSNull null], kCIContextOutputColorSpace: [NSNull null],
+                                  kCIContextCacheIntermediates: @NO};
+        _context = device != nil ? [CIContext contextWithMTLDevice:device options:options]
+                                 : [CIContext contextWithOptions:options];
+    }
+    return self;
+}
+
+- (NSDictionary *)sourcePixelBufferAttributes {
+    return @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+             (id)kCVPixelBufferMetalCompatibilityKey: @YES};
+}
+
+- (NSDictionary *)requiredPixelBufferAttributesForRenderContext {
+    // CPU-memory output: Core Image reads back on the compositor thread, so the viewer's copy on
+    // the UI thread reads cached memory (a GPU-written IOSurface tripled its 4K copy time).
+    return @{(id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
+}
+
+- (void)renderContextChanged:(AVVideoCompositionRenderContext *)context {
+    (void)context;
+}
+
+- (void)cancelAllPendingVideoCompositionRequests {
+}
+
+- (void)startVideoCompositionRequest:(AVAsynchronousVideoCompositionRequest *)request {
+    @autoreleasepool {
+        SpliceInstruction *instruction = (SpliceInstruction *)request.videoCompositionInstruction;
+        CVPixelBufferRef output = [request.renderContext newPixelBuffer];
+        if (output == NULL) {
+            [request finishWithError:[NSError errorWithDomain:@"Splice" code:1 userInfo:nil]];
+            return;
+        }
+        CGSize canvas = instruction.canvas;
+        CGRect bounds = CGRectMake(0, 0, canvas.width, canvas.height);
+        double span = CMTimeGetSeconds(instruction.timeRange.duration);
+        double linear = span > 0 ? CMTimeGetSeconds(CMTimeSubtract(request.compositionTime,
+                                                                   instruction.timeRange.start)) / span : 0;
+        linear = fmin(fmax(linear, 0), 1);
+        CIImage *frame = [[CIImage imageWithColor:[CIColor blackColor]] imageByCroppingToRect:bounds];
+        const SpliceAVLayer *layers = instruction.layers.bytes;
+        size_t count = instruction.layers.length / sizeof(SpliceAVLayer);
+        for (size_t index = 0; index < count; index++) {
+            const SpliceAVLayer *layer = &layers[index];
+            SpliceAVTrack *source = instruction.sources[index];
+            double t = (layer->flags & SpliceAVEase) ? linear * linear * (3 - 2 * linear) : linear;
+            CIImage *image;
+            if (source.fill) {
+                // Same diagonal as still_buffer: colorA top-left to colorB bottom-right.
+                CGFloat a[4], b[4];
+                rgb(source.colorA, a), rgb(source.colorB, b);
+                CGRect area = flip(rect(layer->destination), canvas.height);
+                CIColor *from = [CIColor colorWithRed:a[0] green:a[1] blue:a[2]];
+                CIColor *to = [CIColor colorWithRed:b[0] green:b[1] blue:b[2]];
+                image = source.colorA == source.colorB ? [CIImage imageWithColor:from]
+                    : [CIFilter filterWithName:@"CILinearGradient" withInputParameters:@{
+                        @"inputPoint0": [CIVector vectorWithX:CGRectGetMinX(area) Y:CGRectGetMaxY(area)],
+                        @"inputPoint1": [CIVector vectorWithX:CGRectGetMaxX(area) Y:CGRectGetMinY(area)],
+                        @"inputColor0": from, @"inputColor1": to}].outputImage;
+                image = [image imageByCroppingToRect:area];
+                double opacity = lerp(layer->opacity[0], layer->opacity[1], linear);
+                if (opacity < 1) {
+                    image = [image imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
+                        @"inputRVector": [CIVector vectorWithX:opacity Y:0 Z:0 W:0],
+                        @"inputGVector": [CIVector vectorWithX:0 Y:opacity Z:0 W:0],
+                        @"inputBVector": [CIVector vectorWithX:0 Y:0 Z:opacity W:0],
+                        @"inputAVector": [CIVector vectorWithX:0 Y:0 Z:0 W:opacity]}];
+                }
+                frame = [image imageByCompositingOverImage:frame];
+                continue;
+            }
+            CVPixelBufferRef pixels = [request sourceFrameByTrackID:source.track.trackID];
+            if (pixels == NULL) continue;
+            image = [CIImage imageWithCVPixelBuffer:pixels];
+            // Orient in top-left space, then return to Core Image's bottom-left space.
+            CGSize natural = image.extent.size;
+            CGRect oriented = CGRectApplyAffineTransform(CGRectMake(0, 0, natural.width, natural.height), source.orientation);
+            CGAffineTransform to_top = CGAffineTransformMake(1, 0, 0, -1, 0, natural.height);
+            CGAffineTransform orient = CGAffineTransformConcat(source.orientation,
+                CGAffineTransformMakeTranslation(-oriented.origin.x, -oriented.origin.y));
+            CGAffineTransform to_bottom = CGAffineTransformMake(1, 0, 0, -1, 0, oriented.size.height);
+            image = [image imageByApplyingTransform:CGAffineTransformConcat(CGAffineTransformConcat(to_top, orient), to_bottom)];
+            double W = oriented.size.width, H = oriented.size.height;
+            CGRect crop = CGRectMake(layer->crop[0] * W, layer->crop[1] * H, layer->crop[2] * W, layer->crop[3] * H);
+            CGRect dest = rect(layer->destination);
+            if (layer->center_crop != 0) {
+                double ratio = dest.size.width / dest.size.height;
+                double width = fmin(crop.size.width, crop.size.height * ratio);
+                double height = fmin(crop.size.height, crop.size.width / ratio);
+                crop = CGRectInset(crop, (crop.size.width - width) / 2, (crop.size.height - height) / 2);
+            }
+            double scale = lerp(layer->scale[0], layer->scale[1], t);
+            double fx = lerp(layer->focus[0], layer->focus[2], t), fy = lerp(layer->focus[1], layer->focus[3], t);
+            CGRect placed = CGRectMake(fx + (dest.origin.x - fx) * scale, fy + (dest.origin.y - fy) * scale,
+                                       dest.size.width * scale, dest.size.height * scale);
+            CGRect crop_ci = flip(crop, H), placed_ci = flip(placed, canvas.height);
+            image = [image imageByCroppingToRect:crop_ci];
+            CGAffineTransform fit = CGAffineTransformMakeTranslation(-crop_ci.origin.x, -crop_ci.origin.y);
+            fit = CGAffineTransformConcat(fit, CGAffineTransformMakeScale(placed.size.width / crop.size.width,
+                                                                          placed.size.height / crop.size.height));
+            fit = CGAffineTransformConcat(fit, CGAffineTransformMakeTranslation(placed_ci.origin.x, placed_ci.origin.y));
+            image = [[image imageByApplyingTransform:fit] imageByCroppingToRect:placed_ci];
+            CIImage *mask = nil;
+            double corner = layer->corner * scale;
+            if (corner > 0.5 || layer->shadow > 0) {
+                mask = [CIFilter filterWithName:@"CIRoundedRectangleGenerator" withInputParameters:@{
+                    @"inputExtent": [CIVector vectorWithCGRect:placed_ci], @"inputRadius": @(fmax(corner, 0)),
+                    @"inputColor": [CIColor whiteColor]}].outputImage;
+                if (corner > 0.5) {
+                    image = [image imageByApplyingFilter:@"CISourceInCompositing"
+                                     withInputParameters:@{kCIInputBackgroundImageKey: mask}];
+                }
+            }
+            // Cursor and click rings ride on the picture, so zoom and crop move them with it.
+            SpliceCursorTable *table = layer->cursor >= 0 && (NSUInteger)layer->cursor < instruction.cursors.count
+                                           ? instruction.cursors[layer->cursor] : nil;
+            if (table != nil) {
+                double st = lerp(layer->source[0], layer->source[1], linear), at[2];
+                double per_px = placed.size.width / crop.size.width;  // canvas pixels per source pixel
+                double px_per_point = W / table.points;
+                const SpliceAVCursorSample *samples = table.samples.bytes;
+                size_t total = table.samples.length / sizeof(SpliceAVCursorSample);
+                CGRect clip = placed_ci;
+                if (layer->flags & SpliceAVClickRings) {
+                    for (size_t i = 0; i < total; i++) {
+                        double age = st - samples[i].t;
+                        if (!samples[i].click || age < 0 || age > 0.45) continue;
+                        double cx = placed.origin.x + (samples[i].x * W - crop.origin.x) * per_px;
+                        double cy = placed.origin.y + (samples[i].y * H - crop.origin.y) * per_px;
+                        double radius = (10 + 34 * age / 0.45) * px_per_point * per_px * layer->cursor_scale;
+                        CIImage *ring = [CIFilter filterWithName:@"CIRadialGradient" withInputParameters:@{
+                            @"inputCenter": [CIVector vectorWithX:cx Y:canvas.height - cy],
+                            @"inputRadius0": @(radius * 0.55), @"inputRadius1": @(radius),
+                            @"inputColor0": [CIColor colorWithRed:1 green:1 blue:1 alpha:0.6 * (1 - age / 0.45)],
+                            @"inputColor1": [CIColor colorWithRed:1 green:1 blue:1 alpha:0]}].outputImage;
+                        image = [[ring imageByCroppingToRect:clip] imageByCompositingOverImage:image];
+                    }
+                }
+                const SpliceAVCursorSample *sample = cursor_at(table, st, at);
+                if (sample != NULL && sample->image >= 0 && (NSUInteger)sample->image < table.images.count) {
+                    CIImage *cursor = table.images[sample->image];
+                    const double *hot = &((const double *)table.hotspots.bytes)[sample->image * 3];
+                    double k = layer->cursor_scale * px_per_point * per_px / hot[2];  // canvas px per PNG px
+                    double x = placed.origin.x + (at[0] * W - crop.origin.x) * per_px - hot[0] * k;
+                    double y = placed.origin.y + (at[1] * H - crop.origin.y) * per_px - hot[1] * k;
+                    CGSize size = cursor.extent.size;
+                    CGAffineTransform move = CGAffineTransformMakeScale(k, k);
+                    move = CGAffineTransformConcat(move, CGAffineTransformMakeTranslation(x, canvas.height - y - size.height * k));
+                    image = [[[cursor imageByApplyingTransform:move] imageByCroppingToRect:clip] imageByCompositingOverImage:image];
+                }
+            }
+            double opacity = lerp(layer->opacity[0], layer->opacity[1], linear);
+            if (layer->shadow > 0 && mask != nil) {
+                double blur = 0.03 * fmin(placed.size.width, placed.size.height);
+                CIImage *shadow = [mask imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
+                    @"inputRVector": [CIVector vectorWithX:0 Y:0 Z:0 W:0], @"inputGVector": [CIVector vectorWithX:0 Y:0 Z:0 W:0],
+                    @"inputBVector": [CIVector vectorWithX:0 Y:0 Z:0 W:0],
+                    @"inputAVector": [CIVector vectorWithX:0 Y:0 Z:0 W:0.55 * layer->shadow]}];
+                shadow = [[shadow imageByApplyingGaussianBlurWithSigma:blur / 2]
+                    imageByApplyingTransform:CGAffineTransformMakeTranslation(0, -blur / 3)];
+                image = [image imageByCompositingOverImage:[shadow imageByCroppingToRect:bounds]];
+            }
+            if (opacity < 1) {
+                image = [image imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
+                    @"inputRVector": [CIVector vectorWithX:opacity Y:0 Z:0 W:0],
+                    @"inputGVector": [CIVector vectorWithX:0 Y:opacity Z:0 W:0],
+                    @"inputBVector": [CIVector vectorWithX:0 Y:0 Z:opacity W:0],
+                    @"inputAVector": [CIVector vectorWithX:0 Y:0 Z:0 W:opacity]}];
+            }
+            frame = [image imageByCompositingOverImage:frame];
+        }
+        int32_t at = (int32_t)llround(CMTimeGetSeconds(request.compositionTime) * instruction.fps);
+        for (SpliceAVTextLayer *text in instruction.texts) {
+            if (at < text.firstFrame || at >= text.endFrame) continue;
+            if (text.image == nil) text.image = [CIImage imageWithCGImage:(__bridge CGImageRef)text.contents];
+            double progress = (double)(at - text.firstFrame) / (text.endFrame - text.firstFrame);
+            double alpha = text.fromOpacity + (text.toOpacity - text.fromOpacity) * progress;
+            CIImage *glyphs = [text.image imageByApplyingTransform:
+                CGAffineTransformMakeTranslation(text.frame.origin.x, text.frame.origin.y)];
+            if (alpha < 1) {
+                glyphs = [glyphs imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
+                    @"inputRVector": [CIVector vectorWithX:alpha Y:0 Z:0 W:0],
+                    @"inputGVector": [CIVector vectorWithX:0 Y:alpha Z:0 W:0],
+                    @"inputBVector": [CIVector vectorWithX:0 Y:0 Z:alpha W:0],
+                    @"inputAVector": [CIVector vectorWithX:0 Y:0 Z:0 W:alpha]}];
+            }
+            frame = [glyphs imageByCompositingOverImage:frame];
+        }
+        [_context render:[frame imageByCroppingToRect:bounds] toCVPixelBuffer:output bounds:bounds colorSpace:nil];
+        [request finishWithComposedVideoFrame:output];
+        CVPixelBufferRelease(output);
+    }
+}
+@end
+
+int32_t splice_av_cursor(void *raw, const SpliceAVCursorSample *samples, size_t sample_count,
+                         const SpliceAVCursorImage *images, size_t image_count, double points, char **error) {
+    @autoreleasepool {
+        SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
+        if (!(points > 0) || !isfinite(points) || (sample_count > 0 && samples == NULL) ||
+            (image_count > 0 && images == NULL)) {
+            splice_set_error(error, "Invalid cursor track.");
+            return -1;
+        }
+        NSMutableArray<CIImage *> *loaded = [NSMutableArray arrayWithCapacity:image_count];
+        NSMutableData *hotspots = [NSMutableData dataWithLength:image_count * 3 * sizeof(double)];
+        double *hot = hotspots.mutableBytes;
+        for (size_t index = 0; index < image_count; index++) {
+            NSURL *url = [NSURL fileURLWithFileSystemRepresentation:images[index].path isDirectory:NO relativeToURL:nil];
+            CIImage *image = url != nil ? [CIImage imageWithContentsOfURL:url] : nil;
+            if (image == nil || !(images[index].scale > 0)) {
+                splice_set_error(error, "A cursor image could not be loaded.");
+                return -1;
+            }
+            [loaded addObject:image];
+            hot[index * 3] = images[index].hot[0], hot[index * 3 + 1] = images[index].hot[1];
+            hot[index * 3 + 2] = images[index].scale;
+        }
+        for (size_t index = 0; index < sample_count; index++) {
+            if (!isfinite(samples[index].t) || !isfinite(samples[index].x) || !isfinite(samples[index].y) ||
+                samples[index].image >= (int32_t)image_count || (index > 0 && samples[index].t < samples[index - 1].t)) {
+                splice_set_error(error, "Cursor samples must be finite, ordered and reference loaded images.");
+                return -1;
+            }
+        }
+        SpliceCursorTable *table = [SpliceCursorTable new];
+        table.samples = [NSData dataWithBytes:samples length:sample_count * sizeof(SpliceAVCursorSample)];
+        table.images = loaded;
+        table.hotspots = hotspots;
+        table.points = points;
+        if (assembly.cursors == nil) assembly.cursors = [NSMutableArray array];
+        [assembly.cursors addObject:table];
+        return (int32_t)assembly.cursors.count - 1;
+    }
 }
 
 bool splice_av_range(void *raw, int32_t from, int32_t to,
@@ -446,28 +737,27 @@ bool splice_av_range(void *raw, int32_t from, int32_t to,
         }
         CMTime start = time_for(assembly, from);
         CMTimeRange interval = CMTimeRangeFromTimeToTime(start, time_for(assembly, to));
-        NSMutableArray *ordered = [NSMutableArray arrayWithCapacity:layer_count];
-        // AVFoundation expects the frontmost layer first.
-        for (size_t index = layer_count; index > 0; index--) {
-            const SpliceAVLayer *layer = &layers[index - 1];
+        NSMutableArray<SpliceAVTrack *> *sources = [NSMutableArray arrayWithCapacity:layer_count];
+        NSMutableArray<NSValue *> *ids = [NSMutableArray arrayWithCapacity:layer_count];
+        for (size_t index = 0; index < layer_count; index++) {
+            const SpliceAVLayer *layer = &layers[index];
             SpliceAVTrack *source = track_at(assembly, layer->track);
+            bool finite = true;
+            for (size_t k = 0; k < 4; k++) finite = finite && isfinite(layer->focus[k]);
             if (source == nil || source.mix != nil || !valid_rect(layer->crop) || !valid_rect(layer->destination) ||
-                !isfinite(layer->scale[0]) || !isfinite(layer->scale[1]) ||
+                !isfinite(layer->scale[0]) || !isfinite(layer->scale[1]) || !(layer->scale[0] > 0 && layer->scale[1] > 0) ||
+                !finite || !isfinite(layer->source[0]) || !isfinite(layer->source[1]) ||
+                !(layer->corner >= 0 && isfinite(layer->corner)) || !(layer->shadow >= 0 && layer->shadow <= 1) ||
+                !(layer->cursor_scale > 0 && isfinite(layer->cursor_scale)) ||
+                (layer->cursor >= 0 && (NSUInteger)layer->cursor >= assembly.cursors.count) ||
                 !(layer->opacity[0] >= 0 && layer->opacity[0] <= 1 &&
                   layer->opacity[1] >= 0 && layer->opacity[1] <= 1)) {
                 splice_set_error(error, "Invalid picture layer in a composition instruction.");
                 return false;
             }
-            AVMutableVideoCompositionLayerInstruction *instruction =
-                [AVMutableVideoCompositionLayerInstruction videoCompositionLayerInstructionWithAssetTrack:source.track];
-            CGRect crop;
-            CGAffineTransform a = placement(source, assembly.size, layer, layer->scale[0], &crop);
-            CGAffineTransform b = placement(source, assembly.size, layer, layer->scale[1], &crop);
-            [instruction setCropRectangle:crop atTime:start];
-            [instruction setTransformRampFromStartTransform:a toEndTransform:b timeRange:interval];
-            [instruction setOpacityRampFromStartOpacity:(float)layer->opacity[0]
-                                           toEndOpacity:(float)layer->opacity[1] timeRange:interval];
-            [ordered addObject:instruction];
+            [sources addObject:source];
+            NSValue *trackID = @(source.track.trackID);
+            if (!source.fill && ![ids containsObject:trackID]) [ids addObject:trackID];
         }
         for (size_t index = 0; index < gain_count; index++) {
             const SpliceAVGain *gain = &gains[index];
@@ -479,9 +769,17 @@ bool splice_av_range(void *raw, int32_t from, int32_t to,
             }
             [source.mix setVolumeRampFromStartVolume:gain->gain[0] toEndVolume:gain->gain[1] timeRange:interval];
         }
-        AVMutableVideoCompositionInstruction *instruction = [AVMutableVideoCompositionInstruction videoCompositionInstruction];
+        SpliceInstruction *instruction = [SpliceInstruction new];
         instruction.timeRange = interval;
-        instruction.layerInstructions = ordered;
+        instruction.enablePostProcessing = NO;
+        instruction.containsTweening = YES;
+        instruction.requiredSourceTrackIDs = ids;
+        instruction.passthroughTrackID = kCMPersistentTrackID_Invalid;
+        instruction.layers = [NSData dataWithBytes:layers length:layer_count * sizeof(SpliceAVLayer)];
+        instruction.sources = sources;
+        instruction.cursors = assembly.cursors ?: @[];
+        instruction.canvas = assembly.size;
+        instruction.fps = assembly.fps;
         [assembly.instructions addObject:instruction];
         assembly.covered = to;
         return true;
@@ -550,31 +848,6 @@ bool splice_av_text(void *raw, int32_t from, int32_t to, const SpliceAVText *spe
         }
         layer.contents = (__bridge id)image;
         CGImageRelease(image);
-        double first = (double)from / assembly.end;
-        double last = ((double)to - 0.5) / assembly.end;
-        NSMutableArray *times = [NSMutableArray array];
-        NSMutableArray *values = [NSMutableArray array];
-        if (from > 0) {
-            [times addObjectsFromArray:@[@0, @(((double)from - 0.5) / assembly.end)]];
-            [values addObjectsFromArray:@[@0, @0]];
-        }
-        double fraction = ((double)(to - from) - 0.5) / (to - from);
-        [times addObjectsFromArray:@[@(first), @(last), @((double)to / assembly.end)]];
-        [values addObjectsFromArray:@[@(spec->opacity[0]),
-                                      @(spec->opacity[0] + (spec->opacity[1] - spec->opacity[0]) * fraction),
-                                      @0]];
-        if (to < assembly.end) {
-            [times addObject:@1];
-            [values addObject:@0];
-        }
-        CAKeyframeAnimation *show = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
-        show.values = values;
-        show.keyTimes = times;
-        show.beginTime = AVCoreAnimationBeginTimeAtZero;
-        show.duration = (double)assembly.end / assembly.fps;
-        show.fillMode = kCAFillModeBoth;
-        show.removedOnCompletion = NO;
-        [layer addAnimation:show forKey:@"visibility"];
         [assembly.text addSublayer:layer];
         return true;
     }
@@ -588,23 +861,31 @@ bool splice_av_finish(void *raw, char **error) {
             return false;
         }
         AVMutableVideoComposition *video = [AVMutableVideoComposition videoComposition];
+        video.customVideoCompositorClass = [SpliceCompositor class];
         video.renderSize = assembly.size;
         video.frameDuration = time_for(assembly, 1);
         video.instructions = assembly.instructions;
         assembly.video = video;
-        // ponytail: export uses Core Animation text and the viewer draws evaluator text in PXUI.
-        // Use the M3 compositor for both if a visible mismatch is reported in friction.
+        // Export draws text in the compositor; the viewer draws the same evaluator text in PXUI.
         if (assembly.text != nil) {
-            CALayer *root = [CALayer layer];
-            root.frame = assembly.text.frame;
-            CALayer *picture = [CALayer layer];
-            picture.frame = root.bounds;
-            [root addSublayer:picture];
-            [root addSublayer:assembly.text];
+            NSMutableArray *offline = [NSMutableArray arrayWithCapacity:assembly.instructions.count];
+            for (SpliceInstruction *source in assembly.instructions) {
+                SpliceInstruction *copy = [SpliceInstruction new];
+                copy.timeRange = source.timeRange;
+                copy.enablePostProcessing = source.enablePostProcessing;
+                copy.containsTweening = source.containsTweening;
+                copy.requiredSourceTrackIDs = source.requiredSourceTrackIDs;
+                copy.passthroughTrackID = source.passthroughTrackID;
+                copy.layers = source.layers;
+                copy.sources = source.sources;
+                copy.cursors = source.cursors;
+                copy.canvas = source.canvas;
+                copy.fps = source.fps;
+                copy.texts = (NSArray<SpliceAVTextLayer *> *)assembly.text.sublayers;
+                [offline addObject:copy];
+            }
             assembly.offline = [video mutableCopy];
-            assembly.offline.animationTool = [AVVideoCompositionCoreAnimationTool
-                 videoCompositionCoreAnimationToolWithPostProcessingAsVideoLayer:picture inLayer:root];
-            [CATransaction flush];
+            assembly.offline.instructions = offline;
         } else {
             assembly.offline = video;
         }

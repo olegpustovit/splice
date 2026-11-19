@@ -1,8 +1,11 @@
-use crate::{Error, TimedText};
+use crate::{
+    Error, TimedText,
+    takes::{self, TakeEvents},
+};
 use apple_sys::composition::{
     AudioRamp, Builder, Composition, Source, TextLayer, Timing, VideoLayer,
 };
-use splice_eval::{Audio, Background, CaptionPreset, Evaluator, Layer, Picture, Track};
+use splice_eval::{Audio, Background, CaptionPreset, Evaluator, Keys, Layer, Picture, Track};
 use splice_model::{ClipId, Frame, Media, MediaId, MediaKind, Project, Rect, TimelineId};
 use std::path::{Path, PathBuf};
 
@@ -19,6 +22,10 @@ struct Lowering {
     text: Vec<TimedText>,
     end: Frame,
     tracks: Vec<(Key, i32)>,
+    /// Parsed take events and their registered cursor table, per media.
+    takes: Vec<(MediaId, Option<TakeEvents>, Option<i32>)>,
+    /// Click-zoom keyframes per picture and the timeline frames they land on.
+    zooms: Vec<(TimelineId, Vec<[f64; 4]>, Vec<Frame>)>,
 }
 
 pub(super) fn build(
@@ -33,13 +40,50 @@ pub(super) fn build(
         text: Vec::new(),
         end,
         tracks: Vec::new(),
+        takes: Vec::new(),
+        zooms: Vec::new(),
     };
     let black = state.fill(usize::MAX, 0, 0)?;
+    let [width, height] = project.size.map(f64::from);
     let mut first = evaluator.buffer();
     let mut last = evaluator.buffer();
+    // Click zoom is a curve, not a ramp: cut the timeline at its keyframes.
+    let mut cuts = cuts.to_vec();
+    for pair in cuts.clone().windows(2) {
+        evaluator.frame(pair[0], &mut first);
+        for layer in &first.layers {
+            if let Layer::Picture(picture) = *layer
+                && let Some(zoom) = picture.click_zoom
+                && !state.zooms.iter().any(|(item, ..)| *item == picture.item)
+                && let Some(index) = state.take(project, package, picture.media)?
+                && let Some(events) = &state.takes[index].1
+                && let Some(span) = evaluator.source_span(picture.item)
+            {
+                let fps = Lowering::media(project, picture.media)?.probe.fps;
+                let keys = takes::zoom_keys(&events.clicks, zoom, fps);
+                let frames: Vec<Frame> = keys
+                    .iter()
+                    .map(|k| {
+                        (f64::from(span.start) + (k[0] * fps - span.source) / span.step).round()
+                            as Frame
+                    })
+                    .collect();
+                cuts.extend(
+                    frames
+                        .iter()
+                        .copied()
+                        .filter(|&f| span.start < f && f < span.end),
+                );
+                state.zooms.push((picture.item, keys, frames));
+            }
+        }
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let cuts = cuts.as_slice();
+    let mut chips: Vec<(ClipId, MediaId, Keys)> = Vec::new();
     let mut video = Vec::new();
     let mut audio = Vec::new();
-    let [width, height] = project.size.map(f64::from);
     let bounds = [0.0, 0.0, width, height];
     for pair in cuts.windows(2) {
         let [from, to] = [pair[0], pair[1]];
@@ -59,20 +103,22 @@ pub(super) fn build(
             .iter()
             .any(|layer| matches!(layer, Layer::Fade { .. }))
         {
-            video.push(layer(black, bounds, [1.0; 2]));
+            video.push(layer(black, bounds, [1.0; 2], [width, height]));
         }
         for (depth, (&a, &b)) in first.layers.iter().zip(&last.layers).enumerate() {
             match (a, b) {
                 (Layer::Picture(a), Layer::Picture(b)) => {
                     let track = state.picture(a, project, package, evaluator)?;
-                    video.push(VideoLayer {
+                    let mut picture = VideoLayer::plain(
                         track,
-                        crop: coordinates(a.source),
-                        destination: coordinates(a.destination),
-                        scale: ramp(a.scale, b.scale, range),
-                        opacity: opacity(a.opacity, b.opacity, range),
-                        center_crop: 0,
-                    });
+                        coordinates(a.source),
+                        coordinates(a.destination),
+                        [width, height],
+                    );
+                    picture.scale = ramp(a.scale, b.scale, range);
+                    picture.opacity = opacity(a.opacity, b.opacity, range);
+                    state.dress(&mut picture, a, range, project, package, evaluator)?;
+                    video.push(picture);
                 }
                 (
                     Layer::Background {
@@ -88,24 +134,32 @@ pub(super) fn build(
                         Background::Gradient(a, b) => [a, b],
                     };
                     let track = state.fill(depth, a_color, b_color)?;
-                    video.push(layer(track, coordinates(bounds), opacity(a, b, range)));
+                    video.push(layer(
+                        track,
+                        coordinates(bounds),
+                        opacity(a, b, range),
+                        [width, height],
+                    ));
                 }
                 (Layer::Fade { opacity: a }, Layer::Fade { opacity: b }) => {
-                    video.push(layer(black, bounds, opacity(a, b, range)));
+                    video.push(layer(black, bounds, opacity(a, b, range), [width, height]));
                 }
                 (
                     Layer::Camera {
                         clip,
                         media,
                         bounds,
+                        radius,
+                        shadow,
                         ..
                     },
                     Layer::Camera { .. },
                 ) => {
                     let track = state.camera(clip, media, project, package, evaluator)?;
-                    // ponytail: use rectangular video crops until the M3 compositor supports masks and shadows.
-                    let mut camera = layer(track, coordinates(bounds), [1.0; 2]);
+                    let mut camera = layer(track, coordinates(bounds), [1.0; 2], [width, height]);
                     camera.center_crop = 1;
+                    camera.corner = radius;
+                    camera.shadow = shadow.clamp(0.0, 1.0);
                     video.push(camera);
                 }
                 (
@@ -181,8 +235,16 @@ pub(super) fn build(
                         }
                     }
                 }
-                // ponytail: render recorded keystrokes when T8 supplies the event stream.
-                (Layer::Keystrokes { .. }, Layer::Keystrokes { .. }) => {}
+                (
+                    Layer::Keystrokes {
+                        clip, media, style, ..
+                    },
+                    Layer::Keystrokes { .. },
+                ) => {
+                    if !chips.iter().any(|(known, ..)| *known == clip) {
+                        chips.push((clip, media, style));
+                    }
+                }
                 _ => {
                     return Err(Error::Input(format!(
                         "The render layers reorder inside frames {from}–{to}."
@@ -195,10 +257,181 @@ pub(super) fn build(
         }
         state.builder.range(range, &video, &audio)?;
     }
+    for (clip, media, style) in chips {
+        state.chips(clip, media, style, project, package, evaluator)?;
+    }
     Ok((state.builder.finish()?, state.text))
 }
 
 impl Lowering {
+    /// Window corners and shadow, the cursor and click rings, and the click-zoom curve.
+    fn dress(
+        &mut self,
+        layer: &mut VideoLayer,
+        picture: Picture,
+        [from, to]: [Frame; 2],
+        project: &Project,
+        package: &Path,
+        evaluator: &Evaluator,
+    ) -> Result<(), Error> {
+        let d = picture.destination;
+        if let Some(window) = picture.window {
+            layer.corner = window.corner * d.w.min(d.h);
+            layer.shadow = window.shadow.clamp(0.0, 1.0);
+        }
+        let media = Self::media(project, picture.media)?;
+        if media.kind != MediaKind::Take {
+            return Ok(());
+        }
+        let fps = media.probe.fps;
+        let step = evaluator
+            .source_span(picture.item)
+            .map_or(1.0, |span| span.step);
+        let start = picture.source_frame / fps;
+        layer.source = [start, start + step * f64::from(to - from) / fps];
+        if let Some(cursor) = picture.cursor
+            && let Some(index) = self.take(project, package, picture.media)?
+        {
+            let table = match self.takes[index].2 {
+                Some(table) => Some(table),
+                None => match &self.takes[index].1 {
+                    Some(events) if !events.samples.is_empty() => {
+                        let table =
+                            self.builder
+                                .cursor(&events.samples, &events.images, events.points)?;
+                        self.takes[index].2 = Some(table);
+                        Some(table)
+                    }
+                    _ => None,
+                },
+            };
+            if let Some(table) = table {
+                layer.cursor = table;
+                layer.cursor_scale = cursor.scale;
+                if cursor.click_rings {
+                    layer.flags |= VideoLayer::CLICK_RINGS;
+                }
+            }
+        }
+        if let Some((_, keys, frames)) = self.zooms.iter().find(|(item, ..)| *item == picture.item)
+        {
+            let canvas = |z: [f64; 3]| {
+                let s = picture.source;
+                [
+                    d.x + (z[1] - s.x) / s.w * d.w,
+                    d.y + (z[2] - s.y) / s.h * d.h,
+                ]
+            };
+            let [a, b] = layer.source.map(|t| takes::zoom_at(keys, t));
+            let [fa, fb] = [canvas(a), canvas(b)];
+            layer.scale = [layer.scale[0] * a[0], layer.scale[1] * b[0]];
+            layer.focus = [fa[0], fa[1], fb[0], fb[1]];
+            // An interval spanning exactly one keyframe segment eases natively; a segment split
+            // by other cuts is approximated by linear pieces between exact samples.
+            if frames.windows(2).any(|w| w == [from, to]) {
+                layer.flags |= VideoLayer::EASE;
+            }
+        }
+        Ok(())
+    }
+
+    /// Index of the media's parsed take events, loading them on first use.
+    fn take(
+        &mut self,
+        project: &Project,
+        package: &Path,
+        id: MediaId,
+    ) -> Result<Option<usize>, Error> {
+        if let Some(index) = self.takes.iter().position(|(media, ..)| *media == id) {
+            return Ok(self.takes[index].1.is_some().then_some(index));
+        }
+        let media = Self::media(project, id)?;
+        let events = match media.take.as_ref().and_then(|take| take.events.as_deref()) {
+            Some(file) => {
+                let path = media_path(package, media, Some(file))?;
+                let cursors = media
+                    .take
+                    .as_ref()
+                    .and_then(|take| take.cursors.as_deref())
+                    .and_then(|dir| media_path(package, media, Some(dir)).ok());
+                Some(takes::load(&path, cursors.as_deref())?)
+            }
+            None => None,
+        };
+        self.takes.push((id, events, None));
+        Ok(self
+            .takes
+            .last()
+            .and_then(|t| t.1.as_ref())
+            .map(|_| self.takes.len() - 1))
+    }
+
+    /// Keystroke chips as timed text: typing bursts merge into one chip shown for 1.2 s.
+    fn chips(
+        &mut self,
+        clip: ClipId,
+        media: MediaId,
+        style: Keys,
+        project: &Project,
+        package: &Path,
+        evaluator: &Evaluator,
+    ) -> Result<(), Error> {
+        let Some(index) = self.take(project, package, media)? else {
+            return Ok(());
+        };
+        let Some(span) = evaluator.source_span(TimelineId::Clip(clip)) else {
+            return Ok(());
+        };
+        let fps = Self::media(project, media)?.probe.fps;
+        let hidden = evaluator.hidden_keys(clip).unwrap_or(&[]).to_vec();
+        let [width, height] = project.size.map(f64::from);
+        let chip_h = height * 0.045 * style.scale;
+        let y = match style.position {
+            splice_eval::KeyPosition::TopLeft => height * 0.08,
+            _ => height * 0.86 - chip_h,
+        };
+        let x = match style.position {
+            splice_eval::KeyPosition::BottomCenter => width * 0.2,
+            _ => width * 0.06,
+        };
+        let frame =
+            |t: f64| (f64::from(span.start) + (t * fps - span.source) / span.step).round() as Frame;
+        let mut bursts: Vec<(f64, f64, String)> = Vec::new();
+        let keys = self.takes[index]
+            .1
+            .as_ref()
+            .map_or(&[][..], |e| e.keys.as_slice());
+        for (n, (t, text)) in keys.iter().enumerate() {
+            if hidden.contains(&(n as u32)) {
+                continue;
+            }
+            match bursts.last_mut() {
+                Some(last) if t - last.1 < 0.6 && last.2.chars().count() < 24 => {
+                    last.1 = *t;
+                    last.2.push_str(text);
+                }
+                _ => bursts.push((*t, *t, text.clone())),
+            }
+        }
+        for (start, end, text) in bursts {
+            let from = frame(start).max(span.start);
+            let to = frame(end + 1.2).min(span.end);
+            if to - from >= 2 {
+                self.add_text(
+                    [from, to],
+                    TextLayer {
+                        text,
+                        bounds: [x, y, width * 0.6, chip_h],
+                        font: chip_h * 0.62,
+                        opacity: [1.0; 2],
+                        color: 0xffffff,
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn add_text(&mut self, range: [Frame; 2], layer: TextLayer) -> Result<(), Error> {
         self.builder.text(range, &layer)?;
         self.text.push(TimedText { range, layer });
@@ -402,15 +635,10 @@ fn coordinates(rect: Rect) -> [f64; 4] {
     [rect.x, rect.y, rect.w, rect.h]
 }
 
-fn layer(track: i32, destination: [f64; 4], opacity: [f64; 2]) -> VideoLayer {
-    VideoLayer {
-        track,
-        destination,
-        opacity,
-        crop: [0.0, 0.0, 1.0, 1.0],
-        scale: [1.0; 2],
-        center_crop: 0,
-    }
+fn layer(track: i32, destination: [f64; 4], opacity: [f64; 2], canvas: [f64; 2]) -> VideoLayer {
+    let mut layer = VideoLayer::plain(track, [0.0, 0.0, 1.0, 1.0], destination, canvas);
+    layer.opacity = opacity;
+    layer
 }
 
 fn ramp(a: f64, b: f64, [from, to]: [Frame; 2]) -> [f64; 2] {

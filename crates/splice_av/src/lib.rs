@@ -3,6 +3,7 @@
 #![deny(missing_docs)]
 
 mod lower;
+mod takes;
 
 use apple_sys::composition;
 use splice_eval::{EvalError, Evaluator};

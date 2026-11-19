@@ -624,8 +624,6 @@ fn prepare_clip(p: &Project, slot: Slot, size: [f64; 2]) -> Result<PreparedClip,
             if enabled.pointer == Some(true) {
                 visual.picture.cursor = style::cursor(&scopes);
             }
-            // ponytail: pass click settings and source clock through the plan until
-            // T8 supplies a real capture event stream to the renderer.
             visual.picture.click_zoom = style::click_zoom(&scopes);
         }
         clip.visual = Some(visual);

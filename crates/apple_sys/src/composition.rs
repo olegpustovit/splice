@@ -53,14 +53,92 @@ pub struct VideoLayer {
     pub crop: [f64; 4],
     /// Placement in top-left canvas coordinates as x, y, width and height.
     pub destination: [f64; 4],
-    /// Scale about the canvas center at the two ends of the ramp.
+    /// Scale about `focus` at the two ends of the ramp.
     pub scale: [f64; 2],
     /// Opacity at the two ends of the ramp.
     pub opacity: [f64; 2],
+    /// Canvas point the scale keeps fixed: x, y at the start, then x, y at the end.
+    pub focus: [f64; 4],
+    /// Source clock in seconds at the two ends, for cursor lookups.
+    pub source: [f64; 2],
+    /// Corner radius in canvas pixels before scaling.
+    pub corner: f64,
+    /// Drop shadow intensity, 0…1.
+    pub shadow: f64,
+    /// Cursor size relative to the recorded cursor.
+    pub cursor_scale: f64,
     /// Composition track returned by the builder.
     pub track: i32,
     /// Center-crop the oriented source to fit the destination.
     pub center_crop: u32,
+    /// Cursor table from `Builder::cursor`, or -1.
+    pub cursor: i32,
+    /// `EASE` and `CLICK_RINGS` bits.
+    pub flags: u32,
+}
+
+impl VideoLayer {
+    /// Ease the scale and focus ramps (smoothstep) instead of interpolating linearly.
+    pub const EASE: u32 = 1;
+    /// Draw rings at recorded clicks.
+    pub const CLICK_RINGS: u32 = 2;
+
+    /// A plain layer: no zoom focus, corners, shadow or cursor.
+    pub fn plain(track: i32, crop: [f64; 4], destination: [f64; 4], canvas: [f64; 2]) -> Self {
+        Self {
+            crop,
+            destination,
+            scale: [1.0; 2],
+            opacity: [1.0; 2],
+            focus: [
+                canvas[0] / 2.0,
+                canvas[1] / 2.0,
+                canvas[0] / 2.0,
+                canvas[1] / 2.0,
+            ],
+            source: [0.0; 2],
+            corner: 0.0,
+            shadow: 0.0,
+            cursor_scale: 1.0,
+            track,
+            center_crop: 0,
+            cursor: -1,
+            flags: 0,
+        }
+    }
+}
+
+/// One cursor state on a take's source clock, normalized to the source with a top-left origin.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CursorSample {
+    /// Source seconds.
+    pub t: f64,
+    /// Normalized x.
+    pub x: f64,
+    /// Normalized y.
+    pub y: f64,
+    /// Index into the table's images, or -1 when hidden.
+    pub image: i32,
+    /// 1 at a click.
+    pub click: u32,
+}
+
+/// A recorded cursor image with its hotspot in PNG pixels and its pixels per point.
+pub struct CursorImage {
+    /// PNG file.
+    pub path: std::path::PathBuf,
+    /// Hotspot in PNG pixels.
+    pub hot: [f64; 2],
+    /// PNG pixels per screen point.
+    pub scale: f64,
+}
+
+#[repr(C)]
+struct RawCursorImage {
+    path: *const c_char,
+    hot: [f64; 2],
+    scale: f64,
 }
 
 /// A linear volume ramp for a native audio track.
@@ -97,7 +175,9 @@ struct RawText {
 
 const _: () = {
     assert!(size_of::<RawSource>() == 64 && offset_of!(RawSource, timeline) == 40);
-    assert!(size_of::<VideoLayer>() == 104 && offset_of!(VideoLayer, center_crop) == 100);
+    assert!(size_of::<VideoLayer>() == 184 && offset_of!(VideoLayer, flags) == 180);
+    assert!(size_of::<CursorSample>() == 32 && offset_of!(CursorSample, click) == 28);
+    assert!(size_of::<RawCursorImage>() == 32 && offset_of!(RawCursorImage, scale) == 24);
     assert!(size_of::<AudioRamp>() == 12 && offset_of!(AudioRamp, gain) == 4);
     assert!(size_of::<RawText>() == 64 && offset_of!(RawText, color) == 56);
 };
@@ -134,6 +214,15 @@ unsafe extern "C" {
         error: *mut *mut c_char,
     ) -> bool;
     fn splice_av_finish(composition: *mut c_void, error: *mut *mut c_char) -> bool;
+    fn splice_av_cursor(
+        composition: *mut c_void,
+        samples: *const CursorSample,
+        sample_count: usize,
+        images: *const RawCursorImage,
+        image_count: usize,
+        points: f64,
+        error: *mut *mut c_char,
+    ) -> i32;
     fn splice_av_read_frame(
         composition: *mut c_void,
         frame: i32,
@@ -303,6 +392,48 @@ impl Builder {
     }
 
     /// Publishes the native composition after all ranges have been added.
+    /// Registers a take's cursor track. `points` is the captured source width in screen points.
+    pub fn cursor(
+        &mut self,
+        samples: &[CursorSample],
+        images: &[CursorImage],
+        points: f64,
+    ) -> Result<i32, Error> {
+        let paths = images
+            .iter()
+            .map(|image| CString::new(image.path.as_os_str().as_bytes()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| Error::message("A cursor image path contains NUL."))?;
+        let raw: Vec<RawCursorImage> = images
+            .iter()
+            .zip(&paths)
+            .map(|(image, path)| RawCursorImage {
+                path: path.as_ptr(),
+                hot: image.hot,
+                scale: image.scale,
+            })
+            .collect();
+        let mut error = ptr::null_mut();
+        // SAFETY: the slices and their C strings stay alive for the duration of the call.
+        let index = unsafe {
+            splice_av_cursor(
+                self.0.0.as_ptr(),
+                samples.as_ptr(),
+                samples.len(),
+                raw.as_ptr(),
+                raw.len(),
+                points,
+                &mut error,
+            )
+        };
+        if index < 0 {
+            Err(diagnostic(error))
+        } else {
+            Ok(index)
+        }
+    }
+
+    /// Completes the composition.
     pub fn finish(self) -> Result<Composition, Error> {
         let mut error = ptr::null_mut();
         // SAFETY: the builder owns a valid native object and provides a diagnostic output.

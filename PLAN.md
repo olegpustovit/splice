@@ -201,8 +201,11 @@ Depends on T1.3, T4.1, T7.
 
 ## 0.2 decisions (2026-11-19)
 
-- **D1** Start the M3 Metal compositor inside 0.2 as a custom `AVVideoCompositing`, used by preview
-  and export. It carries the cursor, corners, shadows, zoom focal points, keystroke chips and masks.
+- **D1** Start the M3 compositor inside 0.2. It renders on **OGPU** (PXUI's portable GPU layer:
+  Metal now, Vulkan later), sharing the viewer's device and textures, with decoded frames imported
+  zero-copy (IOSurface on macOS, dmabuf on Linux). The layer plan (ramps, zoom keyframes, cursor
+  tables) is portable Rust. Amended 2026-11-19: the first cut renders with Core Image inside a custom
+  `AVVideoCompositing` as an interim `ponytail:` (T12.1); T12.7 moves it to OGPU.
 - **D2** `quickjs_sys` (vendored QuickJS-NG, built by `cc`) is allowed, behind a gate allowlist
   entry with measured binary size and build time.
 - **D3** Code mode is a tool profile, `splice mcp --code` (`code.run` + `commands.describe`), so
@@ -245,6 +248,10 @@ cut logs one "try it as a user" line.
 - [ ] T12.4 Window frame: corner radius, shadow, inset, wallpaper/gradient presets.
 - [ ] T12.5 Keystroke chips and the camera bubble mask.
 - [ ] T12.6 `intent.reframe {aspect}`: crop to the active window or area, no letterbox bands.
+- [ ] T12.7 OGPU compositor: `ogpu_metal` IOSurface import (the macOS twin of `import_dmabuf`), a
+  portable `splice_gpu` renderer for the layer plan (MSL now, SPIR-V with Vulkan), used by the viewer
+  (zero-copy into its texture), frame grabs and export. Accept: window_program_4k back under 8 ms,
+  pixel parity ≤ 2/255 with T12.1, zero warm Rust allocations per frame.
 
 ### T13 · Audio (0.2) [L + M]
 - [ ] T13.1 `LaneKind::Audio`; `clip.insert {path, lane}` for music; per-item `volume`.

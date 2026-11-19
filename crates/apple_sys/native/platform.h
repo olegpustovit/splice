@@ -142,11 +142,32 @@ typedef struct {
     uint32_t kind, index, colors[2];
 } SpliceAVSource;
 
+// Ramp values run from the start to the end of the instruction interval. `focus` is the canvas
+// point the scale keeps fixed (x, y at the start, then at the end). `source` is the source clock
+// in seconds, for cursor lookups. `corner` is a radius in canvas pixels; `shadow` is 0…1.
 typedef struct {
-    double crop[4], destination[4], scale[2], opacity[2];
+    double crop[4], destination[4], scale[2], opacity[2], focus[4], source[2];
+    double corner, shadow, cursor_scale;
     int32_t track;
     uint32_t center_crop;
+    int32_t cursor;
+    uint32_t flags;
 } SpliceAVLayer;
+
+enum { SpliceAVEase = 1, SpliceAVClickRings = 2 };
+
+// One cursor state on the take's source clock. x and y are normalized to the captured source,
+// top-left origin. `image` indexes the table's images, or -1 when hidden.
+typedef struct {
+    double t, x, y;
+    int32_t image;
+    uint32_t click;
+} SpliceAVCursorSample;
+
+typedef struct {
+    const char *path;
+    double hot[2], scale;
+} SpliceAVCursorImage;
 
 typedef struct {
     int32_t track;
@@ -161,7 +182,9 @@ typedef struct {
 } SpliceAVText;
 
 _Static_assert(sizeof(SpliceAVSource) == 64 && offsetof(SpliceAVSource, timeline) == 40, "source ABI");
-_Static_assert(sizeof(SpliceAVLayer) == 104 && offsetof(SpliceAVLayer, center_crop) == 100, "layer ABI");
+_Static_assert(sizeof(SpliceAVLayer) == 184 && offsetof(SpliceAVLayer, flags) == 180, "layer ABI");
+_Static_assert(sizeof(SpliceAVCursorSample) == 32 && offsetof(SpliceAVCursorSample, click) == 28, "cursor ABI");
+_Static_assert(sizeof(SpliceAVCursorImage) == 32 && offsetof(SpliceAVCursorImage, scale) == 24, "cursor image ABI");
 _Static_assert(sizeof(SpliceAVGain) == 12 && offsetof(SpliceAVGain, gain) == 4, "gain ABI");
 _Static_assert(sizeof(SpliceAVText) == 64 && offsetof(SpliceAVText, color) == 56, "text ABI");
 
@@ -172,6 +195,9 @@ bool splice_av_range(void *composition, int32_t from, int32_t to,
                      const SpliceAVLayer *layers, size_t layer_count,
                      const SpliceAVGain *gains, size_t gain_count, char **error);
 bool splice_av_text(void *composition, int32_t from, int32_t to, const SpliceAVText *text, char **error);
+// Registers a take's cursor track. `points` is the source width in screen points. Returns its index.
+int32_t splice_av_cursor(void *composition, const SpliceAVCursorSample *samples, size_t sample_count,
+                         const SpliceAVCursorImage *images, size_t image_count, double points, char **error);
 bool splice_av_finish(void *composition, char **error);
 bool splice_av_read_frame(void *composition, int32_t frame, uint8_t *rgba, size_t length,
                          bool draw_text, char **error);
