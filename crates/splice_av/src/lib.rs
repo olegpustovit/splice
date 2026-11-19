@@ -7,7 +7,10 @@ mod lower;
 use apple_sys::composition;
 use splice_eval::{EvalError, Evaluator};
 use splice_model::{Frame, Project};
-use std::{fmt, path::Path};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 pub use apple_sys::image::png as encode_png;
 pub use composition::{Export, ExportState, Player};
@@ -46,6 +49,8 @@ pub enum Error {
     Input(String),
     /// A native service rejected the composition or requested frame.
     Native(apple_sys::Error),
+    /// A source file the timeline uses is missing.
+    Offline(PathBuf),
 }
 
 impl fmt::Display for Error {
@@ -54,6 +59,7 @@ impl fmt::Display for Error {
             Self::Plan(error) => error.fmt(f),
             Self::Input(message) => f.write_str(message),
             Self::Native(error) => error.fmt(f),
+            Self::Offline(path) => write!(f, "Media is offline: {}", path.display()),
         }
     }
 }

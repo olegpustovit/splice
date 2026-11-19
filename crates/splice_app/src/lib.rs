@@ -37,7 +37,26 @@ const VIEWER_SIZE: [u32; 2] = [960, 640];
 
 /// Opens a viewer on the application thread. With no project, presents the native open panel.
 pub fn open(path: Option<&Path>, state: Option<&Path>) -> Result<(), StoreError> {
-    run(path, state, false).map(|_| ())
+    run(path, state, false)
+        .map(|_| ())
+        .inspect_err(|error| report(error, path, state))
+}
+
+/// A person launching from Finder never sees stderr: show the error and log it (T10.4).
+fn report(error: &StoreError, project: Option<&Path>, state: Option<&Path>) {
+    if let Some(state) = state {
+        splice_mcp::friction::viewer_error(Some(state.to_path_buf()), project, error);
+    }
+    if apple_sys::app::has_launchd_parent() {
+        let title = project.and_then(Path::file_name).map_or_else(
+            || "Splice could not open the project".to_owned(),
+            |name| format!("Splice could not open {}", name.to_string_lossy()),
+        );
+        apple_sys::app::alert(
+            &title,
+            &format!("{}\n\n{}\n\n({})", error.message, error.fix, error.code),
+        );
+    }
 }
 
 /// Presents the first available program frame to a hidden window.
@@ -46,7 +65,7 @@ pub fn smoke_test(path: Option<&Path>, state: Option<&Path>) -> Result<Option<i3
 }
 
 fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<Option<i32>, StoreError> {
-    let mut project = path.map(Store::open).transpose()?;
+    let mut project = path.map(|path| open_store(path, state)).transpose()?;
     let [width, height] = VIEWER_SIZE.map(i64::from);
     let mut window = Window::open_with("Splice", width, height, !smoke, smoke, !smoke)
         .map_err(|error| viewer_error(&error))?;
@@ -64,7 +83,9 @@ fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<Option<
             window.destroy().map_err(|error| viewer_error(&error))?;
             return Ok(None);
         }
-        project = project_drop(&events).map(Store::open).transpose()?;
+        project = project_drop(&events)
+            .map(|path| open_store(path, state))
+            .transpose()?;
     }
     if project.is_none() && !smoke {
         let recent = last.as_deref().and_then(recall);
@@ -76,7 +97,7 @@ fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<Option<
             window.destroy().map_err(|error| viewer_error(&error))?;
             return Ok(None);
         };
-        project = Some(Store::open(&selected)?);
+        project = Some(open_store(&selected, state)?);
     }
     let keymap = state.map(|dir| dir.join("keymap"));
     let result = loop {
@@ -111,6 +132,21 @@ fn run(path: Option<&Path>, state: Option<&Path>, smoke: bool) -> Result<Option<
     };
     window.destroy().map_err(|error| viewer_error(&error))?;
     Ok(result)
+}
+
+/// Opens the writer, taking the package over from an agent's headless `splice mcp` (T10.1).
+fn open_store(path: &Path, state: Option<&Path>) -> Result<Store, StoreError> {
+    let state = state
+        .map(Path::to_path_buf)
+        .or_else(|| splice_mcp::paths::state_dir().ok());
+    match (Store::open(path), state) {
+        (Err(error), Some(state))
+            if error.code == "LOCKED" && splice_mcp::live::handoff(&state, path)? =>
+        {
+            Store::open(path)
+        }
+        (result, _) => result,
+    }
 }
 
 fn project_drop(events: &[Event]) -> Option<&Path> {
@@ -218,9 +254,12 @@ fn run_surface(
                     if viewer
                         .as_deref()
                         .is_some_and(|viewer| viewer.store().path() == path) => {}
-                Ok(path) => match Store::open(&path) {
+                Ok(path) => match open_store(&path, None) {
                     Ok(project) => break Some(project),
-                    Err(error) => eprintln!("splice: {error}"),
+                    Err(error) => {
+                        eprintln!("splice: {error}");
+                        report(&error, Some(&path), None);
+                    }
                 },
                 Err(error) => eprintln!("splice: could not open {}: {error}", path.display()),
             }
@@ -417,11 +456,22 @@ fn dispatch(
 }
 
 fn project_name(store: &Store) -> Cow<'_, str> {
-    store
+    let name = store
         .path()
         .file_stem()
         .unwrap_or_default()
-        .to_string_lossy()
+        .to_string_lossy();
+    let offline = store
+        .project()
+        .media
+        .iter()
+        .filter(|media| !store.path().join(&media.path).exists())
+        .count();
+    if offline == 0 {
+        name
+    } else {
+        Cow::Owned(format!("{name} · {offline} media offline"))
+    }
 }
 
 fn paint_viewer(

@@ -73,6 +73,9 @@ impl Routes {
             return Ok(None);
         };
         let path = path.to_path_buf();
+        // A package handed off to a viewer (T10.1) has no owner yet; learn it from this reply.
+        let handed_off = expected == Some("");
+        let expected = expected.filter(|owner| !owner.is_empty());
         let mut arguments = routed.clone();
         if project.is_some() {
             replace(&mut arguments, "projectId", text("prj_1"));
@@ -91,7 +94,7 @@ impl Routes {
             replace(&mut body, "owner", text(expected));
         }
         let Some(reply) = request(&path, &body).map_err(|error| disconnected(&error))? else {
-            return if expected.is_some() {
+            return if expected.is_some() || handed_off {
                 Err(disconnected(&"The project viewer is no longer listening."))
             } else {
                 Ok(None)
@@ -113,6 +116,9 @@ impl Routes {
             .field("result")
             .ok_or_else(|| disconnected(&"The viewer result is missing."))?
             .clone();
+        if handed_off {
+            projects.remember_remote(path.clone(), owner.clone());
+        }
         if matches!(name, "project.info" | "record.start")
             && result.field("isError").and_then(Json::as_bool) == Some(false)
             && result

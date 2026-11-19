@@ -1,6 +1,8 @@
 use super::{Json, friction::Recorder, object, paths, project::Projects, text, tools};
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Sender};
+use std::thread;
 
 const LEGACY: &str = "2025-11-25";
 const MODERN: &str = "2026-07-28";
@@ -15,6 +17,19 @@ struct Connection {
     friction: Recorder,
     #[cfg(target_os = "macos")]
     routes: super::live::proxy::Routes,
+    /// Handoff sockets for the packages this headless session holds (T10.1).
+    #[cfg(target_os = "macos")]
+    holders: Vec<super::live::Server>,
+    #[cfg(target_os = "macos")]
+    events: Option<Sender<Event>>,
+}
+
+enum Event {
+    Line(Vec<u8>),
+    End,
+    Failed(io::Error),
+    #[cfg(target_os = "macos")]
+    Handoff(PathBuf, super::live::Request),
 }
 
 #[cfg(target_os = "macos")]
@@ -27,6 +42,8 @@ pub(super) fn record_project(
         projects: Projects::default(),
         friction: Recorder::new(paths::state_dir().ok()),
         routes: Default::default(),
+        holders: Vec::new(),
+        events: None,
     };
     let reply = super::record_cli::run(args, stop, &mut |name, arguments| {
         let reply = connection
@@ -49,7 +66,7 @@ pub(super) fn record_project(
 }
 
 /// Serves one MCP connection, flushing each reply and returning on end of input.
-pub fn serve(input: &mut dyn BufRead, output: &mut dyn Write) -> io::Result<()> {
+pub fn serve(input: &mut (dyn BufRead + Send), output: &mut dyn Write) -> io::Result<()> {
     let global = match paths::state_dir() {
         Ok(dir) => Some(dir),
         Err(error) => {
@@ -61,41 +78,134 @@ pub fn serve(input: &mut dyn BufRead, output: &mut dyn Write) -> io::Result<()> 
 }
 
 pub(super) fn serve_with_log(
-    input: &mut dyn BufRead,
+    input: &mut (dyn BufRead + Send),
     output: &mut dyn Write,
     global: Option<PathBuf>,
 ) -> io::Result<()> {
+    let (events, incoming) = mpsc::channel();
     let mut connection = Connection {
         initialized: false,
         projects: Projects::default(),
         friction: Recorder::new(global),
         #[cfg(target_os = "macos")]
         routes: Default::default(),
+        #[cfg(target_os = "macos")]
+        holders: Vec::new(),
+        #[cfg(target_os = "macos")]
+        events: Some(events.clone()),
     };
-    let mut line = Vec::new();
-    let mut wire = String::new();
-    loop {
-        line.clear();
-        (&mut *input)
-            .take(MAX_LINE_BYTES + 1)
-            .read_until(b'\n', &mut line)?;
-        if line.is_empty() {
-            return connection.projects.close();
-        }
-        let response = if line.len() as u64 > MAX_LINE_BYTES {
-            if !line.ends_with(b"\n") {
-                input.skip_until(b'\n')?;
+    // Stdin is read on its own thread so a viewer's handoff request is served while idle.
+    thread::scope(|scope| {
+        scope.spawn(move || read_lines(input, &events));
+        let mut wire = String::new();
+        loop {
+            let line = match incoming.recv() {
+                Ok(Event::Line(line)) => line,
+                Ok(Event::End) | Err(_) => return connection.close(),
+                Ok(Event::Failed(error)) => return Err(error),
+                #[cfg(target_os = "macos")]
+                Ok(Event::Handoff(path, request)) => {
+                    connection.hand_off(&path, request);
+                    continue;
+                }
+            };
+            let response = if line.len() as u64 > MAX_LINE_BYTES {
+                Some(rpc_error(&Json::Null, -32700, "Message exceeds 16 MiB"))
+            } else {
+                handle_line(&line, &mut connection)
+            };
+            #[cfg(target_os = "macos")]
+            connection.hold();
+            if let Some(response) = response {
+                wire.clear();
+                splice_json::write(&response, &mut wire).map_err(io::Error::other)?;
+                wire.push('\n');
+                output.write_all(wire.as_bytes())?;
+                output.flush()?;
             }
-            Some(rpc_error(&Json::Null, -32700, "Message exceeds 16 MiB"))
-        } else {
-            handle_line(&line, &mut connection)
-        };
-        if let Some(response) = response {
-            splice_json::write(&response, &mut wire).map_err(io::Error::other)?;
-            wire.push('\n');
-            output.write_all(wire.as_bytes())?;
-            output.flush()?;
         }
+    })
+}
+
+fn read_lines(input: &mut dyn BufRead, events: &Sender<Event>) {
+    loop {
+        let mut line = Vec::new();
+        let event = match (&mut *input)
+            .take(MAX_LINE_BYTES + 1)
+            .read_until(b'\n', &mut line)
+        {
+            Err(error) => Event::Failed(error),
+            Ok(_) if line.is_empty() => Event::End,
+            Ok(_) if line.len() as u64 > MAX_LINE_BYTES && !line.ends_with(b"\n") => {
+                match input.skip_until(b'\n') {
+                    Ok(_) => Event::Line(line),
+                    Err(error) => Event::Failed(error),
+                }
+            }
+            Ok(_) => Event::Line(line),
+        };
+        let more = matches!(event, Event::Line(_));
+        if events.send(event).is_err() || !more {
+            return;
+        }
+    }
+}
+
+impl Connection {
+    fn close(self) -> io::Result<()> {
+        #[cfg(target_os = "macos")]
+        drop(self.holders);
+        self.projects.close()
+    }
+
+    /// Keeps one handoff socket per package this session holds.
+    #[cfg(target_os = "macos")]
+    fn hold(&mut self) {
+        let Some(events) = &self.events else {
+            return;
+        };
+        let local = self.projects.local_paths();
+        self.holders
+            .retain(|holder| local.contains(&holder.project()));
+        for path in local {
+            if self.holders.iter().any(|holder| holder.project() == path) {
+                continue;
+            }
+            let Ok(state) = paths::state_dir() else {
+                return;
+            };
+            let events = events.clone();
+            let project = path.to_path_buf();
+            match super::live::Server::hold(
+                path,
+                &state,
+                Box::new(move |request| {
+                    events
+                        .send(Event::Handoff(project.clone(), request))
+                        .map_err(io::Error::other)
+                }),
+            ) {
+                Ok(holder) => self.holders.push(holder),
+                Err(error) => {
+                    eprintln!("splice: no handoff socket for {}: {error}", path.display())
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn hand_off(&mut self, path: &std::path::Path, request: super::live::Request) {
+        let result = if request.body.field("command").and_then(Json::as_str) == Some("handoff") {
+            self.projects.hand_off(path)
+        } else {
+            Err(super::wire::bad("command", "handoff"))
+        };
+        request.reply(match result {
+            Ok(()) => object(vec![("handedOff", Json::Bool(true))]),
+            Err(error) => object(vec![("error", super::wire::error_payload(error))]),
+        });
+        // After the reply: dropping the holder joins the socket worker that waited for it.
+        self.hold();
     }
 }
 

@@ -111,6 +111,50 @@ impl Projects {
             .any(|entry| entry.path() == path && entry.local().is_some())
     }
 
+    /// Packages this headless session holds the writer lock for.
+    #[cfg(target_os = "macos")]
+    pub(super) fn local_paths(&self) -> Vec<&Path> {
+        if self.viewer_only {
+            return Vec::new();
+        }
+        self.open
+            .iter()
+            .filter_map(|entry| entry.local().map(Store::path))
+            .collect()
+    }
+
+    /// Closes the local writer for `path` so a viewer can take it. Later calls with the same
+    /// project ID forward to that viewer.
+    #[cfg(target_os = "macos")]
+    pub(super) fn hand_off(&mut self, path: &Path) -> Result<(), StoreError> {
+        let index = self
+            .open
+            .iter()
+            .position(|entry| entry.path() == path && entry.local().is_some())
+            .ok_or_else(|| {
+                failure(
+                    "NOT_FOUND",
+                    "This session no longer holds the project.",
+                    "Open the project again.",
+                )
+            })?;
+        let id = project_id(index);
+        if self.exports.iter().any(|job| job.active())
+            || self.recordings.iter().any(|job| job.active(&id))
+        {
+            return Err(failure(
+                "BUSY",
+                "An agent export or recording is still running on this project.",
+                "Wait for the agent's job to finish, then open the project again.",
+            ));
+        }
+        let entry = std::mem::replace(
+            &mut self.open[index],
+            OpenProject::Remote(path.to_path_buf(), String::new()),
+        );
+        entry.into_local().expect("checked local entry").close()
+    }
+
     pub(super) fn lookup(&mut self, args: &Json) -> Result<&mut Store, StoreError> {
         self.lookup_id(args.string("projectId")?)
     }

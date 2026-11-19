@@ -42,7 +42,7 @@ mod live {
             assert_eq!(
                 result.field("isError").and_then(Json::as_bool),
                 Some(false),
-                "{reply:?}"
+                "{name} {args}: {reply:?}"
             );
             result.field("structuredContent").unwrap().clone()
         }
@@ -190,14 +190,89 @@ mod live {
         reopened.close().unwrap();
         fs::remove_dir_all(dir).unwrap();
     }
+    /// T10.1: an agent opened the project first; the viewer takes it over, and the agent's
+    /// next edit on the same connection lands in the viewer.
+    pub(super) fn native_viewer_takes_over_a_project_held_by_headless_mcp() {
+        let dir = std::env::temp_dir().join(format!("splice-handoff-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let state = dir.join("Library/Application Support/Splice");
+        let path = dir.join("Live.splice");
+        let mut store = Store::create(&path, &Default::default()).unwrap();
+        let baseline =
+            parse(r#"[{"cmd":"title.add","at":0,"length":60,"text":"Before"}]"#).unwrap();
+        store
+            .apply(baseline.as_array().unwrap(), &Default::default())
+            .unwrap();
+        let items = &store.project().items;
+        let title = items.id(items.order()[0]).unwrap().to_string();
+        store.close().unwrap();
+        let (held, holding) = mpsc::channel();
+        let (go, edit) = mpsc::channel();
+        let remote = dir.clone();
+        let worker = thread::spawn(move || {
+            let mut child = command(&remote)
+                .arg("mcp")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut peer = Peer {
+                input: child.stdin.take().unwrap(),
+                output: BufReader::new(child.stdout.take().unwrap()),
+            };
+            assert!(peer.request(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"handoff-test","version":"1"}}}"#).field("result").is_some());
+            let info = peer.tool("project.info", r#"{"path":"Live.splice"}"#);
+            assert_eq!(
+                info.field("projectId").and_then(Json::as_str),
+                Some("prj_1")
+            );
+            let session = peer.tool("session.start", r#"{"projectId":"prj_1"}"#);
+            let session = session.field("sessionId").and_then(Json::as_str).unwrap();
+            held.send(()).unwrap();
+            edit.recv().unwrap();
+            let edit = peer.tool("edit.apply", &format!(r#"{{"projectId":"prj_1","sessionId":"{session}","ifRevision":"r1","ops":[{{"cmd":"title.set","item":"{title}","text":"Agent edit"}}]}}"#));
+            assert_eq!(edit.field("revision").and_then(Json::as_str), Some("r2"));
+            drop(peer);
+            assert!(child.wait().unwrap().success());
+        });
+        holding.recv().unwrap();
+        assert_eq!(
+            Store::open(&path).err().map(|error| error.code),
+            Some("LOCKED")
+        );
+        assert!(splice_mcp::live::handoff(&state, &path).unwrap());
+        let mut viewer = Viewer::new(Store::open(&path).unwrap(), Some(state.clone()));
+        let server = Server::start(viewer.store(), &state, || true).unwrap();
+        go.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while !worker.is_finished() {
+            if let Some(request) = server.next_request() {
+                let reply = viewer.handle(&request.body, 0, &mut |_, _| Ok(Json::Null));
+                request.reply(reply);
+            }
+            assert!(Instant::now() < deadline, "handed-off MCP did not finish");
+            thread::sleep(Duration::from_millis(1));
+        }
+        worker.join().unwrap();
+        assert_eq!(viewer.store().project().rev, 2);
+        drop(server);
+        viewer.close().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[cfg(target_os = "macos")]
 fn main() {
-    harness::run(&[(
-        "native_viewer_live_mcp_updates_snapshots_and_undo_restores_them",
-        live::native_viewer_live_mcp_updates_snapshots_and_undo_restores_them,
-    )]);
+    harness::run(&[
+        (
+            "native_viewer_live_mcp_updates_snapshots_and_undo_restores_them",
+            live::native_viewer_live_mcp_updates_snapshots_and_undo_restores_them,
+        ),
+        (
+            "native_viewer_takes_over_a_project_held_by_headless_mcp",
+            live::native_viewer_takes_over_a_project_held_by_headless_mcp,
+        ),
+    ]);
 }
 
 #[cfg(not(target_os = "macos"))]

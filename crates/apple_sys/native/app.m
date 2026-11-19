@@ -23,7 +23,32 @@ static bool accessory_quit;
 @interface SpliceAccessoryDelegate : NSObject <NSApplicationDelegate>
 @end
 
+// The capture agent shares the bundle with the viewer, so Launch Services hands it documents
+// and reopen events while it runs. It never shows them itself: it starts a viewer (T10.2).
+static void open_viewer(NSArray<NSString *> *arguments) {
+    NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+    configuration.createsNewApplicationInstance = YES;
+    configuration.arguments = arguments;
+    [[NSWorkspace sharedWorkspace] openApplicationAtURL:NSBundle.mainBundle.bundleURL
+                                          configuration:configuration
+                                      completionHandler:nil];
+}
+
 @implementation SpliceAccessoryDelegate
+- (void)application:(NSApplication *)sender openURLs:(NSArray<NSURL *> *)urls {
+    (void)sender;
+    for (NSURL *url in urls) {
+        if (url.isFileURL) open_viewer(@[url.path]);
+    }
+}
+
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)visible {
+    (void)sender;
+    (void)visible;
+    open_viewer(@[]);
+    return NO;
+}
+
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
     (void)sender;
     accessory_quit = true;
@@ -53,6 +78,20 @@ bool splice_app_wait_accessory(double seconds) {
                 inMode:NSDefaultRunLoopMode dequeue:YES];
         if (event != nil) [NSApp sendEvent:event];
         return !accessory_quit;
+    }
+}
+
+void splice_app_alert(const char *title, const char *message) {
+    if (![NSThread isMainThread]) return;
+    @autoreleasepool {
+        NSApplication *app = [NSApplication sharedApplication];
+        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+        [app activateIgnoringOtherApps:YES];
+        NSAlert *alert = [NSAlert new];
+        alert.alertStyle = NSAlertStyleWarning;
+        alert.messageText = [NSString stringWithUTF8String:title] ?: @"Splice";
+        alert.informativeText = [NSString stringWithUTF8String:message] ?: @"";
+        [alert runModal];
     }
 }
 

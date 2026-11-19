@@ -45,7 +45,7 @@ use std::fs;
 use std::io::{self, BufRead, Cursor, Write};
 use std::path::{Path, PathBuf};
 
-fn isolated_serve(input: &mut dyn BufRead, output: &mut dyn Write) -> io::Result<()> {
+fn isolated_serve(input: &mut (dyn BufRead + Send), output: &mut dyn Write) -> io::Result<()> {
     rpc::serve_with_log(input, output, None)
 }
 

@@ -25,7 +25,7 @@ pub fn grab_frame(store: &Store, at: Frame, file: &Path) -> Result<Json, StoreEr
     let output = Output::prepare(file.to_path_buf(), false)?;
     let revision = store.project().rev;
     let composition = Composition::prepare(store.project(), store.path())
-        .map_err(|error| render_error(&error))?;
+        .map_err(|error| prepare_error(&error, render_error))?;
     let mut pixels = buffer(composition.size())?;
     composition
         .read_frame(at, &mut pixels)
@@ -75,7 +75,7 @@ pub(super) fn render_tool(
     let directory_path = cache.join("frames");
     directory(&directory_path)?;
     let composition = Composition::prepare(store.project(), store.path())
-        .map_err(|error| render_error(&error))?;
+        .map_err(|error| prepare_error(&error, render_error))?;
     let size = composition.size();
     let mut pixels = buffer(size)?;
     let mut frames = Vec::with_capacity(requested.len());
@@ -156,6 +156,21 @@ fn directory(path: &Path) -> Result<(), StoreError> {
 fn save(output: &Output, png: &[u8]) -> Result<(), StoreError> {
     fs::write(output.staged(), png).map_err(|error| path_error(output.staged(), &error))?;
     output.publish()
+}
+
+/// Maps a composition failure, giving offline media its own code.
+pub(super) fn prepare_error(
+    error: &splice_av::Error,
+    other: fn(&dyn Display) -> StoreError,
+) -> StoreError {
+    match error {
+        splice_av::Error::Offline(_) => failure(
+            "OFFLINE_MEDIA",
+            &error.to_string(),
+            "Restore the file, or remove the items that use it; project.info lists offlineMedia.",
+        ),
+        _ => other(error),
+    }
 }
 
 fn render_error(error: &dyn Display) -> StoreError {

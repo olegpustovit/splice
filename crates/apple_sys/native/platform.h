@@ -16,6 +16,7 @@ void splice_set_error(char **error, const char *message);
 void splice_app_cancel_open_panel(void);
 bool splice_app_start_accessory(void);
 bool splice_app_wait_accessory(double seconds);
+void splice_app_alert(const char *title, const char *message);
 char *splice_app_user_home(void);
 
 typedef enum {

@@ -202,8 +202,8 @@ fn encode(
     if cancelling(state) {
         return Ok(false);
     }
-    let composition =
-        Composition::prepare(project, package).map_err(|error| export_failure(&error))?;
+    let composition = Composition::prepare(project, package)
+        .map_err(|error| super::frames::prepare_error(&error, export_failure))?;
     if cancelling(state) {
         return Ok(false);
     }

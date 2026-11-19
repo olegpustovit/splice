@@ -4,6 +4,7 @@ use super::{
     text,
     wire::{count, now},
 };
+use splice_core::history::StoreError;
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
@@ -38,6 +39,21 @@ pub(super) struct Recorder {
     client: String,
     sessions: Vec<(Scope, String)>,
     pending: Vec<Pending>,
+}
+
+/// Logs a viewer failure to the global friction log under client `viewer` (T10.4).
+pub fn viewer_error(global: Option<PathBuf>, project: Option<&Path>, error: &StoreError) {
+    let mut recorder = Recorder::new(global);
+    recorder.client = "viewer".into();
+    let args = object(
+        project
+            .map(|path| vec![("path", text(&path.to_string_lossy()))])
+            .unwrap_or_default(),
+    );
+    let error = StoreError::new(error.code, &error.message, &error.fix);
+    if let Ok(result) = super::tools::reply(Err(error), Vec::new()) {
+        recorder.call(&Projects::default(), "viewer.open", &args, &result, None);
+    }
 }
 
 impl Recorder {

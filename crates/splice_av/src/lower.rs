@@ -272,7 +272,7 @@ impl Lowering {
             package,
             media,
             media.take.as_ref().and_then(|take| take.screen.as_deref()),
-        );
+        )?;
         let source = if media.kind == MediaKind::Image {
             Source::Still(path)
         } else {
@@ -302,7 +302,7 @@ impl Lowering {
             .as_ref()
             .and_then(|take| take.camera.as_deref())
             .ok_or_else(|| Error::Input(format!("{id} has no camera component.")))?;
-        let path = media_path(package, media, Some(component));
+        let path = media_path(package, media, Some(component))?;
         let track = self.builder.source(Source::Video(path), &timing)?;
         self.tracks.push((key, track));
         Ok(track)
@@ -321,7 +321,7 @@ impl Lowering {
         let timing = Self::timing(project.fps, evaluator, a.item, media)?;
         let take = media.take.as_ref();
         let (path, index) = match a.track {
-            Track::Imported(index) => (package.join(&media.path), index),
+            Track::Imported(index) => (media_path(package, media, None)?, index),
             Track::Mic | Track::System => {
                 let (name, file) = if a.track == Track::Mic {
                     ("mic", take.and_then(|take| take.mic.as_deref()))
@@ -329,7 +329,7 @@ impl Lowering {
                     ("system", take.and_then(|take| take.system.as_deref()))
                 };
                 if let Some(file) = file {
-                    (media_path(package, media, Some(file)), 0)
+                    (media_path(package, media, Some(file))?, 0)
                 } else {
                     let index = media
                         .probe
@@ -339,7 +339,7 @@ impl Lowering {
                         .ok_or_else(|| {
                             Error::Input(format!("{} has no {name} audio track.", media.id))
                         })?;
-                    (package.join(&media.path), index as u32)
+                    (media_path(package, media, None)?, index as u32)
                 }
             }
         };
@@ -384,12 +384,17 @@ impl Lowering {
     }
 }
 
-fn media_path(package: &Path, media: &Media, component: Option<&str>) -> PathBuf {
+fn media_path(package: &Path, media: &Media, component: Option<&str>) -> Result<PathBuf, Error> {
     let path = package.join(&media.path);
-    match component {
+    let path = match component {
         Some(file) if path.is_dir() => path.join(file),
         Some(file) => path.with_file_name(file),
         None => path,
+    };
+    if path.exists() {
+        Ok(path)
+    } else {
+        Err(Error::Offline(path))
     }
 }
 

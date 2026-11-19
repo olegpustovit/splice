@@ -76,7 +76,7 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
             return writeln!(output, "splice {}", env!("CARGO_PKG_VERSION")).map_err(io_error);
         }
         ("mcp", []) => {
-            return match splice_mcp::serve(&mut io::stdin().lock(), output) {
+            return match splice_mcp::serve(&mut io::BufReader::new(io::stdin()), output) {
                 Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
                 result => result.map_err(io_error),
             };

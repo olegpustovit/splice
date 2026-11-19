@@ -134,9 +134,12 @@ pub(super) fn composition(store: &Store) -> Result<Option<Rc<Composition>>, Stor
     if project.clips.order().is_empty() && project.items.order().is_empty() {
         return Ok(None);
     }
-    Composition::prepare(project, store.path())
-        .map(|composition| Some(Rc::new(composition)))
-        .map_err(|error| viewer_error(&error))
+    match Composition::prepare(project, store.path()) {
+        Ok(composition) => Ok(Some(Rc::new(composition))),
+        // Open without a picture; the title names the offline media.
+        Err(splice_av::Error::Offline(_)) => Ok(None),
+        Err(error) => Err(viewer_error(&error)),
+    }
 }
 
 pub(super) fn paint(ui: &mut Ui, contents: Option<(i32, &Rc<Composition>)>, image: Option<Image>) {

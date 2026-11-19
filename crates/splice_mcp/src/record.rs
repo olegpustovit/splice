@@ -26,6 +26,13 @@ pub(super) struct Job {
     peer: Option<UnixStream>,
 }
 
+impl Job {
+    /// Still recording or publishing into project `id`.
+    pub(super) fn active(&self, id: &str) -> bool {
+        self.project == id && self.terminal.is_none()
+    }
+}
+
 pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
     let insert = args.flag("insert")? || args.field("insert").is_none();
     let still = args.flag("still")?;

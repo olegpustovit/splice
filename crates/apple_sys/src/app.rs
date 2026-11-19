@@ -1,5 +1,5 @@
 use std::{
-    ffi::{CStr, OsStr, c_char},
+    ffi::{CStr, CString, OsStr, c_char},
     io,
     os::unix::ffi::OsStrExt,
     path::PathBuf,
@@ -10,6 +10,7 @@ unsafe extern "C" {
     fn splice_app_cancel_open_panel();
     fn splice_app_start_accessory() -> bool;
     fn splice_app_wait_accessory(seconds: f64) -> bool;
+    fn splice_app_alert(title: *const c_char, message: *const c_char);
     fn splice_app_user_home() -> *mut c_char;
     fn splice_string_free(value: *mut c_char);
     fn getppid() -> i32;
@@ -31,6 +32,14 @@ pub fn start_accessory() -> bool {
 pub fn wait_accessory(timeout: Duration) -> bool {
     // SAFETY: Duration supplies finite nonnegative seconds and the shim checks the thread.
     unsafe { splice_app_wait_accessory(timeout.as_secs_f64()) }
+}
+
+/// Shows a modal warning on the application thread; does nothing on another thread.
+pub fn alert(title: &str, message: &str) {
+    let title = CString::new(title.replace('\0', "\u{FFFD}")).expect("NUL replaced");
+    let message = CString::new(message.replace('\0', "\u{FFFD}")).expect("NUL replaced");
+    // SAFETY: both strings outlive the call and the shim checks the thread.
+    unsafe { splice_app_alert(title.as_ptr(), message.as_ptr()) };
 }
 
 /// Indicates whether the process has launchd as its parent.
