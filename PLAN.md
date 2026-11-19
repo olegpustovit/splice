@@ -424,14 +424,14 @@ eight places; the board below already carries the changes.
 - [x] T36.10 [M] Recording discoverability: `window:{app}` in descriptions and fixes; dryRun omits titles unless `titles:true`. (bca5620)
 
 ### T37 · Edit-model correctness (report §4) [L]
-- [ ] T37.1 [L] C1 project-unique word IDs `w:<media>:<n>` with migration; cues break at clip boundaries.
-- [ ] T37.2 [L] H1 overlay double move; H2 gap/past-end placement; H2b cut of a whole range cascades; timeline length = spine (titles past the end trimmed or refused).
-- [ ] T37.3 [L] D21 partial cuts re-parent anchored items; `connected:"reparent"|"delete"|"trim"`; result lists moved/removed items with causes.
-- [ ] T37.4 [L] H3 word anchors resolve to clip anchors; H4 freeze = speed 0 (no OUT_OF_SOURCE after); H5 duplicate keeps captions on the copy.
-- [ ] T37.5 [L] M1 3-frame minimum on every edit; M2 overlay source in media frames; M3 overlays stop at media end; M4 join seams rebase on split; M5 compound with item anchors; M6 end-edge anchors on split; M7 `keepShots` needs a range.
-- [ ] T37.6 [L] M17 `style.set` doesn't enable windows; M18 `effect.add` checks components; M19 ripple shortens anchored items before bumping, bump report carries a cause; M21 lane/project transform applies or is refused.
+- [x] T37.1 [L] C1 project-unique word IDs `w:<media>:<n>` with migration; cues break at clip boundaries. (0e9d19c)
+- [x] T37.2 [L] H1 overlay double move; H2 gap/past-end placement; H2b cut of a whole range cascades; timeline length = spine (titles past the end trimmed or refused). (4469616, 53cf527)
+- [x] T37.3 [L] D21 partial cuts re-parent anchored items; `connected:"reparent"|"delete"|"trim"`; result lists moved/removed items with causes. (53cf527)
+- [x] T37.4 [L] H3 word anchors resolve to clip anchors; H4 freeze = speed 0 (no OUT_OF_SOURCE after); H5 duplicate keeps captions on the copy. (70a901c)
+- [x] T37.5 [L] M1 3-frame minimum on every edit; M2 overlay source in media frames; M3 overlays stop at media end; M4 join seams rebase on split; M5 compound with item anchors; M6 end-edge anchors on split; M7 `keepShots` needs a range. (ea4d308)
+- [x] T37.6 [L] M17 `style.set` doesn't enable windows; M18 `effect.add` checks components; M19 ripple shortens anchored items before bumping, bump report carries a cause; M21 lane/project transform applies or is refused. (de3a922; M21 lane/project transforms refused until T42.4)
 - [x] T37.7 [L] H10 cancel only stops the job its request started, watch list bounded; M10 enrich resolves `$ref`s and runs in `splice apply`; M11 sidecars honour range/overwrite; M12 variant name collision; M13 consolidate only on commit; M14 relink re-probes; M16 recovery skips takes still being written. (cd6c0e8 H10, 7deca25 M10/M13, 6975724 M11/M12, 3e35ce9 M14, b659842 M16)
-- [ ] T37.8 [L] Low list: silent clamps → errors; `marker.add` past end; negative `cut.range from`; SRT hour overflow; friction-log unwrap; `catch_unwind` per request; idle undo reports nothing to undo.
+- [x] T37.8 [L] Low list: silent clamps → errors; `marker.add` past end; negative `cut.range from`; SRT hour overflow; friction-log unwrap; `catch_unwind` per request; idle undo reports nothing to undo. (37935ea, 414dcac, 6975724, 6bf8e57; audio volume, cursor and keys size refusals in 39bee1d)
 
 ### T38 · Camera (D12, D13) [L + M]
 - [x] T38.1 [L] Camera model: timeline segments `{from,to,amount,center|follow,mode,spring}`; analytic spring per channel (focused k205/c33.3/m1.5, smooth ~0.9 s); pre-aim; bounce-out guard; hold-center zoom-out; travel-space clamp. Accept: step golden vs reference; 0 allocations; 2,000 segments p99 < 50 µs. (48cf147)
@@ -470,7 +470,7 @@ eight places; the board below already carries the changes.
 - [ ] T42.6 [L] Templates use brand colors and safe zones.
 
 ### T43 · QA loop (D18) [L]
-- [x] T43.1 [L] Lints in every `apply`/`dryRun`: zoom ≠ 1 at an item's end, text bounds vs safe zone and window, transition on windowed clip without handles, title past the timeline, pacing stats (cut rate, longest static) vs profile. (splice_mcp::lints on every apply/dryRun: PAST_END, OUTSIDE_SAFE_ZONE tiktok-2026, TEXT_OVER_WINDOW, ZOOM_OVERFLOW, LONG_STATIC, with fixes and ops; pacing stats. A transition without handles is now refused instead (T36.3).)
+- [x] T43.1 [L] Lints in every `apply`/`dryRun`: zoom ≠ 1 at an item's end, text bounds vs safe zone and window, transition on windowed clip without handles, title past the timeline, pacing stats (cut rate, longest static) vs profile. (splice_mcp::lints on every apply/dryRun: OUTSIDE_SAFE_ZONE tiktok-2026, TEXT_OVER_WINDOW, ZOOM_OVERFLOW, LONG_STATIC, with fixes and ops; pacing stats. A transition without handles is refused (T36.3) and an item past the end is trimmed by the edit (T37.2) instead.)
 - [x] T43.2 [L] `view.check {from,to,checks}` (macOS): off-canvas content, black/frozen spans, camera jump, cursor teleport, transition bleed; returns issues + contact sheet. Versioned `safeZone:"tiktok-2026"`. (view.check: camera/offCanvas from the evaluator everywhere; black/frozen/bleed rendered on macOS with a contact sheet; cursor teleport is impossible by construction since T39 and covered by its tests)
 - [ ] T43.3 [L] `view.frames {strip}` motion strip with difference heatmap.
 

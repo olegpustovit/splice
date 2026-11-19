@@ -1,6 +1,6 @@
 //! Scene-graph lints returned with every `edit.apply` and dry run (PLAN.md D18, T43.1): cheap
 //! checks of the resulting project that catch what agents miss (text outside the platform's safe
-//! zone or over the window, items past the end, zooms that overflow the canvas, static stretches)
+//! zone or over the window, zooms that overflow the canvas, static stretches)
 //! with a fix and, where one exists, a suggested op batch. Warnings never block the edit.
 use super::{Json, object, text};
 use splice_eval::{Evaluator, FramePlan, Layer};
@@ -39,23 +39,6 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
             continue;
         };
         let (from, to) = (span.start, span.end);
-        if to > end {
-            let ops = if from >= end {
-                format!(r#"[{{"cmd":"item.delete","items":["{id}"]}}]"#)
-            } else {
-                format!(
-                    r#"[{{"cmd":"item.trim","item":"{id}","edge":"out","delta":{}}}]"#,
-                    end - to
-                )
-            };
-            lints.push(lint(
-                "PAST_END",
-                &format!("{id} runs to frame {to}, past the timeline's end at {end}: it plays over an empty canvas or extends the video."),
-                &[id.to_string()],
-                "Trim it to the last clip, or delete it if it starts after the end.",
-                &ops,
-            ));
-        }
         match &data.kind {
             ItemKind::Title { .. } => {
                 let mid = (from + to) / 2;
@@ -228,10 +211,11 @@ mod tests {
             .collect()
     }
 
-    /// T43.1: titles past the end or outside the safe zone and zooms past the canvas come back
-    /// as lints with a fix and a ready batch.
+    /// T43.1: titles outside the safe zone and zooms past the canvas come back as lints with a
+    /// fix and a ready batch. (Items past the end cannot happen: every edit ends them with
+    /// the spine, T37.2.)
     #[test]
-    fn lints_flag_past_end_safe_zone_and_overflowing_zooms() {
+    fn lints_flag_safe_zone_and_overflowing_zooms() {
         let mut project = crate::tests::sample_project();
         // The sample's hook title sits 134 px from the top of a 1920 px short.
         let found = codes(&project);
@@ -239,22 +223,11 @@ mod tests {
             && lint.field("items").and_then(Json::as_array).unwrap()[0].as_str()
                 == Some("ovl_hook")));
         let ops = splice_json::parse(
-            r#"[{"cmd":"title.add","text":"Late","at":600,"length":90,"ref":"late"},
-                {"cmd":"zoom.set","zoom":"ovl_detail","mode":"frame","amount":2}]"#,
+            r#"[{"cmd":"zoom.set","zoom":"ovl_detail","mode":"frame","amount":2}]"#,
         )
         .unwrap();
         edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
         let found = codes(&project);
-        let past = found
-            .iter()
-            .find(|(code, _)| code == "PAST_END")
-            .expect("past end");
-        assert_eq!(
-            past.1.field("ops").and_then(Json::as_array).unwrap()[0]
-                .field("cmd")
-                .and_then(Json::as_str),
-            Some("item.trim")
-        );
         let zoom = found
             .iter()
             .find(|(code, _)| code == "ZOOM_OVERFLOW")
