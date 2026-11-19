@@ -220,6 +220,8 @@ pub struct TextLayer {
     pub style: TextStyle,
     /// UTF-16 range that draws; the rest keeps its layout but is transparent (word animators).
     pub visible: Option<[usize; 2]>,
+    /// UTF-16 range of the spoken caption word and its RGB.
+    pub active: Option<([usize; 2], u32)>,
 }
 
 /// Font, weight and decoration of rasterized text.
@@ -374,6 +376,9 @@ unsafe extern "C" {
         style: *const RawTextStyle,
         visible_from: i64,
         visible_to: i64,
+        active_from: i64,
+        active_to: i64,
+        active_color: u32,
         error: *mut *mut c_char,
     ) -> *mut u8;
     fn splice_av_append(
@@ -766,6 +771,10 @@ pub fn text_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, Error> {
         line_height: layer.style.line_height,
     };
     let [from, to] = layer.visible.map_or([-1, -1], |r| r.map(|v| v as i64));
+    let ([active_from, active_to], active_color) =
+        layer.active.map_or(([-1, -1], 0), |(range, color)| {
+            (range.map(|v| v as i64), color)
+        });
     let mut error = ptr::null_mut();
     // SAFETY: the strings and style live for the call; native returns a malloc'd
     // width*height*4 buffer.
@@ -778,6 +787,9 @@ pub fn text_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, Error> {
             &style,
             from,
             to,
+            active_from,
+            active_to,
+            active_color,
             &mut error,
         )
     };

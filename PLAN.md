@@ -416,7 +416,7 @@ eight places; the board below already carries the changes.
 - [x] T36.2 [L] Title fades default 0; fades/dips go to the backdrop, not black (T27.5). (48cf147 title fades 0; 3f078f7 clip fades and dips go to the backdrop)
 - [x] T36.3 [L] Transition validation on every path (H9): generic `effect.*`/`param.*`, length ≤ neighbors, not on the first clip, not project/lane scope. (one check_transition on upsert/effect.set/param.*: scope, neighbor, length, handles)
 - [x] T36.4 [L] No silent keys: every schema param keyed through one `sample(t)` path or refused `NOT_KEYABLE`; enumerate-and-render test; agent keys default `inOut`. (effects.json `keys:true` on the 33 parameters the evaluator samples; NOT_KEYABLE elsewhere with the keyable list; 0.3 files keep the first key; every_keyable_parameter_renders_its_keys sweeps the schema)
-- [ ] T36.5 [M] Captions: stroke under fill (H8); second line not clipped; active color rendered.
+- [x] T36.5 [M] Captions: stroke under fill (H8); second line not clipped; active color rendered. (two-pass outline under fill; shrink-to-fit instead of dropped lines; active word range in the active color; looks_caption_stroke… pixel test)
 - [x] T36.6 [L] Motion items hold `to` after they end; `MOTION_ENDS_ZOOMED` warning when `to ≠ 1`. (superseded by D12: motion items are camera segments, 48cf147)
 - [x] T36.7 [L] Errors carry the rule: `{param, got, expected, fix}` on every BAD_ARGS; `UNKNOWN_PARAM` with `didYouMean`. (Rule {param, got, expected, didYouMean} on every BAD_ARGS/UNKNOWN_PARAM/UNKNOWN_COMMAND; apply fills got from the op)
 - [ ] T36.8 [L] Docs, TS types and ranges generated from `effects.json` and validators; test fails on any mismatch (M8).

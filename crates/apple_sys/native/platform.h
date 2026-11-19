@@ -239,7 +239,7 @@ typedef struct SpliceTextStyle {
 } SpliceTextStyle;
 uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, double font,
                           const SpliceTextStyle *style, int64_t visible_from, int64_t visible_to,
-                          char **error);
+                          int64_t active_from, int64_t active_to, uint32_t active_color, char **error);
 
 void *splice_image_png(const uint8_t *pixels, size_t length, uint32_t width, uint32_t height,
                        uint32_t max_edge, bool video, const uint8_t **data, size_t *size, char **error);

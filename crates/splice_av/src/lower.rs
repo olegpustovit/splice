@@ -226,12 +226,18 @@ pub(super) fn build(
                             _ => words.len(),
                         };
                         let mut text = String::new();
-                        for word in &words[..count] {
+                        // The spoken word in UTF-16 units, drawn in the active color.
+                        let mut active = None;
+                        for (index, token) in words[..count].iter().enumerate() {
                             if !text.is_empty() {
                                 text.push(' ');
                             }
-                            text.push_str(&word.text);
-                            if let Some(emoji) = &word.emoji {
+                            let start = text.encode_utf16().count();
+                            text.push_str(&token.text);
+                            if word == Some(index) {
+                                active = Some([start, text.encode_utf16().count()]);
+                            }
+                            if let Some(emoji) = &token.emoji {
                                 text.push_str(emoji);
                             }
                         }
@@ -260,6 +266,9 @@ pub(super) fn build(
                                     color: text_style.map_or(style.color, |s| s.color),
                                     style: native_style(text_style, style.stroke),
                                     visible: None,
+                                    active: active
+                                        .filter(|_| style.active != style.color)
+                                        .map(|range| (range, style.active)),
                                 },
                             );
                         }
@@ -434,6 +443,7 @@ impl Lowering {
                             ..Default::default()
                         },
                         visible: None,
+                        active: None,
                     },
                 );
             }
@@ -448,6 +458,7 @@ impl Lowering {
             && last.item == item
             && last.range[1] == range[0]
             && last.layer.text == layer.text
+            && last.layer.active == layer.active
             && last.reveal.is_none()
         {
             last.range[1] = range[1];
@@ -480,6 +491,7 @@ impl Lowering {
             color: style.map_or(0xffffff, |s| s.color),
             style: native_style(style, 0.0),
             visible: None,
+            active: None,
         };
         let Some(style) = style.filter(|s| s.animate != Animate::None) else {
             self.text.push(TimedText {

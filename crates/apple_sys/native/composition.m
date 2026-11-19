@@ -624,8 +624,42 @@ static CTFontRef styled_font(const SpliceTextStyle *style, double size) {
     return (CTFontRef)CFBridgingRetain(font);
 }
 
+// The attributed text for one pass: `outline` strokes only (twice the visible width, since a
+// stroke is centered on the glyph edge and the fill pass covers its inner half); otherwise
+// fill only, with `active` in the active color. Ranges outside `visible` keep their layout but
+// draw nothing.
+static NSAttributedString *styled_text(NSString *text, CTFontRef font, CTParagraphStyleRef paragraph,
+                                       const SpliceTextStyle *style, CGColorRef color, CGColorRef stroke,
+                                       CGColorRef clear, BOOL outline, NSRange visible, NSRange active,
+                                       CGColorRef active_color) {
+    NSMutableDictionary *attributes = [@{
+        (__bridge NSString *)kCTFontAttributeName: (__bridge id)font,
+        (__bridge NSString *)kCTParagraphStyleAttributeName: (__bridge id)paragraph,
+    } mutableCopy];
+    if (outline) {
+        attributes[(__bridge NSString *)kCTForegroundColorAttributeName] = (__bridge id)clear;
+        attributes[(__bridge NSString *)kCTStrokeWidthAttributeName] = @(style->stroke_width * 200.0);
+        attributes[(__bridge NSString *)kCTStrokeColorAttributeName] = (__bridge id)stroke;
+    } else {
+        attributes[(__bridge NSString *)kCTForegroundColorAttributeName] = (__bridge id)color;
+    }
+    NSMutableAttributedString *styled = [[NSMutableAttributedString alloc] initWithString:text attributes:attributes];
+    if (!outline && active.location != NSNotFound) {
+        [styled addAttribute:(__bridge NSString *)kCTForegroundColorAttributeName value:(__bridge id)active_color
+                       range:active];
+    }
+    if (visible.location != NSNotFound) {
+        NSDictionary *hidden = @{(__bridge NSString *)kCTForegroundColorAttributeName: (__bridge id)clear,
+                                 (__bridge NSString *)kCTStrokeColorAttributeName: (__bridge id)clear};
+        if (visible.location > 0) [styled addAttributes:hidden range:NSMakeRange(0, visible.location)];
+        NSUInteger end = NSMaxRange(visible);
+        if (end < text.length) [styled addAttributes:hidden range:NSMakeRange(end, text.length - end)];
+    }
+    return styled;
+}
+
 static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, const SpliceTextStyle *style,
-                              NSRange visible) {
+                              NSRange visible, NSRange active, uint32_t active_rgb) {
     size_t width = (size_t)ceil(size.width), height = (size_t)ceil(size.height);
     CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, space,
@@ -638,7 +672,8 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
     CGColorRef clear = CGColorCreateGenericRGB(0, 0, 0, 0);
     rgb(style->stroke, components);
     CGColorRef stroke = CGColorCreateGenericRGB(components[0], components[1], components[2], 1);
-    CTFontRef font = styled_font(style, font_size);
+    rgb(active_rgb, components);
+    CGColorRef active_color = CGColorCreateGenericRGB(components[0], components[1], components[2], 1);
     CTTextAlignment alignment = style->align == 0 ? kCTTextAlignmentLeft
                               : style->align == 2 ? kCTTextAlignmentRight : kCTTextAlignmentCenter;
     CGFloat multiple = style->line_height > 0 ? style->line_height / 1.15 : 1.0;
@@ -647,27 +682,27 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
         {kCTParagraphStyleSpecifierLineHeightMultiple, sizeof(multiple), &multiple},
     };
     CTParagraphStyleRef paragraph = CTParagraphStyleCreate(settings, 2);
-    NSMutableDictionary *attributes = [@{
-        (__bridge NSString *)kCTFontAttributeName: (__bridge id)font,
-        (__bridge NSString *)kCTForegroundColorAttributeName: (__bridge id)color,
-        (__bridge NSString *)kCTParagraphStyleAttributeName: (__bridge id)paragraph,
-    } mutableCopy];
-    if (style->stroke_width > 0) {
-        // Negative widths fill and stroke; the value is a percentage of the font size.
-        attributes[(__bridge NSString *)kCTStrokeWidthAttributeName] = @(-style->stroke_width * 100.0);
-        attributes[(__bridge NSString *)kCTStrokeColorAttributeName] = (__bridge id)stroke;
-    }
-    NSMutableAttributedString *styled = [[NSMutableAttributedString alloc] initWithString:text attributes:attributes];
-    if (visible.location != NSNotFound) {
-        // Only `visible` draws; the rest keeps its layout but is transparent.
-        NSDictionary *hidden = @{(__bridge NSString *)kCTForegroundColorAttributeName: (__bridge id)clear,
-                                 (__bridge NSString *)kCTStrokeColorAttributeName: (__bridge id)clear};
-        if (visible.location > 0) [styled addAttributes:hidden range:NSMakeRange(0, visible.location)];
-        NSUInteger end = NSMaxRange(visible);
-        if (end < text.length) [styled addAttributes:hidden range:NSMakeRange(end, text.length - end)];
-    }
-    CTFramesetterRef setter = CTFramesetterCreateWithAttributedString((__bridge CFAttributedStringRef)styled);
     CGFloat pad = style->boxed ? font_size * 0.35 : 0;
+    // The outline reaches stroke_width × font past the glyphs on every side.
+    CGFloat inset = style->stroke_width > 0 ? style->stroke_width * font_size : 0;
+    CGSize room = CGSizeMake(MAX(width - 2 * pad - 2 * inset, 1), MAX(height - pad - 2 * inset, 1));
+    // Shrink to fit instead of dropping lines that do not fit (T36.5, T42.3).
+    CTFontRef font = styled_font(style, font_size);
+    for (int attempt = 0; attempt < 4; attempt++) {
+        NSAttributedString *probe = styled_text(text, font, paragraph, style, color, stroke, clear, NO,
+                                                NSMakeRange(NSNotFound, 0), NSMakeRange(NSNotFound, 0), color);
+        CTFramesetterRef measure = CTFramesetterCreateWithAttributedString((__bridge CFAttributedStringRef)probe);
+        CGSize fit = CTFramesetterSuggestFrameSizeWithConstraints(measure, CFRangeMake(0, 0), NULL,
+                                                                  CGSizeMake(room.width, CGFLOAT_MAX), NULL);
+        CFRelease(measure);
+        if (fit.height <= room.height + 0.5) break;
+        CFRelease(font);
+        font_size *= MAX(0.5, room.height / fit.height * 0.98);
+        font = styled_font(style, font_size);
+    }
+    NSAttributedString *fill = styled_text(text, font, paragraph, style, color, stroke, clear, NO, visible, active,
+                                           active_color);
+    CTFramesetterRef setter = CTFramesetterCreateWithAttributedString((__bridge CFAttributedStringRef)fill);
     if (style->boxed && visible.location == NSNotFound) {
         CGSize fit = CTFramesetterSuggestFrameSizeWithConstraints(setter, CFRangeMake(0, 0), NULL,
                                                                   CGSizeMake(width - 2 * pad, height), NULL);
@@ -687,7 +722,18 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
         CGContextSetShadowWithColor(context, CGSizeMake(0, -font_size * 0.05), font_size * 0.15, shade);
         CGColorRelease(shade);
     }
-    CGPathRef path = CGPathCreateWithRect(CGRectMake(pad, 0, width - 2 * pad, height - pad), NULL);
+    CGPathRef path = CGPathCreateWithRect(CGRectMake(pad + inset, inset, room.width, room.height), NULL);
+    if (style->stroke_width > 0) {
+        // Stroke under fill (H8): the outline pass casts the shadow, the fill draws on top.
+        NSAttributedString *outline = styled_text(text, font, paragraph, style, color, stroke, clear, YES, visible,
+                                                  NSMakeRange(NSNotFound, 0), active_color);
+        CTFramesetterRef outliner = CTFramesetterCreateWithAttributedString((__bridge CFAttributedStringRef)outline);
+        CTFrameRef under = CTFramesetterCreateFrame(outliner, CFRangeMake(0, 0), path, NULL);
+        CTFrameDraw(under, context);
+        CFRelease(under);
+        CFRelease(outliner);
+        CGContextSetShadowWithColor(context, CGSizeZero, 0, NULL);
+    }
     CTFrameRef frame = CTFramesetterCreateFrame(setter, CFRangeMake(0, 0), path, NULL);
     CTFrameDraw(frame, context);
     CGImageRef image = CGBitmapContextCreateImage(context);
@@ -699,13 +745,14 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
     CGColorRelease(color);
     CGColorRelease(clear);
     CGColorRelease(stroke);
+    CGColorRelease(active_color);
     CGContextRelease(context);
     return image;
 }
 
 uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, double font,
                           const SpliceTextStyle *style, int64_t visible_from, int64_t visible_to,
-                          char **error) {
+                          int64_t active_from, int64_t active_to, uint32_t active_color, char **error) {
     @autoreleasepool {
         NSString *string = [NSString stringWithUTF8String:text];
         if (string == nil || width == 0 || height == 0 || width > 16384 || height > 16384 ||
@@ -717,7 +764,11 @@ uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, dou
         if (visible_from >= 0 && visible_to >= visible_from && (NSUInteger)visible_to <= string.length) {
             visible = NSMakeRange((NSUInteger)visible_from, (NSUInteger)(visible_to - visible_from));
         }
-        CGImageRef image = text_bitmap(string, CGSizeMake(width, height), font, style, visible);
+        NSRange active = NSMakeRange(NSNotFound, 0);
+        if (active_from >= 0 && active_to > active_from && (NSUInteger)active_to <= string.length) {
+            active = NSMakeRange((NSUInteger)active_from, (NSUInteger)(active_to - active_from));
+        }
+        CGImageRef image = text_bitmap(string, CGSizeMake(width, height), font, style, visible, active, active_color);
         uint8_t *pixels = image == NULL ? NULL : calloc((size_t)width * height, 4);
         CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         CGContextRef context = pixels == NULL ? NULL : CGBitmapContextCreate(pixels, width, height, 8, width * 4,

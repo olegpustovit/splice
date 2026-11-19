@@ -631,6 +631,73 @@ mod looks {
         assert!(r >= 205 && b <= 54, "P3 not converted: ({r}, {g}, {b})");
     }
 
+    /// H8, T36.5: a thick caption stroke outlines the glyphs instead of covering them, two
+    /// lines that do not fit shrink instead of dropping the second, and the spoken word draws
+    /// in the active color.
+    pub(super) fn caption_stroke_sits_under_the_fill_and_the_active_word_is_colored() {
+        use apple_sys::composition::{TextLayer, TextStyle, text_rgba};
+        let size = [400u32, 120];
+        let layer = |text: &str, active: Option<([usize; 2], u32)>| TextLayer {
+            text: text.into(),
+            bounds: [0.0, 0.0, 400.0, 120.0],
+            font: 80.0,
+            opacity: [1.0; 2],
+            color: 0xffffff,
+            style: TextStyle {
+                weight: 5,
+                stroke: 0x000000,
+                stroke_width: 0.14,
+                ..TextStyle::default()
+            },
+            visible: None,
+            active,
+        };
+        let count = |pixels: &[u8], test: &dyn Fn(&[u8]) -> bool, half: Option<bool>| {
+            pixels
+                .chunks_exact(4)
+                .enumerate()
+                .filter(|(i, p)| {
+                    let right = (i % size[0] as usize) >= size[0] as usize / 2;
+                    half.is_none_or(|h| h == right) && p[3] > 250 && test(p)
+                })
+                .count()
+        };
+        let white = |p: &[u8]| p[0] > 240 && p[1] > 240 && p[2] > 240;
+        let red = |p: &[u8]| p[0] > 200 && p[1] < 60 && p[2] < 60;
+        let pixels = text_rgba(&layer("HI", None), size).unwrap();
+        let (fill, outline) = (
+            count(&pixels, &white, None),
+            count(&pixels, &|p| p[0] < 20 && p[1] < 20 && p[2] < 20, None),
+        );
+        // Stroke over fill left almost no white in bold 80 px glyphs.
+        assert!(
+            fill > 1500 && outline > 1500,
+            "fill {fill}, outline {outline}"
+        );
+        let pixels = text_rgba(&layer("AB CD", Some(([3, 5], 0xff2020))), size).unwrap();
+        assert!(
+            count(&pixels, &red, Some(true)) > 500,
+            "active word not red"
+        );
+        assert_eq!(
+            count(&pixels, &red, Some(false)),
+            0,
+            "inactive word colored"
+        );
+        // Two lines in a box one line tall: shrunk, both drawn (nothing in the bottom-left
+        // corner would mean the second line was dropped).
+        let tall = TextLayer {
+            bounds: [0.0, 0.0, 400.0, 120.0],
+            ..layer("ONE LONG LINE THAT WRAPS TWICE", None)
+        };
+        let pixels = text_rgba(&tall, size).unwrap();
+        let lower = pixels[(size[0] * size[1] * 2) as usize..]
+            .chunks_exact(4)
+            .filter(|p| p[3] > 250)
+            .count();
+        assert!(lower > 300, "second line dropped: {lower}");
+    }
+
     pub(super) fn ocr_reads_text_and_a_blur_mask_hides_it() {
         let dir = scratch("ocr");
         // A "screen" still with black text on white, like a recorded window.
@@ -644,6 +711,7 @@ mod looks {
                 color: 0x000000,
                 style: apple_sys::composition::TextStyle::default(),
                 visible: None,
+                active: None,
             },
             [640, 120],
         )
@@ -1084,6 +1152,10 @@ fn main() {
         (
             "looks_ocr_reads_text_and_a_blur_mask_hides_it",
             looks::ocr_reads_text_and_a_blur_mask_hides_it,
+        ),
+        (
+            "looks_caption_stroke_sits_under_the_fill_and_the_active_word_is_colored",
+            looks::caption_stroke_sits_under_the_fill_and_the_active_word_is_colored,
         ),
         (
             "looks_exports_alpha_audio_ranges_and_chapters",

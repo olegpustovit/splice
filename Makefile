@@ -83,7 +83,7 @@ dev:
 
 # ---- Mac mini (docs/LOOP.md §3): sync once, check once. ----
 mac-sync:
-	rsync -az --delete --exclude /target --exclude /.git --exclude '.git' --exclude '*.splice/cache' ./ $(MAC):$(MAC_DIR)/
+	rsync -az --delete --exclude /target --exclude /.git --exclude '.git' --exclude '*.splice/cache' --exclude /.claude ./ $(MAC):$(MAC_DIR)/
 
 mac-check: mac-sync
 	ssh $(MAC) '$(MAC_ENV) $(MAC_NICE) make mac-local-check'
