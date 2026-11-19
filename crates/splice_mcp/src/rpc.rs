@@ -12,7 +12,7 @@ const SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
 /// Encoding time per turn of the serve loop while an export runs, so requests still get answers.
 #[cfg(target_os = "macos")]
-const EXPORT_SLICE: std::time::Duration = std::time::Duration::from_millis(50);
+pub(super) const EXPORT_SLICE: std::time::Duration = std::time::Duration::from_millis(50);
 
 struct Connection {
     initialized: bool,

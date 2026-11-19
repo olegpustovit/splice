@@ -278,7 +278,9 @@ fn unknown(id: &str) -> CommandError {
     CommandError {
         code: "UNKNOWN_COMMAND",
         message: format!("No command {id:?}."),
-        fix: "Call commands.describe with a query to find the command ID.".into(),
+        fix: "Call commands.describe with a query to find the command ID. Tools such as \
+              export.start or view.frames are called directly, not as edit.apply ops."
+            .into(),
         valid,
     }
 }

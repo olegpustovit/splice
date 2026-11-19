@@ -46,11 +46,15 @@ pub(super) fn declarations(filter: Option<&str>) -> String {
     let filter = filter.unwrap_or("").to_lowercase();
     let wanted = |name: &str| name.to_lowercase().contains(&filter);
     let mut out = String::from(HEADER);
-    let commands: Vec<&Command> = COMMANDS.iter().filter(|row| wanted(row.id)).collect();
+    // Planned rows only fail with NOT_IMPLEMENTED; commands.describe still lists them.
+    let commands: Vec<&Command> = COMMANDS
+        .iter()
+        .filter(|row| row.tier != Tier::Planned && wanted(row.id))
+        .collect();
     let ids: Vec<&str> = commands.iter().map(|row| row.id).collect();
     if !commands.is_empty() {
         out.push_str("\n  namespace op {\n");
-        out.push_str("    interface Base {\n      /** Binds the result as \"$name\" for later ops (\"$name.new\": its first created item). */\n      ref?: string;\n    }\n");
+        out.push_str("    interface Base {\n      /** Binds the result as \"$name\" for later ops (\"$name.new\": its first created item). */\n      ref?: `$${string}`;\n    }\n");
         for row in &commands {
             command(&mut out, row);
         }
@@ -120,7 +124,8 @@ fn command(out: &mut String, row: &Command) {
         let plain = [
             "string", "id", "id[]", "frame", "frames", "int", "bool", "object",
         ];
-        if !plain.contains(&kind) && !ts.contains('"') && !ts.starts_with('{') {
+        // The anchor shape is fully typed; other object prose carries ranges and defaults.
+        if !plain.contains(&kind) && !ts.contains('"') && !kind.starts_with("{clip") {
             notes.push(kind.to_string());
         }
         if !doc.is_empty() {
@@ -163,6 +168,14 @@ fn param_type(kind: &str, doc: &str) -> String {
     let kind = kind.trim();
     if kind.starts_with("{clip") {
         return "{ clip: string; sourceFrame?: number } | { pinned: true; frame?: number }".into();
+    }
+    if kind.starts_with("{x,y}") {
+        let point = "{ x: number; y: number }";
+        return if kind.contains("null") {
+            format!("{point} | null")
+        } else {
+            point.into()
+        };
     }
     if kind.starts_with("{x,y,w,h}") {
         return "Rect | null".into();

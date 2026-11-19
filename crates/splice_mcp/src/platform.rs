@@ -210,6 +210,9 @@ pub(super) fn job(projects: &mut Projects, name: &str, args: &Json) -> Result<Js
         if cancel {
             job.cancel();
         }
+        // Polling advances the job: a code.run program that loops on jobs.status blocks the
+        // serve loop that otherwise steps exports between requests.
+        job.step(super::rpc::EXPORT_SLICE);
         return job.status();
     }
     Err(missing_job(id))

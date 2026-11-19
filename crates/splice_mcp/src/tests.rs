@@ -500,6 +500,15 @@ fn code_profile_transcript_runs_tools_in_one_call() {
 fn code_mode_declarations_golden() {
     let text = typescript::declarations(None);
     for row in splice_core::commands::COMMANDS {
+        if row.tier == splice_core::commands::Tier::Planned {
+            // Planned rows only fail; code mode leaves them out (commands.describe lists them).
+            assert!(
+                !text.contains(&format!("cmd: \"{}\";", row.id)),
+                "{}",
+                row.id
+            );
+            continue;
+        }
         assert!(
             text.contains(&format!("cmd: \"{}\";", row.id)),
             "{}",
@@ -519,4 +528,45 @@ fn code_mode_declarations_golden() {
     assert!(!typescript::declarations(Some("item.split")).contains("interface ItemTrim"));
     let path = mcp_fixtures().join("code/splice.d.ts");
     splice_testkit::golden(&path, text.as_bytes()).unwrap();
+}
+
+/// A polling loop reports one trace row with a count, not one row per call.
+#[test]
+fn code_run_collapses_repeated_calls_in_the_trace() {
+    let args = splice_json::parse(
+        r#"{"code":"for (let i = 0; i < 50; i++) splice.jobs.status({jobId: \"job_1\"}); splice.project.info({path: \"a.splice\"}); return 1;"}"#,
+    )
+    .unwrap();
+    let mut seen = 0;
+    let reply = code::run(&args, &mut |name, _| {
+        seen += 1;
+        Ok(object(vec![(
+            "structuredContent",
+            object(vec![("tool", text(name))]),
+        )]))
+    })
+    .unwrap();
+    assert_eq!(seen, 51, "{reply:?}");
+    let calls: Vec<_> = reply
+        .field("calls")
+        .and_then(Json::as_array)
+        .unwrap()
+        .iter()
+        .map(|call| {
+            (
+                call.field("tool")
+                    .and_then(Json::as_str)
+                    .unwrap()
+                    .to_owned(),
+                call.field("count").and_then(Json::as_u64),
+            )
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            ("jobs.status".to_owned(), Some(50)),
+            ("project.info".to_owned(), None)
+        ]
+    );
 }

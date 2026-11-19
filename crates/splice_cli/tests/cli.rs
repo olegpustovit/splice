@@ -855,3 +855,56 @@ fn native_viewer_playbar_golden() {
     };
     splice_testkit::golden(&file, &png).unwrap();
 }
+
+/// A code.run program blocks the serve loop, so its jobs.status polling must advance the export
+/// (eval tiktok-textedit hit the 200-call limit polling an export that never stepped).
+#[cfg(target_os = "macos")]
+#[test]
+fn native_code_mode_export_completes_while_a_program_polls() {
+    use std::io::{BufRead, BufReader};
+
+    let scratch = Scratch::new("native-code-export");
+    let project = export_sample(&scratch);
+    let mut child = scratch
+        .command()
+        .args(["mcp", "--code"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let program = r#"const p = splice.project.info({path: \"native.splice\"});
+const s = splice.session.start({projectId: p.projectId, agent: \"code-export\"});
+let job = splice.export.start({projectId: p.projectId, sessionId: s.sessionId, ifRevision: p.revision, path: \"polled.mp4\"});
+let polls = 0;
+while (job.state === \"running\") { job = splice.jobs.status({jobId: job.jobId}); polls++; }
+return {state: job.state, polls};"#
+        .replace('\n', "\\n");
+    writeln!(input, r#"{{"jsonrpc":"2.0","id":0,"method":"initialize","params":{{"protocolVersion":"2025-11-25","capabilities":{{}},"clientInfo":{{"name":"code-export","version":"1"}}}}}}"#).unwrap();
+    writeln!(input, r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"code.run","arguments":{{"code":"{program}"}}}}}}"#).unwrap();
+    input.flush().unwrap();
+    let mut line = String::new();
+    assert!(output.read_line(&mut line).unwrap() > 0);
+    line.clear();
+    assert!(output.read_line(&mut line).unwrap() > 0);
+    let result = parse(&line).unwrap();
+    let content = result
+        .field("result")
+        .unwrap()
+        .field("structuredContent")
+        .unwrap();
+    let value = content
+        .field("result")
+        .unwrap_or_else(|| panic!("{content:?}"));
+    assert_eq!(
+        value.field("state").and_then(Json::as_str),
+        Some("done"),
+        "{content:?}"
+    );
+    assert!(value.field("polls").and_then(Json::as_u64).unwrap() < 200);
+    assert!(project.join("polled.mp4").is_file());
+    drop(input);
+    child.wait().unwrap();
+}

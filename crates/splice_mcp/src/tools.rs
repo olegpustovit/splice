@@ -377,7 +377,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ("projectId", "string"),
             ("sessionId", "string"),
             ("ifRevision", REVISION),
-            ("preset", "string"),
+            ("preset", r#"{"enum":["social-h264","social-hevc"]}"#),
             ("path", "string"),
             ("overwrite", "boolean"),
         ],

@@ -1,7 +1,10 @@
 //! `code.run` (T14): agent JavaScript that calls the tools through one bounded QuickJS run.
 use super::{Json, object, text, tools, wire::*};
 use quickjs_sys::{Kind, Limits};
-use splice_core::{commands::COMMANDS, history::StoreError};
+use splice_core::{
+    commands::{COMMANDS, Tier},
+    history::StoreError,
+};
 use std::time::{Duration, Instant};
 
 pub(super) const LIMITS: Limits = Limits {
@@ -67,7 +70,7 @@ pub(super) fn run(
             "logs",
             Json::Array(outcome.logs.into_iter().map(Json::String).collect()),
         ),
-        ("calls", Json::Array(calls)),
+        ("calls", Json::Array(calls.iter().map(Call::json).collect())),
         ("revisions", revisions.json()),
     ];
     if let Some(failure) = outcome.error {
@@ -113,7 +116,13 @@ fn context(project: Option<&str>, session: Option<&str>) -> Result<String, Store
         ("tools", Json::Object(tools)),
         (
             "commands",
-            Json::Array(COMMANDS.iter().map(|row| text(row.id)).collect()),
+            Json::Array(
+                COMMANDS
+                    .iter()
+                    .filter(|row| row.tier != Tier::Planned)
+                    .map(|row| text(row.id))
+                    .collect(),
+            ),
         ),
     ]);
     let mut json = String::new();
@@ -121,21 +130,52 @@ fn context(project: Option<&str>, session: Option<&str>) -> Result<String, Store
     Ok(json)
 }
 
+/// One trace entry: consecutive calls to the same tool with the same outcome collapse into one
+/// (a polling loop reports `count` instead of hundreds of identical rows).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Call {
+    tool: String,
+    ok: bool,
+    ms: u64,
+    count: u32,
+}
+
+impl Call {
+    fn json(&self) -> Json {
+        let mut fields = vec![
+            ("tool", text(&self.tool)),
+            ("ok", Json::Bool(self.ok)),
+            ("ms", Json::Unsigned(self.ms)),
+        ];
+        if self.count > 1 {
+            fields.push(("count", Json::Unsigned(u64::from(self.count))));
+        }
+        object(fields)
+    }
+}
+
 fn host(
     name: &str,
     args: &str,
     call: &mut dyn FnMut(&str, &Json) -> Result<Json, splice_json::NonFiniteNumber>,
-    calls: &mut Vec<Json>,
+    calls: &mut Vec<Call>,
     revisions: &mut Revisions,
 ) -> Result<String, String> {
     let began = Instant::now();
     let result = dispatch(name, args, call, revisions);
     let ms = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX);
-    calls.push(object(vec![
-        ("tool", text(name)),
-        ("ok", Json::Bool(result.is_ok())),
-        ("ms", Json::Unsigned(ms)),
-    ]));
+    match calls.last_mut() {
+        Some(last) if last.tool == name && last.ok == result.is_ok() => {
+            last.count += 1;
+            last.ms = last.ms.saturating_add(ms);
+        }
+        _ => calls.push(Call {
+            tool: name.into(),
+            ok: result.is_ok(),
+            ms,
+            count: 1,
+        }),
+    }
     let (Ok(value) | Err(value)) = &result;
     let mut json = String::new();
     if splice_json::write(value, &mut json).is_err() {

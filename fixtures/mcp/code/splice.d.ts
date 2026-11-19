@@ -27,7 +27,7 @@ declare namespace Splice {
   namespace op {
     interface Base {
       /** Binds the result as "$name" for later ops ("$name.new": its first created item). */
-      ref?: string;
+      ref?: `$${string}`;
     }
     /** Split at Playhead (edit, 0.1). */
     interface ItemSplit extends Base {
@@ -147,7 +147,7 @@ declare namespace Splice {
       /** scale */
       to?: number;
       /** {x,y} canvas point (0–1) a motion holds still */
-      focus?: string;
+      focus?: { x: number; y: number };
       /** ease a motion in and out */
       ease?: boolean;
       placement?: "full" | "card" | "corner-tl" | "corner-tr" | "corner-bl" | "corner-br";
@@ -190,7 +190,7 @@ declare namespace Splice {
       /** scale · @default 1.32 */
       to?: number;
       /** {x,y} canvas point (0–1) the zoom holds still (default: center) */
-      focus?: string;
+      focus?: { x: number; y: number };
       /** ease in and out · @default false */
       ease?: boolean;
     }
@@ -204,7 +204,7 @@ declare namespace Splice {
       /** 0.5–2 */
       to?: number;
       /** {x,y} canvas point (0–1), or null for the center */
-      focus?: string;
+      focus?: { x: number; y: number } | null;
       ease?: boolean;
     }
     /** Pin / Unpin (edit, 0.1). */
@@ -335,7 +335,7 @@ declare namespace Splice {
       /** instead of rect: the largest crop of this shape, fit fill (reframe without bands) */
       aspect?: "9:16" | "4:5" | "1:1" | "4:3" | "16:9" | "canvas";
       /** {x,y} source point (0–1) the aspect crop keeps in frame (default: center) */
-      focus?: string;
+      focus?: { x: number; y: number };
     }
     /** Delete Range (destructive, 0.2). */
     interface CutRange extends Base {
@@ -445,86 +445,6 @@ declare namespace Splice {
       /** ovl_…[] · two or more captions on one lane */
       items: string[];
     }
-    /** Join Clips (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface ClipJoin extends Base {
-      cmd: "clip.join";
-    }
-    /** Ungroup (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface ClipUngroup extends Base {
-      cmd: "clip.ungroup";
-    }
-    /** Restore Cuts (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface ClipRestore extends Base {
-      cmd: "clip.restore";
-    }
-    /** Reorder Lane (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface LaneReorder extends Base {
-      cmd: "lane.reorder";
-    }
-    /** Animated Crop (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface CropKeys extends Base {
-      cmd: "crop.keys";
-    }
-    /** Add Transition (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface TransitionAdd extends Base {
-      cmd: "transition.add";
-    }
-    /** Zoom Settings (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface ZoomSet extends Base {
-      cmd: "zoom.set";
-    }
-    /** Add Mask (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface MaskAdd extends Base {
-      cmd: "mask.add";
-    }
-    /** Edit Mask (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface MaskSet extends Base {
-      cmd: "mask.set";
-    }
-    /** Translate Captions (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface CaptionsTranslate extends Base {
-      cmd: "captions.translate";
-    }
-    /** Import SRT / VTT (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface CaptionsImport extends Base {
-      cmd: "captions.import";
-    }
-    /** Link Audio (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface AudioLink extends Base {
-      cmd: "audio.link";
-    }
-    /** Unlink Audio (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface AudioUnlink extends Base {
-      cmd: "audio.unlink";
-    }
-    /** Move into Sync (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface AudioSync extends Base {
-      cmd: "audio.sync";
-    }
-    /** Style (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface StyleSet extends Base {
-      cmd: "style.set";
-    }
-    /** Cut Pauses (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface CutPauses extends Base {
-      cmd: "cut.pauses";
-    }
-    /** Tighten Pace (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface IntentPace extends Base {
-      cmd: "intent.pace";
-    }
-    /** Fit to Duration (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface IntentFitDuration extends Base {
-      cmd: "intent.fitDuration";
-    }
-    /** Keep Shots (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface IntentKeepShots extends Base {
-      cmd: "intent.keepShots";
-    }
-    /** Auto Zoom (edit, 0.3, planned: fails with NOT_IMPLEMENTED). */
-    interface IntentAutoZoom extends Base {
-      cmd: "intent.autoZoom";
-    }
     /** Set Transcript (edit, 0.2). */
     interface TranscriptSet extends Base {
       cmd: "transcript.set";
@@ -579,26 +499,6 @@ declare namespace Splice {
     | op.CaptionSet
     | op.CaptionSplit
     | op.CaptionMerge
-    | op.ClipJoin
-    | op.ClipUngroup
-    | op.ClipRestore
-    | op.LaneReorder
-    | op.CropKeys
-    | op.TransitionAdd
-    | op.ZoomSet
-    | op.MaskAdd
-    | op.MaskSet
-    | op.CaptionsTranslate
-    | op.CaptionsImport
-    | op.AudioLink
-    | op.AudioUnlink
-    | op.AudioSync
-    | op.StyleSet
-    | op.CutPauses
-    | op.IntentPace
-    | op.IntentFitDuration
-    | op.IntentKeepShots
-    | op.IntentAutoZoom
     | op.TranscriptSet;
 }
 
@@ -627,9 +527,6 @@ declare const splice: {
       insert(args: Omit<Splice.op.ClipInsert, "cmd">): Splice.op.ClipInsert;
       lift(args: Omit<Splice.op.ClipLift, "cmd">): Splice.op.ClipLift;
       crop(args: Omit<Splice.op.ClipCrop, "cmd">): Splice.op.ClipCrop;
-      join(args: Omit<Splice.op.ClipJoin, "cmd">): Splice.op.ClipJoin;
-      ungroup(args: Omit<Splice.op.ClipUngroup, "cmd">): Splice.op.ClipUngroup;
-      restore(args: Omit<Splice.op.ClipRestore, "cmd">): Splice.op.ClipRestore;
     };
     overlay: {
       replaceSpine(args: Omit<Splice.op.OverlayReplaceSpine, "cmd">): Splice.op.OverlayReplaceSpine;
@@ -648,16 +545,12 @@ declare const splice: {
       create(args: Omit<Splice.op.LaneCreate, "cmd">): Splice.op.LaneCreate;
       rename(args: Omit<Splice.op.LaneRename, "cmd">): Splice.op.LaneRename;
       delete(args: Omit<Splice.op.LaneDelete, "cmd">): Splice.op.LaneDelete;
-      reorder(args: Omit<Splice.op.LaneReorder, "cmd">): Splice.op.LaneReorder;
     };
     component: {
       set(args: Omit<Splice.op.ComponentSet, "cmd">): Splice.op.ComponentSet;
     };
     audio: {
       set(args: Omit<Splice.op.AudioSet, "cmd">): Splice.op.AudioSet;
-      link(args: Omit<Splice.op.AudioLink, "cmd">): Splice.op.AudioLink;
-      unlink(args: Omit<Splice.op.AudioUnlink, "cmd">): Splice.op.AudioUnlink;
-      sync(args: Omit<Splice.op.AudioSync, "cmd">): Splice.op.AudioSync;
     };
     cursor: {
       set(args: Omit<Splice.op.CursorSet, "cmd">): Splice.op.CursorSet;
@@ -676,7 +569,6 @@ declare const splice: {
     cut: {
       range(args: Omit<Splice.op.CutRange, "cmd">): Splice.op.CutRange;
       words(args: Omit<Splice.op.CutWords, "cmd">): Splice.op.CutWords;
-      pauses(args: Omit<Splice.op.CutPauses, "cmd">): Splice.op.CutPauses;
     };
     effect: {
       add(args: Omit<Splice.op.EffectAdd, "cmd">): Splice.op.EffectAdd;
@@ -687,35 +579,11 @@ declare const splice: {
     };
     captions: {
       generate(args: Omit<Splice.op.CaptionsGenerate, "cmd">): Splice.op.CaptionsGenerate;
-      translate(args: Omit<Splice.op.CaptionsTranslate, "cmd">): Splice.op.CaptionsTranslate;
-      import(args: Omit<Splice.op.CaptionsImport, "cmd">): Splice.op.CaptionsImport;
     };
     caption: {
       set(args: Omit<Splice.op.CaptionSet, "cmd">): Splice.op.CaptionSet;
       split(args: Omit<Splice.op.CaptionSplit, "cmd">): Splice.op.CaptionSplit;
       merge(args: Omit<Splice.op.CaptionMerge, "cmd">): Splice.op.CaptionMerge;
-    };
-    crop: {
-      keys(args: Omit<Splice.op.CropKeys, "cmd">): Splice.op.CropKeys;
-    };
-    transition: {
-      add(args: Omit<Splice.op.TransitionAdd, "cmd">): Splice.op.TransitionAdd;
-    };
-    zoom: {
-      set(args: Omit<Splice.op.ZoomSet, "cmd">): Splice.op.ZoomSet;
-    };
-    mask: {
-      add(args: Omit<Splice.op.MaskAdd, "cmd">): Splice.op.MaskAdd;
-      set(args: Omit<Splice.op.MaskSet, "cmd">): Splice.op.MaskSet;
-    };
-    style: {
-      set(args: Omit<Splice.op.StyleSet, "cmd">): Splice.op.StyleSet;
-    };
-    intent: {
-      pace(args: Omit<Splice.op.IntentPace, "cmd">): Splice.op.IntentPace;
-      fitDuration(args: Omit<Splice.op.IntentFitDuration, "cmd">): Splice.op.IntentFitDuration;
-      keepShots(args: Omit<Splice.op.IntentKeepShots, "cmd">): Splice.op.IntentKeepShots;
-      autoZoom(args: Omit<Splice.op.IntentAutoZoom, "cmd">): Splice.op.IntentAutoZoom;
     };
     transcript: {
       set(args: Omit<Splice.op.TranscriptSet, "cmd">): Splice.op.TranscriptSet;
@@ -775,7 +643,7 @@ declare const splice: {
   };
   export: {
     /** Start an MP4 export job. Use overwrite:true to replace an existing output file. */
-    start(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; preset?: string; path?: string; overwrite?: boolean; }): { jobId: string; state: string; settings?: Record<string, unknown>; };
+    start(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; preset?: "social-h264" | "social-hevc"; path?: string; overwrite?: boolean; }): { jobId: string; state: string; settings?: Record<string, unknown>; };
   };
   jobs: {
     /** Check the progress and result of an export, transcription or recording job. */
