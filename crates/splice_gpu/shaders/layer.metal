@@ -123,6 +123,17 @@ static float2 chroma(float3 c) {
     return float2(-0.1146 * c.r - 0.3854 * c.g + 0.5 * c.b, 0.5 * c.r - 0.4542 * c.g - 0.0458 * c.b);
 }
 
+// Golden-angle disk taps (unit radius) for the 16-tap blurs, precomputed (no trig per pixel).
+constant float2 DISK[16] = {
+    float2(0.176777, 0.000000), float2(-0.225772, 0.206827),
+    float2(0.034556, -0.393771), float2(0.284575, 0.371170),
+    float2(-0.522224, -0.092367), float2(0.494690, -0.314693),
+    float2(-0.165454, 0.615528), float2(-0.315575, -0.607587),
+    float2(0.684649, 0.250013), float2(-0.712248, 0.294030),
+    float2(0.343331, -0.733740), float2(0.253759, 0.808923),
+    float2(-0.764763, -0.443156), float2(0.897126, -0.197270),
+    float2(-0.547472, 0.778797), float2(-0.126534, -0.976084)};
+
 static float mask_cover(Mask m, float2 local, float2 size) {
     float2 h = m.rect.zw * 0.5 * size;
     float2 c = (m.rect.xy + m.rect.zw * 0.5) * size;
@@ -146,17 +157,30 @@ static float3 blend(float3 dst, float3 src, uint mode) {
     }
 }
 
-fragment float4 layer_fragment(Out in [[stage_in]], constant Layer &l [[buffer(0)]],
-                               texture2d<float> source [[texture(1)]], sampler linear [[sampler(2)]],
-                               texture2d<float> table [[texture(3)]], texture2d<float> matte [[texture(4)]],
-                               float4 framebuffer [[color(0)]]) {
-    float4 dst = (l.flags & 2u) ? framebuffer.bgra : framebuffer;
+// One body for every entry point; `full` and `hw` are compile-time constants at each call site.
+// `full` false compiles the fill entry (solid and gradient, kinds 1 and 2) without the picture,
+// shape, mask, LUT and key paths. `hw` true leaves source-over to fixed-function blending (an
+// opaque canvas and the normal blend mode): no framebuffer read, so overlapping layers do not
+// serialize on programmable blending.
+static inline float4 layer_body(Out in, constant Layer &l, texture2d<float> source, sampler linear,
+                                texture2d<float> table, texture2d<float> matte, float4 framebuffer,
+                                const bool full, const bool hw) {
+    float4 dst = hw ? float4(0.0) : ((l.flags & 2u) ? framebuffer.bgra : framebuffer);
     float2 h = l.dest.zw * 0.5;
     float2 c = l.dest.xy + h;
     float2 local = (in.px - l.dest.xy) / l.dest.zw;
     float4 color;
     float coverage;
-    if (l.kind == 3) {
+    if (!full) {
+        float d = rounded(in.px, c, h, min(l.corner, min(h.x, h.y)));
+        coverage = clamp(0.5 - d, 0.0, 1.0);
+        if (l.kind == 1) {
+            color = l.color0;
+        } else {
+            float t = clamp(dot(in.px - l.dest.xy, l.dest.zw) / dot(l.dest.zw, l.dest.zw), 0.0, 1.0);
+            color = mix(l.color0, l.color1, t);
+        }
+    } else if (l.kind == 3) {
         float d = abs(length(in.px - c) - (h.x - l.ring * 0.5)) - l.ring * 0.5;
         coverage = clamp(0.5 - d, 0.0, 1.0);
         color = l.color0;
@@ -200,6 +224,13 @@ fragment float4 layer_fragment(Out in [[stage_in]], constant Layer &l [[buffer(0
             }
             for (uint i = 0; i < l.mask_count; i++) {
                 Mask k = l.masks[i];
+                // Outside the mask's feathered box nothing changes (unless inverted): skip the
+                // distance field for the common case of a small mask on a big picture.
+                // The same feather mask_cover uses, in pixels, doubled for margin.
+                float feather = max(k.params.w * min(l.dest.z, l.dest.w), 0.75);
+                float2 slack = 2.0 * feather / l.dest.zw;
+                if (k.color.w <= 0.5 && k.params.y != 3.0 &&
+                    any(local < k.rect.xy - slack || local > k.rect.xy + k.rect.zw + slack)) continue;
                 float inside = mask_cover(k, local, l.dest.zw);
                 if (inside <= 0.0) continue;
                 float amount = k.params.z;
@@ -209,9 +240,7 @@ fragment float4 layer_fragment(Out in [[stage_in]], constant Layer &l [[buffer(0
                     float radius = amount * 0.03;
                     float4 sum = 0.0;
                     for (int j = 0; j < 16; j++) {
-                        float r = sqrt((float(j) + 0.5) / 16.0) * radius;
-                        float a = float(j) * 2.39996;
-                        sum += fetch(source, linear, in.uv + float2(cos(a), sin(a)) * r * float2(1.0, l.dest.z / l.dest.w), l);
+                        sum += fetch(source, linear, in.uv + DISK[j] * radius * float2(1.0, l.dest.z / l.dest.w), l);
                     }
                     treated = sum / 16.0;
                 } else if (k.params.y == 1.0) {
@@ -240,9 +269,7 @@ fragment float4 layer_fragment(Out in [[stage_in]], constant Layer &l [[buffer(0
                 if (l.flags & 64u) {
                     float4 sum = 0.0;
                     for (int j = 0; j < 16; j++) {
-                        float r = sqrt((float(j) + 0.5) / 16.0) * 0.02;
-                        float a = float(j) * 2.39996;
-                        sum += fetch(source, linear, in.uv + float2(cos(a), sin(a)) * r, l);
+                        sum += fetch(source, linear, in.uv + DISK[j] * 0.02, l);
                     }
                     color = mix(color, mix(sum / 16.0, color, m), l.lut.z);
                 } else {
@@ -271,9 +298,30 @@ fragment float4 layer_fragment(Out in [[stage_in]], constant Layer &l [[buffer(0
         float out_alpha = alpha + under;
         result = out_alpha > 0.0 ? float4(rgb * alpha / out_alpha, out_alpha) : float4(0.0);
     }
+    if (hw) return (l.flags & 2u) ? result.bgra : result;
     // Source-over onto the framebuffer (straight alpha).
     float a = result.a + dst.a * (1.0 - result.a);
     float3 over = a > 0.0 ? (result.rgb * result.a + dst.rgb * dst.a * (1.0 - result.a)) / a : float3(0.0);
     float4 outc = float4(over, a);
     return (l.flags & 2u) ? outc.bgra : outc;
+}
+
+fragment float4 layer_fragment(Out in [[stage_in]], constant Layer &l [[buffer(0)]],
+                               texture2d<float> source [[texture(1)]], sampler linear [[sampler(2)]],
+                               texture2d<float> table [[texture(3)]], texture2d<float> matte [[texture(4)]],
+                               float4 framebuffer [[color(0)]]) {
+    return layer_body(in, l, source, linear, table, matte, framebuffer, true, false);
+}
+
+// Hardware-blended entries: they never read [[color(0)]].
+fragment float4 layer_blend(Out in [[stage_in]], constant Layer &l [[buffer(0)]],
+                            texture2d<float> source [[texture(1)]], sampler linear [[sampler(2)]],
+                            texture2d<float> table [[texture(3)]], texture2d<float> matte [[texture(4)]]) {
+    return layer_body(in, l, source, linear, table, matte, float4(0.0), true, true);
+}
+
+fragment float4 fill_blend(Out in [[stage_in]], constant Layer &l [[buffer(0)]],
+                           texture2d<float> source [[texture(1)]], sampler linear [[sampler(2)]],
+                           texture2d<float> table [[texture(3)]], texture2d<float> matte [[texture(4)]]) {
+    return layer_body(in, l, source, linear, table, matte, float4(0.0), false, true);
 }

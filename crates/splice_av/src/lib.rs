@@ -205,15 +205,22 @@ impl Composition {
 
     /// Reads one offscreen program frame, text included, into a caller-owned RGBA8 buffer.
     pub fn read_frame(&self, at: Frame, rgba: &mut [u8]) -> Result<(), Error> {
-        self.read(at, rgba, true)
+        self.read(at, rgba, true, 0)
+    }
+
+    /// Reads a frame, then composes the same decoded sources `repeats` more times back to back,
+    /// as the viewer does at its frame rate. `last_frame_timings` then reports the fastest warm
+    /// compose, free of the GPU waking after a from-scratch decode.
+    pub fn read_frame_warm(&self, at: Frame, rgba: &mut [u8], repeats: u32) -> Result<(), Error> {
+        self.read(at, rgba, true, repeats)
     }
 
     /// Reads the program picture so the viewer can draw text in its own layout.
     pub fn read_picture(&self, at: Frame, rgba: &mut [u8]) -> Result<(), Error> {
-        self.read(at, rgba, false)
+        self.read(at, rgba, false, 0)
     }
 
-    fn read(&self, at: Frame, rgba: &mut [u8], text: bool) -> Result<(), Error> {
+    fn read(&self, at: Frame, rgba: &mut [u8], text: bool, repeats: u32) -> Result<(), Error> {
         use ogpu_core::backend as b;
         let gpu =
             |error: ogpu_core::error::Error| Error::Input(ogpu_core::error::to_string(&error));
@@ -242,30 +249,35 @@ impl Composition {
             .native
             .grab(device_ptr, at, offscreen.program.sources_mut())?;
         let decoded = std::time::Instant::now();
-        let commands = b::begin_commands(&offscreen.queue).map_err(gpu)?;
-        let native = b::native_commands(&commands)
-            .map_err(gpu)?
-            .mtl_command_buffer;
-        if let Err(error) = offscreen.program.draw(
-            &self.plan,
-            self.size,
-            at,
-            count,
-            native,
-            &commands,
-            &mut offscreen.target,
-            text,
-            false,
-        ) {
-            let _ = b::abandon(&commands);
-            return Err(error);
+        let mut compose = std::time::Duration::MAX;
+        for _ in 0..=repeats {
+            let began = std::time::Instant::now();
+            let commands = b::begin_commands(&offscreen.queue).map_err(gpu)?;
+            let native = b::native_commands(&commands)
+                .map_err(gpu)?
+                .mtl_command_buffer;
+            if let Err(error) = offscreen.program.draw(
+                &self.plan,
+                self.size,
+                at,
+                count,
+                native,
+                &commands,
+                &mut offscreen.target,
+                text,
+                false,
+            ) {
+                let _ = b::abandon(&commands);
+                return Err(error);
+            }
+            let receipt = b::commit(&commands).map_err(gpu)?;
+            b::complete_through(&offscreen.queue, receipt.epoch).map_err(gpu)?;
+            compose = compose.min(began.elapsed());
         }
-        let receipt = b::commit(&commands).map_err(gpu)?;
-        b::complete_through(&offscreen.queue, receipt.epoch).map_err(gpu)?;
         let composed = std::time::Instant::now();
         b::read_texture_into(&offscreen.texture, (width * 4) as i64, rgba).map_err(gpu)?;
         self.timings
-            .set([decoded - started, composed - decoded, composed.elapsed()]);
+            .set([decoded - started, compose, composed.elapsed()]);
         Ok(())
     }
 

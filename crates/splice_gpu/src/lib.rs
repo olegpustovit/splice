@@ -10,7 +10,7 @@ use ogpu_core::backend::{
 };
 use ogpu_core::binding::{self, LayoutEntry};
 use ogpu_core::error::Error;
-use ogpu_core::pipeline::{ColorFormat, DepthFormat, RenderDescriptor};
+use ogpu_core::pipeline::{Blend, ColorFormat, DepthFormat, RenderDescriptor};
 use ogpu_core::render_pass::{Load, Primitive, Rect, Store};
 use ogpu_core::shader::{self as sh, Binding, BindingKind, EntryPoint, Stage};
 use ogpu_core::types::{
@@ -170,6 +170,10 @@ pub fn rgb(value: u32) -> [f32; 4] {
 /// Pipeline, sampler and parameter pages for one device.
 pub struct Compositor {
     pipeline: Pipeline,
+    /// Hardware source-over for normal-blend layers on an opaque canvas, and its lean variant for
+    /// solid and gradient fills (kinds 1 and 2).
+    blended: Pipeline,
+    fill: Pipeline,
     sampler: Sampler,
     blank: Texture,
     pages: [Buffer; PAGES],
@@ -203,6 +207,14 @@ impl Compositor {
                         name: "layer_fragment".into(),
                         stage: Stage::Fragment,
                     },
+                    EntryPoint {
+                        name: "layer_blend".into(),
+                        stage: Stage::Fragment,
+                    },
+                    EntryPoint {
+                        name: "fill_blend".into(),
+                        stage: Stage::Fragment,
+                    },
                 ],
                 bindings,
             })
@@ -213,90 +225,97 @@ impl Compositor {
             kind: BindingKind::UniformBuffer,
             visibility: stages,
         };
-        let vertex = shader(vec![params(vec![Stage::Vertex])])?;
-        let fragment = shader(vec![
-            params(vec![Stage::Fragment]),
-            Binding {
-                group: 0,
-                binding: 1,
-                kind: BindingKind::SampledTexture,
-                visibility: vec![Stage::Fragment],
-            },
-            Binding {
-                group: 0,
-                binding: 2,
-                kind: BindingKind::Sampler,
-                visibility: vec![Stage::Fragment],
-            },
-            Binding {
-                group: 0,
-                binding: 3,
-                kind: BindingKind::SampledTexture,
-                visibility: vec![Stage::Fragment],
-            },
-            Binding {
-                group: 0,
-                binding: 4,
-                kind: BindingKind::SampledTexture,
-                visibility: vec![Stage::Fragment],
-            },
-        ])?;
-        let both = vec![binding::Stage::Vertex, binding::Stage::Fragment];
-        let fragment_only = vec![binding::Stage::Fragment];
-        let layout = binding::create_layout(&[
-            LayoutEntry {
-                binding: 0,
-                kind: binding::Kind::Buffer,
-                visibility: both,
-            },
-            // OGPU numbers bindings uniquely and Metal checks them against its slots: buffer 0,
-            // texture 1, sampler 2 in the MSL and the `set_stage_*` calls.
-            LayoutEntry {
-                binding: 1,
-                kind: binding::Kind::Texture,
-                visibility: fragment_only.clone(),
-            },
-            LayoutEntry {
-                binding: 2,
-                kind: binding::Kind::Sampler,
-                visibility: fragment_only.clone(),
-            },
-            // LUT atlas (3) and person matte (4).
-            LayoutEntry {
-                binding: 3,
-                kind: binding::Kind::Texture,
-                visibility: fragment_only.clone(),
-            },
-            LayoutEntry {
-                binding: 4,
-                kind: binding::Kind::Texture,
-                visibility: fragment_only,
-            },
-        ])?;
-        let layout = binding::create_pipeline_layout(
-            b::device_handle(device),
-            &b::capabilities(device),
-            &[(0, layout)],
-        )?;
-        let pipeline = b::create_render_pipeline(
-            device,
-            &RenderDescriptor {
-                backend,
-                label: Some("Splice layer".into()),
-                layout,
-                vertex,
-                vertex_entry: "layer_vertex".into(),
-                fragment: Some(fragment),
-                fragment_entry: Some("layer_fragment".into()),
-                color_format: ColorFormat::Rgba8Unorm,
-                depth_format: DepthFormat::NoDepth,
-                sample_count: 1,
-            },
-            // The shader blends against `[[color(0)]]` (every blend mode, one pipeline).
-            None,
-            Some(Primitive::TriangleList),
-            Some(false),
-        )?;
+        // Pictures, shapes and rings use the full fragment; solid and gradient fills a lean one.
+        let make = |fragment_entry: &str, blend: Option<Blend>| -> Result<Pipeline, Error> {
+            let vertex = shader(vec![params(vec![Stage::Vertex])])?;
+            let fragment = shader(vec![
+                params(vec![Stage::Fragment]),
+                Binding {
+                    group: 0,
+                    binding: 1,
+                    kind: BindingKind::SampledTexture,
+                    visibility: vec![Stage::Fragment],
+                },
+                Binding {
+                    group: 0,
+                    binding: 2,
+                    kind: BindingKind::Sampler,
+                    visibility: vec![Stage::Fragment],
+                },
+                Binding {
+                    group: 0,
+                    binding: 3,
+                    kind: BindingKind::SampledTexture,
+                    visibility: vec![Stage::Fragment],
+                },
+                Binding {
+                    group: 0,
+                    binding: 4,
+                    kind: BindingKind::SampledTexture,
+                    visibility: vec![Stage::Fragment],
+                },
+            ])?;
+            let both = vec![binding::Stage::Vertex, binding::Stage::Fragment];
+            let fragment_only = vec![binding::Stage::Fragment];
+            let layout = binding::create_layout(&[
+                LayoutEntry {
+                    binding: 0,
+                    kind: binding::Kind::Buffer,
+                    visibility: both,
+                },
+                // OGPU numbers bindings uniquely and Metal checks them against its slots: buffer 0,
+                // texture 1, sampler 2 in the MSL and the `set_stage_*` calls.
+                LayoutEntry {
+                    binding: 1,
+                    kind: binding::Kind::Texture,
+                    visibility: fragment_only.clone(),
+                },
+                LayoutEntry {
+                    binding: 2,
+                    kind: binding::Kind::Sampler,
+                    visibility: fragment_only.clone(),
+                },
+                // LUT atlas (3) and person matte (4).
+                LayoutEntry {
+                    binding: 3,
+                    kind: binding::Kind::Texture,
+                    visibility: fragment_only.clone(),
+                },
+                LayoutEntry {
+                    binding: 4,
+                    kind: binding::Kind::Texture,
+                    visibility: fragment_only,
+                },
+            ])?;
+            let layout = binding::create_pipeline_layout(
+                b::device_handle(device),
+                &b::capabilities(device),
+                &[(0, layout)],
+            )?;
+            let pipeline = b::create_render_pipeline(
+                device,
+                &RenderDescriptor {
+                    backend: backend.clone(),
+                    label: Some("Splice layer".into()),
+                    layout,
+                    vertex,
+                    vertex_entry: "layer_vertex".into(),
+                    fragment: Some(fragment),
+                    fragment_entry: Some(fragment_entry.into()),
+                    color_format: ColorFormat::Rgba8Unorm,
+                    depth_format: DepthFormat::NoDepth,
+                    sample_count: 1,
+                },
+                // `None`: the shader blends against `[[color(0)]]` (every blend mode).
+                blend,
+                Some(Primitive::TriangleList),
+                Some(false),
+            )?;
+            Ok(pipeline)
+        };
+        let pipeline = make("layer_fragment", None)?;
+        let blended = make("layer_blend", Some(Blend::Alpha))?;
+        let fill = make("fill_blend", Some(Blend::Alpha))?;
         let sampler = b::create_sampler(
             device,
             SamplerDescriptor {
@@ -338,6 +357,8 @@ impl Compositor {
         };
         Ok(Self {
             pipeline,
+            blended,
+            fill,
             sampler,
             blank,
             pages: [page()?, page()?, page()?],
@@ -368,7 +389,9 @@ impl Compositor {
         )
     }
 
-    /// Encodes `layers`, back to front, into `target` within `commands`. `textures[i]` is layer
+    /// Encodes `layers`, back to front, into `target` within `commands`. On an `opaque` canvas
+    /// normal-blend layers blend in hardware; a transparent canvas (alpha exports) and the other
+    /// blend modes blend in the shader. `textures[i]` is layer
     /// i's source for `Layer::TEXTURE` (handles are `Rc` clones, so a reused `Vec` of them costs no
     /// allocation). At most `MAX_LAYERS`; extra layers are refused.
     pub fn encode(
@@ -378,6 +401,7 @@ impl Compositor {
         size: [u32; 2],
         layers: &[Layer],
         textures: &[Bound],
+        opaque: bool,
     ) -> Result<(), Error> {
         if layers.len() > MAX_LAYERS || textures.len() != layers.len() {
             return Err(ogpu_core::error::make(
@@ -399,6 +423,7 @@ impl Compositor {
         }
         let render = b::render_prepared(commands, target)?;
         let drawn = (|| {
+            let mut bound = 0u8;
             b::set_render_pipeline(&render, &self.pipeline)?;
             b::set_viewport(
                 &render,
@@ -411,6 +436,16 @@ impl Compositor {
             )?;
             b::set_stage_sampler(&render, ShaderStage::Fragment, 2, &self.sampler)?;
             for (index, layer) in layers.iter().enumerate() {
+                let wanted = match (opaque && layer.blend == 0, layer.kind) {
+                    (false, _) => 0u8,
+                    (true, 1 | 2) => 2,
+                    (true, _) => 1,
+                };
+                if wanted != bound {
+                    bound = wanted;
+                    let pipeline = [&self.pipeline, &self.blended, &self.fill][usize::from(wanted)];
+                    b::set_render_pipeline(&render, pipeline)?;
+                }
                 let offset = Some((index * STRIDE) as i64);
                 b::set_stage_buffer(&render, ShaderStage::Vertex, 0, offset, page)?;
                 b::set_stage_buffer(&render, ShaderStage::Fragment, 0, offset, page)?;

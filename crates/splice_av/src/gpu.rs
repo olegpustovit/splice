@@ -294,6 +294,30 @@ impl GpuProgram {
         if text {
             self.text(at, canvas);
         }
+        // Nothing under an opaque full-canvas fill shows (the black base under a window
+        // background): skip it, ~2 ms per covered layer at 4K on an M1.
+        let [cw, ch] = canvas;
+        let covers = |l: &Layer| {
+            matches!(l.kind, Layer::SOLID | Layer::GRADIENT)
+                && l.opacity >= 1.0
+                && l.color0[3] >= 1.0
+                && l.color1[3] >= 1.0
+                && l.blend == 0
+                && l.rotation == 0.0
+                && l.corner == 0.0
+                && l.flags & Layer::CLIP == 0
+                && l.dest[0] <= 0.0
+                && l.dest[1] <= 0.0
+                && f64::from(l.dest[0] + l.dest[2]) >= cw
+                && f64::from(l.dest[1] + l.dest[3]) >= ch
+        };
+        if let Some(top) = self.layers.iter().rposition(covers)
+            && top > 0
+            && self.textures.len() == self.layers.len()
+        {
+            self.layers.drain(..top);
+            self.textures.drain(..top);
+        }
         if bgra {
             for layer in &mut self.layers {
                 layer.flags |= Layer::OUT_BGRA;
@@ -304,7 +328,14 @@ impl GpuProgram {
             self.textures.truncate(MAX_LAYERS);
         }
         self.compositor
-            .encode(commands, target, size, &self.layers, &self.textures)
+            .encode(
+                commands,
+                target,
+                size,
+                &self.layers,
+                &self.textures,
+                !self.transparent,
+            )
             .map_err(gpu)?;
         Ok(true)
     }
