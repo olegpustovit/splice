@@ -193,3 +193,9 @@ date	commit	agent	task	result	checks	calls	errors	recoveries	wall_s	tokens
 2026-11-19	cb53017	claude+code	tiktok-textedit	pass	7/7	11	1	1	53.8	566163
 2026-11-19	cb53017	claude+code	tiktok-textedit	pass	7/7	14	3	1	66.9	689113
 2026-11-19	cb53017	claude+code	tiktok-textedit	pass	7/7	13	2	2	65.7	678454
+2026-11-19	326885b	claude	hand-off	pass	3/3	4	0	0	12.6	141445
+2026-11-19	326885b	claude	hand-off	pass	3/3	4	0	0	13.5	132094
+2026-11-19	326885b	claude	hand-off	pass	3/3	4	0	0	15.2	168400
+2026-11-19	326885b	claude+code	hand-off	pass	3/3	2	0	0	12.8	112259
+2026-11-19	326885b	claude+code	hand-off	pass	3/3	3	0	0	11.2	142307
+2026-11-19	326885b	claude+code	hand-off	pass	3/3	2	0	0	12.8	112095
