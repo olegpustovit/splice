@@ -53,14 +53,20 @@ def tone(path, seconds):
 
 def record_seed(project, spec):
     """Records a real window on macOS: opens a text in TextEdit and captures it."""
-    text = os.path.join(os.path.dirname(project), "notes.txt")
+    # A unique name per run makes the title selector match exactly one window.
+    name = f"notes-{os.path.basename(os.path.dirname(project))}.txt"
+    text = os.path.join(os.path.dirname(project), name)
     with open(text, "w") as f:
         f.write(spec.get("text", "Splice eval\n\nThings to try:\n- crop\n- zoom\n- music\n"))
-    sh(["open", "-a", spec.get("app", "TextEdit"), text])
+    app = spec.get("app", "TextEdit")
+    # Start from a known state: earlier runs can leave windows or a hung app behind.
+    sh(["killall", app])
+    time.sleep(1)
+    sh(["open", "-a", app, text])
     time.sleep(2)
-    splice("record", project, "--window", spec.get("app", "TextEdit"), "--duration", str(spec.get("duration", 6)),
+    splice("record", project, "--window", app, "--title", name, "--duration", str(spec.get("duration", 6)),
            *(["--mic"] if spec.get("mic") else []))
-    sh(["osascript", "-e", f'tell application "{spec.get("app", "TextEdit")}" to close every document saving no'])
+    sh(["killall", app])
 
 
 def seed(task, work):
