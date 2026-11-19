@@ -53,8 +53,10 @@ pub(super) fn tile(frames: &[Vec<u8>], [w, h]: [u32; 2], edge: u32) -> (Vec<u8>,
 /// What changed from `a` to `b` (T43.3): `b` dimmed to a quarter, with the per-pixel change
 /// drawn over it in red (small) through yellow (large), so motion reads at a glance.
 pub(super) fn heatmap(a: &[u8], b: &[u8]) -> Vec<u8> {
-    a.chunks_exact(4)
-        .zip(b.chunks_exact(4))
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
         .flat_map(|(p, q)| {
             let change = (0..3).map(|c| p[c].abs_diff(q[c])).max().unwrap_or(0);
             let heat = u16::from(change).saturating_mul(4).min(255) as u8;
