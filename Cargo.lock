@@ -112,6 +112,13 @@ name = "pxui_types"
 version = "0.1.0"
 
 [[package]]
+name = "quickjs_sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "sdl3"
 version = "0.1.0"
 dependencies = [
@@ -228,6 +235,7 @@ name = "splice_mcp"
 version = "0.1.0"
 dependencies = [
  "apple_sys",
+ "quickjs_sys",
  "splice_av",
  "splice_capture",
  "splice_core",

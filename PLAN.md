@@ -260,14 +260,14 @@ cut logs one "try it as a user" line.
 - [ ] T13.4 `record.start` defaults `systemAudio` on for window and app sources and warns on silent takes.
 
 ### T14 · Code mode (0.2) [L]
-- [ ] T14.1 `quickjs_sys`: vendored QuickJS-NG via `cc`, safe `run(src, limits, host)`; no libc
+- [x] T14.1 (b9835d6) `quickjs_sys`: vendored QuickJS-NG via `cc`, safe `run(src, limits, host)`; no libc
   module, loader or timers; interrupt, memory and stack limits.
-- [ ] T14.2 `splice mcp --code`: `code.run {code, projectId?, sessionId?}` →
+- [x] T14.2 (b9835d6) `splice mcp --code`: `code.run {code, projectId?, sessionId?}` →
   `{result, logs, calls, revisions, error{code, message, fix, line}}`, dispatching through
   `tools::call`; limits 64 KB source, 2 s, 32 MB, 200 calls, 32 KB output.
-- [ ] T14.3 `.d.ts` generated from `COMMANDS` and tool schemas, `commands.describe {format:"ts"}`,
+- [x] T14.3 (b9835d6) `.d.ts` generated from `COMMANDS` and tool schemas, `commands.describe {format:"ts"}`,
   golden-locked; optional fields omittable, never `null`.
-- [ ] T14.4 Adversarial tests: infinite loop, memory bomb, deep recursion, `SpliceError` keeps
+- [x] T14.4 (b9835d6) Adversarial tests: infinite loop, memory bomb, deep recursion, `SpliceError` keeps
   `fix`, line numbers map to the user's source.
 - [ ] T14.5 A/B the T3.6 evals with and without code mode (calls, tokens, wall, pass rate).
 
@@ -329,3 +329,4 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T8.2 · `--request all` starts every missing permission request and opens one Settings pane. `make check` passed in 3.69 s (83 tests, slowest: seeded history replay 1.666 s). `make mac-check` passed in 25.90 s (33 tests and bundle checks, slowest: offscreen viewer snapshots 1.533 s). The batch permission fixture verified one Settings launch and skipped granted permissions in 0.031 s.
 - 2026-11-18 · T8.2–T8.5 · done · 8fe23f0 · Live acceptance from SSH took 25.80 s including `make dev` and `make install`. All four grants persisted across the signed installs. The release CLI, debug CLI and release MCP captures each published one 90-frame take in one verified journal batch (3.005 s, 3.012 s and 3.005 s). Each HEVC probe passed, microphone audio opened with `afinfo` and the event logs parsed. The installed release reports 0.1.0 and the capture agent exited. Final `make check` passed in 3.40 s (83 tests, slowest: seeded history replay 1.606 s). Final `make mac-check` passed in 35.12 s (33 tests and bundle checks, slowest: native title and audio composition 4.356 s).
 - 2026-11-19 · T10.1–T10.5 · done · a706ba9 · Reproduced the 0.1 blink on the Mini: a project held by an agent's `splice mcp` exited with `LOCKED`, and a document opened within 60 s of a recording went to the windowless capture agent. Both now open, as do projects with offline media. `cargo t -p splice_cli native_viewer_takes_over` 0.446 s on the Mini (handoff keeps the agent's session; its next edit lands in the viewer at r2). `make check` 3.04 s (83 tests, slowest: seeded history replay 1.727 s); `make mac-check` 22.05 s (19 native tests plus the 3-case Finder matrix). On the installed release: MCP held → window and forwarded `timeline.snapshot`; capture agent alive → new viewer with the path; offline sample → window; corrupt package → alert plus a `viewer` friction entry. A person can now double-click any project an agent made, at any time, and see it.
+- 2026-11-19 · T14.1–T14.4 · done · b9835d6 · `splice mcp --code` lists `code.run` and `commands.describe`; one `code.run` did project.info, session.start, edit.apply and timeline.snapshot on the sample (fixtures/mcp/code). QuickJS-NG v0.18.0 vendored without libc: +1.22 MB stripped release `splice`, 12.9 s clean `quickjs_sys` build. `cargo t -p quickjs_sys -p splice_mcp` 0.58 s (25 tests, slowest: infinite-loop timeout 0.30 s); `make check` 3.76 s warm, 32.9 s after the C build (93 tests, slowest: seeded history replay 1.686 s). Not run: `make mac-check` (no mac crate touched; splice_mcp now compiles QuickJS with clang on the Mini).

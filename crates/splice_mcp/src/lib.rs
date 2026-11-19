@@ -6,6 +6,7 @@ use splice_json::Value as Json;
 #[cfg(target_os = "macos")]
 /// The installed application's private headless capture transport.
 pub mod capture_agent;
+mod code;
 #[cfg(target_os = "macos")]
 mod export;
 #[cfg(any(target_os = "macos", test))]
@@ -36,6 +37,7 @@ mod record_publish;
 mod rpc;
 mod timeline;
 mod tools;
+mod typescript;
 mod wire;
 
 #[cfg(target_os = "macos")]

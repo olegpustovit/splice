@@ -110,7 +110,7 @@ impl Viewer {
             .field("args")
             .filter(|args| args.as_object().is_some())
             .ok_or_else(|| bad("args", "a tool arguments object"))?;
-        if !tools::known(name) {
+        if !tools::known(name, false) {
             return Err(bad("name", "a tool returned by tools/list"));
         }
         let client = request.optional_string("client")?.unwrap_or("mcp");
