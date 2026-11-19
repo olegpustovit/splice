@@ -34,6 +34,8 @@ pub struct Cursor {
     pub scale: f64,
     /// Draw rings at recorded clicks.
     pub click_rings: bool,
+    /// Smoothing, idle hiding, click pulse and synthesized paths (T39).
+    pub motion: crate::cursor::Motion,
 }
 
 /// Camera bubble corner.
@@ -141,17 +143,34 @@ pub(super) fn window(scopes: &[&[Effect]]) -> Option<Window> {
 pub(super) fn cursor(scopes: &[&[Effect]]) -> Option<Cursor> {
     let style = Resolution::new(scopes, "cursor");
     if !style.enabled.unwrap_or(false) {
+        // No cursor effect: the recorded path as captured.
         return Some(Cursor {
             scale: 1.0,
             click_rings: false,
+            motion: crate::cursor::Motion {
+                smoothing: 0.0,
+                hide_idle: false,
+                click_pulse: false,
+                synthesize: false,
+                ..crate::cursor::Motion::default()
+            },
         });
     }
     if style.boolean("hidden", false) {
         return None;
     }
+    let base = crate::cursor::Motion::default();
     Some(Cursor {
-        scale: style.number("size", 1.5).clamp(0.5, 4.0),
+        scale: style.number("size", 1.5),
         click_rings: style.boolean("clickRings", true),
+        motion: crate::cursor::Motion {
+            smoothing: style.number("smoothing", base.smoothing),
+            hide_idle: style.boolean("hideWhenIdle", base.hide_idle),
+            click_pulse: style.boolean("clickPulse", base.click_pulse),
+            synthesize: style.text("path") != Some("recorded"),
+            arc: style.number("arc", base.arc),
+            arrive_before: style.number("arriveBefore", base.arrive_before),
+        },
     })
 }
 

@@ -5,7 +5,7 @@ use crate::{
     Composition, Error, TimedText,
     lower::{Plan, Role, Slot},
 };
-use apple_sys::composition::{CursorSample, FrameSource, Player};
+use apple_sys::composition::{FrameSource, Player};
 use ogpu_core::backend::{self as b, Commands, Device, PreparedRenderTarget, Texture};
 use ogpu_core::types::{Extent, Origin, TextureDescriptor, TextureFormat, TextureUsage};
 use splice_eval::{Animate, FramePlan, Look, MaskMode, MaskShape};
@@ -110,7 +110,7 @@ impl GpuProgram {
             luts.push((upload(&pixels, [n * n, n], "Splice LUT")?, n as f32));
         }
         let mut cursors = Vec::with_capacity(plan.cursors.len());
-        for (_, images, ..) in &plan.cursors {
+        for images in plan.cursors.iter().map(|table| &table.images) {
             let mut table = Vec::with_capacity(images.len());
             for image in images {
                 let (pixels, [w, h]) = apple_sys::image::decode_rgba(&image.path)?;
@@ -546,7 +546,7 @@ impl GpuProgram {
         self.push(layer, bound);
         // The recorded cursor, on the take's clock (the evaluated source frame, so speed ramps
         // and freezes are exact).
-        let (Some(cursor), Some((samples, images, points, fps))) = (
+        let (Some(cursor), Some(table)) = (
             p.cursor,
             usize::try_from(slot.cursor)
                 .ok()
@@ -554,9 +554,9 @@ impl GpuProgram {
         ) else {
             return;
         };
-        let st = p.source_frame / fps.max(1.0);
+        let st = p.source_frame / table.fps.max(1.0);
         let per_px = placed[2] / cwid; // canvas pixels per source pixel
-        let px_per_point = w / points;
+        let px_per_point = w / table.points;
         let to_canvas = |x: f64, y: f64| {
             [
                 placed[0] + (x * w - cx) * per_px,
@@ -565,12 +565,12 @@ impl GpuProgram {
         };
         let rotation = look.rotation.to_radians() as f32;
         if cursor.click_rings {
-            for sample in samples.iter().filter(|s| s.click == 1) {
-                let age = st - sample.t;
+            for &[t, cx, cy] in table.track.clicks() {
+                let age = st - t;
                 if !(0.0..=RING_SECONDS).contains(&age) {
                     continue;
                 }
-                let [x, y] = to_canvas(sample.x, sample.y);
+                let [x, y] = to_canvas(cx, cy);
                 let radius =
                     (10.0 + 34.0 * age / RING_SECONDS) * px_per_point * per_px * cursor.scale;
                 let mut ring = Layer::new(
@@ -585,21 +585,28 @@ impl GpuProgram {
                 self.push(ring, Bound::default());
             }
         }
-        let table = slot.cursor as usize;
-        let sprite = cursor_at(samples, st).and_then(|(sample, at)| {
-            let image = usize::try_from(sample.image).ok()?;
-            let (texture, size) = self.cursors[table].get(image)?;
-            Some((images.get(image)?, texture.clone(), *size, at))
-        });
-        if let Some((meta, texture, [pw, ph], [x, y])) = sprite {
-            let k = cursor.scale * px_per_point * per_px / meta.scale; // canvas px per PNG px
+        // The smoothed table (T39): position, idle fade and click pulse at this source time.
+        let index = slot.cursor as usize;
+        let sprite = table
+            .track
+            .at(st)
+            .filter(|point| point.opacity > 0.0)
+            .and_then(|point| {
+                let image = usize::try_from(point.image).ok()?;
+                let (texture, size) = self.cursors[index].get(image)?;
+                Some((table.images.get(image)?, texture.clone(), *size, point))
+            });
+        if let Some((meta, texture, [pw, ph], point)) = sprite {
+            let [x, y] = [point.x, point.y];
+            // canvas px per PNG px
+            let k = cursor.scale * point.scale * px_per_point * per_px / meta.scale;
             let [x, y] = to_canvas(x, y);
             let mut sprite = Layer::new(
                 Layer::TEXTURE,
                 [x - meta.hot[0] * k, y - meta.hot[1] * k, pw * k, ph * k].map(|v| v as f32),
                 target,
             );
-            sprite.opacity = opacity;
+            sprite.opacity = opacity * point.opacity as f32;
             (sprite.pivot, sprite.rotation) = (pivot, rotation);
             self.push(
                 sprite,
@@ -875,21 +882,6 @@ fn move_layer(layer: &mut Layer, scale: f32, [ox, oy]: [f32; 2], [cx, cy]: [f32;
     }
     layer.corner *= scale;
     layer.ring *= scale;
-}
-
-/// The cursor sample in effect at `t`, gliding across gaps under 0.25 s (as the native one does).
-fn cursor_at(samples: &[CursorSample], t: f64) -> Option<(CursorSample, [f64; 2])> {
-    let next = samples.partition_point(|s| s.t <= t);
-    let a = *samples.get(next.checked_sub(1)?)?;
-    let mut at = [a.x, a.y];
-    if let Some(b) = samples.get(next)
-        && b.t - a.t < 0.25
-        && b.t > a.t
-    {
-        let k = (t - a.t) / (b.t - a.t);
-        at = [a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k];
-    }
-    Some((a, at))
 }
 
 /// A camera bubble's background treatment (0 none, 1 blur, 2 remove) as a cutout look.

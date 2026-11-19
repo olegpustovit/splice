@@ -844,6 +844,18 @@ declare namespace Splice {
       clickRings?: boolean;
       /** Hide cursor · @default false */
       hidden?: boolean;
+      /** Hide when idle · @default true */
+      hideWhenIdle?: boolean;
+      /** Smoothing · 0–1 · @default 1 */
+      smoothing?: number;
+      /** Click pulse · @default true */
+      clickPulse?: boolean;
+      /** Path · @default "auto" */
+      path?: "auto" | "recorded";
+      /** Path arc · 0–0.5 · @default 0.15 */
+      arc?: number;
+      /** Arrive before click (s) · 0–1 · @default 0.15 */
+      arriveBefore?: number;
     };
     /** Camera Layout: screen takes. */
     camera: {

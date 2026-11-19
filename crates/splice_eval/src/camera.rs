@@ -144,7 +144,7 @@ pub(crate) fn solve(segments: &[Segment], end: Frame, fps: u32) -> Vec<View> {
 }
 
 /// Exact step of a damped spring `m·x'' + c·x' + k·(x − target) = 0` over `dt`.
-fn step(x: f64, v: f64, target: f64, dt: f64, [k, c, m]: [f64; 3]) -> (f64, f64) {
+pub(crate) fn step(x: f64, v: f64, target: f64, dt: f64, [k, c, m]: [f64; 3]) -> (f64, f64) {
     let omega = (k / m).sqrt();
     let zeta = c / (2.0 * (k * m).sqrt());
     let x0 = x - target;

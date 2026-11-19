@@ -442,11 +442,11 @@ eight places; the board below already carries the changes.
 - [x] T38.6 [L] API `zoom.add/set/remove {at,length,amount,center|follow,in,out,mode}`; describe reports `fitSafeScale`. (zoom.add/set/remove {at,length,amount,focus,mode,spring}; items.inspect reports fitSafeScale from the evaluated card; `follow` is the cursor work of T39)
 
 ### T39 · Cursor [L + M]
-- [ ] T39.1 [L] Smoothed 60 Hz table per take: decimate, shake filter (0.015 UV/100 ms), hold gaps > 67 ms, Mellow spring 470/3/70 with lead c/k, click lookahead 500 ms, click spring 530/1/40 for 175 ms; replaces the 0.25 s teleport rule.
-- [ ] T39.2 [L] Idle hide 2 s / fade 0.4 s / pre-roll 0.25 s; click 0.8× over 130 ms.
-- [ ] T39.3 [L] Synthesized paths for warps: seeded cubic Bézier (spread `arc`·clamp(D,2,200) px), minimum-jerk progress, Fitts duration a=0.2 s b=0.1 s/bit in [0.25,1] s, arrive 0.15 s early, no re-spring, overshoot off. Accept: 1,000 random anchor sets pass human heuristics; deterministic.
+- [x] T39.1 [L] Smoothed 60 Hz table per take: decimate, shake filter (0.015 UV/100 ms), hold gaps > 67 ms, Mellow spring 470/3/70 with lead c/k, click lookahead 500 ms, click spring 530/1/40 for 175 ms; replaces the 0.25 s teleport rule. (splice_eval::cursor: 60 Hz table per take and treatment; hold gaps > 67 ms, rope shake filter, mellow spring with lead c/k, snappy spring and exact landing at presses)
+- [x] T39.2 [L] Idle hide 2 s / fade 0.4 s / pre-roll 0.25 s; click 0.8× over 130 ms. (idle hide 2 s / fade 0.4 s / back 0.25 s before moving; click pulse 0.8× over 130 ms)
+- [x] T39.3 [L] Synthesized paths for warps: seeded cubic Bézier (spread `arc`·clamp(D,2,200) px), minimum-jerk progress, Fitts duration a=0.2 s b=0.1 s/bit in [0.25,1] s, arrive 0.15 s early, no re-spring, overshoot off. Accept: 1,000 random anchor sets pass human heuristics; deterministic. (warps: speed > 12k pt/s or > 0.1 s silence then a far position; seeded Bezier, minimum-jerk, Fitts duration, early arrival; 1,000 random anchor sets test)
 - [ ] T39.4 [M] Pointer declarations `record.start {resume, pointer:{x,y,action}}` and `takes.events` injection after the fact.
-- [ ] T39.5 [L] Cursor params keyable/size + `hideWhenIdle`, `smoothing`, `clickPulse`, `path`, `arc`, `arriveBefore`.
+- [x] T39.5 [L] Cursor params keyable/size + `hideWhenIdle`, `smoothing`, `clickPulse`, `path`, `arc`, `arriveBefore`. (cursor effect: hideWhenIdle, smoothing, clickPulse, path auto|recorded, arc, arriveBefore)
 
 ### T40 · One backdrop, group transitions (D14) [L + M]
 - [x] T40.1 [L] Backdrop drawn once per frame; clips render content inside their frame. (3f078f7)

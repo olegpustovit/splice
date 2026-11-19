@@ -3,8 +3,9 @@ use crate::{
     takes::{self, TakeEvents},
 };
 use apple_sys::composition::{
-    AudioRamp, Builder, Composition, CursorImage, CursorSample, Source, TextLayer, Timing,
+    AudioRamp, Builder, Composition, CursorImage, Source, TextLayer, Timing,
 };
+use splice_eval::cursor;
 use splice_eval::{
     Animate, Audio, Background, CaptionPreset, Evaluator, Keys, Layer, Picture, TextStyle, Track,
 };
@@ -67,14 +68,26 @@ impl Slot {
     }
 }
 
+/// A take's smoothed cursor for one treatment, with its images.
+#[derive(Clone)]
+pub(crate) struct CursorTable {
+    pub media: MediaId,
+    pub motion: cursor::Motion,
+    pub track: cursor::Track,
+    pub images: Vec<CursorImage>,
+    /// Captured source width in screen points.
+    pub points: f64,
+    /// The take's frame rate.
+    pub fps: f64,
+}
+
 /// The lowered layer plan, kept for the OGPU compositor (T12.7).
 #[derive(Clone, Default)]
 pub(crate) struct Plan {
     /// Instruction intervals in order, each with its layers back to front.
     pub intervals: Vec<([Frame; 2], Vec<Slot>)>,
-    /// Cursor tables in registration order (`Slot::cursor` indexes them): samples, images,
-    /// points per source pixel, and the take's frame rate.
-    pub cursors: Vec<(Vec<CursorSample>, Vec<CursorImage>, f64, f64)>,
+    /// Cursor tables in registration order (`Slot::cursor` indexes them).
+    pub cursors: Vec<CursorTable>,
     /// Display orientation per video track (0 none … 3 270°).
     pub orients: Vec<(i32, u32)>,
     /// LUT files by `Grade::lut` index.
@@ -92,7 +105,7 @@ struct Lowering {
     end: Frame,
     tracks: Vec<(Key, i32)>,
     /// Parsed take events and their registered cursor table, per media.
-    takes: Vec<(MediaId, Option<TakeEvents>, Option<i32>)>,
+    takes: Vec<(MediaId, Option<TakeEvents>)>,
 }
 
 pub(super) fn build(
@@ -307,7 +320,8 @@ pub(super) fn build(
 
 impl Lowering {
     /// Window corners and shadow, the cursor and click rings, and the click-zoom curve.
-    /// The cursor table of a take picture whose cursor is drawn, registered on first use.
+    /// The cursor table of a take picture whose cursor is drawn: one smoothed table per take
+    /// and cursor treatment (T39), built on first use.
     fn cursor_table(
         &mut self,
         picture: Picture,
@@ -315,33 +329,37 @@ impl Lowering {
         package: &Path,
     ) -> Result<i32, Error> {
         let media = Self::media(project, picture.media)?;
-        if media.kind != MediaKind::Take || picture.cursor.is_none() {
+        let Some(style) = picture.cursor.filter(|_| media.kind == MediaKind::Take) else {
             return Ok(-1);
+        };
+        if let Some(table) = self
+            .plan
+            .cursors
+            .iter()
+            .position(|c| c.media == picture.media && c.motion == style.motion)
+        {
+            return Ok(table as i32);
         }
         let fps = media.probe.fps;
         let Some(index) = self.take(project, package, picture.media)? else {
             return Ok(-1);
         };
-        if let Some(table) = self.takes[index].2 {
-            return Ok(table);
-        }
         match &self.takes[index].1 {
             Some(events) if !events.samples.is_empty() => {
-                let table = self.plan.cursors.len() as i32;
-                self.plan.cursors.push((
-                    events.samples.clone(),
-                    events.images.clone(),
-                    events.points,
+                self.plan.cursors.push(CursorTable {
+                    media: picture.media,
+                    motion: style.motion,
+                    track: cursor::Track::build(&events.samples, events.size, style.motion),
+                    images: events.images.clone(),
+                    points: events.size[0],
                     fps,
-                ));
-                self.takes[index].2 = Some(table);
-                Ok(table)
+                });
+                Ok(self.plan.cursors.len() as i32 - 1)
             }
             _ => Ok(-1),
         }
     }
 
-    /// Index of the media's parsed take events, loading them on first use.
     fn take(
         &mut self,
         project: &Project,
@@ -369,7 +387,7 @@ impl Lowering {
             }
             None => None,
         };
-        self.takes.push((id, events, None));
+        self.takes.push((id, events));
         Ok(self
             .takes
             .last()

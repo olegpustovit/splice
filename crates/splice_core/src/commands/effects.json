@@ -79,6 +79,49 @@
         "type": "bool",
         "def": false,
         "label": "Hide cursor"
+      },
+      "hideWhenIdle": {
+        "type": "bool",
+        "def": true,
+        "label": "Hide when idle"
+      },
+      "smoothing": {
+        "type": "number",
+        "def": 1,
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "label": "Smoothing"
+      },
+      "clickPulse": {
+        "type": "bool",
+        "def": true,
+        "label": "Click pulse"
+      },
+      "path": {
+        "type": "enum",
+        "def": "auto",
+        "options": [
+          "auto",
+          "recorded"
+        ],
+        "label": "Path"
+      },
+      "arc": {
+        "type": "number",
+        "def": 0.15,
+        "min": 0,
+        "max": 0.5,
+        "step": 0.01,
+        "label": "Path arc"
+      },
+      "arriveBefore": {
+        "type": "number",
+        "def": 0.15,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Arrive before click (s)"
       }
     },
     "applies": "take"

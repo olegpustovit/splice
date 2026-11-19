@@ -6,6 +6,7 @@ use splice_model::{ClipId, Frame, ItemId, MediaId, Rect, ShapeKind, TimelineId, 
 mod camera;
 mod compound;
 mod cube;
+pub mod cursor;
 mod eval;
 mod layout;
 mod look;

@@ -1,15 +1,16 @@
-//! Recorded take events for the renderer: the cursor track and the click-zoom path.
-//! Parsed once per composition build, never per frame.
+//! Recorded take events for the renderer: cursor samples, images, clicks and keys.
+//! Parsed once per composition build, never per frame; splice_eval::cursor smooths them.
 use crate::Error;
-use apple_sys::composition::{CursorImage, CursorSample};
+use apple_sys::composition::CursorImage;
+use splice_eval::cursor::Sample;
 use splice_json::Value as Json;
 use std::{fs, path::Path};
 
 /// Cursor samples and images on the source clock, plus clicks and typed keys.
 pub(crate) struct TakeEvents {
-    /// Captured source width in screen points.
-    pub points: f64,
-    pub samples: Vec<CursorSample>,
+    /// Captured source width and height in screen points.
+    pub size: [f64; 2],
+    pub samples: Vec<Sample>,
     pub images: Vec<CursorImage>,
     /// (source seconds, x, y) normalized to the source.
     pub clicks: Vec<[f64; 3]>,
@@ -21,15 +22,17 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
     let bad = |what: &str| Error::Input(format!("{}: {what}", events.display()));
     let text = fs::read_to_string(events).map_err(|e| bad(&e.to_string()))?;
     let root = splice_json::parse(&text).map_err(|e| bad(&e.to_string()))?;
-    let points = root
-        .field("source")
-        .and_then(|s| s.field("rect"))
-        .and_then(|r| r.field("width"))
-        .and_then(Json::as_f64)
-        .filter(|w| *w > 0.0)
-        .ok_or_else(|| bad("missing source.rect.width"))?;
+    let rect = |key| {
+        root.field("source")
+            .and_then(|s| s.field("rect"))
+            .and_then(|r| r.field(key))
+            .and_then(Json::as_f64)
+            .filter(|v| *v > 0.0)
+    };
+    let width = rect("width").ok_or_else(|| bad("missing source.rect.width"))?;
     let mut out = TakeEvents {
-        points,
+        // Older logs carry only the width; assume a 16:10 display for the path math.
+        size: [width, rect("height").unwrap_or(width / 1.6)],
         samples: Vec::new(),
         images: Vec::new(),
         clicks: Vec::new(),
@@ -80,7 +83,7 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
                     }
                 };
                 if let Some([x, y]) = at {
-                    push(&mut out.samples, t, x, y, image, 0);
+                    push(&mut out.samples, t, x, y, image, false);
                 }
             }
             Some(kind @ ("move" | "drag" | "down" | "up")) => {
@@ -88,9 +91,9 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
                     continue;
                 };
                 at = Some([x, y]);
-                let click = u32::from(kind == "down");
+                let click = kind == "down";
                 push(&mut out.samples, t, x, y, image, click);
-                if click == 1 {
+                if click {
                     out.clicks.push([t, x, y]);
                 }
             }
@@ -107,10 +110,10 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
     Ok(out)
 }
 
-fn push(samples: &mut Vec<CursorSample>, t: f64, x: f64, y: f64, image: i32, click: u32) {
+fn push(samples: &mut Vec<Sample>, t: f64, x: f64, y: f64, image: i32, click: bool) {
     // Events can arrive with equal or slightly earlier timestamps; keep the table ordered.
     let t = samples.last().map_or(t, |last| t.max(last.t));
-    samples.push(CursorSample {
+    samples.push(Sample {
         t,
         x,
         y,

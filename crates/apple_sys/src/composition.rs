@@ -113,22 +113,6 @@ struct RawSource {
     colors: [u32; 2],
 }
 
-/// One cursor state on a take's source clock, normalized to the source with a top-left origin.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CursorSample {
-    /// Source seconds.
-    pub t: f64,
-    /// Normalized x.
-    pub x: f64,
-    /// Normalized y.
-    pub y: f64,
-    /// Index into the table's images, or -1 when hidden.
-    pub image: i32,
-    /// 1 at a click.
-    pub click: u32,
-}
-
 /// One layer's decoded source for the OGPU compositor: an MTLTexture on the caller's device,
 /// cached per IOSurface. `texture` is null for fills or a missing frame.
 #[repr(C)]
