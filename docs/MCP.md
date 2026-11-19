@@ -58,7 +58,7 @@ result, is logged to the friction log, and the server keeps serving.
 | 5 | `takes.events` | read | Cursor, clicks and keys of a take, in timeline frames (keys redacted by policy) |
 | 6 | `transcript.get` | read | Words with IDs and timing; `captions: json\|srt\|vtt` |
 | 7 | `media.analyze` | read | Per clip or media, by `kinds`: loudness, pauses, peaks, beats, sounds, shots, text, faces, people, matte. Cached by file stamp; long media runs as a job. `audio.summary` stays an alias |
-| 8 | `view.frames` | read | PNG frames at frames N from the export composition (what the agent sees = what export makes); `sheet:true` returns one contact sheet |
+| 8 | `view.frames` | read | PNG frames at frames N from the export composition (what the agent sees = what export makes); `sheet:true` returns one contact sheet; `strip:true` adds a heatmap of what changed between consecutive frames |
 | 9 | `view.check` | read | Problems a few frames miss, with spans and fixes: camera jumps and off-canvas pictures (every platform), black or frozen spans and backdrop bleed in transitions (macOS, rendered at 5/s, with a contact sheet) |
 | 10 | `commands.describe` | read | The command registry: params, examples, status (built or planned) |
 | 11 | `session.start` | edit | A session id and a checkpoint revision |

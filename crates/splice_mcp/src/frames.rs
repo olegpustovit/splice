@@ -68,6 +68,7 @@ pub(super) fn render_tool(
     store: &Store,
     selection: FrameSelection,
     sheet: bool,
+    strip: bool,
     content: &mut Vec<Json>,
 ) -> Result<Json, StoreError> {
     let requested = selection.resolve(timeline::duration(store.project())?)?;
@@ -121,6 +122,13 @@ pub(super) fn render_tool(
         ]));
     }
     if sheet {
+        if strip {
+            let changes: Vec<Vec<u8>> = thumbs
+                .windows(2)
+                .map(|pair| super::sheet::heatmap(&pair[0], &pair[1]))
+                .collect();
+            thumbs.extend(changes);
+        }
         let (pixels, sheet_size) = super::sheet::tile(&thumbs, size, 360);
         let png = encode_frame_png(&pixels, sheet_size, 0).map_err(|error| render_error(&error))?;
         let output = Output::prepare(

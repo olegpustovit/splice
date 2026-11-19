@@ -1385,8 +1385,8 @@ declare const splice: {
     analyze(args: { projectId?: string; clip: string; kinds?: ("loudness" | "pauses" | "peaks" | "beats" | "sounds" | "shots" | "text" | "faces" | "people" | "matte")[]; async?: boolean; }): { revision: Splice.Revision; clip: string; components?: unknown[]; pauses?: unknown[]; peaks?: Record<string, unknown>; beats?: unknown[]; sounds?: unknown[]; shots?: unknown[]; text?: unknown[]; faces?: unknown[]; people?: unknown[]; matte?: string; };
   };
   view: {
-    /** Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count; sheet:true returns one contact-sheet image of them all. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */
-    frames(args?: { projectId?: string; at?: number[]; count?: number; sheet?: boolean; }): { revision: Splice.Revision; frames: unknown[]; sheet?: string; };
+    /** Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count; sheet:true returns one contact-sheet image of them all, and strip:true adds a heatmap of what changed between each consecutive pair after them. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */
+    frames(args?: { projectId?: string; at?: number[]; count?: number; sheet?: boolean; strip?: boolean; }): { revision: Splice.Revision; frames: unknown[]; sheet?: string; };
     /** Check a range for problems a few frames would miss. Camera jumps and pictures pushed off the canvas come from the evaluated timeline on every platform; on macOS, black or frozen spans and transitions that disturb the backdrop come from frames rendered at 5 per second, with a contact sheet of the flagged frames. Each issue has its span and a fix. */
     check(args?: { projectId?: string; from?: number; to?: number; checks?: ("camera" | "offCanvas" | "black" | "frozen" | "bleed")[]; }): { revision: Splice.Revision; issues: unknown[]; pixels: boolean; sheet?: string; };
   };

@@ -50,8 +50,38 @@ pub(super) fn tile(frames: &[Vec<u8>], [w, h]: [u32; 2], edge: u32) -> (Vec<u8>,
     (sheet, [sw, sh])
 }
 
+/// What changed from `a` to `b` (T43.3): `b` dimmed to a quarter, with the per-pixel change
+/// drawn over it in red (small) through yellow (large), so motion reads at a glance.
+pub(super) fn heatmap(a: &[u8], b: &[u8]) -> Vec<u8> {
+    a.chunks_exact(4)
+        .zip(b.chunks_exact(4))
+        .flat_map(|(p, q)| {
+            let change = (0..3).map(|c| p[c].abs_diff(q[c])).max().unwrap_or(0);
+            let heat = u16::from(change).saturating_mul(4).min(255) as u8;
+            let dim = |v: u8| v / 4;
+            [
+                dim(q[0]).max(heat),
+                dim(q[1]).max(heat.saturating_sub(128).saturating_mul(2)),
+                dim(q[2]),
+                255,
+            ]
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn heatmap_marks_only_what_changed() {
+        let a = [10, 10, 10, 255, 200, 200, 200, 255, 200, 200, 200, 255];
+        let b = [10, 10, 10, 255, 180, 200, 200, 255, 0, 200, 200, 255];
+        let map = super::heatmap(&a, &b);
+        // Unchanged: the dimmed frame. A small change is red; a large one saturates to yellow.
+        assert_eq!(&map[..4], &[2, 2, 2, 255]);
+        assert_eq!(&map[4..8], &[80, 50, 50, 255]);
+        assert_eq!(&map[8..], &[255, 254, 50, 255]);
+    }
+
     #[test]
     fn frames_tile_into_a_grid_of_thumbnails() {
         let red: Vec<u8> = (0..64 * 32).flat_map(|_| [200, 10, 10, 255]).collect();

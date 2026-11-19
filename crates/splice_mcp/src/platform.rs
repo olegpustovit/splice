@@ -80,14 +80,16 @@ pub(super) fn frames(
     content: &mut Vec<Json>,
 ) -> Result<Json, StoreError> {
     let selection = FrameSelection::parse(args)?;
-    let sheet = args.flag("sheet")?;
+    // A strip is a sheet with the change between consecutive frames after them (T43.3).
+    let strip = args.flag("strip")?;
+    let sheet = args.flag("sheet")? || strip;
     #[cfg(target_os = "macos")]
     {
-        super::frames::render_tool(store, selection, sheet, content)
+        super::frames::render_tool(store, selection, sheet, strip, content)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (store, content, sheet);
+        let _ = (store, content, sheet, strip);
         // Keep argument validation common and leave timeline and media handling to the native renderer.
         match selection {
             FrameSelection::Explicit(values) => {

@@ -472,7 +472,7 @@ eight places; the board below already carries the changes.
 ### T43 · QA loop (D18) [L]
 - [x] T43.1 [L] Lints in every `apply`/`dryRun`: zoom ≠ 1 at an item's end, text bounds vs safe zone and window, transition on windowed clip without handles, title past the timeline, pacing stats (cut rate, longest static) vs profile. (splice_mcp::lints on every apply/dryRun: OUTSIDE_SAFE_ZONE tiktok-2026, TEXT_OVER_WINDOW, ZOOM_OVERFLOW, LONG_STATIC, with fixes and ops; pacing stats. A transition without handles is refused (T36.3) and an item past the end is trimmed by the edit (T37.2) instead.)
 - [x] T43.2 [L] `view.check {from,to,checks}` (macOS): off-canvas content, black/frozen spans, camera jump, cursor teleport, transition bleed; returns issues + contact sheet. Versioned `safeZone:"tiktok-2026"`. (view.check: camera/offCanvas from the evaluator everywhere; black/frozen/bleed rendered on macOS with a contact sheet; cursor teleport is impossible by construction since T39 and covered by its tests)
-- [ ] T43.3 [L] `view.frames {strip}` motion strip with difference heatmap.
+- [x] T43.3 [L] `view.frames {strip}` motion strip with difference heatmap. (view.frames strip:true: the sheet gains a change heatmap per consecutive pair)
 
 ### T44 · Evals & gates [L + M]
 - [ ] T44.1 [M] `silent-demo-short` eval (silent take → 15–25 s short; every action kept; zero lint errors; cursor continuous; no zoom snap; clean transitions).
