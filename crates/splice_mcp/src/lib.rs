@@ -56,7 +56,7 @@ pub use export::export_project;
 #[cfg(target_os = "macos")]
 pub use frames::{grab_frame, write_png};
 pub use history::{apply_batch, checkpoint_edit, edit_result_json};
-pub use rpc::serve;
+pub use rpc::{VERSION, serve};
 pub use wire::error_payload;
 
 /// Runs the same capture preflight as `record.start {dryRun:true}`.

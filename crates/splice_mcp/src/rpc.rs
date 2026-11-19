@@ -13,7 +13,8 @@ const CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
 const SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
 /// `<crate version>+<git short sha>[-dirty]` (`+unknown` outside a checkout), from build.rs.
-const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("SPLICE_BUILD"));
+/// `<version>+<git sha>[-dirty]`: what `serverInfo.version` and `splice version` report.
+pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("SPLICE_BUILD"));
 /// Jobs watched for progress and cancellation at once; the oldest is forgotten first.
 const MAX_WATCHED: usize = 64;
 /// Encoding time per turn of the serve loop while an export runs, so requests still get answers.

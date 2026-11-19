@@ -73,7 +73,7 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
     let value = match (command.as_str(), tail) {
         ("--help" | "-h", []) => return output.write_all(HELP.as_bytes()).map_err(io_error),
         ("version" | "--version", []) => {
-            return writeln!(output, "splice {}", env!("CARGO_PKG_VERSION")).map_err(io_error);
+            return writeln!(output, "splice {}", splice_mcp::VERSION).map_err(io_error);
         }
         ("mcp", []) | ("mcp", [_]) if tail.first().is_none_or(|flag| flag == "--code") => {
             let code = !tail.is_empty();
