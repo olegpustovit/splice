@@ -1,4 +1,4 @@
-//! Recorded take events for the renderer: cursor samples, images, clicks and keys.
+//! Recorded take events for the renderer: cursor samples, images and keys.
 //! Parsed once per composition build, never per frame; splice_eval::cursor smooths them.
 use crate::Error;
 use apple_sys::composition::CursorImage;
@@ -6,14 +6,12 @@ use splice_eval::cursor::Sample;
 use splice_json::Value as Json;
 use std::{fs, path::Path};
 
-/// Cursor samples and images on the source clock, plus clicks and typed keys.
+/// Cursor samples and images on the source clock, plus typed keys.
 pub(crate) struct TakeEvents {
     /// Captured source width and height in screen points.
     pub size: [f64; 2],
     pub samples: Vec<Sample>,
     pub images: Vec<CursorImage>,
-    /// (source seconds, x, y) normalized to the source.
-    pub clicks: Vec<[f64; 3]>,
     /// (source seconds, typed text).
     pub keys: Vec<(f64, String)>,
 }
@@ -35,7 +33,6 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
         size: [width, rect("height").unwrap_or(width / 1.6)],
         samples: Vec::new(),
         images: Vec::new(),
-        clicks: Vec::new(),
         keys: Vec::new(),
     };
     let mut ids: Vec<String> = Vec::new();
@@ -93,9 +90,6 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
                 at = Some([x, y]);
                 let click = kind == "down";
                 push(&mut out.samples, t, x, y, image, click);
-                if click {
-                    out.clicks.push([t, x, y]);
-                }
             }
             Some("key") => {
                 if let Some(ch) = event.field("ch").and_then(Json::as_str)

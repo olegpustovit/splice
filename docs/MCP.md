@@ -129,7 +129,7 @@ would be minted. It leaves the project and its next ID serial untouched.
 
 Every side effect carries a `cause`: `cascade` (its parent was deleted), `follow` (it followed
 its content through a split, trim or join), `reparent`, `cut`, `spineEnd`, `words` (its caption
-words left the timeline or were re-captioned), `laneDeleted`, or `overlap` with `with` naming the
+words left the timeline or were re-captioned), `laneDeleted`, `replaced` (a re-run of `intent.autoZoom` replaced its earlier zooms), or `overlap` with `with` naming the
 item that held the lane.
 
 Use `at` for a placement calculated from a frame or anchor. Use `anchor` to retain an explicit

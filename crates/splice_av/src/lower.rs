@@ -20,7 +20,7 @@ enum Key {
     CameraMatte(ClipId),
     Camera(ClipId),
     Audio(TimelineId, Track, bool),
-    Fill(usize, u32, u32),
+    Black,
 }
 
 /// What a lowered video layer is for, so the GPU can apply the owner's per-frame look.
@@ -30,8 +30,6 @@ pub(crate) enum Role {
     Plain,
     /// A clip or overlay picture.
     Picture(TimelineId),
-    /// The window backing of a picture.
-    Backing(TimelineId),
     /// The person matte of a picture: bound to it, never drawn.
     Matte(TimelineId),
     /// A take's camera bubble.
@@ -94,8 +92,6 @@ pub(crate) struct Plan {
     pub luts: Vec<PathBuf>,
     /// The prepared timeline, evaluated per frame for keyed looks and shapes.
     pub evaluator: Option<Arc<Evaluator>>,
-    /// The black base track under every interval (left out of transparent exports).
-    pub base: i32,
 }
 
 struct Lowering {
@@ -132,8 +128,9 @@ pub(super) fn build(
         tracks: Vec::new(),
         takes: Vec::new(),
     };
-    let black = state.fill(usize::MAX, 0, 0)?;
-    state.plan.base = black;
+    // One black track stands in for every fill: the GPU draws backgrounds and fades from the
+    // evaluated layer, and a fill source decodes to no texture.
+    let black = state.black()?;
     let [width, height] = project.size.map(f64::from);
     let mut first = evaluator.buffer();
     let mut last = evaluator.buffer();
@@ -173,30 +170,12 @@ pub(super) fn build(
                     video.push(slot);
                 }
                 (Layer::Background { fill, .. }, Layer::Background { .. }) => {
-                    let [a_color, b_color] = match fill {
-                        Background::None => continue,
-                        Background::Solid(value) => [value; 2],
-                        Background::Gradient(a, b) => [a, b],
-                    };
-                    let track = state.fill(depth, a_color, b_color)?;
-                    // A backing belongs to the picture drawn right after it.
-                    let owner = first.layers[depth + 1..].iter().find_map(|l| match l {
-                        Layer::Picture(p) => Some(p.item),
-                        _ => None,
-                    });
-                    video.push(Slot::new(
-                        track,
-                        owner.map_or(Role::Plain, Role::Backing),
-                        depth,
-                    ));
+                    if fill != Background::None {
+                        video.push(Slot::new(black, Role::Plain, depth));
+                    }
                 }
-                (Layer::Fade { color, .. }, Layer::Fade { .. }) => {
-                    let track = if color == 0 {
-                        black
-                    } else {
-                        state.fill(depth, color, color)?
-                    };
-                    video.push(Slot::new(track, Role::Plain, depth));
+                (Layer::Fade { .. }, Layer::Fade { .. }) => {
+                    video.push(Slot::new(black, Role::Plain, depth));
                 }
                 (Layer::Shape { .. }, Layer::Shape { .. }) => {}
                 (
@@ -676,8 +655,8 @@ impl Lowering {
         self.insert(key, Source::Video(path), &timings).map(Some)
     }
 
-    fn fill(&mut self, depth: usize, a: u32, b: u32) -> Result<i32, Error> {
-        let key = Key::Fill(depth, a, b);
+    fn black(&mut self) -> Result<i32, Error> {
+        let key = Key::Black;
         if let Some(track) = self.cached(key) {
             return Ok(track);
         }
@@ -688,7 +667,7 @@ impl Lowering {
             speed: 1.0,
             source_frame_duration: 1.0,
         };
-        let track = self.builder.source(Source::Color(a, b), &timing)?;
+        let track = self.builder.source(Source::Color(0, 0), &timing)?;
         self.tracks.push((key, track));
         Ok(track)
     }

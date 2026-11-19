@@ -561,11 +561,11 @@ impl GpuProgram {
         };
         let rotation = look.rotation.to_radians() as f32;
         if cursor.click_rings {
-            for &[t, cx, cy] in table.track.clicks() {
+            // Clicks are in time order: only those of the last RING_SECONDS can show.
+            let clicks = table.track.clicks();
+            let first = clicks.partition_point(|c| c[0] < st - RING_SECONDS);
+            for &[t, cx, cy] in clicks[first..].iter().take_while(|c| c[0] <= st) {
                 let age = st - t;
-                if !(0.0..=RING_SECONDS).contains(&age) {
-                    continue;
-                }
                 let [x, y] = to_canvas(cx, cy);
                 let radius =
                     (10.0 + 34.0 * age / RING_SECONDS) * px_per_point * per_px * cursor.scale;

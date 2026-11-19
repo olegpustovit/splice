@@ -965,3 +965,15 @@ fn m21_lane_and_project_transforms_are_refused() {
     )
     .unwrap();
 }
+
+/// Review #15: zoom.remove deletes a camera segment and refuses anything else.
+#[test]
+fn zoom_remove_deletes_only_zooms() {
+    let mut project = sample();
+    let ops = splice_json::parse(r#"[{"cmd":"zoom.remove","zoom":"ovl_detail"}]"#).unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    assert!(project.items.find("ovl_detail".parse().unwrap()).is_none());
+    let ops = splice_json::parse(r#"[{"cmd":"zoom.remove","zoom":"ovl_hook"}]"#).unwrap();
+    let error = apply(&mut sample(), ops.as_array().unwrap(), Source::Agent, false).unwrap_err();
+    assert_eq!(error.error.code, "WRONG_KIND");
+}

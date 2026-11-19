@@ -102,27 +102,21 @@ pub(crate) fn solve(segments: &[Segment], end: Frame, fps: u32) -> Vec<View> {
                 CameraMode::Auto,
             ),
         };
-        let target_center = held;
         match spring.physics() {
             None => {
                 (amount, amount_v) = (target, 0.0);
-                (center, center_v) = (target_center, [0.0, 0.0]);
+                (center, center_v) = (held, [0.0, 0.0]);
             }
             Some(physics) => {
                 for _ in 0..substeps {
                     // Pre-aim: while unzoomed at the start of the step the center is invisible,
                     // so it lands on the target before the zoom leaves 1×.
                     if amount <= PRE_AIM {
-                        (center, center_v) = (target_center, [0.0, 0.0]);
+                        (center, center_v) = (held, [0.0, 0.0]);
                     } else {
                         for axis in 0..2 {
-                            (center[axis], center_v[axis]) = step(
-                                center[axis],
-                                center_v[axis],
-                                target_center[axis],
-                                dt,
-                                physics,
-                            );
+                            (center[axis], center_v[axis]) =
+                                step(center[axis], center_v[axis], held[axis], dt, physics);
                         }
                     }
                     (amount, amount_v) = step(amount, amount_v, target, dt, physics);
@@ -133,7 +127,6 @@ pub(crate) fn solve(segments: &[Segment], end: Frame, fps: u32) -> Vec<View> {
                 }
             }
         }
-        let mode = current.map_or(mode, |s| s.mode);
         out.push(View {
             amount,
             center: center.map(|c| c.clamp(0.0, 1.0)),

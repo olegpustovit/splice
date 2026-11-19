@@ -334,8 +334,12 @@ impl Evaluator {
             result.prepare_item(project, rank, slot, size)?;
         }
         // Where segments overlap, the later start wins (sort is stable for equal starts).
-        result.zooms.sort_by_key(|segment| segment.start);
-        result.camera = crate::camera::solve(&result.zooms, result.end, project.fps);
+        // No zoom segments: no table (pictures keep View::IDENTITY), nothing solved.
+        let mut zooms = std::mem::take(&mut result.zooms);
+        if !zooms.is_empty() {
+            zooms.sort_by_key(|segment| segment.start);
+            result.camera = crate::camera::solve(&zooms, result.end, project.fps);
+        }
         result.soloed = result
             .clips
             .iter()

@@ -122,6 +122,8 @@ const IDLE_AFTER: f64 = 2.0;
 const FADE_OUT: f64 = 0.4;
 const FADE_IN: f64 = 0.25;
 const PULSE: f64 = 0.13;
+/// How far from a press any click effect reaches (spring window, press aim, pulse).
+const REACH: f64 = CLICK_WINDOW + PRESS_AIM + 1.0 / RATE;
 /// A move faster than this (screen points per second) is a warp, not a hand.
 const WARP_SPEED: f64 = 12_000.0;
 /// A pointer silent this long that then appears far away was warped.
@@ -184,7 +186,9 @@ impl Track {
             .collect();
         // The spring, sampled ahead by its own lag; synthesized stretches are already smooth.
         let lead = MELLOW[1] / MELLOW[0];
-        let near_click = |t: f64| clicks.iter().any(|c| (t - c[0]).abs() <= CLICK_WINDOW);
+        // Clicks are in time order and every click effect is local: a moving window of the
+        // clicks within REACH keeps the build linear in points plus clicks.
+        let (mut lo, mut hi) = (0, 0);
         let dt = 1.0 / RATE / 4.0;
         let mut position = filtered[0];
         let mut velocity = [0.0, 0.0];
@@ -201,6 +205,15 @@ impl Track {
         }
         for i in 0..count {
             let t = start + i as f64 / RATE;
+            while lo < clicks.len() && clicks[lo][0] < t - REACH {
+                lo += 1;
+            }
+            hi = hi.max(lo);
+            while hi < clicks.len() && clicks[hi][0] <= t + REACH {
+                hi += 1;
+            }
+            let near = &clicks[lo..hi];
+            let near_click = near.iter().any(|c| (t - c[0]).abs() <= CLICK_WINDOW);
             let ahead = ((i as f64 + lead * RATE).round() as usize)
                 .min(count - 1)
                 .min(next_synthetic[i].saturating_sub(1).max(i));
@@ -209,8 +222,11 @@ impl Track {
                 position = filtered[i];
                 velocity = [0.0, 0.0];
             } else {
-                let physics = if near_click(t) { SNAPPY } else { MELLOW };
-                let goal = if near_click(t) { filtered[i] } else { target };
+                let (physics, goal) = if near_click {
+                    (SNAPPY, filtered[i])
+                } else {
+                    (MELLOW, target)
+                };
                 for _ in 0..4 {
                     for axis in 0..2 {
                         (position[axis], velocity[axis]) =
@@ -224,7 +240,7 @@ impl Track {
                 filtered[i][1] + (position[1] - filtered[i][1]) * s,
             ];
             // Land exactly on each press.
-            for c in &clicks {
+            for c in near {
                 // Flat for one table step each side, so lookups between points stay exact.
                 let w = smoothstep(1.0 - ((t - c[0]).abs() - 1.0 / RATE).max(0.0) / PRESS_AIM);
                 p = [p[0] + (c[1] - p[0]) * w, p[1] + (c[2] - p[1]) * w];
@@ -232,7 +248,7 @@ impl Track {
             let image = raw[i].1;
             let mut scale = 1.0;
             if motion.click_pulse {
-                for c in &clicks {
+                for c in near {
                     let age = t - c[0];
                     if (0.0..=PULSE).contains(&age) {
                         scale = 1.0 - 0.2 * (std::f64::consts::PI * age / PULSE).sin();
@@ -300,14 +316,16 @@ fn smoothstep(x: f64) -> f64 {
 /// `FADE_OUT`) and shows it again `FADE_IN` before it next moves.
 fn fade_idle(points: &mut [Point], path: &[[f64; 2]], start: f64, clicks: &[[f64; 3]]) {
     let n = points.len();
-    let moving: Vec<bool> = (0..n)
-        .map(|i| {
-            let t = start + i as f64 / RATE;
-            let moved =
-                i > 0 && (path[i][0] - path[i - 1][0]).hypot(path[i][1] - path[i - 1][1]) > 1e-6;
-            moved || clicks.iter().any(|c| (c[0] - t).abs() < 0.5 / RATE)
-        })
+    let mut moving: Vec<bool> = (0..n)
+        .map(|i| i > 0 && (path[i][0] - path[i - 1][0]).hypot(path[i][1] - path[i - 1][1]) > 1e-6)
         .collect();
+    // A press counts as activity at its nearest table point.
+    for c in clicks {
+        let i = ((c[0] - start) * RATE).round();
+        if (0.0..n as f64).contains(&i) {
+            moving[i as usize] = true;
+        }
+    }
     let mut last = 0.0;
     let mut next = vec![f64::INFINITY; n];
     let mut upcoming = f64::INFINITY;
@@ -584,6 +602,29 @@ mod tests {
             track.at(1.0).unwrap().x < 0.25,
             "rests until the move starts"
         );
+    }
+
+    /// Review #5: the build is linear in points plus clicks (a 30-minute take with a click
+    /// every 1.8 s used to scan every click several times per point).
+    #[test]
+    fn a_long_take_with_many_clicks_builds_quickly() {
+        let samples: Vec<Sample> = (0..108_000)
+            .map(|i| {
+                let t = i as f64 / 60.0;
+                sample(
+                    t,
+                    0.5 + 0.3 * (t * 0.7).sin(),
+                    0.5 + 0.3 * (t * 0.3).cos(),
+                    i % 108 == 0,
+                )
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        let track = Track::build(&samples, SIZE, Motion::default());
+        let elapsed = started.elapsed();
+        eprintln!("30 min, 1,000 clicks: built in {elapsed:?}");
+        assert_eq!(track.clicks().len(), 1000);
+        assert!(elapsed.as_millis() < 1500, "{elapsed:?}");
     }
 
     #[test]

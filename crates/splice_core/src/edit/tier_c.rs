@@ -1467,7 +1467,6 @@ impl Editor {
     ) -> Result<Outcome, CommandError> {
         let (id, slot) = self.spine_clip(item)?;
         let timing = self.project.clips.timing(slot).expect("live clip");
-        let rate = source_rate(&self.project, slot)?;
         let fps = f64::from(self.project.fps);
         let frames = |seconds: f64| (seconds * fps).round() as Frame;
         let (lead, tail, merge, settle, gap) = (
@@ -1477,8 +1476,15 @@ impl Editor {
             frames(0.5),
             frames(0.6),
         );
+        // Where each source frame plays, through the clip's speed effect (as anchors resolve).
+        let project = &self.project;
         let local = |source: Frame| -> Result<Frame, CommandError> {
-            rounded((f64::from(source) - f64::from(timing.source)) / rate)
+            let at = splice_model::timing::anchor_start(
+                project,
+                Anchor::ClipSource { clip: id, source },
+            )
+            .map_err(|_| CommandError::bad("clicks", "source frames inside the take"))?;
+            Ok(at - timing.start)
         };
         // Clusters: first and last click frame, coordinate sums and count.
         let mut clusters: Vec<(Frame, Frame, [f64; 2], f64)> = Vec::new();
@@ -1538,7 +1544,9 @@ impl Editor {
         }
         // Replace this clip's earlier auto zooms.
         let clip = id;
-        let stale: Vec<Slot> = self
+        // A re-run replaces this clip's earlier auto zooms through delete, so the result
+        // reports them and anything anchored to them cascades.
+        let stale: Vec<Target> = self
             .project
             .items
             .order()
@@ -1553,9 +1561,20 @@ impl Editor {
                         Anchor::ClipSource { clip: c, .. } if c == clip
                     )
             })
+            .filter_map(|slot| self.project.items.id(slot))
+            .map(|id| Target::Timeline(TimelineId::Item(id)))
             .collect();
-        for slot in stale {
-            self.project.items.remove(slot);
+        if !stale.is_empty() {
+            for target in &stale {
+                if let Target::Timeline(TimelineId::Item(id)) = *target {
+                    self.report.side_effects.push(SideEffect::Removed {
+                        id,
+                        cascade_from: None,
+                        cause: Cause::Replaced,
+                    });
+                }
+            }
+            self.delete(&stale, false, false, None)?;
         }
         let mut created = Vec::with_capacity(segments.len());
         for &(start, end, _, focus) in &segments {

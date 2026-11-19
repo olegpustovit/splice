@@ -161,8 +161,21 @@ impl Editor {
                 spring,
             } => self.set_zoom(&zoom, amount, focus, mode, spring),
             Op::ZoomRemove { zoom } => {
-                // Only a zoom: set_zoom with no changes is the kind check.
-                self.set_zoom(&zoom, None, None, None, None)?;
+                let is_zoom = match self.timeline(&zoom)? {
+                    TimelineId::Item(id) => matches!(
+                        self.project
+                            .items
+                            .data(item_slot(&self.project, id)?)
+                            .map(|d| &d.kind),
+                        Some(ItemKind::Zoom(_))
+                    ),
+                    _ => false,
+                };
+                if !is_zoom {
+                    return Err(wrong_kind(
+                        "Pass a zoom item (ovl_…) from timeline.snapshot.",
+                    ));
+                }
                 self.delete(std::slice::from_ref(&zoom), false, false, None)
             }
             Op::EffectAdd {

@@ -112,6 +112,8 @@ pub enum Cause {
     Overlap(ItemId),
     /// Its lane was deleted.
     LaneDeleted,
+    /// A re-run of the intent that made it replaced it (intent.autoZoom).
+    Replaced,
 }
 
 impl Cause {
@@ -126,6 +128,7 @@ impl Cause {
             Self::Words => "words",
             Self::Overlap(_) => "overlap",
             Self::LaneDeleted => "laneDeleted",
+            Self::Replaced => "replaced",
         }
     }
 }

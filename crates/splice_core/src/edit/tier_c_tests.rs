@@ -739,3 +739,30 @@ fn captions_stay_on_their_words_on_a_ramped_clip() {
     }
     assert!(checked >= 3, "{checked} cues checked");
 }
+
+/// Review #16: re-running autoZoom replaces the clip's earlier auto zooms through delete, so
+/// the result reports each one it removed.
+#[test]
+fn auto_zoom_rerun_reports_the_zooms_it_replaces() {
+    let mut project = sample();
+    let run = r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.7,"y":0.3},{"at":250,"x":0.2,"y":0.6}],"amount":1.5}]"#;
+    let ops = splice_json::parse(run).unwrap();
+    let first = apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let made = first.changes[0].created.len();
+    assert!(made >= 2);
+    let again = apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let removed = again
+        .side_effects
+        .iter()
+        .filter(|e| matches!(e, SideEffect::Removed { .. }))
+        .count();
+    assert_eq!(removed, made, "{again:?}");
+    let zooms = project
+        .items
+        .order()
+        .iter()
+        .filter(|&&s| matches!(project.items.data(s).unwrap().kind, ItemKind::Zoom(_)))
+        .count();
+    // The sample's own zoom plus one run's worth: nothing doubled.
+    assert_eq!(zooms, 1 + made);
+}
