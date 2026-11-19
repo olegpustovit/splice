@@ -2,7 +2,7 @@ use super::*;
 use crate::package::Package;
 use std::path::Path;
 
-fn sample() -> Project {
+pub(super) fn sample() -> Project {
     let source =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/sample.splice");
     let path = std::env::temp_dir().join(format!("splice-edit-{}.splice", std::process::id()));

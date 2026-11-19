@@ -108,11 +108,31 @@ impl Editor {
             Op::TitleSet { item, text } => self.set_title(&item, text),
             Op::MarkerSet { marker, name, at } => self.set_marker(&marker, name, at.as_ref()),
             Op::ProjectSet { aspect, access } => self.set_project(aspect, access),
-            _ => Err(error(
+            Op::ClipJoin
+            | Op::ClipUngroup
+            | Op::ClipRestore
+            | Op::LaneReorder
+            | Op::CropKeys
+            | Op::TransitionAdd
+            | Op::ZoomSet
+            | Op::MaskAdd
+            | Op::MaskSet
+            | Op::CaptionsTranslate
+            | Op::CaptionsImport
+            | Op::AudioLink
+            | Op::AudioUnlink
+            | Op::AudioSync
+            | Op::StyleSet
+            | Op::CutPauses
+            | Op::IntentPace
+            | Op::IntentFitDuration
+            | Op::IntentKeepShots
+            | Op::IntentAutoZoom => Err(error(
                 "PLANNED",
                 &format!("{cmd} does not have an apply handler yet."),
                 "Use an available command from commands.describe.",
             )),
+            op => self.run_tier_b(op),
         }
     }
 
@@ -140,7 +160,12 @@ impl Editor {
         })
     }
 
-    fn split_clip(&mut self, id: ClipId, at: Frame, cut: Frame) -> Result<ClipId, CommandError> {
+    pub(super) fn split_clip(
+        &mut self,
+        id: ClipId,
+        at: Frame,
+        cut: Frame,
+    ) -> Result<ClipId, CommandError> {
         let slot = clip_slot(&self.project, id)?;
         let old = self.project.clips.timing(slot).expect("live clip");
         let mut data = self.project.clips.data(slot).expect("live clip").clone();
@@ -242,7 +267,7 @@ impl Editor {
         Ok(right)
     }
 
-    fn add_item(
+    pub(super) fn add_item(
         &mut self,
         content: OverlayContent,
         at: Option<&FrameArg>,

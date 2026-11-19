@@ -89,6 +89,8 @@ impl Command {
                 }),
             ),
         ];
+        // Every 0.1 and 0.2 row applies (tier_a and tier_b tests apply each described example).
+        fields.push(("available".into(), Json::Bool(self.tier != Tier::Planned)));
         if self.tier == Tier::Planned {
             fields.push(("planned".into(), Json::Bool(true)));
         }

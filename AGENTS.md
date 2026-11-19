@@ -35,6 +35,8 @@ Build loop, self-improvement and Mac testing: [docs/LOOP.md](docs/LOOP.md).
 ## Fast iteration (rays rules)
 
 - Read the flow and callers first. Smallest correct change; delete obsolete code; no new abstractions.
+- Refactor freely when it makes the code simpler or faster. Hot paths stay fast and allocation-free,
+  and any change to them is measured.
 - Inner loop `cargo check -p <crate>`; focused tests `cargo t -p <crate> [filter]`. **Never run raw
   `cargo test` or test binaries**: `cargo t` kills a case at 5 s and a run at 60 s. Never raise a
   deadline or weaken an assertion to go green.

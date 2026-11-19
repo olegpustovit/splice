@@ -12,12 +12,15 @@ mod mints;
 mod properties;
 mod settle;
 mod spine;
+mod tier_b;
 mod time;
 
 pub use time::{resolve_view_frame, span};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tier_b_tests;
 
 /// One frame range and its lane, when it occupies one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -215,6 +215,7 @@ const TOOLS: &[Tool] = &[
             ("group", "string"),
             ("risk", "string"),
             ("cut", "string"),
+            ("available", "boolean"),
             ("planned", "boolean"),
             ("params", "object"),
             ("shortcut", r#"{"type":["string","null"]}"#),

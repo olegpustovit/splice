@@ -93,9 +93,9 @@ Stay under 20 tools in the default profile: new capabilities become `edit.apply`
 sample project. A leading `!` in a description marks a required argument. With `query` it
 searches command IDs, titles and groups without regard to case.
 
-The `cut` field gives the command's release tier. The 20 registry-only commands carry
-`planned:true` and return `PLANNED` if submitted as edits. Commands in 0.2 also require that
-cut to execute. In `edit.apply`, an operation can bind a result with `ref:"$cut"`. Later operations
+The `cut` field gives the command's release tier. `available:true` means the command applies
+today (every 0.1 and 0.2 row). The 20 registry-only commands carry `available:false`,
+`planned:true` and return `PLANNED` if submitted as edits. In `edit.apply`, an operation can bind a result with `ref:"$cut"`. Later operations
 can use `"$cut"` for its primary item and `"$cut.right"` or `"$cut.new"` for its first created item.
 
 ## Batch results

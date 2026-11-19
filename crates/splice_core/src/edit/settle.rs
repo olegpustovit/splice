@@ -432,7 +432,7 @@ fn caption_hash(project: &Project, anchor: Anchor) -> Option<u64> {
 }
 
 #[derive(Clone, Copy)]
-enum Owner {
+pub(super) enum Owner {
     Project,
     Spine,
     Lane(usize),
@@ -440,7 +440,7 @@ enum Owner {
     Item(Slot),
 }
 
-fn effects(project: &Project, owner: Owner) -> &[Effect] {
+pub(super) fn effects(project: &Project, owner: Owner) -> &[Effect] {
     match owner {
         Owner::Project => &project.effects,
         Owner::Spine => &project.spine.effects,
@@ -465,6 +465,10 @@ fn effects(project: &Project, owner: Owner) -> &[Effect] {
 }
 
 fn effects_mut(project: &mut Project, owner: Owner) -> &mut [Effect] {
+    effects_vec_mut(project, owner)
+}
+
+pub(super) fn effects_vec_mut(project: &mut Project, owner: Owner) -> &mut Vec<Effect> {
     match owner {
         Owner::Project => &mut project.effects,
         Owner::Spine => &mut project.spine.effects,
