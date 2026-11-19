@@ -260,41 +260,6 @@ impl Editor {
                 self.add_template(&name, at, length, &fields)
             }
             Op::TemplateSet { item, fields } => self.set_template(&item, &fields),
-            Op::MediaRelink {
-                media: target,
-                path,
-                frames,
-                force,
-            } => {
-                let Target::Media(id) = self.resolve(&target)? else {
-                    return Err(wrong_kind("Pass a media ID (med_…)."));
-                };
-                let index = self
-                    .project
-                    .media
-                    .iter()
-                    .position(|m| m.id == id)
-                    .ok_or_else(|| not_found(&id, "project.info lists media."))?;
-                let descriptor = &mut self.project.media[index];
-                if let Some(frames) = frames
-                    && frames != descriptor.probe.frames
-                    && !force
-                {
-                    return Err(error(
-                        "MEDIA_MISMATCH",
-                        &format!(
-                            "{path} has {frames} frames; {id} had {}.",
-                            descriptor.probe.frames
-                        ),
-                        "Relink a file with the same length, or pass force:true.",
-                    ));
-                }
-                if let Some(frames) = frames {
-                    descriptor.probe.frames = frames;
-                }
-                descriptor.path = path;
-                Ok(Outcome::edit(format!("Relinked {id}"), Target::Media(id)))
-            }
             Op::MediaConsolidate { media: targets } => {
                 let mut ids = Vec::new();
                 for target in &targets {
@@ -2273,6 +2238,89 @@ impl Outcome {
             primary: Some(primary),
             created,
         }
+    }
+}
+
+impl Editor {
+    /// `media.relink` (M14): the file is probed through the batch's media loader and must match
+    /// the media it replaces (length and kind, unless `force`); its probe (fps, size, tracks)
+    /// replaces the stale one. Without a prober (Linux, or a journal written before relink
+    /// probed) the agent's `frames` is trusted as before.
+    pub(super) fn relink(
+        &mut self,
+        target: &Target,
+        path: String,
+        frames: Option<Frame>,
+        force: bool,
+        load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
+    ) -> Result<Outcome, CommandError> {
+        let Target::Media(id) = self.resolve(target)? else {
+            return Err(wrong_kind("Pass a media ID (med_…)."));
+        };
+        let index = self
+            .project
+            .media
+            .iter()
+            .position(|m| m.id == id)
+            .ok_or_else(|| not_found(&id, "project.info lists media."))?;
+        let probed = match load(&path) {
+            Ok(mut probed) => {
+                probed.id = id;
+                Some(probed)
+            }
+            Err(error) if error.message == UNPROBED => None,
+            Err(error) => return Err(error),
+        };
+        let old = &self.project.media[index];
+        let measured = probed.as_ref().map(|m| m.probe.frames);
+        if let (Some(given), Some(measured)) = (frames, measured)
+            && given != measured
+        {
+            return Err(CommandError::rule(
+                "MEDIA_MISMATCH",
+                "frames",
+                Some(Json::Signed(i64::from(given))),
+                &format!("{measured}, the probed length of {path}"),
+                "Omit frames: Splice probes the file.",
+            ));
+        }
+        let length = measured.or(frames);
+        let kind = probed.as_ref().map_or(old.kind, |m| m.kind);
+        if !force && (length.is_some_and(|length| length != old.probe.frames) || kind != old.kind) {
+            return Err(CommandError::rule(
+                "MEDIA_MISMATCH",
+                "path",
+                Some(Json::String(path.clone())),
+                &format!(
+                    "a {:?} file with {} frames like {id}",
+                    old.kind, old.probe.frames
+                ),
+                "Relink the same media (same length and kind), or pass force:true.",
+            ));
+        }
+        let descriptor = &mut self.project.media[index];
+        match probed {
+            Some(probed) => {
+                descriptor.kind = probed.kind;
+                descriptor.path.clone_from(&probed.path);
+                descriptor.bookmark.clone_from(&probed.bookmark);
+                descriptor.size = probed.size;
+                descriptor.mtime = probed.mtime;
+                descriptor.probe = probed.probe.clone();
+                // Replay rebuilds the relink from this descriptor without opening the file.
+                self.imports.push(MediaImport {
+                    request: path,
+                    descriptor: probed,
+                });
+            }
+            None => {
+                if let Some(frames) = frames {
+                    descriptor.probe.frames = frames;
+                }
+                descriptor.path = path;
+            }
+        }
+        Ok(Outcome::edit(format!("Relinked {id}"), Target::Media(id)))
     }
 }
 

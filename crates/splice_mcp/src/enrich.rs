@@ -1,5 +1,5 @@
 //! Fills the inputs of 0.3 commands that the core can't read itself (PLAN.md T20, T21): take
-//! clicks for intent.autoZoom, probed lengths for media.relink, the file copies behind
+//! clicks for intent.autoZoom, the file copies behind
 //! media.consolidate, and (macOS) tracking, sync offsets and on-device translation. Batches that
 //! need none of this pass through untouched.
 use super::{Json, object, wire::*};
@@ -8,7 +8,6 @@ use splice_core::history::{Store, StoreError};
 const FILLED: &[&str] = &[
     "crop.keys",
     "intent.autoZoom",
-    "media.relink",
     "media.consolidate",
     "mask.track",
     "audio.sync",
@@ -88,13 +87,6 @@ pub(super) fn ops(store: &Store, ops: &[Json]) -> Result<Option<Vec<Json>>, Stor
                 };
                 fields.retain(|(name, _)| name != "follow" && name != "aspect");
                 fields.push(("keys".into(), keys));
-            }
-            "media.relink" if !has("frames") => {
-                if let Some(path) = get("path")
-                    && let Some(frames) = super::platform::probe_frames(store, &path)?
-                {
-                    fields.push(("frames".into(), Json::Signed(i64::from(frames))));
-                }
             }
             "media.consolidate" => consolidate(store, fields)?,
             "mask.track" if !has("keys") => {

@@ -330,6 +330,102 @@ fn history_verify_accepts_transcripts_stored_in_media_order() {
 }
 
 #[test]
+fn m14_relink_reprobes_and_refuses_a_mismatching_file() {
+    use crate::commands::CommandError;
+    use splice_model::{AudioTrack, Media, MediaId, MediaKind, Probe};
+
+    fn file(path: &str, frames: i32, fps: f64, width: u32, audio: usize) -> Media {
+        Media {
+            id: MediaId::from_serial(0),
+            kind: MediaKind::Video,
+            path: path.into(),
+            bookmark: None,
+            size: 100,
+            mtime: 1,
+            probe: Probe {
+                fps,
+                frames,
+                width,
+                height: 64,
+                audio: (0..audio)
+                    .map(|n| AudioTrack {
+                        name: format!("track {n}"),
+                        channels: Some(2),
+                    })
+                    .collect(),
+                codec: None,
+                loudness: None,
+            },
+            take: None,
+        }
+    }
+    let temp = Temp::new("relink");
+    let mut store = Store::create(&temp.0, &Project::default()).unwrap();
+    let session = store.start_session("test", 1).unwrap().id;
+    let mut loader = |path: &str| -> Result<Media, CommandError> {
+        match path {
+            "a.mov" => Ok(file("a.mov", 30, 30.0, 96, 0)),
+            "long.mov" => Ok(file("long.mov", 60, 30.0, 96, 0)),
+            "b.mov" => Ok(file("b.mov", 30, 25.0, 192, 1)),
+            _ => Err(CommandError::new(
+                "MEDIA_OFFLINE",
+                format!("Could not access {path}."),
+                "Check the path.".into(),
+            )),
+        }
+    };
+    let mut rev = 0;
+    let mut relink = |store: &mut Store, args: &str, rev: &mut u64| {
+        let result = store.apply_with_media(
+            &[op(&format!(
+                r#"{{"cmd":"media.relink","media":"med_1",{args}}}"#
+            ))],
+            &agent(session, *rev, 2),
+            &mut loader,
+        );
+        if result.is_ok() {
+            *rev += 1;
+        }
+        result
+    };
+    store
+        .apply_with_media(
+            &[op(r#"{"cmd":"clip.insert","path":"a.mov"}"#)],
+            &agent(session, 0, 2),
+            &mut |path| Ok(file(path, 30, 30.0, 96, 0)),
+        )
+        .unwrap();
+    rev += 1;
+    // A different length is a different file.
+    let error = relink(&mut store, r#""path":"long.mov""#, &mut rev).unwrap_err();
+    assert_eq!(error.code, "MEDIA_MISMATCH");
+    assert_eq!(error.rule.as_ref().unwrap().param, "path");
+    // An agent's frames no longer skips the probe: a missing file is refused.
+    let error = relink(&mut store, r#""path":"gone.mov","frames":30"#, &mut rev).unwrap_err();
+    assert_eq!(error.code, "MEDIA_OFFLINE");
+    let error = relink(&mut store, r#""path":"b.mov","frames":31"#, &mut rev).unwrap_err();
+    assert_eq!(error.rule.as_ref().unwrap().param, "frames");
+    // The same media re-encoded: fps, size and tracks follow the new file.
+    relink(&mut store, r#""path":"b.mov""#, &mut rev).unwrap();
+    let relinked = store.project().media[0].clone();
+    assert_eq!(relinked.path, "b.mov");
+    assert_eq!(
+        (
+            relinked.probe.fps,
+            relinked.probe.width,
+            relinked.probe.audio.len()
+        ),
+        (25.0, 192, 1)
+    );
+    relink(&mut store, r#""path":"long.mov","force":true"#, &mut rev).unwrap();
+    assert_eq!(store.project().media[0].probe.frames, 60);
+    let project = store.project().clone();
+    store.close().unwrap();
+    // Replay rebuilds both relinks from the journal without a prober.
+    assert_eq!(Store::open(&temp.0).unwrap().project().media, project.media);
+}
+
+#[test]
 fn history_media_import_is_atomic_and_replays_without_a_loader() {
     use splice_model::{Media, MediaId, MediaKind, Probe};
 

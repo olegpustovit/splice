@@ -158,10 +158,15 @@ Some 0.3 commands need inputs the core cannot read (it never opens media). `edit
 before the batch applies, so the journal records plain ops that replay without media:
 `intent.autoZoom` (clicks and typing bursts from the take's events; it writes `zoom` items on a
 camera lane), `crop.keys {follow:"cursor"|"face",
-aspect}` (keys every half second), `media.relink` (probed frames), `media.consolidate` (copies
+aspect}` (keys every half second), `media.consolidate` (copies
 files into `media/`), `mask.track` (Vision object tracking), `audio.sync` (envelope
 cross-correlation offset) and `captions.translate` without `texts` (on-device Translation).
 Pass the inputs yourself to skip the native step.
+
+`media.relink` always probes the new file (the journal keeps the probe, so replay never opens it):
+fps, size and audio tracks follow the file, and a file of a different length or kind is refused with
+`MEDIA_MISMATCH` and the broken rule (`param:"path"`, or `param:"frames"` when the `frames` you
+passed disagrees with the probe) unless `force:true`. A missing file is `MEDIA_OFFLINE`.
 
 On Linux, rendering, export and capture return `UNSUPPORTED_PLATFORM`. A job ID with no retained
 job returns `NOT_FOUND`. Headless `ui.show` returns `{"applied":false,"reason":"headless"}`.

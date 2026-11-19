@@ -210,10 +210,13 @@ pub(crate) fn stage_above(
     Ok((work.edit.project, work.edit.report, work.edit.imports))
 }
 
+/// `missing_media`'s message: no media backend probed the path (see `Editor::relink`).
+pub(crate) const UNPROBED: &str = "The path has no registered media descriptor.";
+
 pub(crate) fn missing_media(_: &str) -> Result<Media, CommandError> {
     Err(error(
         "MEDIA_OFFLINE",
-        "The path has no registered media descriptor.",
+        UNPROBED,
         "Import the file through the native media backend or pass a media ID from project.info.",
     ))
 }

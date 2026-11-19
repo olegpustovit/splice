@@ -309,12 +309,6 @@ pub(super) fn analyze(
     Ok(out)
 }
 
-pub(super) fn probe_frames(store: &Store, path: &str) -> Result<Option<Frame>, StoreError> {
-    let descriptor = splice_media::probe(store.path(), Path::new(path), store.project().fps)
-        .map_err(|f| failure(f.code, &f.message, f.fix))?;
-    Ok(Some(descriptor.probe.frames))
-}
-
 fn field(fields: &[(String, Json)], key: &str) -> Option<String> {
     fields
         .iter()

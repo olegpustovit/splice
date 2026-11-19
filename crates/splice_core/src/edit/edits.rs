@@ -10,6 +10,12 @@ impl Editor {
         load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
     ) -> Result<Outcome, CommandError> {
         match op {
+            Op::MediaRelink {
+                media,
+                path,
+                frames,
+                force,
+            } => self.relink(&media, path, frames, force, load),
             Op::ItemSplit { item, at } => {
                 let item = self.timeline(&item)?;
                 let at = self.frame(&at)?;

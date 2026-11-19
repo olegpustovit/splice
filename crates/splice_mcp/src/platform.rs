@@ -611,9 +611,7 @@ fn recognize(audio: &Path, language: &str, fps: f64, frames: Frame) -> Result<Js
 // ── 0.3 native analysis and inputs filled by `enrich` (macOS: `native.rs`) ──
 
 #[cfg(target_os = "macos")]
-pub(super) use super::native::{
-    analyze, follow_face, probe_frames, sync_offset, track_mask, translate_captions,
-};
+pub(super) use super::native::{analyze, follow_face, sync_offset, track_mask, translate_captions};
 
 /// Peaks, beats, sounds, shots, text, faces, people and mattes need native analysis.
 #[cfg(not(target_os = "macos"))]
@@ -631,12 +629,6 @@ pub(super) fn analyze(
         ),
         "Ask for loudness and pauses only, or run on macOS.",
     ))
-}
-
-/// Probed length of a file for media.relink; `None` when no native prober exists.
-#[cfg(not(target_os = "macos"))]
-pub(super) fn probe_frames(_: &Store, _: &str) -> Result<Option<splice_model::Frame>, StoreError> {
-    Ok(None)
 }
 
 /// Tracked mask centers for mask.track.

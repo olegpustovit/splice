@@ -799,9 +799,9 @@ declare namespace Splice {
       media: string;
       /** new file path */
       path: string;
-      /** number · probed length; splice mcp fills it */
+      /** number · expected length, checked against the probed file */
       frames?: number;
-      /** boolean · accept a different length */
+      /** boolean · accept a different length or kind */
       force?: boolean;
     }
     /** Consolidate Media (edit, 0.3). */
