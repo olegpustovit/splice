@@ -560,8 +560,7 @@ static int64_t fill_sources(NSArray *entry, id<MTLDevice> device, NSMutableDicti
     return (int64_t)entry.count - 1;
 }
 
-bool splice_av_range(void *raw, int32_t from, int32_t to,
-                     const SpliceAVLayer *layers, size_t layer_count,
+bool splice_av_range(void *raw, int32_t from, int32_t to, const int32_t *tracks, size_t layer_count,
                      const SpliceAVGain *gains, size_t gain_count, char **error) {
     @autoreleasepool {
         SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
@@ -574,7 +573,7 @@ bool splice_av_range(void *raw, int32_t from, int32_t to,
         NSMutableArray<SpliceAVTrack *> *sources = [NSMutableArray arrayWithCapacity:layer_count];
         NSMutableArray<NSValue *> *ids = [NSMutableArray arrayWithCapacity:layer_count];
         for (size_t index = 0; index < layer_count; index++) {
-            SpliceAVTrack *source = track_at(assembly, layers[index].track);
+            SpliceAVTrack *source = track_at(assembly, tracks[index]);
             if (source == nil || source.mix != nil) {
                 splice_set_error(error, "A picture layer names a missing or audio track.");
                 return false;

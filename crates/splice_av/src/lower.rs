@@ -4,7 +4,6 @@ use crate::{
 };
 use apple_sys::composition::{
     AudioRamp, Builder, Composition, CursorImage, CursorSample, Source, TextLayer, Timing,
-    VideoLayer,
 };
 use splice_eval::{
     Animate, Audio, Background, CaptionPreset, Evaluator, Keys, Layer, Picture, TextStyle, Track,
@@ -40,17 +39,42 @@ pub(crate) enum Role {
     CameraMatte(ClipId),
 }
 
+/// One composited layer of an interval. Its values (bounds, opacity, look, camera, fill) come
+/// from the evaluated frame at `depth` every frame; lowering only maps it to a source track.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Slot {
+    /// Composition track the decoded source comes from.
+    pub track: i32,
+    /// What the layer is for.
+    pub role: Role,
+    /// Index of the evaluated layer it draws, or `NONE` for the black base.
+    pub depth: u32,
+    /// Cursor table of a take picture, or -1.
+    pub cursor: i32,
+}
+
+impl Slot {
+    /// No evaluated layer (the black base under every interval).
+    pub const NONE: u32 = u32::MAX;
+
+    fn new(track: i32, role: Role, depth: usize) -> Self {
+        Self {
+            track,
+            role,
+            depth: u32::try_from(depth).unwrap_or(Self::NONE),
+            cursor: -1,
+        }
+    }
+}
+
 /// The lowered layer plan, kept for the OGPU compositor (T12.7).
 #[derive(Clone, Default)]
 pub(crate) struct Plan {
     /// Instruction intervals in order, each with its layers back to front.
-    pub intervals: Vec<([Frame; 2], Vec<VideoLayer>)>,
-    /// Per interval, what each layer is for.
-    pub roles: Vec<Vec<Role>>,
-    /// Fill tracks and their top-left and bottom-right colors.
-    pub fills: Vec<(i32, [u32; 2])>,
-    /// Cursor tables in registration order (`VideoLayer::cursor` indexes them).
-    pub cursors: Vec<(Vec<CursorSample>, Vec<CursorImage>, f64)>,
+    pub intervals: Vec<([Frame; 2], Vec<Slot>)>,
+    /// Cursor tables in registration order (`Slot::cursor` indexes them): samples, images,
+    /// points per source pixel, and the take's frame rate.
+    pub cursors: Vec<(Vec<CursorSample>, Vec<CursorImage>, f64, f64)>,
     /// Display orientation per video track (0 none … 3 270°).
     pub orients: Vec<(i32, u32)>,
     /// LUT files by `Grade::lut` index.
@@ -102,8 +126,8 @@ pub(super) fn build(
     let mut last = evaluator.buffer();
     let mut chips: Vec<(ClipId, MediaId, Keys)> = Vec::new();
     let mut video = Vec::new();
+    let mut tracks = Vec::new();
     let mut audio = Vec::new();
-    let bounds = [0.0, 0.0, width, height];
     for pair in cuts.windows(2) {
         let [from, to] = [pair[0], pair[1]];
         let range = [from, to];
@@ -116,79 +140,56 @@ pub(super) fn build(
         }
         video.clear();
         audio.clear();
-        let mut roles = Vec::with_capacity(first.layers.len() + 1);
         // Keep a real video track under blank, audio-only and text-only intervals.
         if !first
             .layers
             .iter()
             .any(|layer| matches!(layer, Layer::Fade { .. }))
         {
-            video.push(layer(black, bounds, [1.0; 2], [width, height]));
-            roles.push(Role::Plain);
+            video.push(Slot::new(black, Role::Plain, usize::MAX));
         }
         for (depth, (&a, &b)) in first.layers.iter().zip(&last.layers).enumerate() {
             match (a, b) {
-                (Layer::Picture(a), Layer::Picture(b)) => {
+                (Layer::Picture(a), Layer::Picture(_)) => {
                     if let Some(matte) = state.matte(a, project, package, evaluator)? {
-                        video.push(layer(matte, bounds, [1.0; 2], [width, height]));
-                        roles.push(Role::Matte(a.item));
+                        video.push(Slot::new(matte, Role::Matte(a.item), depth));
                     }
                     let track = state.picture(a, project, package, evaluator)?;
-                    let mut picture = VideoLayer::plain(
-                        track,
-                        coordinates(a.source),
-                        coordinates(a.destination),
-                        [width, height],
-                    );
-                    picture.opacity = opacity(a.opacity, b.opacity, range);
-                    state.dress(&mut picture, a, range, project, package, evaluator)?;
-                    video.push(picture);
-                    roles.push(Role::Picture(a.item));
+                    let mut slot = Slot::new(track, Role::Picture(a.item), depth);
+                    slot.cursor = state.cursor_table(a, project, package)?;
+                    video.push(slot);
                 }
-                (
-                    Layer::Background {
-                        bounds,
-                        fill,
-                        opacity: a,
-                    },
-                    Layer::Background { opacity: b, .. },
-                ) => {
+                (Layer::Background { fill, .. }, Layer::Background { .. }) => {
                     let [a_color, b_color] = match fill {
                         Background::None => continue,
                         Background::Solid(value) => [value; 2],
                         Background::Gradient(a, b) => [a, b],
                     };
                     let track = state.fill(depth, a_color, b_color)?;
-                    video.push(layer(
-                        track,
-                        coordinates(bounds),
-                        opacity(a, b, range),
-                        [width, height],
-                    ));
                     // A backing belongs to the picture drawn right after it.
                     let owner = first.layers[depth + 1..].iter().find_map(|l| match l {
                         Layer::Picture(p) => Some(p.item),
                         _ => None,
                     });
-                    roles.push(owner.map_or(Role::Plain, Role::Backing));
+                    video.push(Slot::new(
+                        track,
+                        owner.map_or(Role::Plain, Role::Backing),
+                        depth,
+                    ));
                 }
-                (Layer::Fade { opacity: a, color }, Layer::Fade { opacity: b, .. }) => {
+                (Layer::Fade { color, .. }, Layer::Fade { .. }) => {
                     let track = if color == 0 {
                         black
                     } else {
                         state.fill(depth, color, color)?
                     };
-                    video.push(layer(track, bounds, opacity(a, b, range), [width, height]));
-                    roles.push(Role::Plain);
+                    video.push(Slot::new(track, Role::Plain, depth));
                 }
                 (Layer::Shape { .. }, Layer::Shape { .. }) => {}
                 (
                     Layer::Camera {
                         clip,
                         media,
-                        bounds,
-                        radius,
-                        shadow,
                         background,
                         ..
                     },
@@ -196,16 +197,10 @@ pub(super) fn build(
                 ) => {
                     if background != 0 {
                         let matte = state.camera_matte(clip, media, project, package, evaluator)?;
-                        video.push(layer(matte, coordinates(bounds), [1.0; 2], [width, height]));
-                        roles.push(Role::CameraMatte(clip));
+                        video.push(Slot::new(matte, Role::CameraMatte(clip), depth));
                     }
                     let track = state.camera(clip, media, project, package, evaluator)?;
-                    let mut camera = layer(track, coordinates(bounds), [1.0; 2], [width, height]);
-                    camera.center_crop = 1;
-                    camera.corner = radius;
-                    camera.shadow = shadow.clamp(0.0, 1.0);
-                    video.push(camera);
-                    roles.push(Role::Camera(clip));
+                    video.push(Slot::new(track, Role::Camera(clip), depth));
                 }
                 (Layer::Title { item, bounds, .. }, Layer::Title { .. }) => {
                     if let Some(text) = evaluator.title(item)
@@ -290,9 +285,10 @@ pub(super) fn build(
         for (&a, &b) in first.audio.iter().zip(&last.audio) {
             state.audio([a, b], range, &mut audio, project, package, evaluator)?;
         }
-        state.builder.range(range, &video, &audio)?;
+        tracks.clear();
+        tracks.extend(video.iter().map(|slot| slot.track));
+        state.builder.range(range, &tracks, &audio)?;
         state.plan.intervals.push((range, video.clone()));
-        state.plan.roles.push(roles);
     }
     for (clip, media, style) in chips {
         state.chips(clip, media, style, project, package, evaluator)?;
@@ -302,58 +298,38 @@ pub(super) fn build(
 
 impl Lowering {
     /// Window corners and shadow, the cursor and click rings, and the click-zoom curve.
-    fn dress(
+    /// The cursor table of a take picture whose cursor is drawn, registered on first use.
+    fn cursor_table(
         &mut self,
-        layer: &mut VideoLayer,
         picture: Picture,
-        [from, to]: [Frame; 2],
         project: &Project,
         package: &Path,
-        evaluator: &Evaluator,
-    ) -> Result<(), Error> {
-        let d = picture.destination;
-        if let Some(window) = picture.window {
-            layer.corner = window.corner * d.w.min(d.h);
-            layer.shadow = window.shadow.clamp(0.0, 1.0);
-        }
+    ) -> Result<i32, Error> {
         let media = Self::media(project, picture.media)?;
-        if media.kind != MediaKind::Take {
-            return Ok(());
+        if media.kind != MediaKind::Take || picture.cursor.is_none() {
+            return Ok(-1);
         }
         let fps = media.probe.fps;
-        let step = evaluator
-            .source_span(picture.item)
-            .map_or(1.0, |span| span.step);
-        let start = picture.source_frame / fps;
-        layer.source = [start, start + step * f64::from(to - from) / fps];
-        if let Some(cursor) = picture.cursor
-            && let Some(index) = self.take(project, package, picture.media)?
-        {
-            let table = match self.takes[index].2 {
-                Some(table) => Some(table),
-                None => match &self.takes[index].1 {
-                    Some(events) if !events.samples.is_empty() => {
-                        let table = self.plan.cursors.len() as i32;
-                        self.plan.cursors.push((
-                            events.samples.clone(),
-                            events.images.clone(),
-                            events.points,
-                        ));
-                        self.takes[index].2 = Some(table);
-                        Some(table)
-                    }
-                    _ => None,
-                },
-            };
-            if let Some(table) = table {
-                layer.cursor = table;
-                layer.cursor_scale = cursor.scale;
-                if cursor.click_rings {
-                    layer.flags |= VideoLayer::CLICK_RINGS;
-                }
-            }
+        let Some(index) = self.take(project, package, picture.media)? else {
+            return Ok(-1);
+        };
+        if let Some(table) = self.takes[index].2 {
+            return Ok(table);
         }
-        Ok(())
+        match &self.takes[index].1 {
+            Some(events) if !events.samples.is_empty() => {
+                let table = self.plan.cursors.len() as i32;
+                self.plan.cursors.push((
+                    events.samples.clone(),
+                    events.images.clone(),
+                    events.points,
+                    fps,
+                ));
+                self.takes[index].2 = Some(table);
+                Ok(table)
+            }
+            _ => Ok(-1),
+        }
     }
 
     /// Index of the media's parsed take events, loading them on first use.
@@ -677,7 +653,6 @@ impl Lowering {
         };
         let track = self.builder.source(Source::Color(a, b), &timing)?;
         self.tracks.push((key, track));
-        self.plan.fills.push((track, [a, b]));
         Ok(track)
     }
 
@@ -900,12 +875,6 @@ fn coordinates(rect: Rect) -> [f64; 4] {
     [rect.x, rect.y, rect.w, rect.h]
 }
 
-fn layer(track: i32, destination: [f64; 4], opacity: [f64; 2], canvas: [f64; 2]) -> VideoLayer {
-    let mut layer = VideoLayer::plain(track, [0.0, 0.0, 1.0, 1.0], destination, canvas);
-    layer.opacity = opacity;
-    layer
-}
-
 fn ramp(a: f64, b: f64, [from, to]: [Frame; 2]) -> [f64; 2] {
     let steps = to - from - 1;
     [
@@ -916,8 +885,4 @@ fn ramp(a: f64, b: f64, [from, to]: [Frame; 2]) -> [f64; 2] {
             a
         },
     ]
-}
-
-fn opacity(a: f64, b: f64, range: [Frame; 2]) -> [f64; 2] {
-    ramp(a, b, range).map(|value| value.clamp(0.0, 1.0))
 }

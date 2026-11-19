@@ -3,14 +3,14 @@
 //! through `GpuProgram::draw`.
 use crate::{
     Composition, Error, TimedText,
-    lower::{Plan, Role},
+    lower::{Plan, Role, Slot},
 };
-use apple_sys::composition::{CursorSample, FrameSource, Player, VideoLayer};
+use apple_sys::composition::{CursorSample, FrameSource, Player};
 use ogpu_core::backend::{self as b, Commands, Device, PreparedRenderTarget, Texture};
 use ogpu_core::types::{Extent, Origin, TextureDescriptor, TextureFormat, TextureUsage};
 use splice_eval::{Animate, FramePlan, Look, MaskMode, MaskShape};
 use splice_gpu::{Bound, Compositor, Layer, MAX_LAYERS, rgb};
-use splice_model::{CameraMode, Frame, ShapeKind, TimelineId};
+use splice_model::{CameraMode, Frame, ShapeKind};
 
 const RING_SECONDS: f64 = 0.45;
 
@@ -103,7 +103,7 @@ impl GpuProgram {
             luts.push((upload(&pixels, [n * n, n], "Splice LUT")?, n as f32));
         }
         let mut cursors = Vec::with_capacity(plan.cursors.len());
-        for (_, images, _) in &plan.cursors {
+        for (_, images, ..) in &plan.cursors {
             let mut table = Vec::with_capacity(images.len());
             for image in images {
                 let (pixels, [w, h]) = apple_sys::image::decode_rgba(&image.path)?;
@@ -231,7 +231,7 @@ impl GpuProgram {
         apple_sys::composition::blit(native_commands, &self.blit_from, &self.blit_to)?;
         let intervals = &plan.intervals;
         let index = intervals.partition_point(|(range, _)| range[1] <= at);
-        let Some((range, layers)) = intervals.get(index) else {
+        let Some((_, layers)) = intervals.get(index) else {
             return Ok(false);
         };
         if layers.len() != count {
@@ -243,29 +243,18 @@ impl GpuProgram {
         if let Some(evaluator) = &plan.evaluator {
             evaluator.frame(at, &mut self.frame);
         }
-        let roles = plan.roles.get(index).map_or(&[][..], Vec::as_slice);
         self.layers.clear();
         self.textures.clear();
         self.mattes.clear();
         let canvas = size.map(f64::from);
-        for (i, layer) in layers.iter().enumerate() {
+        for (i, slot) in layers.iter().enumerate() {
             let source = self.sources[i];
-            let role = roles.get(i).copied().unwrap_or(Role::Plain);
-            let fill = plan
-                .fills
-                .iter()
-                .find(|(track, _)| *track == layer.track)
-                .map(|(_, colors)| *colors);
-            let texture = match (&fill, self.copies.get(i)) {
-                (None, Some(Some((texture, ..)))) if !source.texture.is_null() => {
-                    Some(texture.clone())
-                }
+            let texture = match self.copies.get(i) {
+                Some(Some((texture, ..))) if !source.texture.is_null() => Some(texture.clone()),
                 _ => None,
             };
-            if self.transparent && role == Role::Plain && layer.track == plan.base && i == 0 {
-                continue;
-            }
-            let owner = match role {
+            // Mattes are bound to the layer they cut out, never drawn.
+            let owner = match slot.role {
                 Role::Matte(id) => Some(Role::Picture(id)),
                 Role::CameraMatte(clip) => Some(Role::Camera(clip)),
                 _ => None,
@@ -276,19 +265,25 @@ impl GpuProgram {
                 }
                 continue;
             }
-            let look = match role {
-                Role::Picture(id) | Role::Backing(id) => self.look(id),
-                Role::Camera(clip) => self.camera_look(clip),
-                _ => Look::default(),
+            let Some(evaluated) = self.frame.layers.get(slot.depth as usize).copied() else {
+                // The black base: left out of transparent exports.
+                if !self.transparent {
+                    let mut base = Layer::new(
+                        Layer::SOLID,
+                        [0.0, 0.0, canvas[0] as f32, canvas[1] as f32],
+                        canvas.map(|v| v as f32),
+                    );
+                    base.color0 = [0.0, 0.0, 0.0, 1.0];
+                    self.push(base, Bound::default());
+                }
+                continue;
             };
             let orient = plan
                 .orients
                 .iter()
-                .find_map(|&(track, o)| (track == layer.track).then_some(o))
+                .find_map(|&(track, o)| (track == slot.track).then_some(o))
                 .unwrap_or(0);
-            self.layer(
-                plan, layer, *range, at, canvas, fill, source, texture, &look, role, orient,
-            )?;
+            self.layer(plan, slot, evaluated, canvas, source, texture, orient)?;
         }
         self.shapes(canvas);
         if text {
@@ -340,107 +335,110 @@ impl GpuProgram {
         Ok(true)
     }
 
-    /// The look of a picture (or its backing) in the evaluated frame.
-    fn look(&self, id: TimelineId) -> Look {
-        self.frame
-            .layers
-            .iter()
-            .find_map(|layer| match layer {
-                splice_eval::Layer::Picture(p) if p.item == id => Some(p.look),
-                _ => None,
-            })
-            .unwrap_or_default()
-    }
-
-    /// The timeline camera on a spine picture in the evaluated frame.
-    fn view(&self, id: TimelineId) -> splice_eval::View {
-        self.frame
-            .layers
-            .iter()
-            .find_map(|layer| match layer {
-                splice_eval::Layer::Picture(p) if p.item == id => Some(p.view),
-                _ => None,
-            })
-            .unwrap_or(splice_eval::View::IDENTITY)
-    }
-
-    /// A camera bubble's background treatment as a cutout look.
-    fn camera_look(&self, clip: splice_model::ClipId) -> Look {
-        let background = self.frame.layers.iter().find_map(|layer| match *layer {
-            splice_eval::Layer::Camera {
-                clip: c,
-                background,
-                ..
-            } if c == clip => Some(background),
-            _ => None,
-        });
-        Look {
-            cutout: match background {
-                Some(1) => Some(splice_eval::Cutout {
-                    blur: true,
-                    amount: 1.0,
-                }),
-                Some(2) => Some(splice_eval::Cutout {
-                    blur: false,
-                    amount: 1.0,
-                }),
-                _ => None,
-            },
-            ..Look::default()
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
+    /// Builds the GPU layer(s) for one slot from its evaluated layer: every value is this
+    /// frame's, so nothing is interpolated between interval ends.
     fn layer(
         &mut self,
         plan: &Plan,
-        layer: &VideoLayer,
-        [from, to]: [Frame; 2],
-        at: Frame,
+        slot: &Slot,
+        evaluated: splice_eval::Layer,
         [cw, ch]: [f64; 2],
-        fill: Option<[u32; 2]>,
         source: FrameSource,
         texture: Option<Texture>,
-        look: &Look,
-        role: Role,
         orient: u32,
     ) -> Result<(), Error> {
-        let span = f64::from((to - from).max(1));
-        let linear = (f64::from(at - from) / span).clamp(0.0, 1.0);
-        let lerp = |a: f64, b: f64, k: f64| a + (b - a) * k;
-        let opacity = (lerp(layer.opacity[0], layer.opacity[1], linear) * look.opacity) as f32;
         let target = [cw as f32, ch as f32];
-        let [dx, dy, dw, dh] = layer.destination;
-        if let Some([a, b]) = fill {
-            let kind = if a == b {
-                Layer::SOLID
-            } else {
-                Layer::GRADIENT
-            };
-            let (dest, pivot) = transform([dx, dy, dw, dh], look);
-            let mut out = Layer::new(kind, dest, target);
-            (out.color0, out.color1, out.opacity) = (rgb(a), rgb(b), opacity);
-            out.pivot = pivot;
-            out.rotation = look.rotation.to_radians() as f32;
-            if matches!(role, Role::Backing(_)) {
-                clip(&mut out, look);
+        match evaluated {
+            // A backdrop is the backing's own evaluated opacity; it never borrows the picture's
+            // look or camera (H7, D14).
+            splice_eval::Layer::Background {
+                bounds,
+                fill,
+                opacity,
+            } => {
+                let [a, b] = match fill {
+                    splice_eval::Background::None => return Ok(()),
+                    splice_eval::Background::Solid(c) => [c, c],
+                    splice_eval::Background::Gradient(a, b) => [a, b],
+                };
+                let kind = if a == b {
+                    Layer::SOLID
+                } else {
+                    Layer::GRADIENT
+                };
+                let mut out = Layer::new(kind, rect(bounds), target);
+                (out.color0, out.color1, out.opacity) = (rgb(a), rgb(b), opacity as f32);
+                self.push(out, Bound::default());
             }
-            self.push(out, Bound::default());
-            return Ok(());
+            splice_eval::Layer::Fade { opacity, color } => {
+                let mut out = Layer::new(Layer::SOLID, [0.0, 0.0, target[0], target[1]], target);
+                (out.color0, out.opacity) = (rgb(color), opacity as f32);
+                self.push(out, Bound::default());
+            }
+            splice_eval::Layer::Camera {
+                bounds,
+                radius,
+                shadow,
+                background,
+                ..
+            } => {
+                let Some(texture) = texture else {
+                    return Ok(());
+                };
+                let look = camera_look(background);
+                let dest = [bounds.x, bounds.y, bounds.w, bounds.h];
+                let crop = center_crop(source, orient, [0.0, 0.0, 1.0, 1.0], dest);
+                let mut camera = Layer::new(Layer::TEXTURE, rect(bounds), target);
+                camera.crop = crop.map(|v| v as f32);
+                camera.corner = radius as f32;
+                camera.shadow = shadow.clamp(0.0, 1.0) as f32;
+                camera.flags = Layer::BGRA;
+                camera.orient = orient;
+                let mut bound = Bound {
+                    source: Some(texture),
+                    ..Bound::default()
+                };
+                self.cutout(&mut camera, &mut bound, &look, slot.role);
+                self.push(camera, bound);
+            }
+            splice_eval::Layer::Picture(picture) => {
+                if let Some(texture) = texture {
+                    self.picture(plan, slot, &picture, target, source, texture, orient);
+                }
+            }
+            _ => {}
         }
-        let Some(texture) = texture else {
-            return Ok(());
-        };
+        Ok(())
+    }
+
+    /// A clip or overlay picture with its look, camera view, window corners and cursor.
+    #[allow(clippy::too_many_arguments)]
+    fn picture(
+        &mut self,
+        plan: &Plan,
+        slot: &Slot,
+        p: &splice_eval::Picture,
+        target: [f32; 2],
+        source: FrameSource,
+        texture: Texture,
+        orient: u32,
+    ) {
+        let look = &p.look;
+        let [cw, ch] = target.map(f64::from);
         // Crop math runs in the displayed orientation; the shader maps back to decoded pixels.
         let (w, h) = if orient % 2 == 1 {
             (f64::from(source.height), f64::from(source.width))
         } else {
             (f64::from(source.width), f64::from(source.height))
         };
-        let crop = look.crop.unwrap_or(layer.crop);
+        let d = p.destination;
+        let [dx, dy, dw, dh] = [d.x, d.y, d.w, d.h];
+        let base = look
+            .crop
+            .map_or([p.source.x, p.source.y, p.source.w, p.source.h], |c| c);
         let [mut cx, mut cy, mut cwid, mut chei] =
-            [crop[0] * w, crop[1] * h, crop[2] * w, crop[3] * h];
-        if layer.center_crop != 0 || look.crop.is_some() {
+            [base[0] * w, base[1] * h, base[2] * w, base[3] * h];
+        if look.crop.is_some() {
             let ratio = dw / dh;
             let width = cwid.min(chei * ratio);
             let height = chei.min(cwid / ratio);
@@ -450,10 +448,7 @@ impl GpuProgram {
         }
         // The timeline camera (D12, D13): content mode narrows the crop to the viewport inside
         // a fixed frame; frame mode scales the card so the viewport fills the card's place.
-        let view = match role {
-            Role::Picture(id) => self.view(id),
-            _ => splice_eval::View::IDENTITY,
-        };
+        let view = p.view;
         let scale = view.amount.max(1.0);
         let [vx, vy, vw, vh] = view.viewport();
         let content = match view.mode {
@@ -472,37 +467,40 @@ impl GpuProgram {
                 dh * scale,
             ]
         };
-        let scale = if content { 1.0 } else { scale };
+        let card = if content { 1.0 } else { scale };
         let (dest, pivot) = transform(zoomed, look);
         let placed = dest.map(f64::from);
-        let mut picture = Layer::new(Layer::TEXTURE, dest, target);
-        picture.crop = [cx / w, cy / h, cwid / w, chei / h].map(|v| v as f32);
-        picture.opacity = opacity;
-        picture.corner = (layer.corner * scale * look.scale) as f32;
-        picture.shadow = layer.shadow as f32;
-        picture.flags = Layer::BGRA;
-        picture.orient = orient;
-        picture.pivot = pivot;
-        picture.rotation = look.rotation.to_radians() as f32;
-        picture.blend = look.blend.index();
+        let opacity = (p.opacity * look.opacity) as f32;
+        let mut layer = Layer::new(Layer::TEXTURE, dest, target);
+        layer.crop = [cx / w, cy / h, cwid / w, chei / h].map(|v| v as f32);
+        layer.opacity = opacity;
+        if let Some(window) = p.window {
+            layer.corner = (window.corner * dw.min(dh) * card * look.scale) as f32;
+            layer.shadow = window.shadow.clamp(0.0, 1.0) as f32;
+        }
+        layer.flags = Layer::BGRA;
+        layer.orient = orient;
+        layer.pivot = pivot;
+        layer.rotation = look.rotation.to_radians() as f32;
+        layer.blend = look.blend.index();
         let mut bound = Bound {
             source: Some(texture),
             ..Bound::default()
         };
         if let Some(g) = look.color {
-            picture.flags |= Layer::GRADE;
-            picture.grade0 = [g.exposure, g.contrast, g.saturation, g.vibrance].map(|v| v as f32);
-            picture.grade1 = [g.temperature, g.tint, g.highlights, g.shadows].map(|v| v as f32);
+            layer.flags |= Layer::GRADE;
+            layer.grade0 = [g.exposure, g.contrast, g.saturation, g.vibrance].map(|v| v as f32);
+            layer.grade1 = [g.temperature, g.tint, g.highlights, g.shadows].map(|v| v as f32);
             if let Some((lut, n)) = g.lut.and_then(|i| self.luts.get(usize::from(i))) {
-                picture.flags |= Layer::LUT;
-                picture.lut[0] = g.lut_amount as f32;
-                picture.lut[1] = *n;
+                layer.flags |= Layer::LUT;
+                layer.lut[0] = g.lut_amount as f32;
+                layer.lut[1] = *n;
                 bound.lut = Some(lut.clone());
             }
         }
-        for (slot, mask) in picture.masks.iter_mut().zip(look.masks.iter().flatten()) {
-            slot.rect = mask.rect.map(|v| v as f32);
-            slot.params = [
+        for (mask_slot, mask) in layer.masks.iter_mut().zip(look.masks.iter().flatten()) {
+            mask_slot.rect = mask.rect.map(|v| v as f32);
+            mask_slot.params = [
                 match mask.shape {
                     MaskShape::Rect => 0.0,
                     MaskShape::RoundRect => 1.0,
@@ -518,34 +516,29 @@ impl GpuProgram {
                 mask.feather as f32,
             ];
             let [r, g, b, _] = rgb(mask.color);
-            slot.color = [r, g, b, if mask.invert { 1.0 } else { 0.0 }];
-            picture.mask_count += 1;
+            mask_slot.color = [r, g, b, if mask.invert { 1.0 } else { 0.0 }];
+            layer.mask_count += 1;
         }
         if let Some(key) = look.key {
-            picture.flags |= Layer::KEY;
+            layer.flags |= Layer::KEY;
             let [r, g, b, _] = rgb(key.color);
-            picture.key0 = [r, g, b, key.tolerance as f32];
-            picture.key1 = [key.softness as f32, key.spill as f32, 0.0, 0.0];
+            layer.key0 = [r, g, b, key.tolerance as f32];
+            layer.key1 = [key.softness as f32, key.spill as f32, 0.0, 0.0];
         }
-        if let Some(cutout) = look.cutout
-            && let Some((_, matte)) = self.mattes.iter().find(|(owner, _)| *owner == role)
-        {
-            picture.flags |= Layer::CUTOUT;
-            if cutout.blur {
-                picture.flags |= Layer::CUTOUT_BLUR;
-            }
-            picture.lut[2] = cutout.amount as f32;
-            bound.matte = Some(matte.clone());
-        }
-        clip(&mut picture, look);
-        self.push(picture, bound);
-        let Some((samples, _, points)) = usize::try_from(layer.cursor)
-            .ok()
-            .and_then(|i| plan.cursors.get(i))
-        else {
-            return Ok(());
+        self.cutout(&mut layer, &mut bound, look, slot.role);
+        clip(&mut layer, look);
+        self.push(layer, bound);
+        // The recorded cursor, on the take's clock (the evaluated source frame, so speed ramps
+        // and freezes are exact).
+        let (Some(cursor), Some((samples, images, points, fps))) = (
+            p.cursor,
+            usize::try_from(slot.cursor)
+                .ok()
+                .and_then(|i| plan.cursors.get(i)),
+        ) else {
+            return;
         };
-        let st = lerp(layer.source[0], layer.source[1], linear);
+        let st = p.source_frame / fps.max(1.0);
         let per_px = placed[2] / cwid; // canvas pixels per source pixel
         let px_per_point = w / points;
         let to_canvas = |x: f64, y: f64| {
@@ -555,7 +548,7 @@ impl GpuProgram {
             ]
         };
         let rotation = look.rotation.to_radians() as f32;
-        if layer.flags & VideoLayer::CLICK_RINGS != 0 {
+        if cursor.click_rings {
             for sample in samples.iter().filter(|s| s.click == 1) {
                 let age = st - sample.t;
                 if !(0.0..=RING_SECONDS).contains(&age) {
@@ -563,7 +556,7 @@ impl GpuProgram {
                 }
                 let [x, y] = to_canvas(sample.x, sample.y);
                 let radius =
-                    (10.0 + 34.0 * age / RING_SECONDS) * px_per_point * per_px * layer.cursor_scale;
+                    (10.0 + 34.0 * age / RING_SECONDS) * px_per_point * per_px * cursor.scale;
                 let mut ring = Layer::new(
                     Layer::RING,
                     [x - radius, y - radius, 2.0 * radius, 2.0 * radius].map(|v| v as f32),
@@ -576,32 +569,44 @@ impl GpuProgram {
                 self.push(ring, Bound::default());
             }
         }
-        let table = usize::try_from(layer.cursor).unwrap_or(0);
-        let images = &plan.cursors[table].1;
+        let table = slot.cursor as usize;
         let sprite = cursor_at(samples, st).and_then(|(sample, at)| {
             let image = usize::try_from(sample.image).ok()?;
             let (texture, size) = self.cursors[table].get(image)?;
             Some((images.get(image)?, texture.clone(), *size, at))
         });
         if let Some((meta, texture, [pw, ph], [x, y])) = sprite {
-            let k = layer.cursor_scale * px_per_point * per_px / meta.scale; // canvas px per PNG px
+            let k = cursor.scale * px_per_point * per_px / meta.scale; // canvas px per PNG px
             let [x, y] = to_canvas(x, y);
-            let mut cursor = Layer::new(
+            let mut sprite = Layer::new(
                 Layer::TEXTURE,
                 [x - meta.hot[0] * k, y - meta.hot[1] * k, pw * k, ph * k].map(|v| v as f32),
                 target,
             );
-            cursor.opacity = opacity;
-            (cursor.pivot, cursor.rotation) = (pivot, rotation);
+            sprite.opacity = opacity;
+            (sprite.pivot, sprite.rotation) = (pivot, rotation);
             self.push(
-                cursor,
+                sprite,
                 Bound {
                     source: Some(texture),
                     ..Bound::default()
                 },
             );
         }
-        Ok(())
+    }
+
+    /// Binds a person matte to a picture or camera bubble with a cutout look.
+    fn cutout(&self, layer: &mut Layer, bound: &mut Bound, look: &Look, role: Role) {
+        if let Some(cutout) = look.cutout
+            && let Some((_, matte)) = self.mattes.iter().find(|(owner, _)| *owner == role)
+        {
+            layer.flags |= Layer::CUTOUT;
+            if cutout.blur {
+                layer.flags |= Layer::CUTOUT_BLUR;
+            }
+            layer.lut[2] = cutout.amount as f32;
+            bound.matte = Some(matte.clone());
+        }
     }
 
     /// Generated shapes from the evaluated frame.
@@ -788,4 +793,50 @@ fn cursor_at(samples: &[CursorSample], t: f64) -> Option<(CursorSample, [f64; 2]
         at = [a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k];
     }
     Some((a, at))
+}
+
+/// A camera bubble's background treatment (0 none, 1 blur, 2 remove) as a cutout look.
+fn camera_look(background: u8) -> Look {
+    Look {
+        cutout: match background {
+            1 => Some(splice_eval::Cutout {
+                blur: true,
+                amount: 1.0,
+            }),
+            2 => Some(splice_eval::Cutout {
+                blur: false,
+                amount: 1.0,
+            }),
+            _ => None,
+        },
+        ..Look::default()
+    }
+}
+
+fn rect(r: splice_model::Rect) -> [f32; 4] {
+    [r.x, r.y, r.w, r.h].map(|v| v as f32)
+}
+
+/// The crop (normalized to the oriented source) that center-fills `dest` from `base`.
+fn center_crop(
+    source: FrameSource,
+    orient: u32,
+    base: [f64; 4],
+    [_, _, dw, dh]: [f64; 4],
+) -> [f64; 4] {
+    let (w, h) = if orient % 2 == 1 {
+        (f64::from(source.height), f64::from(source.width))
+    } else {
+        (f64::from(source.width), f64::from(source.height))
+    };
+    let [bx, by, bw, bh] = [base[0] * w, base[1] * h, base[2] * w, base[3] * h];
+    let ratio = dw / dh.max(1e-9);
+    let width = bw.min(bh * ratio);
+    let height = bh.min(bw / ratio);
+    [
+        (bx + (bw - width) / 2.0) / w.max(1.0),
+        (by + (bh - height) / 2.0) / h.max(1.0),
+        width / w.max(1.0),
+        height / h.max(1.0),
+    ]
 }

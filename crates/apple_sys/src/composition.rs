@@ -113,69 +113,6 @@ struct RawSource {
     colors: [u32; 2],
 }
 
-/// A native picture layer, with ramp values sampled over a composition interval.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct VideoLayer {
-    /// Source aperture as normalized x, y, width and height in oriented image coordinates.
-    pub crop: [f64; 4],
-    /// Placement in top-left canvas coordinates as x, y, width and height.
-    pub destination: [f64; 4],
-    /// Scale about `focus` at the two ends of the ramp.
-    pub scale: [f64; 2],
-    /// Opacity at the two ends of the ramp.
-    pub opacity: [f64; 2],
-    /// Canvas point the scale keeps fixed: x, y at the start, then x, y at the end.
-    pub focus: [f64; 4],
-    /// Source clock in seconds at the two ends, for cursor lookups.
-    pub source: [f64; 2],
-    /// Corner radius in canvas pixels before scaling.
-    pub corner: f64,
-    /// Drop shadow intensity, 0…1.
-    pub shadow: f64,
-    /// Cursor size relative to the recorded cursor.
-    pub cursor_scale: f64,
-    /// Composition track returned by the builder.
-    pub track: i32,
-    /// Center-crop the oriented source to fit the destination.
-    pub center_crop: u32,
-    /// Cursor table from `Builder::cursor`, or -1.
-    pub cursor: i32,
-    /// `EASE` and `CLICK_RINGS` bits.
-    pub flags: u32,
-}
-
-impl VideoLayer {
-    /// Ease the scale and focus ramps (smoothstep) instead of interpolating linearly.
-    pub const EASE: u32 = 1;
-    /// Draw rings at recorded clicks.
-    pub const CLICK_RINGS: u32 = 2;
-
-    /// A plain layer: no zoom focus, corners, shadow or cursor.
-    pub fn plain(track: i32, crop: [f64; 4], destination: [f64; 4], canvas: [f64; 2]) -> Self {
-        Self {
-            crop,
-            destination,
-            scale: [1.0; 2],
-            opacity: [1.0; 2],
-            focus: [
-                canvas[0] / 2.0,
-                canvas[1] / 2.0,
-                canvas[0] / 2.0,
-                canvas[1] / 2.0,
-            ],
-            source: [0.0; 2],
-            corner: 0.0,
-            shadow: 0.0,
-            cursor_scale: 1.0,
-            track,
-            center_crop: 0,
-            cursor: -1,
-            flags: 0,
-        }
-    }
-}
-
 /// One cursor state on a take's source clock, normalized to the source with a top-left origin.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -340,7 +277,6 @@ struct RawTextStyle {
 
 const _: () = {
     assert!(size_of::<RawSource>() == 64 && offset_of!(RawSource, timeline) == 40);
-    assert!(size_of::<VideoLayer>() == 184 && offset_of!(VideoLayer, flags) == 180);
     assert!(size_of::<FrameSource>() == 24);
     assert!(size_of::<AudioRamp>() == 12 && offset_of!(AudioRamp, gain) == 4);
 };
@@ -363,8 +299,8 @@ unsafe extern "C" {
         composition: *mut c_void,
         from: i32,
         to: i32,
-        video: *const VideoLayer,
-        videos: usize,
+        tracks: *const i32,
+        track_count: usize,
         audio: *const AudioRamp,
         audios: usize,
         error: *mut *mut c_char,
@@ -507,11 +443,11 @@ impl Builder {
         unsafe { splice_av_orientation(self.0.0.as_ptr(), track) }
     }
 
-    /// Appends the ordered video layers and audio ramps for one contiguous interval.
+    /// Appends one contiguous interval: its picture tracks back to front and its audio ramps.
     pub fn range(
         &mut self,
         [from, to]: [i32; 2],
-        video: &[VideoLayer],
+        tracks: &[i32],
         audio: &[AudioRamp],
     ) -> Result<(), Error> {
         let mut error = ptr::null_mut();
@@ -521,8 +457,8 @@ impl Builder {
                 self.0.0.as_ptr(),
                 from,
                 to,
-                video.as_ptr(),
-                video.len(),
+                tracks.as_ptr(),
+                tracks.len(),
                 audio.as_ptr(),
                 audio.len(),
                 &mut error,

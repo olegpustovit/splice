@@ -144,17 +144,6 @@ typedef struct {
     uint32_t kind, index, colors[2];
 } SpliceAVSource;
 
-// One picture layer of an instruction interval. Natively only `track` is read (to pin that
-// track's decoded frames); the rest is the plan splice_gpu draws (see splice_av::gpu).
-typedef struct {
-    double crop[4], destination[4], scale[2], opacity[2], focus[4], source[2];
-    double corner, shadow, cursor_scale;
-    int32_t track;
-    uint32_t center_crop;
-    int32_t cursor;
-    uint32_t flags;
-} SpliceAVLayer;
-
 typedef struct {
     int32_t track;
     float gain[2];
@@ -168,7 +157,6 @@ typedef struct {
 } SpliceAVFrameSource;
 
 _Static_assert(sizeof(SpliceAVSource) == 64 && offsetof(SpliceAVSource, timeline) == 40, "source ABI");
-_Static_assert(sizeof(SpliceAVLayer) == 184 && offsetof(SpliceAVLayer, flags) == 180, "layer ABI");
 _Static_assert(sizeof(SpliceAVGain) == 12 && offsetof(SpliceAVGain, gain) == 4, "gain ABI");
 _Static_assert(sizeof(SpliceAVFrameSource) == 24, "frame source ABI");
 
@@ -177,8 +165,9 @@ void splice_av_release(void *composition);
 int32_t splice_av_source(void *composition, const SpliceAVSource *source, char **error);
 bool splice_av_append(void *raw, int32_t track, const SpliceAVSource *spec, char **error);
 uint32_t splice_av_orientation(void *raw, int32_t track);
-bool splice_av_range(void *composition, int32_t from, int32_t to,
-                     const SpliceAVLayer *layers, size_t layer_count,
+// One instruction interval: its picture tracks back to front (their decoded frames are pinned
+// for the OGPU compositor, which draws them from splice_eval's plan) and its audio ramps.
+bool splice_av_range(void *composition, int32_t from, int32_t to, const int32_t *tracks, size_t track_count,
                      const SpliceAVGain *gains, size_t gain_count, char **error);
 bool splice_av_finish(void *composition, char **error);
 
