@@ -1,0 +1,11 @@
+[package]
+name = "splice_gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ogpu_core = { path = "../../pxui/crates/open/ogpu_core" }
+
+[lints]
+workspace = true

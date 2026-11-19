@@ -68,7 +68,7 @@ fn window_program_4k_reuses_shared_textures_without_allocations() {
         })
         .unwrap();
     let media_files = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/media");
-    let composition = Composition::prepare(&project, &media_files).unwrap();
+    let composition = std::rc::Rc::new(Composition::prepare(&project, &media_files).unwrap());
     let mut player = composition.player().unwrap();
     let mut window =
         Window::open_with("Splice preview test", 320, 180, false, true, false).unwrap();
@@ -77,11 +77,18 @@ fn window_program_4k_reuses_shared_textures_without_allocations() {
     let mut pixels = vec![0; size[0] as usize * size[1] as usize * 4];
     let mut events = Vec::with_capacity(input::EVENT_RESERVE);
     let deadline = Instant::now() + Duration::from_secs(2);
+    // Frame zero through the OGPU compositor, read back from the texture PXUI samples.
     loop {
         assert!(window.pump(&mut events));
         events.clear();
-        if let Some(at) = player.copy_frame(&mut pixels).unwrap() {
+        assert!(surface.begin(&window).unwrap());
+        let sample = surface.sample(&composition, &mut player).unwrap();
+        let input = FrameIn::new(320.0, 180.0).time(window.time());
+        ui.frame(&input, &mut |_| {}).unwrap();
+        assert!(surface.draw(&window, &ui).unwrap());
+        if let Some(at) = sample {
             assert_eq!(at, 0);
+            assert!(surface.read_program(&mut pixels).unwrap());
             break;
         }
         assert!(
@@ -105,12 +112,12 @@ fn window_program_4k_reuses_shared_textures_without_allocations() {
     player.set_playing(true);
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut last = 0;
-    let mut frame = || loop {
+    let mut frame = |surface: &mut Surface| loop {
         assert!(window.pump(&mut events));
         events.clear();
         assert!(surface.begin(&window).unwrap());
         let start = Instant::now();
-        let sample = surface.sample(&mut player).unwrap();
+        let sample = surface.sample(&composition, &mut player).unwrap();
         let image = surface.image();
         let input = FrameIn::new(320.0, 180.0).time(window.time());
         ui.frame(&input, &mut |ui| {
@@ -134,13 +141,13 @@ fn window_program_4k_reuses_shared_textures_without_allocations() {
         window.wait(Some(window.time() + 0.006));
     };
     for _ in 0..6 {
-        frame();
+        frame(&mut surface);
     }
     max_work.set(Duration::ZERO);
     splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
-        .warm(&mut frame);
+        .warm(&mut || frame(&mut surface));
     for _ in 0..8 {
-        frame();
+        frame(&mut surface);
     }
     player.set_playing(false);
     println!(
@@ -152,7 +159,12 @@ fn window_program_4k_reuses_shared_textures_without_allocations() {
     loop {
         assert!(window.pump(&mut events));
         events.clear();
-        if player.copy_frame(&mut pixels).unwrap() == Some(11) {
+        assert!(surface.begin(&window).unwrap());
+        let sample = surface.sample(&composition, &mut player).unwrap();
+        let input = FrameIn::new(320.0, 180.0).time(window.time());
+        ui.frame(&input, &mut |_| {}).unwrap();
+        assert!(surface.draw(&window, &ui).unwrap());
+        if sample == Some(11) {
             break;
         }
         assert!(

@@ -3,7 +3,8 @@ use crate::{
     takes::{self, TakeEvents},
 };
 use apple_sys::composition::{
-    AudioRamp, Builder, Composition, Source, TextLayer, Timing, VideoLayer,
+    AudioRamp, Builder, Composition, CursorImage, CursorSample, Source, TextLayer, Timing,
+    VideoLayer,
 };
 use splice_eval::{Audio, Background, CaptionPreset, Evaluator, Keys, Layer, Picture, Track};
 use splice_model::{ClipId, Frame, Media, MediaId, MediaKind, Project, Rect, TimelineId};
@@ -17,7 +18,19 @@ enum Key {
     Fill(usize, u32, u32),
 }
 
+/// The lowered layer plan, kept for the OGPU compositor (T12.7).
+#[derive(Default)]
+pub(crate) struct Plan {
+    /// Instruction intervals in order, each with its layers back to front.
+    pub intervals: Vec<([Frame; 2], Vec<VideoLayer>)>,
+    /// Fill tracks and their top-left and bottom-right colors.
+    pub fills: Vec<(i32, [u32; 2])>,
+    /// Cursor tables in registration order (`VideoLayer::cursor` indexes them).
+    pub cursors: Vec<(Vec<CursorSample>, Vec<CursorImage>, f64)>,
+}
+
 struct Lowering {
+    plan: Plan,
     builder: Builder,
     text: Vec<TimedText>,
     end: Frame,
@@ -34,8 +47,9 @@ pub(super) fn build(
     evaluator: &Evaluator,
     cuts: &[Frame],
     end: Frame,
-) -> Result<(Composition, Vec<TimedText>), Error> {
+) -> Result<(Composition, Vec<TimedText>, Plan), Error> {
     let mut state = Lowering {
+        plan: Plan::default(),
         builder: Builder::new(project.size, project.fps, end)?,
         text: Vec::new(),
         end,
@@ -256,11 +270,12 @@ pub(super) fn build(
             state.audio([a, b], range, &mut audio, project, package, evaluator)?;
         }
         state.builder.range(range, &video, &audio)?;
+        state.plan.intervals.push((range, video.clone()));
     }
     for (clip, media, style) in chips {
         state.chips(clip, media, style, project, package, evaluator)?;
     }
-    Ok((state.builder.finish()?, state.text))
+    Ok((state.builder.finish()?, state.text, state.plan))
 }
 
 impl Lowering {
@@ -485,6 +500,7 @@ impl Lowering {
         };
         let track = self.builder.source(Source::Color(a, b), &timing)?;
         self.tracks.push((key, track));
+        self.plan.fills.push((track, [a, b]));
         Ok(track)
     }
 

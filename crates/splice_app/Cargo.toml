@@ -17,6 +17,7 @@ splice_core = { path = "../splice_core" }
 splice_json = { path = "../splice_json" }
 splice_mcp = { path = "../splice_mcp" }
 splice_av = { path = "../splice_av" }
+splice_gpu = { path = "../splice_gpu" }
 splice_kit = { path = "../splice_kit" }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]

@@ -156,6 +156,7 @@ dependencies = [
  "pxui_sdl",
  "splice_av",
  "splice_core",
+ "splice_gpu",
  "splice_json",
  "splice_kit",
  "splice_mcp",
@@ -168,7 +169,9 @@ name = "splice_av"
 version = "0.1.0"
 dependencies = [
  "apple_sys",
+ "ogpu_core",
  "splice_eval",
+ "splice_gpu",
  "splice_json",
  "splice_model",
 ]
@@ -212,6 +215,13 @@ dependencies = [
  "splice_core",
  "splice_model",
  "splice_testkit",
+]
+
+[[package]]
+name = "splice_gpu"
+version = "0.1.0"
+dependencies = [
+ "ogpu_core",
 ]
 
 [[package]]

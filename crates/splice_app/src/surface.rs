@@ -1,17 +1,25 @@
 use super::viewer_error;
-use apple_sys::composition::{Player, ProgramTexture};
+use apple_sys::composition::Player;
 use metal_sys::frames::Frames;
 use ogpu_core::backend as be;
+use ogpu_core::types::{TextureDescriptor, TextureFormat, TextureUsage};
 use pxui::{
     Commands, Gpu, Image, Pass, Renderer, TargetDesc, Ui,
     images::{Images, Want},
 };
 use pxui_host::Window;
+use splice_av::{Composition, GpuProgram};
 use splice_core::history::StoreError;
+use std::rc::Rc;
 
 /// Owns the sampled textures as long as the PXUI renderer can reference them.
 pub(super) struct Surface {
     device: be::Device,
+    queue: be::Queue,
+    /// The frame's command buffer, adopted once and readopted each frame without allocating.
+    commands: Option<be::Commands>,
+    /// The OGPU compositor for the current composition (T12.7).
+    program: Option<(*const Composition, GpuProgram)>,
     frames: Option<Frames>,
     renderer: Option<Renderer>,
     slots: Vec<Slot>,
@@ -21,7 +29,8 @@ pub(super) struct Surface {
 }
 
 struct Slot {
-    texture: ProgramTexture,
+    texture: be::Texture,
+    target: be::PreparedRenderTarget,
     sampled: u64,
 }
 
@@ -31,8 +40,12 @@ impl Surface {
         ui: &Ui,
         size: Option<[u32; 2]>,
     ) -> Result<Self, StoreError> {
+        let device = open_device()?;
         let mut surface = Self {
-            device: open_device()?,
+            queue: be::create_queue(&device).map_err(gpu_error)?,
+            device,
+            commands: None,
+            program: None,
             frames: None,
             renderer: None,
             slots: Vec::with_capacity(3),
@@ -44,26 +57,39 @@ impl Surface {
         surface.frames =
             Some(Frames::new(&surface.device, token).map_err(|error| viewer_error(&error))?);
         let native = be::native_leased(&surface.device).map_err(gpu_error)?;
-        let device_ptr = native.mtl_device;
         surface.renderer = Some(open_renderer(ui, native, 2)?);
         if let Some([width, height]) = size {
             for id in 1..=3 {
-                let texture =
-                    ProgramTexture::new([width, height]).map_err(|error| viewer_error(&error))?;
-                let image = texture.image_for_device(device_ptr).ok_or_else(|| {
-                    viewer_error(&"The program texture is on another Metal device.")
-                })?;
+                // The compositor draws into these and PXUI samples them: no copies.
+                let texture = be::create_texture(
+                    &surface.device,
+                    TextureDescriptor {
+                        label: Some("Splice program".into()),
+                        width: i64::from(width),
+                        height: i64::from(height),
+                        depth: 1,
+                        mip_levels: 1,
+                        sample_count: 1,
+                        format: TextureFormat::Rgba8Unorm,
+                        usage: vec![
+                            TextureUsage::TextureBinding,
+                            TextureUsage::RenderAttachment,
+                            TextureUsage::TextureCopySrc,
+                        ],
+                    },
+                )
+                .map_err(gpu_error)?;
+                let image = be::native_texture(&texture).map_err(gpu_error)?.mtl_texture;
+                let target =
+                    splice_gpu::Compositor::target(&surface.device, &texture, [0.0, 0.0, 0.0, 1.0])
+                        .map_err(gpu_error)?;
                 surface.images.store(
                     Want::new(id, 1024).expect("fixed video image identity"),
-                    Some(Image::rgba8(
-                        width,
-                        height,
-                        std::ptr::null_mut(),
-                        image.as_ptr(),
-                    )),
+                    Some(Image::rgba8(width, height, std::ptr::null_mut(), image)),
                 );
                 surface.slots.push(Slot {
                     texture,
+                    target,
                     sampled: 0,
                 });
             }
@@ -83,22 +109,79 @@ impl Surface {
             .map_err(|error| viewer_error(&error))
     }
 
-    pub(super) fn sample(&mut self, player: &mut Player) -> Result<Option<i32>, StoreError> {
+    /// Composites the player's newest frame into a free program texture, inside this frame's
+    /// command buffer so PXUI samples it in the same submission.
+    pub(super) fn sample(
+        &mut self,
+        composition: &Rc<Composition>,
+        player: &mut Player,
+    ) -> Result<Option<i32>, StoreError> {
         // Frames::begin has waited for the reused in-flight slot. A paused frame can
         // be sampled again at any serial, so track each texture's most recent use.
-        let completed = self.frames.as_ref().expect("open surface").completed();
+        let frames = self.frames.as_ref().expect("open surface");
+        let completed = frames.completed();
         let index = self
             .slots
             .iter()
             .position(|slot| slot.sampled <= completed)
             .ok_or_else(|| viewer_error(&"No completed video texture slot is available."))?;
-        let frame = player
-            .copy_into(&mut self.slots[index].texture)
-            .map_err(|error| viewer_error(&error))?;
+        let key = Rc::as_ptr(composition);
+        if self.program.as_ref().is_none_or(|(known, _)| *known != key) {
+            let program =
+                GpuProgram::new(&self.device, composition).map_err(|error| viewer_error(&error))?;
+            self.program = Some((key, program));
+        }
+        let native = be::NativeCommands {
+            size: std::mem::size_of::<be::NativeCommands>() as u32,
+            vk_command_buffer: std::ptr::null_mut(),
+            mtl_command_buffer: frames.commands(),
+            frame_serial: frames.serial(),
+            inside_pass: 0,
+        };
+        let commands = match &self.commands {
+            Some(commands) if be::readopt_commands(commands, native).map_err(gpu_error)? => {
+                commands.clone()
+            }
+            _ => {
+                let commands = be::adopt_commands(&self.queue, native).map_err(gpu_error)?;
+                self.commands = Some(commands.clone());
+                commands
+            }
+        };
+        let (_, program) = self.program.as_mut().expect("program");
+        let frame = program
+            .render(
+                composition,
+                player,
+                index as u32,
+                frames.commands(),
+                &commands,
+                &mut self.slots[index].target,
+            )
+            .map_err(|error| viewer_error(&error));
+        be::settle_commands(&commands);
+        let frame = frame?;
         if frame.is_some() {
             self.current = Some(index);
+            // Retire the slot only after this frame's command buffer completes.
+            self.slots[index].sampled = frames.serial();
         }
         Ok(frame)
+    }
+
+    /// Reads the shown program texture back (tests and diagnostics; waits for the GPU).
+    #[allow(dead_code)]
+    pub(super) fn read_program(&mut self, rgba: &mut [u8]) -> Result<bool, StoreError> {
+        let Some(current) = self.current else {
+            return Ok(false);
+        };
+        if let Some(frames) = &mut self.frames {
+            frames.wait().map_err(|error| viewer_error(&error))?;
+        }
+        let texture = &self.slots[current].texture;
+        let width = be::native_texture(texture).map_err(gpu_error)?.width;
+        be::read_texture_into(texture, i64::from(width) * 4, rgba).map_err(gpu_error)?;
+        Ok(true)
     }
 
     pub(super) fn image(&self) -> Option<Image> {
@@ -168,6 +251,8 @@ impl Drop for Surface {
             let _ = frames.wait();
         }
         drop(self.renderer.take());
+        self.program = None;
+        self.commands = None;
         self.slots.clear();
         drop(self.frames.take());
         let _ = be::destroy_device(&self.device);

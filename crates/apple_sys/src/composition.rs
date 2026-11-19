@@ -48,6 +48,7 @@ struct RawSource {
 
 /// A native picture layer, with ramp values sampled over a composition interval.
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct VideoLayer {
     /// Source aperture as normalized x, y, width and height in oriented image coordinates.
     pub crop: [f64; 4],
@@ -124,6 +125,60 @@ pub struct CursorSample {
     pub click: u32,
 }
 
+/// One layer's decoded source for the OGPU compositor: an MTLTexture on the caller's device,
+/// cached per IOSurface. `texture` is null for fills or a missing frame.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FrameSource {
+    /// Borrowed `id<MTLTexture>`, valid while the player lives.
+    pub texture: *mut c_void,
+    /// IOSurface ID, stable across frames from the same pooled buffer.
+    pub surface: u32,
+    /// Pixels.
+    pub width: u32,
+    /// Pixels.
+    pub height: u32,
+    pad: u32,
+}
+
+impl Default for FrameSource {
+    fn default() -> Self {
+        Self {
+            texture: ptr::null_mut(),
+            surface: 0,
+            width: 0,
+            height: 0,
+            pad: 0,
+        }
+    }
+}
+
+/// Encodes whole-texture GPU copies (`sources[i]` into `destinations[i]`, `id<MTLTexture>`s of one
+/// size and format) into `command_buffer` (an `id<MTLCommandBuffer>`).
+pub fn blit(
+    command_buffer: *mut c_void,
+    sources: &[*mut c_void],
+    destinations: &[*mut c_void],
+) -> Result<(), Error> {
+    if sources.len() != destinations.len() {
+        return Err(Error::message(
+            "Frame copies need one destination per source.",
+        ));
+    }
+    let mut error = ptr::null_mut();
+    // SAFETY: both slices are valid for their length; native validates every texture pair.
+    let ok = unsafe {
+        splice_av_blit(
+            command_buffer,
+            sources.as_ptr(),
+            destinations.as_ptr(),
+            sources.len(),
+            &mut error,
+        )
+    };
+    if ok { Ok(()) } else { Err(diagnostic(error)) }
+}
+
 /// A recorded cursor image with its hotspot in PNG pixels and its pixels per point.
 pub struct CursorImage {
     /// PNG file.
@@ -176,6 +231,7 @@ struct RawText {
 const _: () = {
     assert!(size_of::<RawSource>() == 64 && offset_of!(RawSource, timeline) == 40);
     assert!(size_of::<VideoLayer>() == 184 && offset_of!(VideoLayer, flags) == 180);
+    assert!(size_of::<FrameSource>() == 24);
     assert!(size_of::<CursorSample>() == 32 && offset_of!(CursorSample, click) == 28);
     assert!(size_of::<RawCursorImage>() == 32 && offset_of!(RawCursorImage, scale) == 24);
     assert!(size_of::<AudioRamp>() == 12 && offset_of!(AudioRamp, gain) == 4);
@@ -214,6 +270,23 @@ unsafe extern "C" {
         error: *mut *mut c_char,
     ) -> bool;
     fn splice_av_finish(composition: *mut c_void, error: *mut *mut c_char) -> bool;
+    fn splice_av_blit(
+        command_buffer: *mut c_void,
+        sources: *const *mut c_void,
+        destinations: *const *mut c_void,
+        count: usize,
+        error: *mut *mut c_char,
+    ) -> bool;
+    fn splice_av_player_sources(
+        player: *mut c_void,
+        device: *mut c_void,
+        slot: u32,
+        sources: *mut FrameSource,
+        capacity: usize,
+        count: *mut usize,
+        frame: *mut i32,
+        error: *mut *mut c_char,
+    ) -> i32;
     fn splice_av_cursor(
         composition: *mut c_void,
         samples: *const CursorSample,
@@ -235,26 +308,6 @@ unsafe extern "C" {
     fn splice_av_player_play(player: *mut c_void, playing: bool);
     fn splice_av_player_ended(player: *mut c_void) -> bool;
     fn splice_av_player_seek(player: *mut c_void, frame: i32) -> bool;
-    fn splice_av_player_copy(
-        player: *mut c_void,
-        rgba: *mut u8,
-        length: usize,
-        frame: *mut i32,
-        error: *mut *mut c_char,
-    ) -> i32;
-    fn splice_av_texture(
-        width: u32,
-        height: u32,
-        device: *mut *mut c_void,
-        image: *mut *mut c_void,
-        error: *mut *mut c_char,
-    ) -> *mut c_void;
-    fn splice_av_player_into_texture(
-        player: *mut c_void,
-        texture: *mut c_void,
-        frame: *mut i32,
-        error: *mut *mut c_char,
-    ) -> i32;
     fn splice_av_export(
         composition: *mut c_void,
         file: *const c_char,
@@ -278,13 +331,6 @@ pub struct Composition(NonNull<c_void>);
 
 /// An AVPlayer and its output for one immutable composition.
 pub struct Player(NonNull<c_void>);
-
-/// An RGBA texture backed by shared Metal memory on the default device.
-pub struct ProgramTexture {
-    storage: NonNull<c_void>,
-    device: *mut c_void,
-    image: *mut c_void,
-}
 
 /// A native encoder job retaining the composition until encoding completes.
 pub struct Export(NonNull<c_void>);
@@ -502,44 +548,35 @@ impl Player {
         unsafe { splice_av_player_ended(self.0.as_ptr()) }
     }
 
-    /// Copies the newest sample to the caller's exact-size RGBA buffer if one is ready.
-    pub fn copy_frame(&mut self, rgba: &mut [u8]) -> Result<Option<i32>, Error> {
-        let mut frame = 0;
-        let mut error = ptr::null_mut();
-        // SAFETY: the bridge checks buffer length and does not retain caller memory.
-        let result = unsafe {
-            splice_av_player_copy(
-                self.0.as_ptr(),
-                rgba.as_mut_ptr(),
-                rgba.len(),
-                &mut frame,
-                &mut error,
-            )
-        };
-        match result {
-            1 => Ok(Some(frame)),
-            0 => Ok(None),
-            _ => Err(diagnostic(error)),
-        }
-    }
-
     /// Converts a decoded frame directly into a free shared Metal texture.
     ///
     /// Finish GPU work sampling the texture before writing to it again.
-    pub fn copy_into(&mut self, texture: &mut ProgramTexture) -> Result<Option<i32>, Error> {
-        let mut frame = 0;
+    /// Takes the newest displayed frame's decoded sources, one per layer of its instruction, as
+    /// textures on `device` (an `id<MTLDevice>`). `slot` (0…2) keeps the buffers alive until reused:
+    /// pass a slot whose GPU work has completed. Returns the frame and source count.
+    pub fn sources(
+        &mut self,
+        device: *mut c_void,
+        slot: u32,
+        out: &mut [FrameSource],
+    ) -> Result<Option<(i32, usize)>, Error> {
+        let (mut frame, mut count) = (0, 0);
         let mut error = ptr::null_mut();
-        // SAFETY: both native objects are owned for the call and native checks their dimensions.
+        // SAFETY: `out` is writable for its length; native validates the device and slot.
         let result = unsafe {
-            splice_av_player_into_texture(
+            splice_av_player_sources(
                 self.0.as_ptr(),
-                texture.storage.as_ptr(),
+                device,
+                slot,
+                out.as_mut_ptr(),
+                out.len(),
+                &mut count,
                 &mut frame,
                 &mut error,
             )
         };
         match result {
-            1 => Ok(Some(frame)),
+            1 => Ok(Some((frame, count))),
             0 => Ok(None),
             _ => Err(diagnostic(error)),
         }
@@ -559,41 +596,6 @@ impl Player {
         } else {
             Err(Error::message("The seek frame is outside the timeline."))
         }
-    }
-}
-
-impl ProgramTexture {
-    /// Allocates the shared storage and its sampled image on the default Metal device.
-    pub fn new([width, height]: [u32; 2]) -> Result<Self, Error> {
-        let mut image = ptr::null_mut();
-        let mut device = ptr::null_mut();
-        let mut error = ptr::null_mut();
-        // SAFETY: the native constructor validates dimensions and writes only to these outputs.
-        let storage =
-            unsafe { splice_av_texture(width, height, &mut device, &mut image, &mut error) };
-        let storage = NonNull::new(storage).ok_or_else(|| diagnostic(error))?;
-        Ok(Self {
-            storage,
-            device,
-            image,
-        })
-    }
-
-    /// Returns the texture pointer for a renderer on the same Metal device.
-    /// The caller must keep this texture alive until all its consumers finish.
-    pub fn image_for_device(&self, device: *mut c_void) -> Option<NonNull<c_void>> {
-        if self.device == device {
-            NonNull::new(self.image)
-        } else {
-            None
-        }
-    }
-}
-
-impl Drop for ProgramTexture {
-    fn drop(&mut self) {
-        // SAFETY: this is the retained native owner of the texture and storage.
-        unsafe { splice_av_release(self.storage.as_ptr()) };
     }
 }
 

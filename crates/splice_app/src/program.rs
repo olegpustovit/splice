@@ -37,7 +37,7 @@ impl Program {
     }
 
     pub(super) fn sample(&mut self, surface: &mut Surface) -> Result<(), StoreError> {
-        if let Some(at) = surface.sample(&mut self.player)? {
+        if let Some(at) = surface.sample(&self.composition, &mut self.player)? {
             self.shown = Some(at);
             if self.pending == Some(at) || self.playing {
                 self.pending = None;

@@ -6,7 +6,9 @@ license.workspace = true
 
 [dependencies]
 apple_sys = { path = "../apple_sys" }
+ogpu_core = { path = "../../pxui/crates/open/ogpu_core" }
 splice_eval = { path = "../splice_eval" }
+splice_gpu = { path = "../splice_gpu" }
 splice_json = { path = "../splice_json" }
 splice_model = { path = "../splice_model" }
 

@@ -2,8 +2,11 @@
 #![cfg(target_os = "macos")]
 #![deny(missing_docs)]
 
+mod gpu;
 mod lower;
 mod takes;
+
+pub use gpu::GpuProgram;
 
 use apple_sys::composition;
 use splice_eval::{EvalError, Evaluator};
@@ -23,6 +26,7 @@ pub struct Composition {
     size: [u32; 2],
     end: Frame,
     text: Vec<TimedText>,
+    plan: lower::Plan,
 }
 
 /// A resolved title or caption shared by the export and viewer.
@@ -79,13 +83,14 @@ impl Composition {
         let evaluator = Evaluator::prepare(project).map_err(Error::Plan)?;
         let cuts = evaluator.breakpoints();
         let end = *cuts.last().unwrap_or(&0);
-        let (native, text) = lower::build(project, package, &evaluator, &cuts, end)?;
+        let (native, text, plan) = lower::build(project, package, &evaluator, &cuts, end)?;
         Ok(Self {
             native,
             evaluator,
             size: project.size,
             end,
             text,
+            plan,
         })
     }
 

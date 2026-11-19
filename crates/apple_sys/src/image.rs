@@ -16,6 +16,13 @@ unsafe extern "C" {
         error: *mut *mut c_char,
     ) -> *mut c_void;
     fn splice_image_release(data: *mut c_void);
+    fn splice_image_rgba(
+        path: *const c_char,
+        width: *mut u32,
+        height: *mut u32,
+        error: *mut *mut c_char,
+    ) -> *mut u8;
+    fn free(pointer: *mut c_void);
     fn splice_cursor_current(
         previous: *const u8,
         info: *mut CursorInfo,
@@ -76,6 +83,27 @@ pub fn system_cursor(previous: Option<&[u8; 32]>) -> Result<Option<CursorImage>,
     }
     // SAFETY: a failed native capture transfers its diagnostic.
     Err(unsafe { Error::from_native(error, "System cursor capture failed.") })
+}
+
+/// Decodes an image file to straight-alpha sRGB RGBA8.
+pub fn decode_rgba(path: &std::path::Path) -> Result<(Vec<u8>, [u32; 2]), Error> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| Error::message("An image path contains NUL."))?;
+    let (mut width, mut height) = (0, 0);
+    let mut error = ptr::null_mut();
+    // SAFETY: the path lives for the call; native returns a malloc'd buffer of width*height*4.
+    let pixels = unsafe { splice_image_rgba(path.as_ptr(), &mut width, &mut height, &mut error) };
+    if pixels.is_null() {
+        // SAFETY: the bridge transfers ownership of the optional diagnostic on failure.
+        return Err(unsafe { Error::from_native(error, "Image decoding failed.") });
+    }
+    let length = width as usize * height as usize * 4;
+    // SAFETY: the buffer holds `length` initialized bytes until freed below.
+    let bytes = unsafe { std::slice::from_raw_parts(pixels, length) }.to_vec();
+    // SAFETY: the native allocation came from calloc and is not used again.
+    unsafe { free(pixels.cast()) };
+    Ok((bytes, [width, height]))
 }
 
 /// Encodes premultiplied sRGB RGBA8. A nonzero limit bounds the longest edge.
