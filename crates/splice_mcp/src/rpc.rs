@@ -10,6 +10,8 @@ const PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
 const CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
 const SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
+/// Jobs watched for progress and cancellation at once; the oldest is forgotten first.
+const MAX_WATCHED: usize = 64;
 /// Encoding time per turn of the serve loop while an export runs, so requests still get answers.
 #[cfg(target_os = "macos")]
 pub(super) const EXPORT_SLICE: std::time::Duration = std::time::Duration::from_millis(50);
@@ -402,18 +404,7 @@ fn dispatch(id: &Json, method: &str, params: &Json, connection: &mut Connection)
             }
             match connection.call(name, args, modern.then_some(meta)) {
                 Ok(result) => {
-                    if let Some(job) = result
-                        .field("structuredContent")
-                        .and_then(|content| content.field("jobId"))
-                        .and_then(Json::as_str)
-                    {
-                        connection.watched.push((
-                            job.to_owned(),
-                            id.clone(),
-                            meta.field("progressToken").cloned(),
-                            0.0,
-                        ));
-                    }
+                    connection.watch(name, args, &result, id, meta);
                     result
                 }
                 Err(_) => return rpc_error(id, -32603, "Tool returned invalid JSON"),
@@ -465,6 +456,34 @@ impl Connection {
             active
         });
         notes
+    }
+
+    /// Watches a job this request started (H10): never one a status, cancel, stop or resume
+    /// call only names, so cancelling that call leaves the job alone. The list is bounded.
+    fn watch(&mut self, name: &str, args: &Json, result: &Json, id: &Json, meta: &Json) {
+        let starts = match name {
+            "export.start" | "media.analyze" | "transcript.get" => true,
+            "record.start" => args.field("resume").is_none(),
+            _ => false,
+        };
+        let Some(job) = result
+            .field("structuredContent")
+            .and_then(|content| content.field("jobId"))
+            .and_then(Json::as_str)
+            .filter(|_| starts)
+        else {
+            return;
+        };
+        self.watched.retain(|(watched, ..)| watched != job);
+        if self.watched.len() == MAX_WATCHED {
+            self.watched.remove(0);
+        }
+        self.watched.push((
+            job.to_owned(),
+            id.clone(),
+            meta.field("progressToken").cloned(),
+            0.0,
+        ));
     }
 
     /// `notifications/cancelled`: cancels the job the request started, if any.
@@ -561,4 +580,83 @@ fn message(id: &Json, key: &str, value: Json) -> Json {
         ("id".into(), id.clone()),
         (key.into(), value),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::TestDirectory;
+    use crate::wire::Args;
+
+    fn connection() -> Connection {
+        Connection {
+            initialized: true,
+            code: false,
+            projects: Projects::default(),
+            friction: Recorder::new(None),
+            #[cfg(target_os = "macos")]
+            routes: Default::default(),
+            #[cfg(target_os = "macos")]
+            holders: Vec::new(),
+            #[cfg(target_os = "macos")]
+            events: None,
+            watched: Vec::new(),
+        }
+    }
+
+    fn call(connection: &mut Connection, id: u64, tool: &str, args: &str) -> Json {
+        let line = format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"{tool}","arguments":{args}}}}}"#
+        );
+        let reply = handle_line(line.as_bytes(), connection).expect("a reply");
+        reply
+            .field("result")
+            .and_then(|result| result.field("structuredContent"))
+            .cloned()
+            .expect("a tool result")
+    }
+
+    #[test]
+    fn h10_cancelling_a_status_request_keeps_the_job() {
+        let temp = TestDirectory::new("rpc-watch");
+        let package = temp.0.join("Watch.splice");
+        let mut connection = connection();
+        let opened = call(
+            &mut connection,
+            1,
+            "project.info",
+            &format!(r#"{{"path":"{}","create":true}}"#, package.display()),
+        );
+        let project = opened.string("projectId").unwrap().to_owned();
+        let export = format!(r#"{{"projectId":"{project}","ifRevision":0,"format":"fcpxml"}}"#);
+        let started = call(&mut connection, 2, "export.start", &export);
+        let job = started.string("jobId").unwrap().to_owned();
+        let status = call(
+            &mut connection,
+            3,
+            "jobs.status",
+            &format!(r#"{{"jobId":"{job}"}}"#),
+        );
+        assert_eq!(status.string("jobId").unwrap(), job);
+        // Only the request that started the job owns it: cancelling the status call is a no-op.
+        assert_eq!(connection.watched.len(), 1);
+        assert_eq!(connection.watched[0].0, job);
+        assert_eq!(connection.watched[0].1, Json::Unsigned(2));
+        handle_line(
+            br#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}"#,
+            &mut connection,
+        );
+        // The watch list stays bounded however many jobs a connection starts.
+        for id in 4..4 + MAX_WATCHED as u64 {
+            call(&mut connection, id, "export.start", &export);
+        }
+        assert_eq!(connection.watched.len(), MAX_WATCHED);
+        assert!(
+            connection
+                .watched
+                .iter()
+                .all(|(watched, ..)| *watched != job)
+        );
+        connection.close().unwrap();
+    }
 }
