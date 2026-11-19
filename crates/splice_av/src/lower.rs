@@ -290,6 +290,10 @@ impl Lowering {
         evaluator: &Evaluator,
     ) -> Result<(), Error> {
         let d = picture.destination;
+        if let Some([x, y]) = picture.focus {
+            let [width, height] = project.size.map(f64::from);
+            layer.focus = [x * width, y * height, x * width, y * height];
+        }
         if let Some(window) = picture.window {
             layer.corner = window.corner * d.w.min(d.h);
             layer.shadow = window.shadow.clamp(0.0, 1.0);

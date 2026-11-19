@@ -150,6 +150,8 @@ struct PreparedMotion {
     interval: Interval,
     from: f64,
     to: f64,
+    focus: Option<[f64; 2]>,
+    ease: bool,
 }
 
 struct PreparedCaption {
@@ -297,6 +299,10 @@ impl Evaluator {
         }
         for motion in &self.motions {
             motion.interval.add_breakpoints(&mut cuts);
+            if motion.ease {
+                // Renderers ramp linearly between cuts: sample the eased curve every 4 frames.
+                cuts.extend((motion.interval.start..motion.interval.end).step_by(4));
+            }
         }
         cuts.sort_unstable();
         cuts.dedup();
@@ -443,16 +449,22 @@ impl Evaluator {
         let source = input.frame(frame - clip.interval.start);
         let opacity = clip.interval.alpha(frame);
         if let Some(visual) = &clip.visual {
-            let zoom = self
+            let motion = self
                 .motions
                 .iter()
-                .find(|motion| motion.interval.contains(frame))
-                .map_or(1.0, |motion| {
-                    let progress = f64::from(frame - motion.interval.start)
-                        / f64::from((motion.interval.end - motion.interval.start - 1).max(1));
-                    motion.from + (motion.to - motion.from) * progress
-                });
+                .find(|motion| motion.interval.contains(frame));
+            let zoom = motion.map_or(1.0, |motion| {
+                let mut progress = f64::from(frame - motion.interval.start)
+                    / f64::from((motion.interval.end - motion.interval.start - 1).max(1));
+                if motion.ease {
+                    progress = progress * progress * (3.0 - 2.0 * progress);
+                }
+                motion.from + (motion.to - motion.from) * progress
+            });
             visual.draw(source, zoom, 1.0, out);
+            if let (Some(motion), Some(Layer::Picture(picture))) = (motion, out.layers.last_mut()) {
+                picture.focus = motion.focus;
+            }
         }
         input.audio(source, TimelineId::Clip(clip.id), opacity, out);
         if clip.take {
@@ -522,7 +534,12 @@ impl Evaluator {
                 interval,
                 text: text.clone(),
             }),
-            ItemKind::Motion { from, to } => {
+            ItemKind::Motion {
+                from,
+                to,
+                focus,
+                ease,
+            } => {
                 if !from.is_finite() || !to.is_finite() || *from <= 0.0 || *to <= 0.0 {
                     return Err(EvalError::Range);
                 }
@@ -530,6 +547,8 @@ impl Evaluator {
                     interval,
                     from: *from,
                     to: *to,
+                    focus: *focus,
+                    ease: *ease,
                 });
             }
             ItemKind::Media(overlay) => {
@@ -739,6 +758,7 @@ fn blank_visual(
             source: layout::rect(0.0, 0.0, 1.0, 1.0),
             destination: bounds,
             scale: 1.0,
+            focus: None,
             opacity: 1.0,
             window,
             cursor: None,

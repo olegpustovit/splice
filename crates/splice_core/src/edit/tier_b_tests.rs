@@ -240,3 +240,93 @@ fn tier_b_captions_generate_edit_split_merge_and_follow_cuts() {
     };
     assert!(project.items.find(gone).is_none());
 }
+
+#[test]
+fn tier_b_motion_focus_and_ease_apply_validate_and_round_trip() {
+    let mut project = sample();
+    run(
+        &mut project,
+        r#"[{"cmd":"motion.set","item":"ovl_detail","focus":{"x":0.25,"y":0.75},"ease":true},
+            {"cmd":"motion.add","at":0,"length":30,"to":1.5,"focus":{"x":0.5,"y":0.1}}]"#,
+    )
+    .unwrap();
+    let slot = project.items.find("ovl_detail".parse().unwrap()).unwrap();
+    let ItemKind::Motion { focus, ease, .. } = &project.items.data(slot).unwrap().kind else {
+        panic!("motion")
+    };
+    assert_eq!((*focus, *ease), (Some([0.25, 0.75]), true));
+    for (op, code) in [
+        (
+            r#"{"cmd":"motion.set","item":"ovl_detail","focus":{"x":2,"y":0}}"#,
+            "BAD_ARGS",
+        ),
+        (
+            r#"{"cmd":"motion.add","at":0,"focus":{"x":0.5}}"#,
+            "BAD_ARGS",
+        ),
+    ] {
+        let error = run(&mut project, &format!("[{op}]")).unwrap_err();
+        assert_eq!(error.error.code, code, "{op}");
+    }
+    // Saved and reopened, the focus and easing survive; null resets the focus.
+    let dir = std::env::temp_dir().join(format!("splice-motion-{}.splice", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    drop(crate::package::Package::create(&dir, &project).unwrap());
+    let (package, reopened) = crate::package::Package::open(&dir).unwrap();
+    drop(package);
+    std::fs::remove_dir_all(&dir).unwrap();
+    let slot = reopened.items.find("ovl_detail".parse().unwrap()).unwrap();
+    assert_eq!(
+        reopened.items.data(slot).unwrap().kind,
+        project.items.data(slot).unwrap().kind
+    );
+    run(
+        &mut project,
+        r#"[{"cmd":"motion.set","item":"ovl_detail","focus":null}]"#,
+    )
+    .unwrap();
+    let ItemKind::Motion { focus, ease, .. } = &project.items.data(slot).unwrap().kind else {
+        panic!("motion")
+    };
+    assert_eq!((*focus, *ease), (None, true));
+}
+
+#[test]
+fn tier_b_crop_aspect_reframes_to_fill_without_bands() {
+    let mut project = sample();
+    // The 640×400 take on the 9:16 canvas: the widest 9:16 slice, around the focus.
+    run(
+        &mut project,
+        r#"[{"cmd":"clip.crop","items":["clp_take"],"aspect":"canvas","focus":{"x":0.9,"y":0.5}}]"#,
+    )
+    .unwrap();
+    let take = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    let framing = project.clips.data(take).unwrap().framing;
+    let crop = framing.crop.unwrap();
+    assert_eq!(framing.fit, Fit::Fill);
+    assert!(
+        (crop.w - 0.5625 / 1.6).abs() < 1e-3 && crop.h == 1.0,
+        "{crop:?}"
+    );
+    assert!(
+        (crop.x + crop.w - 1.0).abs() < 1e-3,
+        "clamped to the right edge: {crop:?}"
+    );
+    run(
+        &mut project,
+        r#"[{"cmd":"clip.crop","items":["clp_take"],"aspect":"1:1"}]"#,
+    )
+    .unwrap();
+    let crop = project.clips.data(take).unwrap().framing.crop.unwrap();
+    assert!(
+        (crop.w - 0.625).abs() < 1e-3 && (crop.x - 0.1875).abs() < 1e-3,
+        "{crop:?}"
+    );
+    for op in [
+        r#"{"cmd":"clip.crop","items":["clp_take"],"aspect":"tall"}"#,
+        r#"{"cmd":"clip.crop","items":["clp_take"],"aspect":"1:1","rect":{"x":0,"y":0,"w":1,"h":1}}"#,
+        r#"{"cmd":"clip.crop","items":["ovl_hook"],"aspect":"canvas"}"#,
+    ] {
+        assert!(run(&mut project, &format!("[{op}]")).is_err(), "{op}");
+    }
+}

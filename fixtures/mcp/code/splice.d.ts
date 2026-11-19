@@ -144,6 +144,10 @@ declare namespace Splice {
       from?: number;
       /** scale */
       to?: number;
+      /** {x,y} canvas point (0–1) a motion holds still */
+      focus?: string;
+      /** ease a motion in and out */
+      ease?: boolean;
       placement?: "full" | "card" | "corner-tl" | "corner-tr" | "corner-bl" | "corner-br";
       behindPresenter?: boolean;
       /** @default true */
@@ -183,6 +187,10 @@ declare namespace Splice {
       from?: number;
       /** scale · @default 1.32 */
       to?: number;
+      /** {x,y} canvas point (0–1) the zoom holds still (default: center) */
+      focus?: string;
+      /** ease in and out · @default false */
+      ease?: boolean;
     }
     /** Edit Scale Keyframes (edit, 0.2). */
     interface MotionSet extends Base {
@@ -193,6 +201,9 @@ declare namespace Splice {
       from?: number;
       /** 0.5–2 */
       to?: number;
+      /** {x,y} canvas point (0–1), or null for the center */
+      focus?: string;
+      ease?: boolean;
     }
     /** Pin / Unpin (edit, 0.1). */
     interface ItemAnchor extends Base {
@@ -313,6 +324,10 @@ declare namespace Splice {
       rect?: Rect | null;
       /** how the cropped source sits in the canvas (or overlay box) */
       fit?: "fit" | "fill";
+      /** instead of rect: the largest crop of this shape, fit fill (reframe without bands) */
+      aspect?: "9:16" | "4:5" | "1:1" | "4:3" | "16:9" | "canvas";
+      /** {x,y} source point (0–1) the aspect crop keeps in frame (default: center) */
+      focus?: string;
     }
     /** Delete Range (destructive, 0.2). */
     interface CutRange extends Base {

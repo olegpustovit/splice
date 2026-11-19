@@ -247,7 +247,7 @@ impl Editor {
         data.appearance.fade_in = 0;
         clamp_fades(&mut data.appearance, length);
         match (&mut original.kind, &mut data.kind) {
-            (ItemKind::Motion { from, to }, ItemKind::Motion { from: right, .. }) => {
+            (ItemKind::Motion { from, to, .. }, ItemKind::Motion { from: right, .. }) => {
                 let midpoint = *from + (*to - *from) * f64::from(cut) / f64::from(timing.length);
                 *to = midpoint;
                 *right = midpoint;
@@ -287,9 +287,21 @@ impl Editor {
                     ..Appearance::default()
                 },
             ),
-            OverlayContent::Motion { from, to } => {
-                (ItemKind::Motion { from, to }, 120, Appearance::default())
-            }
+            OverlayContent::Motion {
+                from,
+                to,
+                focus,
+                ease,
+            } => (
+                ItemKind::Motion {
+                    from,
+                    to,
+                    focus,
+                    ease,
+                },
+                120,
+                Appearance::default(),
+            ),
             OverlayContent::Media {
                 media: id,
                 source,

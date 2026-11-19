@@ -139,6 +139,10 @@ pub enum Op {
         from: f64,
         /// Ending scale.
         to: f64,
+        /// Canvas point (0…1) the scale holds still.
+        focus: Option<[f64; 2]>,
+        /// Ease in and out.
+        ease: bool,
     },
     /// Edit Scale Keyframes.
     MotionSet {
@@ -148,6 +152,10 @@ pub enum Op {
         from: Option<f64>,
         /// New ending scale.
         to: Option<f64>,
+        /// New focus. Null resets to the center.
+        focus: Option<Option<[f64; 2]>>,
+        /// New easing.
+        ease: Option<bool>,
     },
     /// Pin / Unpin.
     ItemAnchor {
@@ -267,6 +275,10 @@ pub enum Op {
         rect: Option<Option<Rect>>,
         /// New fit mode.
         fit: Option<Fit>,
+        /// Reframe: crop to this width/height ratio (`None` inside means the canvas shape).
+        aspect: Option<Option<f64>>,
+        /// Source point the reframe keeps in frame.
+        focus: Option<[f64; 2]>,
     },
     /// Delete Range.
     CutRange {
@@ -532,6 +544,10 @@ pub enum OverlayContent {
         from: f64,
         /// Ending scale.
         to: f64,
+        /// Canvas point (0…1) the scale holds still.
+        focus: Option<[f64; 2]>,
+        /// Ease in and out.
+        ease: bool,
     },
     /// Media overlay.
     Media {

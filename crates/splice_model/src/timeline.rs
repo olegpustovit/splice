@@ -295,6 +295,10 @@ pub enum ItemKind {
         from: f64,
         /// Ending scale.
         to: f64,
+        /// Canvas point (normalized 0…1) the scale holds still; the center when absent.
+        focus: Option<[f64; 2]>,
+        /// Ease in and out instead of a linear ramp.
+        ease: bool,
     },
     /// Cue composed from words in a transcript.
     Caption {
@@ -575,9 +579,16 @@ impl Clone for ItemKind {
         match self {
             Self::Title { text } => Self::Title { text: text.clone() },
             Self::Media(overlay) => Self::Media(*overlay),
-            Self::Motion { from, to } => Self::Motion {
+            Self::Motion {
+                from,
+                to,
+                focus,
+                ease,
+            } => Self::Motion {
                 from: *from,
                 to: *to,
+                focus: *focus,
+                ease: *ease,
             },
             Self::Caption { words, edits } => Self::Caption {
                 words: words.clone(),

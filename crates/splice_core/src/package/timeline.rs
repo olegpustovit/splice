@@ -124,10 +124,24 @@ pub(super) fn decode_clip(value: &Json) -> Result<Clip, PackageError> {
 pub(super) fn encode_item(id: ItemId, timing: ItemTiming, data: &ItemData) -> Json {
     let (kind, params) = match &data.kind {
         ItemKind::Title { text: title } => ("title", object(vec![("text", text(title))])),
-        ItemKind::Motion { from, to } => (
-            "motion",
-            object(vec![("from", Json::Float(*from)), ("to", Json::Float(*to))]),
-        ),
+        ItemKind::Motion {
+            from,
+            to,
+            focus,
+            ease,
+        } => {
+            let mut fields = vec![("from", Json::Float(*from)), ("to", Json::Float(*to))];
+            if let Some([x, y]) = focus {
+                fields.push((
+                    "focus",
+                    object(vec![("x", Json::Float(*x)), ("y", Json::Float(*y))]),
+                ));
+            }
+            if *ease {
+                fields.push(("ease", Json::Bool(true)));
+            }
+            ("motion", object(fields))
+        }
         ItemKind::Caption { words, edits } => (
             "caption",
             object(vec![
@@ -191,10 +205,22 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
             }
         }
         "motion" => {
-            shape(params, &["from", "to"])?;
+            shape(params, &["from", "to", "focus", "ease"])?;
+            let focus = match params.field("focus") {
+                None => None,
+                Some(point) => {
+                    shape(point, &["x", "y"])?;
+                    Some([number(point, "x")?, number(point, "y")?])
+                }
+            };
             ItemKind::Motion {
                 from: number(params, "from")?,
                 to: number(params, "to")?,
+                focus,
+                ease: params
+                    .field("ease")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false),
             }
         }
         "media" => {

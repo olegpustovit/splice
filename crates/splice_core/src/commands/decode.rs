@@ -138,6 +138,8 @@ pub(super) fn overlay_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         "motion" => OverlayContent::Motion {
             from: a.opt_number("from")?.unwrap_or(1.0),
             to: a.opt_number("to")?.unwrap_or(1.32),
+            focus: focus(a)?.flatten(),
+            ease: a.flag("ease", false)?,
         },
         "media" => OverlayContent::Media {
             media: a.target("media")?,
@@ -191,6 +193,8 @@ pub(super) fn motion_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         length: a.opt_int("length")?.unwrap_or(120),
         from: a.opt_number("from")?.unwrap_or(1.0),
         to: a.opt_number("to")?.unwrap_or(1.32),
+        focus: focus(a)?.flatten(),
+        ease: a.flag("ease", false)?,
     })
 }
 
@@ -199,7 +203,28 @@ pub(super) fn motion_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         item: a.target("item")?,
         from: a.opt_number("from")?,
         to: a.opt_number("to")?,
+        focus: focus(a)?,
+        ease: a.opt_flag("ease")?,
     })
+}
+
+/// `focus`: absent (None), null (Some(None)) or a normalized canvas point {x, y}.
+fn focus(a: &Json) -> Result<Option<Option<[f64; 2]>>, Error> {
+    let Some(value) = a.field("focus") else {
+        return Ok(None);
+    };
+    if *value == Json::Null {
+        return Ok(Some(None));
+    }
+    let x = value.number("x")?;
+    let y = value.number("y")?;
+    if !(0.0..=1.0).contains(&x)
+        || !(0.0..=1.0).contains(&y)
+        || value.as_object().map_or(0, |fields| fields.len()) != 2
+    {
+        return Err(Error::bad("focus", "{x, y} with both from 0 to 1, or null"));
+    }
+    Ok(Some(Some([x, y])))
 }
 
 pub(super) fn item_anchor(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
@@ -345,13 +370,34 @@ pub(super) fn project_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
 pub(super) fn clip_crop(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let rect = crop(a)?;
     let fit = a.opt_string("fit")?.as_deref().map(fit).transpose()?;
-    if rect.is_none() && fit.is_none() {
-        return Err(Error::bad("rect or fit", "a crop, a fit mode, or both"));
+    let aspect = match a.opt_string("aspect")?.as_deref() {
+        None => None,
+        Some("canvas") => Some(None),
+        Some(shape) => {
+            let ratio = shape
+                .split_once(':')
+                .and_then(|(w, h)| Some(w.parse::<f64>().ok()? / h.parse::<f64>().ok()?))
+                .filter(|ratio| ratio.is_finite() && *ratio > 0.05 && *ratio < 20.0)
+                .ok_or_else(|| Error::bad("aspect", "9:16, 4:5, 1:1, 4:3, 16:9 or canvas"))?;
+            Some(Some(ratio))
+        }
+    };
+    let focus = focus(a)?.flatten();
+    if rect.is_some() && aspect.is_some() {
+        return Err(Error::bad("rect", "either rect or aspect, not both"));
+    }
+    if rect.is_none() && fit.is_none() && aspect.is_none() {
+        return Err(Error::bad(
+            "rect or fit",
+            "a crop, a fit mode, an aspect, or a mix",
+        ));
     }
     Ok(Op::ClipCrop {
         items: a.targets("items")?,
         rect,
         fit,
+        aspect,
+        focus,
     })
 }
 

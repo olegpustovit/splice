@@ -111,8 +111,10 @@ pub struct Picture {
     pub source: Rect,
     /// Destination rectangle in pixels before zoom.
     pub destination: Rect,
-    /// Scale around the canvas center from the active Motion item.
+    /// Scale from the active Motion item, about `focus`.
     pub scale: f64,
+    /// Canvas point (normalized 0…1) the Motion scale holds still; the center when absent.
+    pub focus: Option<[f64; 2]>,
     /// Fade opacity.
     pub opacity: f64,
     /// Resolved Window treatment. Its background is a separate layer.

@@ -113,7 +113,16 @@ fn merge(into: &mut Vec<EffectParam>, params: Vec<EffectParam>) {
 impl Editor {
     pub(super) fn run_tier_b(&mut self, op: Op) -> Result<Outcome, CommandError> {
         match op {
-            Op::ClipCrop { items, rect, fit } => self.crop(&items, rect, fit),
+            Op::ClipCrop {
+                items,
+                rect,
+                fit,
+                aspect,
+                focus,
+            } => match aspect {
+                Some(ratio) => self.reframe(&items, ratio, focus),
+                None => self.crop(&items, rect, fit),
+            },
             Op::ComponentSet {
                 clip,
                 component,
@@ -157,18 +166,31 @@ impl Editor {
                 length,
                 from,
                 to,
+                focus,
+                ease,
             } => {
                 check_scale(from, "from")?;
                 check_scale(to, "to")?;
                 self.add_item(
-                    OverlayContent::Motion { from, to },
+                    OverlayContent::Motion {
+                        from,
+                        to,
+                        focus,
+                        ease,
+                    },
                     Some(&at),
                     None,
                     None,
                     Some(length),
                 )
             }
-            Op::MotionSet { item, from, to } => self.set_motion(&item, from, to),
+            Op::MotionSet {
+                item,
+                from,
+                to,
+                focus,
+                ease,
+            } => self.set_motion(&item, from, to, focus, ease),
             Op::EffectAdd {
                 target,
                 kind,
@@ -307,6 +329,58 @@ impl Editor {
         })
     }
 
+    /// The largest crop of `ratio` (the canvas shape when `None`) around `focus`, filling the frame.
+    fn reframe(
+        &mut self,
+        items: &[Target],
+        ratio: Option<f64>,
+        focus: Option<[f64; 2]>,
+    ) -> Result<Outcome, CommandError> {
+        let ratio =
+            ratio.unwrap_or(f64::from(self.project.size[0]) / f64::from(self.project.size[1]));
+        let [fx, fy] = focus.unwrap_or([0.5, 0.5]);
+        let ids = self.selection(items)?;
+        for &id in &ids {
+            let media_id = match id {
+                TimelineId::Clip(clip) => {
+                    let slot = clip_slot(&self.project, clip)?;
+                    self.project.clips.data(slot).expect("live clip").media
+                }
+                TimelineId::Item(item) => {
+                    let slot = item_slot(&self.project, item)?;
+                    match self.project.items.data(slot).expect("live item").kind {
+                        ItemKind::Media(overlay) => Some(overlay.media),
+                        _ => None,
+                    }
+                }
+                TimelineId::Marker(_) => None,
+            };
+            let probe = media_id
+                .and_then(|m| media(&self.project, m).ok())
+                .filter(|m| m.kind != MediaKind::Audio && m.probe.width > 0 && m.probe.height > 0)
+                .map(|m| f64::from(m.probe.width) / f64::from(m.probe.height))
+                .ok_or_else(no_source_frame)?;
+            // Normalized width and height of the largest `ratio` crop inside the source.
+            let (w, h) = if probe > ratio {
+                (ratio / probe, 1.0)
+            } else {
+                (1.0, probe / ratio)
+            };
+            let rect = Rect {
+                x: round4((fx - w / 2.0).clamp(0.0, 1.0 - w)),
+                y: round4((fy - h / 2.0).clamp(0.0, 1.0 - h)),
+                w: round4(w),
+                h: round4(h),
+            };
+            self.crop(&[Target::Timeline(id)], Some(Some(rect)), Some(Fit::Fill))?;
+        }
+        Ok(Outcome {
+            summary: Summary::Text(format!("Reframed {} item(s) to fill the canvas", ids.len())),
+            primary: ids.first().copied().map(Target::Timeline),
+            created: Vec::new(),
+        })
+    }
+
     fn take_clip(&self, target: &Target) -> Result<(ClipId, Slot), CommandError> {
         match self.resolve(target)? {
             Target::Timeline(TimelineId::Clip(id)) => Ok((id, clip_slot(&self.project, id)?)),
@@ -421,6 +495,8 @@ impl Editor {
         item: &Target,
         from: Option<f64>,
         to: Option<f64>,
+        focus: Option<Option<[f64; 2]>>,
+        ease: Option<bool>,
     ) -> Result<Outcome, CommandError> {
         let TimelineId::Item(id) = self.timeline(item)? else {
             return Err(wrong_kind("Pass a motion overlay (ovl_…)."));
@@ -429,6 +505,8 @@ impl Editor {
         let ItemKind::Motion {
             from: old_from,
             to: old_to,
+            focus: old_focus,
+            ease: old_ease,
         } = &mut self.project.items.data_mut(slot).expect("live item").kind
         else {
             return Err(wrong_kind("Pass a motion overlay (ovl_…)."));
@@ -440,6 +518,12 @@ impl Editor {
         if let Some(to) = to {
             check_scale(to, "to")?;
             *old_to = to;
+        }
+        if let Some(focus) = focus {
+            *old_focus = focus;
+        }
+        if let Some(ease) = ease {
+            *old_ease = ease;
         }
         Ok(Outcome::edit(
             format!("Motion {id} {old_from}→{old_to}"),
