@@ -70,7 +70,7 @@ Recording runs in Splice.app's capture agent (LaunchServices-launched, accessory
 privacy grants belong to the stably signed `~/Applications/Splice.app`, never to the terminal or MCP
 client that spawned `splice mcp` (PLAN.md T8).
 
-Stay under 20 tools: new capabilities become `edit.apply` commands or parameters, not tools.
+Stay under 20 tools in the default profile: new capabilities become `edit.apply` commands or parameters, not tools. Code mode is a separate profile, `splice mcp --code` (PLAN.md D3, T14).
 
 ## Every call
 

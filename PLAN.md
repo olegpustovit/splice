@@ -2,6 +2,8 @@
 
 **Cut 0.1 landed on 2026-11-18.** The signed release is installed on the Mini and the live recording
 checks passed across debug and release installs. The loop keeps going until the M1 exit (0.3).
+**Now: 0.1.1 (T10, opening always works), then 0.2** per the 0.2 proposal
+(https://artifacts.microapps.space/a/qg46h5ht5g07, accepted 2026-11-19).
 Scope is fixed. When a task does not fit, ship it as a `ponytail:` with an upgrade
 trigger instead of cutting the task; when that is not possible, move the task to a later cut and
 say so in the log. Never weaken a test to make a cut.
@@ -37,7 +39,10 @@ Build the core on the Linux box. Reach for the Mac only for `[mac]` tasks:
 - **0.1 · today:** T0, T1, T2 (Tier A commands), T3, T4, T5.1–T5.5, T6.1–T6.2, T7.1–T7.5, then T8
   (recording through MCP). Recording is secondary to editing but in 0.1, so agents can generate real
   projects to edit and to feed the self-improvement loop.
-- **0.2:** T2.7 (Tier B commands), T3.6 evals, T6.3, T9 captions with transcription.
+- **0.1.1:** T10 (writer handoff, capture-agent documents, offline media, visible errors, human-path matrix).
+- **0.2 · headless-complete:** T3.6 outcome evals gate the cut, T2.7 Tier B (as T11), T12 recording
+  render on the Metal compositor, T13 audio, T9 captions, T14 code mode, T6.3. Exit: every eval
+  passes 3/3, friction triaged, no `PLANNED` reaches an agent for a row describe calls available.
 - **0.3 · M1 exit:** every registry row built (the 20 planned rows too), T7.6 notarization,
   performance budgets met, the friction backlog empty or triaged.
 
@@ -67,7 +72,7 @@ SHA.
 - [x] T2.4 [L] History (89ca2a7): revisions, human undo/redo, sessions, `history.undo {scope:"last"|"session"|"to", revision}`, revert (rebuild + replay with a `skipped` list), `ifRevision` → `STALE_REVISION`, `idempotencyKey`. Accept: a seeded property test (500 random batches mixing human and agent edits) shows undo to every revision r reproduces hash(r), journal replay equals live state, undoing an undo restores, and the skipped lists are deterministic.
 - [x] T2.5 [L] `splice_eval` (809dcae): timeline → per-frame render plan (layers, transforms, fades, audio gains), effect resolution project › lane › item. Accept: plan goldens at 10 frames of the sample; a warm per-frame eval allocates nothing.
 - [x] T2.6 [L] Budgets (ab85713): apply p99 < 1 ms on a 2,000-item project; warm `item.trim`/`move`/`set` allocate nothing. Accept: `cargo t -p splice_core budget` (release-timed in qualification with `SPLICE_SLOW=1`).
-- [ ] T2.7 [L] Tier B commands (0.2): effects (`effect.add/set/remove/paste/promote`), components (`component.set`, `audio.set`, `cursor.set`, `keys.set`, `keys.hide`), cutting (`cut.range`, `cut.words`), `clip.crop`, `motion.add/set`, `clip.lift`, `overlay.replaceSpine`, captions (`captions.generate`, `caption.set/split/merge`). Then the 20 planned rows (0.3).
+- [ ] T2.7 [L] Tier B commands (0.2, tracked as T11): effects (`effect.add/set/remove/paste/promote`), components (`component.set`, `audio.set`, `cursor.set`, `keys.set`, `keys.hide`), cutting (`cut.range`, `cut.words`), `clip.crop`, `motion.add/set`, `clip.lift`, `overlay.replaceSpine`, captions (`captions.generate`, `caption.set/split/merge`). Then the 20 planned rows (0.3).
 
 ### T3 · MCP and CLI, headless
 - [x] T3.1 [L] JSON-RPC 2.0 stdio (33e67ce), newline-delimited, hand-rolled. `initialize` negotiates 2025-11-25 and 2026-07-28. `tools/list` comes from the table in a fixed order with `inputSchema` and `outputSchema`. Results are `structuredContent` plus a text mirror; business errors are `isError` results with `code` and `fix`. Accept: a conformance transcript and a `tools/list` golden.
@@ -75,7 +80,7 @@ SHA.
 - [x] T3.3 [L] Friction log (99c005a): every `isError` result, the next calls and whether they recovered, and the optional `friction` argument every tool accepts → `<project>.splice/friction.jsonl` plus the global state dir. `splice friction [list|show|repro <id>|resolve <id> <sha>]`. Accept: transcript tests for logging, the recovery flag, and `repro` writing a failing transcript fixture.
 - [x] T3.4 [L] Transcript runner (3ddd172): `fixtures/mcp/*.jsonl` replays request → expected structured result with `"…"` wildcards. Accept: every T3.2 fixture runs under `cargo t -p splice_mcp transcript`.
 - [x] T3.5 [L] `splice` CLI (80e8c4f): `new`, `open`, `mcp`, `apply`, `snapshot`, `describe`, `export`, `frame`, `friction`, `check`, `version`, and `splice <path>` = open. On Linux, `open`, `export` and `frame` return the typed error `UNSUPPORTED_PLATFORM`. Accept: CLI tests over a temp project.
-- [ ] T3.6 [L] (0.2) `.mcp.json` dogfood and `make eval`: `evals/tasks/*.toml` (prompt, seed project, end-state assertions checked by `splice check`) run `claude -p` with the `splice` skill against `splice mcp`. Results go to `evals/results.tsv` (pass, calls, errors, recoveries). Accept: 5 tasks; a baseline recorded.
+- [ ] T3.6 [L] (0.2, gates the cut) `.mcp.json` dogfood and `make eval`: `evals/tasks/*.toml` (prompt, seed project, end-state assertions checked by `splice check`) run `claude -p` with the `splice` skill against `splice mcp`. Results go to `evals/results.tsv` (pass, calls, errors, recoveries). Accept: 5 tasks; a baseline recorded. First task: `tiktok-textedit` (9:16 without letterbox bands, visible cursor ≥ 1.5×, ≥ 1 zoom, background frame, music ≤ −14 LUFS, export exists), recorded failing before T11 starts.
 
 ### T4 · Media on macOS (no ffmpeg)
 - [x] T4.1 [M] `apple_sys` (6ea33b9), in LocalWave's `lw_apple_sys` pattern: one crate, one ARC Objective-C shim per service (`media.m`, `capture.m`, `events.m`, `permissions.m`, `panel.m`, …) behind one C header `platform.h` with `_Static_assert` layout checks, built by `cc` in build.rs (macOS only), and a small safe Rust module per shim. Native → Rust traffic is a bounded event ring polled with `peek`/`ack` plus a `wake` callback; callbacks never hold Rust references; errors come back as `char **error`. This crate is the only `unsafe`. Accept: probe of a fixture movie on the Mini.
@@ -193,6 +198,70 @@ Depends on T1.3, T4.1, T7.
 ### T9 · Text and captions (0.2) [M + L]
 - [ ] T9.1 [M] `splice_speech`: SpeechAnalyzer transcription job → words with frame-accurate timing (forced alignment), transcript hash. Linux uses fixture transcripts.
 - [ ] T9.2 [L] Caption commands and `transcript.get {captions: json|srt|vtt}` (from the prototype). Burn-in through T4.3.
+
+## 0.2 decisions (2026-11-19)
+
+- **D1** Start the M3 Metal compositor inside 0.2 as a custom `AVVideoCompositing`, used by preview
+  and export. It carries the cursor, corners, shadows, zoom focal points, keystroke chips and masks.
+- **D2** `quickjs_sys` (vendored QuickJS-NG, built by `cc`) is allowed, behind a gate allowlist
+  entry with measured binary size and build time.
+- **D3** Code mode is a tool profile, `splice mcp --code` (`code.run` + `commands.describe`), so
+  the default profile stays under 20 tools and the two profiles A/B in evals.
+- **D4** Music goes on audio lanes (`LaneKind::Audio`), not media overlays.
+
+Process (docs/LOOP.md): outcome evals gate cuts; the human-path matrix runs in `mac-check`; a row
+is available only with an apply test; visual features ship a frame golden from a real take; each
+cut logs one "try it as a user" line.
+
+### T10 · 0.1.1: opening always works [M]
+- [ ] T10.1 Writer handoff. A headless MCP writer serves the per-project live socket. A viewer that
+  gets `LOCKED` asks the holder to hand off; the holder releases the lock and forwards to the
+  viewer. Accept: MCP `project.info`, then open → a window, and the next `edit.apply` on the same
+  MCP connection lands in the viewer.
+- [ ] T10.2 The capture agent never keeps a document: it relaunches a new viewer instance with the
+  path. Accept: `record --dry-run`, then `open x.splice` → a viewer process with the path.
+- [ ] T10.3 Offline media is not fatal: the viewer opens and shows an offline slate; export refuses
+  with `OFFLINE_MEDIA`. Accept: the sample fixture without assets opens.
+- [ ] T10.4 No silent failures: a viewer error shows an alert with code, message and fix and is
+  appended to the global friction log.
+- [ ] T10.5 Human-path matrix in `mac-check`: Launch Services open × {clean, MCP holding, agent
+  alive, offline media} checks a live viewer process and no error.
+
+### T11 · Headless-complete editing (0.2) [L]
+- [ ] T11.1 `clip.crop` (eval and AV already render it).
+- [ ] T11.2 `effect.add/set/remove/paste/promote`.
+- [ ] T11.3 `component.set`, `audio.set`, `cursor.set`, `keys.set/hide`.
+- [ ] T11.4 `cut.range`, `clip.lift`, `overlay.replaceSpine`.
+- [ ] T11.5 `motion.add/set` with focal point and easing.
+- [ ] T11.6 Describe tells the truth: `available` per row; the parity test fails a row that is
+  available without an apply test.
+
+### T12 · Recording render on the Metal compositor (0.2) [M + L]
+- [ ] T12.1 `AVVideoCompositing` Metal compositor from the eval plan; parity ≤ 2/255 with the current
+  lowering; zero warm allocations per frame.
+- [ ] T12.2 Cursor layer from `events.json` + `cursors/`: size, smoothing, idle hide, click rings.
+- [ ] T12.3 Auto-zoom solver: clicks and typing → zoom keyframes with focal points; `intent.autoZoom`.
+- [ ] T12.4 Window frame: corner radius, shadow, inset, wallpaper/gradient presets.
+- [ ] T12.5 Keystroke chips and the camera bubble mask.
+- [ ] T12.6 `intent.reframe {aspect}`: crop to the active window or area, no letterbox bands.
+
+### T13 · Audio (0.2) [L + M]
+- [ ] T13.1 `LaneKind::Audio`; `clip.insert {path, lane}` for music; per-item `volume`.
+- [ ] T13.2 `audio.duck {under, amount, attack, release}` as eval gain ramps.
+- [ ] T13.3 Native loudness in `audio.summary`; `audio.normalize {target}`.
+- [ ] T13.4 `record.start` defaults `systemAudio` on for window and app sources and warns on silent takes.
+
+### T14 · Code mode (0.2) [L]
+- [ ] T14.1 `quickjs_sys`: vendored QuickJS-NG via `cc`, safe `run(src, limits, host)`; no libc
+  module, loader or timers; interrupt, memory and stack limits.
+- [ ] T14.2 `splice mcp --code`: `code.run {code, projectId?, sessionId?}` →
+  `{result, logs, calls, revisions, error{code, message, fix, line}}`, dispatching through
+  `tools::call`; limits 64 KB source, 2 s, 32 MB, 200 calls, 32 KB output.
+- [ ] T14.3 `.d.ts` generated from `COMMANDS` and tool schemas, `commands.describe {format:"ts"}`,
+  golden-locked; optional fields omittable, never `null`.
+- [ ] T14.4 Adversarial tests: infinite loop, memory bomb, deep recursion, `SpliceError` keeps
+  `fix`, line numbers map to the user's source.
+- [ ] T14.5 A/B the T3.6 evals with and without code mode (calls, tokens, wall, pass rate).
 
 ## Log
 

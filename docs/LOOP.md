@@ -30,6 +30,15 @@ Iterations never skip a red check. If something is still blocked after two hones
 iteration writes the blocker under the task in PLAN.md (`blocked: …`), leaves the task unticked and
 moves on. The loop stops when PLAN.md has no actionable task, or when a `STOP` file exists in the repo root.
 
+Acceptance is about outcomes, not parts (lessons from 0.1):
+
+- A cut ships only when its outcome evals (§2, "Measured by evals") pass, run by a real agent.
+- Human launch paths are tested the way a person launches: Launch Services `open`, not hidden
+  smoke flags. The T10.5 matrix runs in `make mac-check`.
+- A registry row is available only when it has an apply test. Never advertise a row that returns `PLANNED`.
+- A visual feature ships a frame golden from a real take, pulled back with `make mac-pull` and looked at.
+- Each cut adds one log line saying what a person can now make with it.
+
 ## 2 · The friction loop
 
 ### At runtime, inside an agent session (self-correction)
