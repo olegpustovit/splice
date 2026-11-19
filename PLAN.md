@@ -107,7 +107,7 @@ SHA.
 - [x] T7.3 Install targets and Finder launch (f05d175): `make dev` (debug) and `make install` (release) publish the same `$(APPDIR)/Splice.app` (default `~/Applications`), link its executable at `~/.local/bin/splice`, and register the app with Launch Services. Both profiles ran through the link on the Mini, and Launch Services delivered a `.splice` package to the installed app.
 - [x] T7.4 Bundle and state paths (35a3859): macOS executable lookup and canonicalization resolve the installed symlink to the bundle. Smoke checks the packaged SDL license in `Contents/Resources`. The CLI and MCP share state resolution at `~/Library/Application Support/Splice` on macOS and `$XDG_STATE_HOME/splice` on Linux. Viewer sockets are under the state directory's `live/` subdirectory. The installed symlink passed smoke from a separate directory on the Mini.
 - [x] T7.5 Bundle verifier (9792f32): `tools/check-macos-bundle.sh` adapts LocalWave's verifier to validate Splice's metadata, macOS 15.0 deployment ceiling, runtime paths, bundled dependencies, and signed entitlements. Bundling runs the static checks before publication. `make mac-check` also launches a hidden smoke test through a symlink and rejects a signed fixture missing a usage string.
-- [ ] T7.6 (0.3) Notarize (`tools/notarize-macos.sh`) and a `.dmg`. Built (09ac…: see log): `make dmg` makes
+- [ ] T7.6 (0.3) Notarize (`tools/notarize-macos.sh`) and a `.dmg`. Built (d05b099): `make dmg` makes
   `target/dist/Splice-<version>.dmg`, Developer ID signed and verified; the app inside runs. Gatekeeper's only
   objection is "Unnotarized Developer ID". HUMAN: store notarytool credentials once
   (`xcrun notarytool store-credentials splice-notary`, Apple ID + app-specific password, team 7ZH3FYV964), then
