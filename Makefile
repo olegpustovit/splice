@@ -20,7 +20,7 @@ MAC_DIR  ?= projects/editor
 MAC_ENV   = cd $(MAC_DIR) && export CARGO_BUILD_JOBS=2 PATH="$$HOME/.cargo/bin:$$PATH" &&
 MAC_NICE  = nice -n 10
 
-.PHONY: check build lib dev install bundle sign mac-sync mac-check mac-local-check mac-run mac-pull eval loop
+.PHONY: check build lib dev install bundle sign dmg mac-sync mac-check mac-local-check mac-run mac-pull eval loop
 
 check:
 	cargo run -q -p gate -- all
@@ -57,6 +57,11 @@ bundle: build
 	packaging/bundle-macos.sh '$(PRODUCTS)' '$(SPLICE_SIGNING_KEYCHAIN)' '$(SDL3_DIR)' '$(BUNDLE_DIR)' '$(BUNDLE_MODE)'
 
 sign: bundle
+
+# T7.6: signed DMG in target/dist; NOTARY_PROFILE=<notarytool profile> also notarizes and staples.
+dmg: bundle
+	@/usr/bin/security unlock-keychain -p '' '$(SPLICE_SIGNING_KEYCHAIN)' >/dev/null 2>&1 || true
+	tools/notarize-macos.sh '$(BUNDLE_DIR)/Splice.app' '$(SPLICE_SIGNING_KEYCHAIN)' target/dist
 
 install:
 	@mkdir -p '$(APPDIR)' '$(PREFIX)/bin'

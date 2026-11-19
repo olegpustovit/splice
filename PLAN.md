@@ -107,7 +107,11 @@ SHA.
 - [x] T7.3 Install targets and Finder launch (f05d175): `make dev` (debug) and `make install` (release) publish the same `$(APPDIR)/Splice.app` (default `~/Applications`), link its executable at `~/.local/bin/splice`, and register the app with Launch Services. Both profiles ran through the link on the Mini, and Launch Services delivered a `.splice` package to the installed app.
 - [x] T7.4 Bundle and state paths (35a3859): macOS executable lookup and canonicalization resolve the installed symlink to the bundle. Smoke checks the packaged SDL license in `Contents/Resources`. The CLI and MCP share state resolution at `~/Library/Application Support/Splice` on macOS and `$XDG_STATE_HOME/splice` on Linux. Viewer sockets are under the state directory's `live/` subdirectory. The installed symlink passed smoke from a separate directory on the Mini.
 - [x] T7.5 Bundle verifier (9792f32): `tools/check-macos-bundle.sh` adapts LocalWave's verifier to validate Splice's metadata, macOS 15.0 deployment ceiling, runtime paths, bundled dependencies, and signed entitlements. Bundling runs the static checks before publication. `make mac-check` also launches a hidden smoke test through a symlink and rejects a signed fixture missing a usage string.
-- [ ] T7.6 (0.3) Notarize (`tools/notarize-macos.sh`) and a `.dmg`.
+- [ ] T7.6 (0.3) Notarize (`tools/notarize-macos.sh`) and a `.dmg`. Built (09ac…: see log): `make dmg` makes
+  `target/dist/Splice-<version>.dmg`, Developer ID signed and verified; the app inside runs. Gatekeeper's only
+  objection is "Unnotarized Developer ID". HUMAN: store notarytool credentials once
+  (`xcrun notarytool store-credentials splice-notary`, Apple ID + app-specific password, team 7ZH3FYV964), then
+  `make dmg NOTARY_PROFILE=splice-notary` submits, staples and spctl-checks app and DMG.
 
 ### T8 · Screen recording through MCP, almost headless (0.1, after T7) [M]
 
@@ -362,3 +366,5 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-19 · T14.6 · done · 26ace8e · Index-first code-mode declarations: cost -8% vs direct (v2 +4%), cache writes +4% (v2 +21%), 15/15 pass. Study updated (f0hfkms3e4d0 v2, archive rs6zd6dc2ryj v3, 65 runs).
 - 2026-11-19 · friction · a716130 · Fixed the recurring friction both arms filed (sound labels, bare refs, social preset, audio.set types, lane inspect, jobs in code.run replies, describe any-term). `make check` 111 tests, `make mac-check` green. apply p99 budget flakes at load ~30 on 20 cores (pre-0.2 a706ba9 measures the same 500–900 µs band side by side); budget unchanged.
 - 2026-11-19 · T14.7 · done · 33e1f28, 92f21e0 · Final paired round, both arms at one commit: code mode cost -13% (every task below direct), wall -19%, turns -48%, 30/30 pass. eval.py runs agents with stdin from /dev/null (under ssh … bash -s, claude -p swallowed the rest of the script). Study f0hfkms3e4d0 v3, archive rs6zd6dc2ryj v4 (95 runs).
+- 2026-11-19 · defects · 3a99937 · captions.generate follows a take split earlier in the batch; a pinned item spanning a ripple cut loses the removed frames (sample watermark 660 → 651). Regression test fails without the fix.
+- 2026-11-19 · T7.6 · built, notarization HUMAN · `make dmg` on the Mini: Splice-0.1.0.dmg 9.0 MB, Developer ID signed, app verifies and runs from the mounted image; spctl: "Unnotarized Developer ID" until a notarytool profile exists.
