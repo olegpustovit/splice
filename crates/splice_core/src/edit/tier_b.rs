@@ -262,6 +262,11 @@ impl Editor {
             Op::CaptionSet { item, text, words } => self.set_caption(&item, text, words),
             Op::CaptionSplit { item, word } => self.split_caption(&item, word),
             Op::CaptionMerge { items } => self.merge_captions(&items),
+            Op::TranscriptSet {
+                media,
+                words,
+                language,
+            } => self.set_transcript(&media, words, language),
             _ => unreachable!("tier B dispatch"),
         }
     }
@@ -1549,6 +1554,56 @@ impl Editor {
         Ok(Outcome::edit(
             format!("Caption {id}"),
             Target::Timeline(TimelineId::Item(id)),
+        ))
+    }
+
+    /// Stores a media item's words (replacing any earlier transcript). Word IDs are `w1…` in order;
+    /// the hash covers the language and words, so captions anchored to an older version settle away.
+    fn set_transcript(
+        &mut self,
+        target: &Target,
+        words: Vec<(String, Frame, Frame)>,
+        language: String,
+    ) -> Result<Outcome, CommandError> {
+        let Target::Media(id) = self.resolve(target)? else {
+            return Err(wrong_kind("Pass a media ID (med_…) from project.info."));
+        };
+        let frames = media(&self.project, id)?.probe.frames;
+        if words.last().is_some_and(|word| word.2 > frames) {
+            return Err(error(
+                "OUT_OF_SOURCE",
+                "A word ends after its media.",
+                "Use source frames within the media duration.",
+            ));
+        }
+        let mut canonical = language.clone();
+        for (text, from, to) in &words {
+            write!(canonical, "|{text},{from},{to}").expect("string write");
+        }
+        let transcript = Transcript {
+            media: id,
+            hash: crate::package::hash_bytes(canonical.as_bytes()),
+            language,
+            words: words
+                .into_iter()
+                .enumerate()
+                .map(|(index, (text, from, to))| Word {
+                    id: WordId::from_index(index as u32 + 1),
+                    text,
+                    from,
+                    to,
+                    confidence: None,
+                })
+                .collect(),
+        };
+        let count = transcript.words.len();
+        match self.project.transcripts.iter_mut().find(|t| t.media == id) {
+            Some(existing) => *existing = transcript,
+            None => self.project.transcripts.push(transcript),
+        }
+        Ok(Outcome::edit(
+            format!("Transcript of {id}: {count} words"),
+            Target::Media(id),
         ))
     }
 

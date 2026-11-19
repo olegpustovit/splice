@@ -291,3 +291,123 @@ pub(super) fn unavailable(feature: &str) -> StoreError {
         "Use a macOS build with the native media and capture backend.",
     )
 }
+
+/// Transcription needs the native speech backend.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn transcribe(_: &mut Store, _: &Json) -> Result<Json, StoreError> {
+    Err(unavailable("Transcription"))
+}
+
+/// `transcript.get {transcribe:true}`: recognizes the clip's speech on device and commits the
+/// words as `transcript.set` in the caller's session, then answers like `transcript.get`.
+#[cfg(target_os = "macos")]
+pub(super) fn transcribe(store: &mut Store, args: &Json) -> Result<Json, StoreError> {
+    let session = args.session()?;
+    let p = store.project();
+    let slot = match args.optional_string("clip")? {
+        Some(id) => {
+            let id: splice_model::ClipId = id
+                .parse()
+                .map_err(|_| bad("clip", "a clip ID from timeline.snapshot"))?;
+            p.clips.find(id).ok_or_else(|| {
+                failure(
+                    "NOT_FOUND",
+                    &format!("No clip {id}."),
+                    "Call timeline.snapshot to find a current clip ID.",
+                )
+            })?
+        }
+        None => p
+            .clips
+            .order()
+            .iter()
+            .copied()
+            .find(|&slot| {
+                p.clips
+                    .data(slot)
+                    .and_then(|data| data.media)
+                    .is_some_and(|id| {
+                        p.media
+                            .iter()
+                            .any(|m| m.id == id && !m.probe.audio.is_empty())
+                    })
+            })
+            .ok_or_else(|| {
+                failure(
+                    "NOT_FOUND",
+                    "No clip on the spine has audio.",
+                    "Record with mic or insert a clip with speech, then transcribe it.",
+                )
+            })?,
+    };
+    let media_id = p
+        .clips
+        .data(slot)
+        .and_then(|data| data.media)
+        .ok_or_else(|| bad("clip", "a clip with media"))?;
+    let media = p
+        .media
+        .iter()
+        .find(|m| m.id == media_id)
+        .ok_or_else(|| bad("clip", "a clip with media"))?;
+    // A take's speech is in its microphone (else system audio) file; an import is one file.
+    let base = store.path().join(&media.path);
+    let audio = match media
+        .take
+        .as_ref()
+        .and_then(|t| t.mic.as_deref().or(t.system.as_deref()))
+    {
+        Some(file) if base.is_dir() => base.join(file),
+        Some(file) => base.with_file_name(file),
+        None => base,
+    };
+    let language = args.optional_string("language")?.unwrap_or("en-US");
+    let words = apple_sys::speech::transcribe(&audio, language).map_err(|error| {
+        failure(
+            "TRANSCRIPTION_FAILED",
+            &error.to_string(),
+            "Check that the clip has speech; the first run downloads the language model.",
+        )
+    })?;
+    let fps = media.probe.fps;
+    let mut last = 0;
+    let mut list = Vec::with_capacity(words.len());
+    for apple_sys::speech::Word { text, start, end } in words {
+        let from = ((start * fps).round() as Frame).max(last);
+        let to = ((end * fps).round() as Frame)
+            .max(from + 1)
+            .min(media.probe.frames);
+        if to <= from {
+            continue;
+        }
+        last = to;
+        list.push(super::object(vec![
+            ("text", Json::String(text)),
+            ("from", Json::Signed(i64::from(from))),
+            ("to", Json::Signed(i64::from(to))),
+        ]));
+    }
+    if list.is_empty() {
+        return Err(failure(
+            "NO_SPEECH",
+            "No words were recognized in the clip's audio.",
+            "Check the microphone track, or pass language for a non-English take.",
+        ));
+    }
+    let op = super::object(vec![
+        ("cmd", super::text("transcript.set")),
+        ("media", display(&media_id)),
+        ("words", Json::Array(list)),
+        ("language", super::text(language)),
+    ]);
+    let options = splice_core::history::WriteOptions {
+        source: splice_core::history::Source::Agent,
+        session: Some(session),
+        if_revision: Some(store.project().rev),
+        label: Some("Agent: Transcribe".into()),
+        time: now(),
+        ..Default::default()
+    };
+    store.apply(std::slice::from_ref(&op), &options)?;
+    super::media::transcript(store.project(), args)
+}

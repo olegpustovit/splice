@@ -196,8 +196,10 @@ Depends on T1.3, T4.1, T7.
      prompt. Each profile kept all four grants, the installed path and the designated requirement.
 
 ### T9 · Text and captions (0.2) [M + L]
-- [ ] T9.1 [M] `splice_speech`: SpeechAnalyzer transcription job → words with frame-accurate timing (forced alignment), transcript hash. Linux uses fixture transcripts.
-- [ ] T9.2 [L] Caption commands and `transcript.get {captions: json|srt|vtt}` (from the prototype). Burn-in through T4.3.
+- [x] T9.1 [M] SpeechAnalyzer on device through a Swift `@_cdecl` shim in `apple_sys` (no separate crate):
+  `transcript.get {transcribe:true}` commits `transcript.set` (words in source frames, versioned hash).
+  Synchronous; ponytail: a `job_` when takes run past a few minutes. Linux uses fixture transcripts.
+- [x] T9.2 [L] Caption commands and `transcript.get {captions: json|srt|vtt}` (from the prototype). Burn-in through T4.3.
 
 ## 0.2 decisions (2026-11-19)
 
@@ -236,8 +238,7 @@ cut logs one "try it as a user" line.
 - [x] T11.2 (ff8a777) `effect.add/set/remove/paste/promote`.
 - [x] T11.3 (ff8a777) `component.set`, `audio.set`, `cursor.set`, `keys.set/hide`.
 - [x] T11.4 (ff8a777) `cut.range`, `clip.lift`, `overlay.replaceSpine`.
-- [ ] T11.5 `motion.add/set` with focal point and easing. (Click zoom has both since 5cc7409; motion
-  items still scale about the canvas center.)
+- [x] T11.5 (2fb1eac) `motion.add/set` with `focus` and `ease`.
 - [x] T11.6 (ff8a777) Describe tells the truth: `available` per row; the parity test fails a row that is
   available without an apply test.
 
@@ -250,7 +251,7 @@ cut logs one "try it as a user" line.
 - [x] T12.4 (5cc7409) Window frame: corner radius, shadow, gradient and solid backgrounds. Open: inset
   stroke, wallpaper presets.
 - [x] T12.5 (5cc7409) Keystroke chips (timed text) and the rounded, shadowed camera bubble.
-- [ ] T12.6 `intent.reframe {aspect}`: crop to the active window or area, no letterbox bands.
+- [x] T12.6 (2fb1eac) `clip.crop {aspect, focus}` (reframe): crop to the active window or area, no letterbox bands.
 - [x] T12.7 (ef451c1, eea9f2c) OGPU compositor: `ogpu_metal` IOSurface import (the macOS twin of `import_dmabuf`), a
   portable `splice_gpu` renderer for the layer plan (MSL now, SPIR-V with Vulkan), used by the viewer
   (zero-copy into its texture), frame grabs and export. Follow ../rays: the app leases one OGPU
@@ -261,10 +262,10 @@ cut logs one "try it as a user" line.
   per frame.
 
 ### T13 · Audio (0.2) [L + M]
-- [ ] T13.1 `LaneKind::Audio`; `clip.insert {path, lane}` for music; per-item `volume`.
-- [ ] T13.2 `audio.duck {under, amount, attack, release}` as eval gain ramps.
-- [ ] T13.3 Native loudness in `audio.summary`; `audio.normalize {target}`.
-- [ ] T13.4 `record.start` defaults `systemAudio` on for window and app sources and warns on silent takes.
+- [x] T13.1 (eecd6c1) `LaneKind::Audio`; `clip.insert {path, lane}` for music; per-item `volume`.
+- [x] T13.2 (eecd6c1) `audio.duck {under, amount, attack, release}` as eval gain ramps.
+- [x] T13.3 (eecd6c1) Native loudness in `audio.summary`; `audio.normalize {target}`.
+- [x] T13.4 (eecd6c1) `record.start` defaults `systemAudio` on for window and app sources and warns on silent takes.
 
 ### T14 · Code mode (0.2) [L]
 - [x] T14.1 (b9835d6) `quickjs_sys`: vendored QuickJS-NG via `cc`, safe `run(src, limits, host)`; no libc

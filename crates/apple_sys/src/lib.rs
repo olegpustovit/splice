@@ -34,5 +34,8 @@ pub mod permissions;
 /// Still capture with ScreenCaptureKit.
 pub mod screenshot;
 
+/// On-device transcription (SpeechAnalyzer, through a Swift shim).
+pub mod speech;
+
 #[cfg(test)]
 mod tests;

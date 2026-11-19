@@ -525,6 +525,16 @@ declare namespace Splice {
     interface IntentAutoZoom extends Base {
       cmd: "intent.autoZoom";
     }
+    /** Set Transcript (edit, 0.2). */
+    interface TranscriptSet extends Base {
+      cmd: "transcript.set";
+      /** med_… the recorded or imported source */
+      media: string;
+      /** [{text, from, to}] source frames, in order · from transcription (transcript.get {transcribe:true} does this) */
+      words: string;
+      /** BCP 47 tag · @default en-US */
+      language?: string;
+    }
   }
   /** Any registry command, for edit.apply's ops. */
   type Op =
@@ -588,7 +598,8 @@ declare namespace Splice {
     | op.IntentPace
     | op.IntentFitDuration
     | op.IntentKeepShots
-    | op.IntentAutoZoom;
+    | op.IntentAutoZoom
+    | op.TranscriptSet;
 }
 
 declare const splice: {
@@ -706,6 +717,9 @@ declare const splice: {
       keepShots(args: Omit<Splice.op.IntentKeepShots, "cmd">): Splice.op.IntentKeepShots;
       autoZoom(args: Omit<Splice.op.IntentAutoZoom, "cmd">): Splice.op.IntentAutoZoom;
     };
+    transcript: {
+      set(args: Omit<Splice.op.TranscriptSet, "cmd">): Splice.op.TranscriptSet;
+    };
   };
   project: {
     /** Open a .splice project by path or inspect an open project by ID. Use create:true to make a new project. */
@@ -726,8 +740,8 @@ declare const splice: {
     events(args: { projectId?: string; clip: string; from?: number; to?: number; }): { revision: Splice.Revision; clip: string; cursor?: unknown[]; clicks: unknown[]; keys: unknown[]; };
   };
   transcript: {
-    /** Page through words by ID or get caption cues as JSON, SRT or WebVTT. Use the returned hash with word anchors. */
-    get(args?: { projectId?: string; clip?: string; cursor?: string; limit?: number; captions?: "json" | "srt" | "vtt"; lane?: string; }): { revision: Splice.Revision; hash: string | null; clip?: string; words: unknown[]; fillers?: string[]; nextCursor?: string | null; lanes?: unknown[]; cues?: unknown[] | number; format?: "srt" | "vtt"; text?: string; };
+    /** Page through words by ID or get caption cues as JSON, SRT or WebVTT. Use the returned hash with word anchors. With transcribe:true (and sessionId), first recognizes the clip's speech on device and saves the words. */
+    get(args?: { projectId?: string; clip?: string; transcribe?: boolean; language?: string; sessionId?: string; cursor?: string; limit?: number; captions?: "json" | "srt" | "vtt"; lane?: string; }): { revision: Splice.Revision; hash: string | null; clip?: string; words: unknown[]; fillers?: string[]; nextCursor?: string | null; lanes?: unknown[]; cues?: unknown[] | number; format?: "srt" | "vtt"; text?: string; };
   };
   audio: {
     /** Read loudness, peaks and silence or pause ranges for a clip's audio components. */

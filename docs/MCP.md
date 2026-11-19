@@ -122,8 +122,13 @@ Agents cannot restore a revision that would change the project's access level.
 
 `takes.events` reports timeline frame numbers and source frame numbers. Key events expose their
 indexes, visibility and categories. Captured characters and raw key codes stay in the take.
-`audio.summary` returns track settings and labels transcript-derived pauses. Loudness and peaks
-are null when the current build cannot measure the audio.
+`audio.summary` returns track settings and labels transcript-derived pauses. Integrated loudness
+(LUFS) is measured natively at import; peaks and recorded take components report null.
+
+`transcript.get {transcribe:true, sessionId}` recognizes a spine clip's speech on device
+(SpeechAnalyzer, macOS 26+; the first run downloads the language model) and commits the words as one
+`transcript.set` batch in that session, so `history.undo` removes them. It then answers like a plain
+`transcript.get`. Other platforms return UNSUPPORTED_PLATFORM.
 
 `view.frames` accepts 1–16 exact frame numbers in `at` or a `count` from 1–16 for a filmstrip.
 A filmstrip of two or more samples spans the first through last timeline frames. Each result

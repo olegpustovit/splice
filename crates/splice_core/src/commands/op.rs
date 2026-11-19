@@ -425,6 +425,15 @@ pub enum Op {
     IntentKeepShots,
     /// Auto Zoom.
     IntentAutoZoom,
+    /// Set Transcript (a Splice extension).
+    TranscriptSet {
+        /// Source media.
+        media: Target,
+        /// Words as (text, from, to) in source frames.
+        words: Vec<(String, Frame, Frame)>,
+        /// BCP 47 language tag.
+        language: String,
+    },
 }
 
 /// A typed ID or a reference to a preceding operation.

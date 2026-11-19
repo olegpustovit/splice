@@ -16,7 +16,7 @@ fn registry_matches_prototype_ids_order_and_status() {
     assert_eq!((built.len(), planned.len()), (41, 20));
     assert_eq!(
         COMMANDS.iter().map(|row| row.id).collect::<Vec<_>>(),
-        [built, planned].concat()
+        [built, planned, EXTENSIONS.to_vec()].concat()
     );
     assert_eq!(
         COMMANDS

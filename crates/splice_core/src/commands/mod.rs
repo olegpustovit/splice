@@ -10,6 +10,9 @@ mod table;
 pub use op::*;
 pub use table::COMMANDS;
 
+/// Splice's own rows, after the prototype's 61 (docs/reference/core.js), in table order.
+pub const EXTENSIONS: &[&str] = &["transcript.set"];
+
 #[cfg(test)]
 mod tests;
 

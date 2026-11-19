@@ -599,4 +599,14 @@ pub const COMMANDS: &[Command] = &[
         ui: &["Command palette with preview"],
         example: r#"{"cmd":"intent.autoZoom"}"#, decoder: |_, _| Ok(Op::IntentAutoZoom),
     },
+    // ── Splice extensions after the prototype's rows (see commands::EXTENSIONS) ──
+    Command {
+        id: "transcript.set", title: "Set Transcript", group: "Captions",
+        risk: "edit", shortcut: "", tier: Tier::Second,
+        params: &[("media", "!med_… the recorded or imported source"),
+            ("words", "![{text, from, to}] source frames, in order · from transcription (transcript.get {transcribe:true} does this)"),
+            ("language", "BCP 47 tag = en-US")],
+        ui: &["Transcript panel ▸ Transcribe"],
+        example: r#"{"cmd":"transcript.set","media":"med_webcam","words":[{"text":"Hello","from":6,"to":18},{"text":"there","from":21,"to":33}]}"#, decoder: decode::transcript_set,
+    },
 ];

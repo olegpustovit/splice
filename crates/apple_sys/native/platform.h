@@ -211,6 +211,9 @@ void splice_av_writer_release(void *writer);
 // Encodes GPU copies of whole textures into a caller's MTLCommandBuffer. Same size and format per pair.
 bool splice_av_blit(void *command_buffer, void *const *sources, void *const *destinations, size_t count,
                     char **error);
+// On-device transcription (native/speech.swift, macOS 26+). On success *out is "start\tend\ttext\n"
+// lines in seconds; free it with free(). On failure *error is set.
+bool splice_speech_transcribe(const char *path, const char *locale, char **out, char **error);
 // Decodes an image file to straight RGBA8. Free the pixels with free().
 uint8_t *splice_image_rgba(const char *path, uint32_t *width, uint32_t *height, char **error);
 // Rasterizes centered bold text to straight RGBA8. Free the pixels with free().

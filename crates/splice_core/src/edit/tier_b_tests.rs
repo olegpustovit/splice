@@ -433,3 +433,50 @@ fn tier_b_music_lands_on_an_audio_lane_with_volume_duck_and_loudness() {
         assert_eq!(error.error.code, code, "{op}");
     }
 }
+
+#[test]
+fn tier_b_transcript_set_replaces_words_and_feeds_captions() {
+    let mut project = sample();
+    let old = project.transcripts[0].hash;
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"transcript.set","media":"med_screen","words":[{"text":"Hello","from":6,"to":17},{"text":"world","from":20,"to":30}]},
+            {"cmd":"captions.generate","maxWords":2}]"#,
+    )
+    .unwrap();
+    let transcript = &project.transcripts[0];
+    assert_ne!(transcript.hash, old);
+    let texts: Vec<_> = transcript
+        .words
+        .iter()
+        .map(|w| (w.id.to_string(), w.text.as_str()))
+        .collect();
+    assert_eq!(
+        texts,
+        [("w1".to_owned(), "Hello"), ("w2".to_owned(), "world")]
+    );
+    // Captions on the old words settle away; the new ones caption the new words.
+    let cues: Vec<_> = project
+        .items
+        .order()
+        .iter()
+        .filter_map(|&slot| match &project.items.data(slot).unwrap().kind {
+            ItemKind::Caption { words, .. } => Some(words.len()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cues, [2]);
+    assert!(
+        report
+            .side_effects
+            .iter()
+            .any(|e| matches!(e, SideEffect::Removed { .. }))
+    );
+    for op in [
+        r#"{"cmd":"transcript.set","media":"med_screen","words":[{"text":"a","from":5,"to":4}]}"#,
+        r#"{"cmd":"transcript.set","media":"med_screen","words":[{"text":"late","from":10,"to":9999}]}"#,
+        r#"{"cmd":"transcript.set","media":"clp_take","words":[]}"#,
+    ] {
+        assert!(run(&mut project, &format!("[{op}]")).is_err(), "{op}");
+    }
+}

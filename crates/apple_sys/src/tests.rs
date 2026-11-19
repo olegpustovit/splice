@@ -128,3 +128,52 @@ fn event_ring_reuses_storage_after_warmup() {
         assert!(ring.ack(1));
     });
 }
+
+/// T9.1: SpeechAnalyzer through the Swift shim returns timed words on device.
+#[test]
+fn native_speech_transcribes_synthesized_words_in_order() {
+    let dir = std::env::temp_dir().join(format!("splice-speech-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (aiff, m4a) = (dir.join("speech.aiff"), dir.join("speech.m4a"));
+    let said = std::process::Command::new("say")
+        .args([
+            "-o",
+            aiff.to_str().unwrap(),
+            "Today we build a frame study.",
+        ])
+        .status()
+        .unwrap();
+    assert!(said.success());
+    let converted = std::process::Command::new("afconvert")
+        .args([
+            "-f",
+            "m4af",
+            "-d",
+            "aac",
+            aiff.to_str().unwrap(),
+            m4a.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(converted.success());
+    let words = crate::speech::transcribe(&m4a, "en-US").unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let text: Vec<_> = words
+        .iter()
+        .map(|w| {
+            w.text
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .collect();
+    assert_eq!(
+        text,
+        ["today", "we", "build", "a", "frame", "study"],
+        "{words:?}"
+    );
+    assert!(
+        words
+            .windows(2)
+            .all(|pair| pair[0].start <= pair[1].start && pair[0].end <= pair[1].end)
+    );
+}

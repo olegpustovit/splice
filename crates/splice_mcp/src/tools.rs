@@ -164,11 +164,14 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "transcript.get",
-        description: "Page through words by ID or get caption cues as JSON, SRT or WebVTT. Use the returned hash with word anchors.",
-        read_only: true,
+        description: "Page through words by ID or get caption cues as JSON, SRT or WebVTT. Use the returned hash with word anchors. With transcribe:true (and sessionId), first recognizes the clip's speech on device and saves the words.",
+        read_only: false,
         input: &[
             ("projectId", "string"),
             ("clip", "string"),
+            ("transcribe", "boolean"),
+            ("language", "string"),
+            ("sessionId", "string"),
             ("cursor", "string"),
             ("limit", LIMIT),
             ("captions", r#"{"enum":["json","srt","vtt"]}"#),
@@ -635,6 +638,9 @@ fn execute(
         "timeline.snapshot" => timeline::snapshot(projects.lookup(args)?.project(), args),
         "items.inspect" => timeline::inspect(projects.lookup(args)?.project(), args),
         "timeline.find" => timeline::find(projects.lookup(args)?.project(), args),
+        "transcript.get" if args.flag("transcribe")? => {
+            platform::transcribe(projects.lookup(args)?, args)
+        }
         "transcript.get" => media::transcript(projects.lookup(args)?.project(), args),
         "takes.events" => media::events(projects.lookup(args)?, args),
         "audio.summary" => media::audio(projects.lookup(args)?, args),

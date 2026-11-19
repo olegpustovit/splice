@@ -8,3 +8,8 @@ t = "run -q --manifest-path pxui/tools/t/Cargo.toml --target-dir target --"
 linker = "pxui/tools/cc-stack.sh"
 [target.x86_64-apple-darwin]
 linker = "pxui/tools/cc-stack.sh"
+
+# Matches LSMinimumSystemVersion (packaging/Info.plist). Below macOS 12 the Swift runtime stubs
+# name @rpath back-deployment copies, so the native speech shim needs the real floor here.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "15.0"

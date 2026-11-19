@@ -1,5 +1,5 @@
 use super::{CommandError as Error, DecodeScratch, Json, args::*, op::*};
-use splice_model::{Duck, Fit, Placement};
+use splice_model::{Duck, Fit, Frame, Placement};
 
 type DecodedOp = Result<Op, Error>;
 
@@ -594,4 +594,37 @@ pub(super) fn caption_merge(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp
         return Err(Error::bad("items", "two or more caption IDs"));
     }
     Ok(Op::CaptionMerge { items })
+}
+
+pub(super) fn transcript_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let mut words = Vec::new();
+    for word in a
+        .field("words")
+        .and_then(Json::as_array)
+        .ok_or_else(|| Error::bad("words", "an array of {text, from, to}"))?
+    {
+        let text = word.string("text")?.trim();
+        let bounds = || Error::bad("words", "integer source frames from and to");
+        let from = word.opt_int("from")?.ok_or_else(bounds)?;
+        let to = word.opt_int("to")?.ok_or_else(bounds)?;
+        if text.is_empty()
+            || from < 0
+            || to <= from
+            || words
+                .last()
+                .is_some_and(|w: &(String, Frame, Frame)| from < w.1)
+        {
+            return Err(Error::bad(
+                "words",
+                "nonempty text with increasing source frames, to after from",
+            ));
+        }
+        words.push((text.to_owned(), from, to));
+    }
+    let language = a.opt_string("language")?.unwrap_or_else(|| "en-US".into());
+    Ok(Op::TranscriptSet {
+        media: a.target("media")?,
+        words,
+        language,
+    })
 }
