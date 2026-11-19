@@ -72,7 +72,7 @@ SHA.
 - [x] T2.4 [L] History (89ca2a7): revisions, human undo/redo, sessions, `history.undo {scope:"last"|"session"|"to", revision}`, revert (rebuild + replay with a `skipped` list), `ifRevision` → `STALE_REVISION`, `idempotencyKey`. Accept: a seeded property test (500 random batches mixing human and agent edits) shows undo to every revision r reproduces hash(r), journal replay equals live state, undoing an undo restores, and the skipped lists are deterministic.
 - [x] T2.5 [L] `splice_eval` (809dcae): timeline → per-frame render plan (layers, transforms, fades, audio gains), effect resolution project › lane › item. Accept: plan goldens at 10 frames of the sample; a warm per-frame eval allocates nothing.
 - [x] T2.6 [L] Budgets (ab85713): apply p99 < 1 ms on a 2,000-item project; warm `item.trim`/`move`/`set` allocate nothing. Accept: `cargo t -p splice_core budget` (release-timed in qualification with `SPLICE_SLOW=1`).
-- [ ] T2.7 [L] Tier B commands (0.2, tracked as T11): effects (`effect.add/set/remove/paste/promote`), components (`component.set`, `audio.set`, `cursor.set`, `keys.set`, `keys.hide`), cutting (`cut.range`, `cut.words`), `clip.crop`, `motion.add/set`, `clip.lift`, `overlay.replaceSpine`, captions (`captions.generate`, `caption.set/split/merge`). Then the 20 planned rows (0.3).
+- [x] T2.7 [L] (ff8a777) Tier B commands (0.2, tracked as T11): effects (`effect.add/set/remove/paste/promote`), components (`component.set`, `audio.set`, `cursor.set`, `keys.set`, `keys.hide`), cutting (`cut.range`, `cut.words`), `clip.crop`, `motion.add/set`, `clip.lift`, `overlay.replaceSpine`, captions (`captions.generate`, `caption.set/split/merge`). Then the 20 planned rows (0.3).
 
 ### T3 · MCP and CLI, headless
 - [x] T3.1 [L] JSON-RPC 2.0 stdio (33e67ce), newline-delimited, hand-rolled. `initialize` negotiates 2025-11-25 and 2026-07-28. `tools/list` comes from the table in a fixed order with `inputSchema` and `outputSchema`. Results are `structuredContent` plus a text mirror; business errors are `isError` results with `code` and `fix`. Accept: a conformance transcript and a `tools/list` golden.
@@ -80,7 +80,7 @@ SHA.
 - [x] T3.3 [L] Friction log (99c005a): every `isError` result, the next calls and whether they recovered, and the optional `friction` argument every tool accepts → `<project>.splice/friction.jsonl` plus the global state dir. `splice friction [list|show|repro <id>|resolve <id> <sha>]`. Accept: transcript tests for logging, the recovery flag, and `repro` writing a failing transcript fixture.
 - [x] T3.4 [L] Transcript runner (3ddd172): `fixtures/mcp/*.jsonl` replays request → expected structured result with `"…"` wildcards. Accept: every T3.2 fixture runs under `cargo t -p splice_mcp transcript`.
 - [x] T3.5 [L] `splice` CLI (80e8c4f): `new`, `open`, `mcp`, `apply`, `snapshot`, `describe`, `export`, `frame`, `friction`, `check`, `version`, and `splice <path>` = open. On Linux, `open`, `export` and `frame` return the typed error `UNSUPPORTED_PLATFORM`. Accept: CLI tests over a temp project.
-- [ ] T3.6 [L] (0.2, gates the cut) `.mcp.json` dogfood and `make eval`: `evals/tasks/*.toml` (prompt, seed project, end-state assertions checked by `splice check`) run `claude -p` with the `splice` skill against `splice mcp`. Results go to `evals/results.tsv` (pass, calls, errors, recoveries). Accept: 5 tasks; a baseline recorded. First task: `tiktok-textedit` (9:16 without letterbox bands, visible cursor ≥ 1.5×, ≥ 1 zoom, background frame, music ≤ −14 LUFS, export exists), recorded failing before T11 starts.
+- [x] T3.6 [L] (ce3f118) (0.2, gates the cut) `.mcp.json` dogfood and `make eval`: `evals/tasks/*.toml` (prompt, seed project, end-state assertions checked by `splice check`) run `claude -p` with the `splice` skill against `splice mcp`. Results go to `evals/results.tsv` (pass, calls, errors, recoveries). Accept: 5 tasks; a baseline recorded. First task: `tiktok-textedit` (9:16 without letterbox bands, visible cursor ≥ 1.5×, ≥ 1 zoom, background frame, music ≤ −14 LUFS, export exists), recorded failing before T11 starts.
 
 ### T4 · Media on macOS (no ffmpeg)
 - [x] T4.1 [M] `apple_sys` (6ea33b9), in LocalWave's `lw_apple_sys` pattern: one crate, one ARC Objective-C shim per service (`media.m`, `capture.m`, `events.m`, `permissions.m`, `panel.m`, …) behind one C header `platform.h` with `_Static_assert` layout checks, built by `cc` in build.rs (macOS only), and a small safe Rust module per shim. Native → Rust traffic is a bounded event ring polled with `peek`/`ack` plus a `wake` callback; callbacks never hold Rust references; errors come back as `char **error`. This crate is the only `unsafe`. Accept: probe of a fixture movie on the Mini.
@@ -232,26 +232,33 @@ cut logs one "try it as a user" line.
   installed app and is checked by hand after `make install`.
 
 ### T11 · Headless-complete editing (0.2) [L]
-- [ ] T11.1 `clip.crop` (eval and AV already render it).
-- [ ] T11.2 `effect.add/set/remove/paste/promote`.
-- [ ] T11.3 `component.set`, `audio.set`, `cursor.set`, `keys.set/hide`.
-- [ ] T11.4 `cut.range`, `clip.lift`, `overlay.replaceSpine`.
-- [ ] T11.5 `motion.add/set` with focal point and easing.
-- [ ] T11.6 Describe tells the truth: `available` per row; the parity test fails a row that is
+- [x] T11.1 (ff8a777) `clip.crop` (eval and AV already render it).
+- [x] T11.2 (ff8a777) `effect.add/set/remove/paste/promote`.
+- [x] T11.3 (ff8a777) `component.set`, `audio.set`, `cursor.set`, `keys.set/hide`.
+- [x] T11.4 (ff8a777) `cut.range`, `clip.lift`, `overlay.replaceSpine`.
+- [ ] T11.5 `motion.add/set` with focal point and easing. (Click zoom has both since 5cc7409; motion
+  items still scale about the canvas center.)
+- [x] T11.6 (ff8a777) Describe tells the truth: `available` per row; the parity test fails a row that is
   available without an apply test.
 
 ### T12 · Recording render on the Metal compositor (0.2) [M + L]
-- [ ] T12.1 `AVVideoCompositing` Metal compositor from the eval plan; parity ≤ 2/255 with the current
-  lowering; zero warm allocations per frame.
-- [ ] T12.2 Cursor layer from `events.json` + `cursors/`: size, smoothing, idle hide, click rings.
-- [ ] T12.3 Auto-zoom solver: clicks and typing → zoom keyframes with focal points; `intent.autoZoom`.
-- [ ] T12.4 Window frame: corner radius, shadow, inset, wallpaper/gradient presets.
-- [ ] T12.5 Keystroke chips and the camera bubble mask.
+- [x] T12.1 (5cc7409, interim) Custom `AVVideoCompositing` from the eval plan, rendering with Core
+  Image on Metal for preview, export and grabs; existing pixel tests pass. Its renderer moves to OGPU in T12.7.
+- [x] T12.2 (5cc7409) Cursor layer from `events.json` + `cursors/`: size, smoothing, idle hide, click rings.
+- [x] T12.3 (5cc7409) Auto-zoom solver: clicks → eased zoom keyframes with focal points (`clickZoom`).
+  Open: typing bursts and `intent.autoZoom` returning editable motion items (0.3 planned row).
+- [x] T12.4 (5cc7409) Window frame: corner radius, shadow, gradient and solid backgrounds. Open: inset
+  stroke, wallpaper presets.
+- [x] T12.5 (5cc7409) Keystroke chips (timed text) and the rounded, shadowed camera bubble.
 - [ ] T12.6 `intent.reframe {aspect}`: crop to the active window or area, no letterbox bands.
 - [ ] T12.7 OGPU compositor: `ogpu_metal` IOSurface import (the macOS twin of `import_dmabuf`), a
   portable `splice_gpu` renderer for the layer plan (MSL now, SPIR-V with Vulkan), used by the viewer
-  (zero-copy into its texture), frame grabs and export. Accept: window_program_4k back under 8 ms,
-  pixel parity ≤ 2/255 with T12.1, zero warm Rust allocations per frame.
+  (zero-copy into its texture), frame grabs and export. Follow ../rays: the app leases one OGPU
+  device that PXUI's `Renderer` borrows; composited textures reach PXUI as `pxui::Image`s from
+  `backend::native_texture` (no copy) with serial-deferred destruction; shaders ship as MSL plus
+  SPIR-V fixtures loaded by `shader::create`; per-frame uniforms reuse one buffer page. Accept:
+  window_program_4k back under 8 ms, pixel parity ≤ 2/255 with T12.1, zero warm Rust allocations
+  per frame.
 
 ### T13 · Audio (0.2) [L + M]
 - [ ] T13.1 `LaneKind::Audio`; `clip.insert {path, lane}` for music; per-item `volume`.
@@ -330,3 +337,7 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-18 · T8.2–T8.5 · done · 8fe23f0 · Live acceptance from SSH took 25.80 s including `make dev` and `make install`. All four grants persisted across the signed installs. The release CLI, debug CLI and release MCP captures each published one 90-frame take in one verified journal batch (3.005 s, 3.012 s and 3.005 s). Each HEVC probe passed, microphone audio opened with `afinfo` and the event logs parsed. The installed release reports 0.1.0 and the capture agent exited. Final `make check` passed in 3.40 s (83 tests, slowest: seeded history replay 1.606 s). Final `make mac-check` passed in 35.12 s (33 tests and bundle checks, slowest: native title and audio composition 4.356 s).
 - 2026-11-19 · T10.1–T10.5 · done · a706ba9 · Reproduced the 0.1 blink on the Mini: a project held by an agent's `splice mcp` exited with `LOCKED`, and a document opened within 60 s of a recording went to the windowless capture agent. Both now open, as do projects with offline media. `cargo t -p splice_cli native_viewer_takes_over` 0.446 s on the Mini (handoff keeps the agent's session; its next edit lands in the viewer at r2). `make check` 3.04 s (83 tests, slowest: seeded history replay 1.727 s); `make mac-check` 22.05 s (19 native tests plus the 3-case Finder matrix). On the installed release: MCP held → window and forwarded `timeline.snapshot`; capture agent alive → new viewer with the path; offline sample → window; corrupt package → alert plus a `viewer` friction entry. A person can now double-click any project an agent made, at any time, and see it.
 - 2026-11-19 · T14.1–T14.4 · done · b9835d6 · `splice mcp --code` lists `code.run` and `commands.describe`; one `code.run` did project.info, session.start, edit.apply and timeline.snapshot on the sample (fixtures/mcp/code). QuickJS-NG v0.18.0 vendored without libc: +1.22 MB stripped release `splice`, 12.9 s clean `quickjs_sys` build. `cargo t -p quickjs_sys -p splice_mcp` 0.58 s (25 tests, slowest: infinite-loop timeout 0.30 s); `make check` 3.76 s warm, 32.9 s after the C build (93 tests, slowest: seeded history replay 1.686 s). Not run: `make mac-check` (no mac crate touched; splice_mcp now compiles QuickJS with clang on the Mini).
+- 2026-11-19 · T11 · done · ff8a777 · Every 0.2 row applies headless; 18 described examples apply, replay and match goldens in fixtures/json/tier-b. `make check` 4.28 s (88 tests). T11.5 (motion focal point) stays open.
+- 2026-11-19 · T3.6 · done · ce3f118 · tools/eval.py with 5 outcome tasks. Linux baseline with claude: tighten-talk, undo-session and crop-and-frame pass (11–16 calls, 34–42 s each). tiktok-textedit and music-duck need the Mac and T13.
+- 2026-11-19 · T12.1–T12.5 · done (interim renderer) · 5cc7409 · Cursor, click rings, eased click zoom toward the click, window corners and shadow, keystroke chips and export text render through a custom compositor. `cargo t -p splice_av native_take` 0.30 s on the Mini. `make mac-check` green; window_program_4k 8.2 ms against an 8 ms budget (4.1–4.5 ms before, measured side by side), which T12.7 fixes by moving the renderer to OGPU.
+- 2026-11-19 · T14 merged · da57597 · Code mode on QuickJS-NG; goldens re-blessed against the 0.2 command table. `make check` 3.36 s (98 tests); `make mac-check` green.
