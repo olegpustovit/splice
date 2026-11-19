@@ -62,7 +62,7 @@ result, is logged to the friction log, and the server keeps serving.
 | 10 | `session.start` | edit | A session id and a checkpoint revision |
 | 11 | `edit.apply` | edit | One atomic batch of registry commands; `dryRun`, `ifRevision`, `idempotencyKey` |
 | 12 | `history.list` | read | Revisions with labels, sources, sessions, and what each changed |
-| 13 | `history.undo` | edit | `scope: "last"` (the session's last batch) · `"session"` (all of it) · `"to"` + `revision` (restore that exact state). Always a new revision; undo an undo to redo |
+| 13 | `history.undo` | edit | `scope: "last"` (the session's last batch) · `"session"` (all of it) · `"to"` + `revision` (restore that exact state). Always a new revision; undo an undo to redo. With nothing left to undo it returns `NOTHING_TO_UNDO` and changes nothing |
 | 14 | `ui.show` | view | Playhead, selection, framing in a viewer if one is open; headless: `{applied:false, reason:"headless"}` |
 | 15 | `export.start` | edit | Export job, **no approval**: presets, `variants`, `range`, chapters, caption sidecars, `format:"fcpxml"`. Default path `<project>.splice/exports/<name>-r<rev>.mp4`; refuses to overwrite unless `overwrite:true` |
 | 16 | `jobs.status` | read | Progress and result of export, transcription and recording jobs |
@@ -288,7 +288,7 @@ return {revision: e.revision, clips: t.spine.length};
 animate; the fix lists the keyable ones, also marked `keys:true` in `Splice.Effects`).
 0.3 edits: `NO_HANDLES` (roll, slip, slide; a transition whose clips lack the source it consumes),
 `NO_NEIGHBOR`, `NOT_ADJACENT`, `NOT_JOINABLE`,
-`NOT_JOINED`, `NOTHING_TO_RESTORE`, `NO_TRANSITION`, `TOO_LONG`, `FIT_IMPOSSIBLE`, `NEEDS_TEXT`,
+`NOT_JOINED`, `NOTHING_TO_RESTORE`, `NOTHING_TO_UNDO`, `NO_TRANSITION`, `TOO_LONG`, `FIT_IMPOSSIBLE`, `NEEDS_TEXT`,
 `NO_CLICKS`, `NO_FACES`, `NOT_TRACKED`, `NO_CAPTIONS`, `NO_TRANSCRIPT`, `MARKER_EXISTS`,
 `MEDIA_MISMATCH`, `LOUDNESS_UNKNOWN`, `TOO_DEEP`, `RETIMED`,
 `UNSUPPORTED_PLATFORM` (Linux: export, frames, recording), `TCC_DENIED` (recording without a grant;

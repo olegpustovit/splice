@@ -102,6 +102,29 @@ fn history_seeded_five_hundred_batches_restore_and_replay() {
 }
 
 #[test]
+fn low_idle_undo_reports_nothing_to_undo() {
+    let temp = Temp::new("idle-undo");
+    let mut store = Store::create(&temp.0, &Project::default()).unwrap();
+    let session = store.start_session("agent", 1).unwrap().id;
+    for scope in [Scope::Last, Scope::Session] {
+        let error = store.undo(scope, &agent(session, 0, 2)).unwrap_err();
+        assert_eq!(error.code, "NOTHING_TO_UNDO");
+    }
+    assert_eq!(store.project().rev, 0);
+    store
+        .apply(
+            &[op(r#"{"cmd":"marker.add","at":5}"#)],
+            &agent(session, 0, 3),
+        )
+        .unwrap();
+    store.undo(Scope::Last, &agent(session, 1, 4)).unwrap();
+    // The undone batch is no longer live: a second undo has nothing left.
+    let error = store.undo(Scope::Last, &agent(session, 2, 5)).unwrap_err();
+    assert_eq!(error.code, "NOTHING_TO_UNDO");
+    assert_eq!(store.project().rev, 2);
+}
+
+#[test]
 fn history_session_revert_replays_later_human_edits_and_undoes_the_undo() {
     let temp = Temp::new("revert");
     let mut store = Store::create(&temp.0, &Project::default()).unwrap();

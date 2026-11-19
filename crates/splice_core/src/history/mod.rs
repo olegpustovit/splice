@@ -325,7 +325,11 @@ impl Store {
             revisions.push(last);
         }
         if revisions.is_empty() {
-            return Ok(self.history_result(None, None));
+            return Err(StoreError::new(
+                "NOTHING_TO_UNDO",
+                "This session has no live edits to undo.",
+                "Nothing changed. history.list {sessionId} shows its batches; scope:\"to\" restores any earlier revision.",
+            ));
         }
         let rebuilt = self.versions.rebuild(self.records(), &revisions)?;
         self.preserve_agent_access(&rebuilt.version, options.source)?;
