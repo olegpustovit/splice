@@ -28,11 +28,18 @@ const PRELUDE: &str = r#"(() => {
     const a = Object.assign({}, args), t = ctx.tools[name];
     if (t && t[0] && a.projectId === undefined && ctx.projectId) a.projectId = ctx.projectId;
     if (t && t[1] && a.sessionId === undefined && ctx.sessionId) a.sessionId = ctx.sessionId;
-    try { return host(String(name), JSON.stringify(a)); }
+    let r;
+    try { r = host(String(name), JSON.stringify(a)); }
     catch (e) { throw e && typeof e === "object" && !(e instanceof Error) ? new SpliceError(e) : e; }
+    // The first project opened and session started become the defaults for later calls.
+    if (r && typeof r === "object") {
+      if (!ctx.projectId && typeof r.projectId === "string") ctx.projectId = r.projectId;
+      if (!ctx.sessionId && name === "session.start" && typeof r.sessionId === "string") ctx.sessionId = r.sessionId;
+    }
+    return r;
   };
   const describe = (query) => call("commands.describe", { format: "ts", query: query === undefined ? "" : String(query) }).text;
-  const splice = { projectId: ctx.projectId, sessionId: ctx.sessionId, call, describe, op: {} };
+  const splice = { get projectId() { return ctx.projectId; }, get sessionId() { return ctx.sessionId; }, call, describe, op: {} };
   const place = (root, name, value) => {
     const [group, method] = name.split(".");
     (root[group] = root[group] || {})[method] = value;

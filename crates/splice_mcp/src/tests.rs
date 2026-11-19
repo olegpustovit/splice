@@ -713,3 +713,37 @@ fn code_run_reports_started_jobs_even_when_the_program_fails() {
         "{reply:?}"
     );
 }
+
+/// Eval friction: after project.info {path} and session.start in a program, later calls default to them.
+#[test]
+fn code_run_adopts_the_first_opened_project_and_session() {
+    let args = splice_json::parse(
+        r#"{"code":"splice.project.info({path: \"a.splice\"}); splice.session.start({}); splice.timeline.snapshot({}); return [splice.projectId, splice.sessionId];"}"#,
+    )
+    .unwrap();
+    let mut seen = Vec::new();
+    let reply = code::run(&args, &mut |name, args| {
+        seen.push((
+            name.to_owned(),
+            args.field("projectId").cloned(),
+            args.field("sessionId").cloned(),
+        ));
+        let body = match name {
+            "project.info" => object(vec![("projectId", text("prj_4"))]),
+            "session.start" => object(vec![("sessionId", text("ses_9"))]),
+            _ => object(Vec::new()),
+        };
+        Ok(object(vec![("structuredContent", body)]))
+    })
+    .unwrap();
+    assert_eq!(
+        reply.field("result"),
+        Some(&Json::Array(vec![text("prj_4"), text("ses_9")])),
+        "{reply:?}"
+    );
+    assert_eq!(
+        seen[2],
+        ("timeline.snapshot".to_owned(), Some(text("prj_4")), None)
+    );
+    assert_eq!(seen[1].1, Some(text("prj_4")));
+}

@@ -91,3 +91,9 @@ date	commit	agent	task	result	checks	calls	errors	recoveries	wall_s	tokens
 2026-11-19	33e1f28	claude+code	tiktok-textedit	pass	7/7	9	0	0	46.4	507787
 2026-11-19	33e1f28	claude+code	tiktok-textedit	pass	7/7	11	0	0	45.5	538156
 2026-11-19	33e1f28	claude+code	tiktok-textedit	pass	7/7	10	1	1	45.4	558304
+2026-11-19	5c9bffc	claude	tighten-talk	pass	4/4	12	0	0	31.7	338693
+2026-11-19	5c9bffc	claude	tighten-talk	pass	4/4	12	0	0	33.0	340886
+2026-11-19	5c9bffc	claude	tighten-talk	pass	4/4	12	0	0	28.8	340685
+2026-11-19	5c9bffc	claude+code	tighten-talk	pass	4/4	7	1	1	36.6	304327
+2026-11-19	5c9bffc	claude+code	tighten-talk	pass	4/4	7	0	0	28.0	305789
+2026-11-19	5c9bffc	claude+code	tighten-talk	pass	4/4	6	0	0	32.9	301332

@@ -32,7 +32,8 @@ declare namespace Splice {
 
 const API: &str = r#"
 declare const splice: {
-  /** The projectId and sessionId passed to code.run. Tool calls default to them. */
+  /** The projectId and sessionId passed to code.run, else the first project this code opens and session it
+   * starts. Tool calls default to them. */
   readonly projectId: string | undefined;
   readonly sessionId: string | undefined;
   /** Calls a tool by name and returns its structured result. */
