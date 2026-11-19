@@ -281,9 +281,13 @@ cut logs one "try it as a user" line.
   -49% turns, -63% calls, -16% wall, +4% cost (cache writes are 67% of cost and grow with the up-front
   .d.ts). Round 1 found five code-mode defects, fixed in a4218a3 (tiktok-textedit -24% cost, -29% wall).
   Study: https://artifacts.microapps.space/a/f0hfkms3e4d0 · archive: https://artifacts.microapps.space/a/rs6zd6dc2ryj
-- [ ] T14.6 Progressive declarations: code.run's description carries a compact index, and the agent pulls
-  `describe(query)` slices instead of the whole .d.ts. Accept: code-mode cache writes at or below direct
-  and cost below direct on the T14.5 tasks, with no pass-rate loss.
+- [x] T14.6 (26ace8e) Progressive declarations: `commands.describe {format:"ts"}` returns an index (9.9k chars
+  vs 26.6k) and `query:"a,b"` returns full types per command. Measured (n=3, 5 tasks, 15/15 pass): cost -8%,
+  wall -23%, turns -50%, cache writes +4% (v2: +21%) vs direct. Acceptance met in aggregate and on the 3 Linux
+  tasks; the 2 macOS tasks stay +3%/+7% (within run noise), where first programs return full snapshots.
+- [ ] T14.7 Friction fixes from the study (a716130: sound labels, bare refs, `social` preset, audio.set types,
+  lane inspect, jobs in code.run replies, any-term describe) are unmeasured. Re-run T14.5 both arms to measure
+  them, and steer first programs toward small reads (snapshot detail) on the macOS tasks.
 
 ## Log
 
@@ -354,3 +358,5 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-19 · T6.3 · done · 2b5cd03 · `UndoStack::gesture`: a drag is one undo step; cancel restores without redo.
 - 2026-11-19 · gate fix · 1c32dc1 · `make check` had been red since ff8a777 (tier-b goldens ended in a newline; CLI snapshot test predated the media table); my gate greps hid it. Fixed; gate exit codes are now checked, not grepped.
 - 2026-11-19 · T14.5 · done · a4218a3, c6dca9f · Code-mode A/B: 45 runs, all pass; -49% turns, -63% calls, -16% wall, +4% cost. Five code-mode defects found by round 1 and fixed (export polling inside code.run, loose .d.ts types, trace bloat, planned rows, tool-as-op hint); two cross-arm defects fixed after round 2. Study f0hfkms3e4d0, archive rs6zd6dc2ryj.
+- 2026-11-19 · T14.6 · done · 26ace8e · Index-first code-mode declarations: cost -8% vs direct (v2 +4%), cache writes +4% (v2 +21%), 15/15 pass. Study updated (f0hfkms3e4d0 v2, archive rs6zd6dc2ryj v3, 65 runs).
+- 2026-11-19 · friction · a716130 · Fixed the recurring friction both arms filed (sound labels, bare refs, social preset, audio.set types, lane inspect, jobs in code.run replies, describe any-term). `make check` 111 tests, `make mac-check` green. apply p99 budget flakes at load ~30 on 20 cores (pre-0.2 a706ba9 measures the same 500–900 µs band side by side); budget unchanged.
