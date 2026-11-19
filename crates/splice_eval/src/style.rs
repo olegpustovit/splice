@@ -60,6 +60,8 @@ pub enum Corner {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct CameraStyle {
+    /// Background behind the presenter: 0 keep, 1 blur, 2 remove (person matte).
+    pub(super) background: u8,
     pub(super) corner: Corner,
     pub(super) size: f64,
     pub(super) roundness: f64,
@@ -182,6 +184,11 @@ pub(super) fn camera(scopes: &[&[Effect]]) -> CameraStyle {
         _ => Corner::BottomRight,
     };
     CameraStyle {
+        background: match style.text("background") {
+            Some("blur") => 1,
+            Some("remove") => 2,
+            _ => 0,
+        },
         corner,
         size: style.number("size", 0.24).clamp(0.12, 0.45),
         roundness: style.number("roundness", 0.2).clamp(0.0, 1.0),

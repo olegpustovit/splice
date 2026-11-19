@@ -283,6 +283,19 @@ pub(super) fn analyze(
                 .map_err(|e| failure("IO", &e.to_string(), "Check disk space."))?;
             vision::matte(&component(store, media, false), &path).map_err(native)?;
         }
+        // A take's camera gets its own matte for the bubble's background.
+        if let Some(camera) = media.take.as_ref().and_then(|take| take.camera.as_deref()) {
+            let source = store.path().join(&media.path);
+            let source = if source.is_dir() {
+                source.join(camera)
+            } else {
+                source.with_file_name(camera)
+            };
+            let camera_path = splice_av::camera_matte_path(store.path(), media.id);
+            if source.is_file() && !camera_path.exists() {
+                vision::matte(&source, &camera_path).map_err(native)?;
+            }
+        }
         out.push((
             "matte",
             Json::String(

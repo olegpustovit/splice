@@ -17,6 +17,7 @@ use std::sync::Arc;
 enum Key {
     Picture(TimelineId),
     Matte(TimelineId),
+    CameraMatte(ClipId),
     Camera(ClipId),
     Audio(TimelineId, Track, bool),
     Fill(usize, u32, u32),
@@ -33,6 +34,10 @@ pub(crate) enum Role {
     Backing(TimelineId),
     /// The person matte of a picture: bound to it, never drawn.
     Matte(TimelineId),
+    /// A take's camera bubble.
+    Camera(ClipId),
+    /// The person matte of a camera bubble.
+    CameraMatte(ClipId),
 }
 
 /// The lowered layer plan, kept for the OGPU compositor (T12.7).
@@ -222,17 +227,23 @@ pub(super) fn build(
                         bounds,
                         radius,
                         shadow,
+                        background,
                         ..
                     },
                     Layer::Camera { .. },
                 ) => {
+                    if background != 0 {
+                        let matte = state.camera_matte(clip, media, project, package, evaluator)?;
+                        video.push(layer(matte, coordinates(bounds), [1.0; 2], [width, height]));
+                        roles.push(Role::CameraMatte(clip));
+                    }
                     let track = state.camera(clip, media, project, package, evaluator)?;
                     let mut camera = layer(track, coordinates(bounds), [1.0; 2], [width, height]);
                     camera.center_crop = 1;
                     camera.corner = radius;
                     camera.shadow = shadow.clamp(0.0, 1.0);
                     video.push(camera);
-                    roles.push(Role::Plain);
+                    roles.push(Role::Camera(clip));
                 }
                 (Layer::Title { item, bounds, .. }, Layer::Title { .. }) => {
                     if let Some(text) = evaluator.title(item)
@@ -760,6 +771,30 @@ impl Lowering {
             self.plan.orients.push((track, orient));
         }
         Ok(track)
+    }
+
+    /// The camera component's person matte (`media.analyze {kinds:["matte"]}`).
+    fn camera_matte(
+        &mut self,
+        clip: ClipId,
+        id: MediaId,
+        project: &Project,
+        package: &Path,
+        evaluator: &Evaluator,
+    ) -> Result<i32, Error> {
+        let key = Key::CameraMatte(clip);
+        if let Some(track) = self.cached(key) {
+            return Ok(track);
+        }
+        let path = crate::camera_matte_path(package, id);
+        if !path.exists() {
+            return Err(Error::Input(format!(
+                "{id} has no camera matte. Run media.analyze {{kinds:[\"matte\"]}} on the take first."
+            )));
+        }
+        let media = Self::media(project, id)?;
+        let timings = Self::timings(project.fps, evaluator, TimelineId::Clip(clip), media)?;
+        self.insert(key, Source::Video(path), &timings)
     }
 
     fn camera(

@@ -69,6 +69,8 @@ pub enum Layer {
         radius: f64,
         /// Shadow intensity.
         shadow: f64,
+        /// Background behind the presenter: 0 keep, 1 blur, 2 remove.
+        background: u8,
     },
     /// Recorded keystrokes on the current source clock.
     Keystrokes {

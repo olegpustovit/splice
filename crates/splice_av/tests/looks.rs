@@ -450,6 +450,37 @@ mod looks {
         assert_eq!(names, ["Intro", "Demo"]);
         assert!((chapters[1].0 - 35.0 / 30.0).abs() < 0.05, "{chapters:?}");
     }
+
+    pub(super) fn cutout_uses_the_person_matte() {
+        let dir = scratch("cutout");
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/media/probe.mov");
+        fs::copy(&fixture, dir.0.join("probe.mov")).unwrap();
+        let mut video = still(&dir.0, 1, [0, 0, 0]);
+        video.kind = MediaKind::Video;
+        video.path = "probe.mov".into();
+        video.probe.frames = 30;
+        // No person in the fixture: the matte is empty and the cutout removes everything.
+        let matte = matte_path(&dir.0, video.id);
+        fs::create_dir_all(matte.parent().unwrap()).unwrap();
+        apple_sys::vision::matte(&dir.0.join("probe.mov"), &matte).unwrap();
+        let plain = project(vec![video.clone()], vec![(1, 20, vec![])]);
+        let before = pixel(&Composition::prepare(&plain, &dir.0).unwrap(), 5, [48, 32]);
+        assert!(
+            before.iter().map(|&c| u32::from(c)).sum::<u32>() > 50,
+            "{before:?}"
+        );
+        let cut = project(
+            vec![video],
+            vec![(
+                1,
+                20,
+                vec![fx(1, "cutout", vec![("background", s("remove"))])],
+            )],
+        );
+        let after = pixel(&Composition::prepare(&cut, &dir.0).unwrap(), 5, [48, 32]);
+        assert!(after.iter().all(|&c| c < 12), "{after:?}");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -474,6 +505,10 @@ fn main() {
         (
             "looks_exports_alpha_audio_ranges_and_chapters",
             looks::exports_alpha_audio_ranges_and_chapters,
+        ),
+        (
+            "looks_cutout_uses_the_person_matte",
+            looks::cutout_uses_the_person_matte,
         ),
     ]);
 }

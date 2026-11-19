@@ -109,6 +109,11 @@ pub fn matte_path(package: &Path, media: splice_model::MediaId) -> PathBuf {
         .join("matte.mov")
 }
 
+/// Where `media.analyze {kinds:["matte"]}` writes a take camera's person matte.
+pub fn camera_matte_path(package: &Path, media: splice_model::MediaId) -> PathBuf {
+    matte_path(package, media).with_file_name("camera-matte.mov")
+}
+
 impl TimedText {
     /// Samples the opacity ramp at a frame in the cue's interval.
     pub fn opacity(&self, at: Frame) -> f32 {

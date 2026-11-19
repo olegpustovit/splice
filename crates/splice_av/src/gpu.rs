@@ -37,8 +37,8 @@ pub struct GpuProgram {
     luts: Vec<(Texture, f32)>,
     /// The evaluated frame (reused: allocation-free per frame).
     frame: FramePlan,
-    /// Matte textures bound this frame, by owner.
-    mattes: Vec<(TimelineId, Texture)>,
+    /// Matte textures bound this frame, by the role of the layer they belong to.
+    mattes: Vec<(Role, Texture)>,
     /// Leave out the black base (alpha exports).
     pub(crate) transparent: bool,
 }
@@ -265,7 +265,12 @@ impl GpuProgram {
             if self.transparent && role == Role::Plain && layer.track == plan.base && i == 0 {
                 continue;
             }
-            if let Role::Matte(owner) = role {
+            let owner = match role {
+                Role::Matte(id) => Some(Role::Picture(id)),
+                Role::CameraMatte(clip) => Some(Role::Camera(clip)),
+                _ => None,
+            };
+            if let Some(owner) = owner {
                 if let Some(texture) = texture {
                     self.mattes.push((owner, texture));
                 }
@@ -273,6 +278,7 @@ impl GpuProgram {
             }
             let look = match role {
                 Role::Picture(id) | Role::Backing(id) => self.look(id),
+                Role::Camera(clip) => self.camera_look(clip),
                 _ => Look::default(),
             };
             let orient = plan
@@ -313,6 +319,32 @@ impl GpuProgram {
                 _ => None,
             })
             .unwrap_or_default()
+    }
+
+    /// A camera bubble's background treatment as a cutout look.
+    fn camera_look(&self, clip: splice_model::ClipId) -> Look {
+        let background = self.frame.layers.iter().find_map(|layer| match *layer {
+            splice_eval::Layer::Camera {
+                clip: c,
+                background,
+                ..
+            } if c == clip => Some(background),
+            _ => None,
+        });
+        Look {
+            cutout: match background {
+                Some(1) => Some(splice_eval::Cutout {
+                    blur: true,
+                    amount: 1.0,
+                }),
+                Some(2) => Some(splice_eval::Cutout {
+                    blur: false,
+                    amount: 1.0,
+                }),
+                _ => None,
+            },
+            ..Look::default()
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -441,8 +473,8 @@ impl GpuProgram {
             picture.key0 = [r, g, b, key.tolerance as f32];
             picture.key1 = [key.softness as f32, key.spill as f32, 0.0, 0.0];
         }
-        if let (Some(cutout), Role::Picture(id)) = (look.cutout, role)
-            && let Some((_, matte)) = self.mattes.iter().find(|(owner, _)| *owner == id)
+        if let Some(cutout) = look.cutout
+            && let Some((_, matte)) = self.mattes.iter().find(|(owner, _)| *owner == role)
         {
             picture.flags |= Layer::CUTOUT;
             if cutout.blur {

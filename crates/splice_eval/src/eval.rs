@@ -155,6 +155,7 @@ struct Camera {
     bounds: Rect,
     radius: f64,
     shadow: f64,
+    background: u8,
 }
 
 struct Visual {
@@ -764,6 +765,7 @@ impl Evaluator {
                 bounds: camera.bounds,
                 radius: camera.radius,
                 shadow: camera.shadow,
+                background: camera.background,
             });
         }
         if let Some(style) = clip.keys {
@@ -1183,6 +1185,7 @@ fn prepare_clip(
                 bounds,
                 radius,
                 shadow: style.shadow,
+                background: style.background,
             });
         }
     }
