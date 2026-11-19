@@ -225,19 +225,25 @@ fn warm_frames_with_2000_keys_allocate_nothing_and_stay_fast() {
             }
         },
     );
+    // Best of 3 per frame keeps the lock stable on a loaded machine.
     let mut times: Vec<u128> = frames
         .iter()
         .map(|&at| {
-            let start = std::time::Instant::now();
-            evaluator.frame(at, &mut plan);
-            std::hint::black_box(&plan);
-            start.elapsed().as_nanos()
+            (0..3)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    evaluator.frame(at, &mut plan);
+                    std::hint::black_box(&plan);
+                    start.elapsed().as_nanos()
+                })
+                .min()
+                .unwrap()
         })
         .collect();
     times.sort_unstable();
     let p99 = times[times.len() * 99 / 100];
-    // Debug build, 200 keyed titles: the frame must stay far under a 60 fps budget.
-    assert!(p99 < 2_000_000, "p99 {p99} ns");
+    // T24.3 lock: measured ~1.9 µs on the Linux box (2026-11-19); 100 µs is ~50× headroom.
+    assert!(p99 < 100_000, "p99 {p99} ns");
 }
 
 /// The depth cap counts nesting, not compound clips: six sibling compounds render.

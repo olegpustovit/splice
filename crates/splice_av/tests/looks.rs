@@ -481,11 +481,252 @@ mod looks {
         let after = pixel(&Composition::prepare(&cut, &dir.0).unwrap(), 5, [48, 32]);
         assert!(after.iter().all(|&c| c < 12), "{after:?}");
     }
+
+    /// T24.3: a 4K frame with the 0.3 stack (window frame, two stills under a dissolve, keyed
+    /// transform, color with a 17³ LUT, blur and pixelate masks, two media overlays, a styled
+    /// title and an arrow) composes and reads back in under 16 ms. Cursor, click zoom and
+    /// captions need a recorded take; the 0.2 window test covers them.
+    pub(super) fn full_stack_4k_frame_under_16_ms() {
+        let dir = scratch("budget-4k");
+        let project = full_stack(&dir.0, [3840, 2160], 30, 120);
+        let composition = Composition::prepare(&project, &dir.0).unwrap();
+        let [w, h] = composition.size().map(|n| n as usize);
+        assert_eq!([w, h], [3840, 2160]);
+        let mut rgba = vec![0; w * h * 4];
+        // Inside the dissolve and the overlays: every layer is live.
+        let frames: Vec<Frame> = (95..125).collect();
+        for &at in &frames[..5] {
+            composition.read_frame(at, &mut rgba).unwrap();
+        }
+        let mut times: Vec<Duration> = frames
+            .iter()
+            .map(|&at| {
+                let started = std::time::Instant::now();
+                composition.read_frame(at, &mut rgba).unwrap();
+                started.elapsed()
+            })
+            .collect();
+        times.sort_unstable();
+        let (median, p90) = (times[times.len() / 2], times[times.len() * 9 / 10]);
+        eprintln!("4K full stack frame: median {median:?}, p90 {p90:?}");
+        assert!(p90 < Duration::from_millis(16), "p90 {p90:?}");
+    }
+
+    /// T24.3: 20 s of 1080p60 with the same stack exports at least twice as fast as realtime
+    /// (the plan's 10-minute run, scaled to the 60 s test deadline).
+    pub(super) fn full_stack_1080p60_exports_twice_realtime() {
+        let dir = scratch("budget-export");
+        let project = full_stack(&dir.0, [1920, 1080], 60, 600);
+        let composition = Composition::prepare(&project, &dir.0).unwrap();
+        let file = dir.0.join("budget.mp4");
+        let started = std::time::Instant::now();
+        let mut job = composition
+            .start_export(&file, &Encoding::new(Codec::Hevc))
+            .unwrap();
+        while let ExportState::Running(_) = job.step(Duration::from_millis(16)).unwrap() {}
+        let took = started.elapsed();
+        assert_eq!(job.status(), ExportState::Complete);
+        eprintln!("1080p60 full stack export: 20 s in {took:?}");
+        assert!(took < Duration::from_secs(10), "export took {took:?}");
+    }
+
+    /// Two 1080p stills under a dissolve with the 0.3 look stack, two overlays, a title and an
+    /// arrow, at `size` and `fps`; each clip is `clip_length` frames.
+    fn full_stack(dir: &std::path::Path, size: [u32; 2], fps: u32, clip_length: Frame) -> Project {
+        let big = |serial: u64, rgb: [u8; 3]| {
+            let [w, h] = [1920u32, 1080];
+            let pixels: Vec<u8> = (0..w * h)
+                .flat_map(|i| [rgb[0], rgb[1].wrapping_add((i % w) as u8), rgb[2], 255])
+                .collect();
+            let name = format!("big{serial}.png");
+            fs::write(
+                dir.join(&name),
+                apple_sys::image::png(&pixels, [w, h], 0).unwrap(),
+            )
+            .unwrap();
+            let mut media = still(dir, serial + 100, rgb);
+            media.id = MediaId::from_serial(serial);
+            media.path = name;
+            media.probe.width = w;
+            media.probe.height = h;
+            media
+        };
+        let mut cube = String::from("LUT_3D_SIZE 17\n");
+        for b in 0..17 {
+            for g in 0..17 {
+                for r in 0..17 {
+                    let v = |c: i32| f64::from(c) / 16.0;
+                    cube.push_str(&format!("{} {} {}\n", v(r), v(g), v(b)));
+                }
+            }
+        }
+        fs::write(dir.join("look.cube"), cube).unwrap();
+        let keys = EffectValue::Keys(vec![
+            keys::Key {
+                at: 0,
+                value: 1.0,
+                ease: keys::Ease::InOut,
+            },
+            keys::Key {
+                at: 90,
+                value: 1.3,
+                ease: keys::Ease::Linear,
+            },
+        ]);
+        let mut project = project(
+            vec![
+                big(1, [30, 60, 200]),
+                big(2, [200, 120, 40]),
+                still(dir, 3, [250, 250, 250]),
+            ],
+            vec![
+                (1, clip_length, vec![]),
+                (
+                    2,
+                    clip_length,
+                    vec![
+                        fx(
+                            10,
+                            "transition",
+                            vec![("kind", s("dissolve")), ("length", n(30.0))],
+                        ),
+                        fx(11, "transform", vec![("scale", keys)]),
+                        fx(
+                            12,
+                            "color",
+                            vec![("saturation", n(1.2)), ("lut", s("look.cube"))],
+                        ),
+                        fx(
+                            13,
+                            "mask",
+                            vec![
+                                ("mode", s("blur")),
+                                ("x", n(0.6)),
+                                ("y", n(0.05)),
+                                ("w", n(0.3)),
+                                ("h", n(0.1)),
+                            ],
+                        ),
+                        fx(
+                            14,
+                            "mask",
+                            vec![
+                                ("mode", s("pixelate")),
+                                ("x", n(0.1)),
+                                ("y", n(0.7)),
+                                ("w", n(0.3)),
+                                ("h", n(0.2)),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        );
+        project.size = size;
+        project.fps = fps;
+        project.effects.push(fx(
+            20,
+            "window",
+            vec![
+                ("padding", n(0.05)),
+                ("corner", n(0.03)),
+                ("shadow", n(0.6)),
+            ],
+        ));
+        let lanes = [
+            (31, LaneKind::Overlay),
+            (32, LaneKind::Overlay),
+            (33, LaneKind::Graphics),
+            (34, LaneKind::Graphics),
+        ];
+        for (serial, kind) in lanes {
+            project.lanes.push(Lane {
+                id: LaneId::from_serial(serial),
+                name: String::new(),
+                kind,
+                effects: Vec::new(),
+            });
+        }
+        let item = |serial: u64, lane: u64, kind: ItemKind, effects: Vec<Effect>| Item {
+            id: ItemId::from_serial(serial),
+            timing: ItemTiming {
+                anchor: Anchor::Pinned(clip_length / 2),
+                length: clip_length,
+            },
+            data: ItemData {
+                lane: LaneId::from_serial(lane),
+                kind,
+                appearance: Appearance {
+                    effects,
+                    ..Appearance::default()
+                },
+            },
+        };
+        let overlay = |placement| {
+            ItemKind::Media(Overlay {
+                media: MediaId::from_serial(3),
+                source: 0,
+                placement,
+                behind_presenter: false,
+                muted: true,
+                framing: Framing {
+                    crop: None,
+                    fit: Fit::Fill,
+                },
+            })
+        };
+        for built in [
+            item(41, 31, overlay(Placement::TopRight), vec![]),
+            item(
+                42,
+                32,
+                overlay(Placement::Card),
+                vec![fx(43, "transform", vec![("rotation", n(-4.0))])],
+            ),
+            item(
+                44,
+                33,
+                ItemKind::Title {
+                    text: "Field notes, part two".into(),
+                },
+                vec![fx(45, "animate", vec![("preset", s("rise"))])],
+            ),
+            item(
+                46,
+                34,
+                ItemKind::Shape {
+                    shape: ShapeKind::Arrow,
+                    rect: Rect {
+                        x: 0.4,
+                        y: 0.4,
+                        w: 0.2,
+                        h: 0.1,
+                    },
+                },
+                vec![fx(
+                    47,
+                    "shape",
+                    vec![("stroke", s("#ff3b30")), ("strokeWidth", n(0.01))],
+                )],
+            ),
+        ] {
+            project.items.insert(built).unwrap();
+        }
+        project
+    }
 }
 
 #[cfg(target_os = "macos")]
 fn main() {
     harness::run(&[
+        (
+            "looks_full_stack_4k_frame_under_16_ms",
+            looks::full_stack_4k_frame_under_16_ms,
+        ),
+        (
+            "looks_full_stack_1080p60_exports_twice_realtime",
+            looks::full_stack_1080p60_exports_twice_realtime,
+        ),
         (
             "looks_color_lut_masks_and_key_render",
             looks::color_lut_masks_and_key_render,

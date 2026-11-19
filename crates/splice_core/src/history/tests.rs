@@ -439,3 +439,79 @@ fn history_memory_stays_bounded_and_old_revisions_rebuild_exactly() {
         .unwrap();
     assert_eq!(store.project().markers.len() as u64, target / 7);
 }
+
+/// T24.3: a 1-hour, 5,000-item project opens in under 250 ms and 300 MB of heap.
+#[test]
+fn budget_open_an_hour_long_five_thousand_item_project() {
+    use splice_model::*;
+    let temp = Temp::new("open-budget");
+    let mut project = Project::default();
+    let lane = LaneId::from_serial(9);
+    project.lanes.push(Lane {
+        id: lane,
+        name: "Titles".into(),
+        kind: LaneKind::Graphics,
+        effects: Vec::new(),
+    });
+    let hour = 30 * 60 * 60;
+    for index in 0..5_000u64 {
+        let at = (index as i32 * hour) / 5_000;
+        let mut appearance = Appearance::default();
+        appearance.effects.push(Effect {
+            id: EffectId::from_serial(100_000 + index),
+            kind: "transform".into(),
+            enabled: None,
+            params: vec![EffectParam {
+                name: "scale".into(),
+                value: EffectValue::Keys(vec![
+                    keys::Key {
+                        at: 0,
+                        value: 1.0,
+                        ease: keys::Ease::InOut,
+                    },
+                    keys::Key {
+                        at: 20,
+                        value: 1.2,
+                        ease: keys::Ease::Linear,
+                    },
+                ]),
+            }],
+        });
+        project
+            .items
+            .insert(Item {
+                id: ItemId::from_serial(10_000 + index),
+                timing: ItemTiming {
+                    anchor: Anchor::Pinned(at),
+                    length: 60,
+                },
+                data: ItemData {
+                    lane,
+                    kind: ItemKind::Title {
+                        text: format!("Chapter title number {index}"),
+                    },
+                    appearance,
+                },
+            })
+            .unwrap();
+    }
+    project.serial = 200_000;
+    Store::create(&temp.0, &project).unwrap().close().unwrap();
+    let mut best = std::time::Duration::MAX;
+    let mut peak = 0;
+    for _ in 0..3 {
+        mem_sys::local_reset();
+        let started = std::time::Instant::now();
+        let store = Store::open(&temp.0).unwrap();
+        best = best.min(started.elapsed());
+        peak = peak.max(mem_sys::local_peak_bytes());
+        assert_eq!(store.project().items.order().len(), 5_000);
+        store.close().unwrap();
+    }
+    eprintln!("open: best {best:?}, peak heap {} MB", peak / 1_000_000);
+    assert!(
+        best < std::time::Duration::from_millis(250),
+        "open took {best:?}"
+    );
+    assert!(peak < 300_000_000, "open peaked at {peak} bytes");
+}
