@@ -570,14 +570,22 @@ impl GpuProgram {
                 placed[1] + (y * h - cy) * per_px,
             ]
         };
+        // Only inside the visible crop: a cropped-away part of the capture would put the cursor
+        // and its rings on the backdrop beside the card.
+        let visible = |x: f64, y: f64| {
+            (cx..=cx + cwid).contains(&(x * w)) && (cy..=cy + chei).contains(&(y * h))
+        };
         let rotation = look.rotation.to_radians() as f32;
         if cursor.click_rings {
             // Clicks are in time order: only those of the last RING_SECONDS can show.
             let clicks = table.track.clicks();
             let first = clicks.partition_point(|c| c[0] < st - RING_SECONDS);
-            for &[t, cx, cy] in clicks[first..].iter().take_while(|c| c[0] <= st) {
+            for &[t, px, py] in clicks[first..].iter().take_while(|c| c[0] <= st) {
+                if !visible(px, py) {
+                    continue;
+                }
                 let age = st - t;
-                let [x, y] = to_canvas(cx, cy);
+                let [x, y] = to_canvas(px, py);
                 let radius =
                     (10.0 + 34.0 * age / RING_SECONDS) * px_per_point * per_px * cursor.scale;
                 let mut ring = Layer::new(
@@ -603,7 +611,9 @@ impl GpuProgram {
                 let (texture, size) = self.cursors[index].get(image)?;
                 Some((table.images.get(image)?, texture.clone(), *size, point))
             });
-        if let Some((meta, texture, [pw, ph], point)) = sprite {
+        if let Some((meta, texture, [pw, ph], point)) =
+            sprite.filter(|(.., point)| visible(point.x, point.y))
+        {
             let [x, y] = [point.x, point.y];
             // canvas px per PNG px
             let k = cursor.scale * point.scale * px_per_point * per_px / meta.scale;

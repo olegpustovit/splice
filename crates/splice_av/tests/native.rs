@@ -435,6 +435,28 @@ mod native {
             (48..=66).contains(&at[0]),
             "cursor center after zoom {at:?}"
         );
+        // Found on a real take: with the capture cropped to its right half, the cursor at a
+        // quarter of the width is in the cropped-away part and draws nowhere (not on the
+        // backdrop beside the card).
+        {
+            let mut cropped = project.clone();
+            let slot = cropped.clips.order()[0];
+            cropped.clips.data_mut(slot).unwrap().framing.crop = Some(Rect {
+                x: 0.5,
+                y: 0.0,
+                w: 0.5,
+                h: 1.0,
+            });
+            let composition = Composition::prepare(&cropped, &scratch.0).unwrap();
+            let [w, h] = composition.size().map(|n| n as usize);
+            let mut rgba = vec![0; w * h * 4];
+            composition.read_frame(2, &mut rgba).unwrap();
+            let red = rgba
+                .chunks(4)
+                .filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60)
+                .count();
+            assert_eq!(red, 0, "cursor drawn outside the visible crop");
+        }
         // D19: a typed key shows as a chip for people; renders an agent sees leave it out.
         fs::write(
             take.join("events.json"),
