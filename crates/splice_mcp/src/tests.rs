@@ -96,7 +96,7 @@ fn tools_list_golden() {
     let message = splice_json::parse(response).unwrap();
     let result = message.field("result").unwrap();
     let tools = result.field("tools").unwrap().as_array().unwrap();
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 20);
     for tool in tools {
         for field in ["inputSchema", "outputSchema"] {
             assert_eq!(
@@ -1365,8 +1365,6 @@ fn zoom_items_report_their_fit_safe_scale() {
         false,
     )
     .unwrap();
-    assert_eq!(
-        safe(&project),
-        (1080.0_f64 / 972.0 * 1000.0).floor() / 1000.0
-    );
+    // 1080 / 972 = 1.111…, floored to a hundredth.
+    assert_eq!(safe(&project), 1.11);
 }

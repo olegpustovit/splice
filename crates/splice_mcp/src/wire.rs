@@ -9,20 +9,23 @@ pub(super) fn failure(code: &'static str, message: &str, fix: &str) -> StoreErro
 }
 
 pub(super) fn bad(field: &str, expected: &str) -> StoreError {
-    failure(
+    let mut error: StoreError = splice_core::commands::CommandError::rule(
         "BAD_ARGS",
-        &format!("Invalid {field}."),
+        field,
+        None,
+        expected,
         &format!("Pass {field} as {expected}."),
     )
+    .into();
+    error.message = format!("Invalid {field}.");
+    error
 }
 
 /// A required field is absent (as opposed to present with the wrong shape).
 pub(super) fn missing(field: &str, expected: &str) -> StoreError {
-    failure(
-        "BAD_ARGS",
-        &format!("Missing {field}."),
-        &format!("Pass {field} as {expected}."),
-    )
+    let mut error = bad(field, expected);
+    error.message = format!("Missing {field}.");
+    error
 }
 
 pub(super) fn count(value: usize) -> Json {

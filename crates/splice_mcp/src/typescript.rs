@@ -406,7 +406,14 @@ fn tool_signature(out: &mut String, tool: &tools::Tool, brief: bool) {
     let guaranteed = tool.success.first().copied().unwrap_or(&[]);
     for (name, spec) in tool.output {
         let optional = if guaranteed.contains(name) { "" } else { "?" };
+        // The index lists only guaranteed fields; describe gives the whole result (T23.1).
+        if brief && !optional.is_empty() {
+            continue;
+        }
         let _ = write!(result, " {name}{optional}: {};", schema_type(spec));
+    }
+    if brief && tool.output.len() > guaranteed.len() {
+        result.push_str(" /* … */");
     }
     let _ = writeln!(
         out,

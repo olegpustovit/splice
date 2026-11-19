@@ -300,7 +300,7 @@ pub(super) fn inspect(p: &Project, args: &Json) -> Result<Json, StoreError> {
 /// The largest zoom whose card stays on the canvas at `at` (T38.6): in frame mode the card
 /// scales with the zoom, so past min(canvas / card) it overflows; content mode never does
 /// (the camera's own limit, 5×).
-fn fit_safe_scale(evaluator: &splice_eval::Evaluator, at: splice_model::Frame) -> f64 {
+pub(super) fn fit_safe_scale(evaluator: &splice_eval::Evaluator, at: splice_model::Frame) -> f64 {
     let mut plan = evaluator.buffer();
     evaluator.frame(at, &mut plan);
     let [cw, ch] = plan.size.map(f64::from);
@@ -319,7 +319,8 @@ fn fit_safe_scale(evaluator: &splice_eval::Evaluator, at: splice_model::Frame) -
         Some(d) if !content(ch > cw) && d.w > 0.0 && d.h > 0.0 => (cw / d.w).min(ch / d.h),
         _ => splice_model::Zoom::AMOUNT[1],
     };
-    (safe.clamp(1.0, splice_model::Zoom::AMOUNT[1]) * 1000.0).floor() / 1000.0
+    // Floored to a hundredth: a suggestion that is always safe to pass back.
+    (safe.clamp(1.0, splice_model::Zoom::AMOUNT[1]) * 100.0).floor() / 100.0
 }
 
 pub(super) fn find(p: &Project, args: &Json) -> Result<Json, StoreError> {

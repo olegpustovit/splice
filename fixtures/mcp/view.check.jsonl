@@ -1,0 +1,6 @@
+> {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"$sample"}}}
+< {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"projectId":"prj_1","revision":"r0","fps":30,"durationFrames":660,"offlineMedia":"…"},"isError":false}}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"view.check","arguments":{"projectId":"prj_1","checks":["camera","offCanvas"]}}}
+< {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"revision":"r0","issues":[],"pixels":false},"isError":false}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"view.check","arguments":{"projectId":"prj_1","checks":["focus"]}}}
+< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"error":{"code":"BAD_ARGS","param":"checks","expected":"…","fix":"…"}},"isError":true}}

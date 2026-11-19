@@ -1,6 +1,6 @@
 use super::{
-    Json, analyze, history, media, object, platform, project::Projects, text, timeline, typescript,
-    wire::*,
+    Json, analyze, check, history, media, object, platform, project::Projects, text, timeline,
+    typescript, wire::*,
 };
 use splice_core::{commands, history::StoreError};
 
@@ -247,6 +247,28 @@ pub(super) const TOOLS: &[Tool] = &[
             ("sheet", "string"),
         ],
         success: &[&["revision", "frames"]],
+    },
+    Tool {
+        name: "view.check",
+        description: "Check a range for problems a few frames would miss. Camera jumps and pictures pushed off the canvas come from the evaluated timeline on every platform; on macOS, black or frozen spans and transitions that disturb the backdrop come from frames rendered at 5 per second, with a contact sheet of the flagged frames. Each issue has its span and a fix.",
+        read_only: true,
+        input: &[
+            ("projectId", "string"),
+            ("from", "integer"),
+            ("to", "integer"),
+            (
+                "checks",
+                r#"{"type":"array","items":{"enum":["camera","offCanvas","black","frozen","bleed"]}}"#,
+            ),
+        ],
+        required: &["projectId"],
+        output: &[
+            ("revision", REVISION),
+            ("issues", "array"),
+            ("pixels", "boolean"),
+            ("sheet", "string"),
+        ],
+        success: &[&["revision", "issues", "pixels"]],
     },
     Tool {
         name: "commands.describe",
@@ -643,7 +665,15 @@ pub(super) fn call(
     args: &Json,
 ) -> Result<Json, splice_json::NonFiniteNumber> {
     let mut content = Vec::new();
-    let result = execute(projects, name, args, &mut content);
+    let result = execute(projects, name, args, &mut content).map_err(|mut error| {
+        // The handler knows the rule; the arguments know what was passed (D18).
+        if let Some(rule) = &mut error.rule
+            && rule.got.is_none()
+        {
+            rule.got = args.field(&rule.param).cloned();
+        }
+        error
+    });
     reply(result, content)
 }
 
@@ -750,6 +780,7 @@ fn execute(
         "history.list" => history::list(projects.lookup(args)?, args),
         "history.undo" => history::undo(projects.lookup(args)?, args),
         "view.frames" => platform::frames(projects.lookup(args)?, args, content),
+        "view.check" => check::view_check(projects.lookup(args)?, args, content),
         "export.start" => platform::export(projects, args),
         "jobs.status" | "jobs.cancel" => platform::job(projects, name, args),
         "record.start" => platform::record_start(projects, args),

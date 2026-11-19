@@ -9,6 +9,7 @@ mod background;
 #[cfg(target_os = "macos")]
 /// The installed application's private headless capture transport.
 pub mod capture_agent;
+mod check;
 mod code;
 mod enrich;
 #[cfg(target_os = "macos")]

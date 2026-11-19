@@ -47,7 +47,7 @@ not take is refused with `UNKNOWN_PARAM`, its `param` and the closest accepted n
 (it is never silently ignored). A tool call that hits a Splice bug returns `INTERNAL` as an error
 result, is logged to the friction log, and the server keeps serving.
 
-## Tools (19, fixed order)
+## Tools (20, fixed order)
 
 | # | Tool | Hint | Purpose |
 | --- | --- | --- | --- |
@@ -59,17 +59,18 @@ result, is logged to the friction log, and the server keeps serving.
 | 6 | `transcript.get` | read | Words with IDs and timing; `captions: json\|srt\|vtt` |
 | 7 | `media.analyze` | read | Per clip or media, by `kinds`: loudness, pauses, peaks, beats, sounds, shots, text, faces, people, matte. Cached by file stamp; long media runs as a job. `audio.summary` stays an alias |
 | 8 | `view.frames` | read | PNG frames at frames N from the export composition (what the agent sees = what export makes); `sheet:true` returns one contact sheet |
-| 9 | `commands.describe` | read | The command registry: params, examples, status (built or planned) |
-| 10 | `session.start` | edit | A session id and a checkpoint revision |
-| 11 | `edit.apply` | edit | One atomic batch of registry commands; `dryRun`, `ifRevision`, `idempotencyKey` |
-| 12 | `history.list` | read | Revisions with labels, sources, sessions, and what each changed |
-| 13 | `history.undo` | edit | `scope: "last"` (the session's last batch) · `"session"` (all of it) · `"to"` + `revision` (restore that exact state). Always a new revision; undo an undo to redo. With nothing left to undo it returns `NOTHING_TO_UNDO` and changes nothing |
-| 14 | `ui.show` | view | Playhead, selection, framing in a viewer if one is open; headless: `{applied:false, reason:"headless"}` |
-| 15 | `export.start` | edit | Export job, **no approval**: presets, `variants`, `range`, chapters, caption sidecars, `format:"fcpxml"`. Default path `<project>.splice/exports/<name>-r<rev>.mp4`; refuses to overwrite unless `overwrite:true` |
-| 16 | `jobs.status` | read | Progress and result of export, transcription and recording jobs |
-| 17 | `jobs.cancel` | edit | Cancel a job |
-| 18 | `record.start` | edit | Headless capture of a display, window or area, with mic, system audio, camera and input events, into a project (`create:true` makes one). `dryRun:true` lists sources, devices and permission states without recording; `duration` auto-stops. Also voice-overs, retakes, `resume` with `marker`, `exclude`, `recover` |
-| 19 | `record.stop` | edit | Finish recording: the take lands in `takes/` and on the spine as one undoable agent batch (`insert:false` keeps it in media only); `pause:true` pauses instead |
+| 9 | `view.check` | read | Problems a few frames miss, with spans and fixes: camera jumps and off-canvas pictures (every platform), black or frozen spans and backdrop bleed in transitions (macOS, rendered at 5/s, with a contact sheet) |
+| 10 | `commands.describe` | read | The command registry: params, examples, status (built or planned) |
+| 11 | `session.start` | edit | A session id and a checkpoint revision |
+| 12 | `edit.apply` | edit | One atomic batch of registry commands; `dryRun`, `ifRevision`, `idempotencyKey` |
+| 13 | `history.list` | read | Revisions with labels, sources, sessions, and what each changed |
+| 14 | `history.undo` | edit | `scope: "last"` (the session's last batch) · `"session"` (all of it) · `"to"` + `revision` (restore that exact state). Always a new revision; undo an undo to redo. With nothing left to undo it returns `NOTHING_TO_UNDO` and changes nothing |
+| 15 | `ui.show` | view | Playhead, selection, framing in a viewer if one is open; headless: `{applied:false, reason:"headless"}` |
+| 16 | `export.start` | edit | Export job, **no approval**: presets, `variants`, `range`, chapters, caption sidecars, `format:"fcpxml"`. Default path `<project>.splice/exports/<name>-r<rev>.mp4`; refuses to overwrite unless `overwrite:true` |
+| 17 | `jobs.status` | read | Progress and result of export, transcription and recording jobs |
+| 18 | `jobs.cancel` | edit | Cancel a job |
+| 19 | `record.start` | edit | Headless capture of a display, window or area, with mic, system audio, camera and input events, into a project (`create:true` makes one). `dryRun:true` lists sources, devices and permission states without recording; `duration` auto-stops. Also voice-overs, retakes, `resume` with `marker`, `exclude`, `recover` |
+| 20 | `record.stop` | edit | Finish recording: the take lands in `takes/` and on the spine as one undoable agent batch (`insert:false` keeps it in media only); `pause:true` pauses instead |
 
 Changes from the prototype's 17 tools: no export approval (`NEEDS_APPROVAL` and `DENIED` are gone),
 `history.undo` gains `scope:"to"`, `project.info` opens by path, and the recording pair is added.

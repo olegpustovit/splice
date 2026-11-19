@@ -4,7 +4,7 @@
 //! with a fix and, where one exists, a suggested op batch. Warnings never block the edit.
 use super::{Json, object, text};
 use splice_eval::{Evaluator, FramePlan, Layer};
-use splice_model::{CameraMode, Frame, ItemKind, Project, TimelineId, Zoom};
+use splice_model::{Frame, ItemKind, Project, TimelineId};
 
 /// The safe zone of a 9:16 short as fractions of the canvas (top, bottom, left, right): the most
 /// conservative union of published 1080×1920 figures (research T43.2), versioned so a later
@@ -99,10 +99,8 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
                 }
             }
             ItemKind::Zoom(zoom) => {
-                evaluator.frame(from, &mut plan);
-                if let Some(safe) = fit_safe(&evaluator, &plan, from)
-                    && zoom.amount > safe + 1e-6
-                {
+                let safe = super::timeline::fit_safe_scale(&evaluator, from);
+                if zoom.amount > safe + 1e-6 {
                     lints.push(lint(
                         "ZOOM_OVERFLOW",
                         &format!(
@@ -165,25 +163,6 @@ fn overlap(a: splice_model::Rect, b: splice_model::Rect) -> f64 {
     let w = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
     let h = (a.y + a.h).min(b.y + b.h) - a.y.max(b.y);
     w.max(0.0) * h.max(0.0)
-}
-
-/// The largest frame-mode zoom whose card stays on the canvas, or None in content mode.
-fn fit_safe(evaluator: &Evaluator, plan: &FramePlan, at: Frame) -> Option<f64> {
-    let [cw, ch] = plan.size.map(f64::from);
-    let content = match evaluator.camera_mode(at) {
-        CameraMode::Content => true,
-        CameraMode::Frame => false,
-        CameraMode::Auto => ch > cw,
-    };
-    if content {
-        return None;
-    }
-    let card = plan.layers.iter().find_map(|layer| match layer {
-        Layer::Picture(p) if matches!(p.item, TimelineId::Clip(_)) => Some(p.destination),
-        _ => None,
-    })?;
-    let safe = (cw / card.w).min(ch / card.h).clamp(1.0, Zoom::AMOUNT[1]);
-    Some((safe * 100.0).floor() / 100.0)
 }
 
 /// Cut rate and the longest stretch without a visual change (a cut, a zoom boundary, or an

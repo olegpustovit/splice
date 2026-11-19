@@ -223,7 +223,7 @@ fn file_uri(path: &Path) -> String {
     uri
 }
 
-fn base64(bytes: &[u8]) -> String {
+pub(super) fn base64(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for bytes in bytes.chunks(3) {

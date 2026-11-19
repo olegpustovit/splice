@@ -1381,6 +1381,8 @@ declare const splice: {
   view: {
     /** Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count; sheet:true returns one contact-sheet image of them all. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */
     frames(args?: { projectId?: string; at?: number[]; count?: number; sheet?: boolean; }): { revision: Splice.Revision; frames: unknown[]; sheet?: string; };
+    /** Check a range for problems a few frames would miss. Camera jumps and pictures pushed off the canvas come from the evaluated timeline on every platform; on macOS, black or frozen spans and transitions that disturb the backdrop come from frames rendered at 5 per second, with a contact sheet of the flagged frames. Each issue has its span and a fix. */
+    check(args?: { projectId?: string; from?: number; to?: number; checks?: ("camera" | "offCanvas" | "black" | "frozen" | "bleed")[]; }): { revision: Splice.Revision; issues: unknown[]; pixels: boolean; sheet?: string; };
   };
   commands: {
     /** Search the command registry. Pass an exact ID to see parameters, release tier and an example. */

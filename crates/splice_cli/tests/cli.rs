@@ -297,7 +297,7 @@ fn cli_dispatches_mcp_friction_and_native_commands() {
             .and_then(Json::as_array)
             .unwrap()
             .len(),
-        19
+        20
     );
     assert!(
         scratch
