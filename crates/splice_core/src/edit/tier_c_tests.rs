@@ -42,7 +42,7 @@ fn tier_c_described_examples_apply_replay_undo_and_match_goldens() {
         .iter()
         .filter(|row| row.tier == commands::Tier::Third)
         .collect();
-    assert_eq!(rows.len(), 35);
+    assert_eq!(rows.len(), 38);
     for command in rows {
         let described = commands::describe(Some(command.id), None).unwrap();
         let example = described.field("example").unwrap().clone();

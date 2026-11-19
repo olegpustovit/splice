@@ -807,6 +807,109 @@ fn edit_apply_fills_cursor_crops_and_typing_zooms() {
     .unwrap();
 }
 
+/// T41: on a silent take, edit.apply fills intent.steps, intent.speedTyping and the smart cuts'
+/// activity from the take's events; an `auto` basis with words on the timeline needs nothing.
+#[test]
+fn edit_apply_fills_activity_for_silent_takes() {
+    let root = TestDirectory::new("enrich-activity");
+    let package = |name: &str| {
+        let path = root.0.join(name);
+        copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &path).unwrap();
+        fs::create_dir_all(path.join("takes/med_screen")).unwrap();
+        path
+    };
+    let (sample, silent) = (package("sample.splice"), package("silent.splice"));
+    fs::remove_file(silent.join("transcripts/med_screen.json")).unwrap();
+    // A click, typing from 2 s to 4 s (and a shortcut at 5 s), a scroll at 9 s.
+    let mut events = String::from(
+        r#"{"events":[{"t":0.25,"k":"down","b":0,"x":0.5,"y":0.5},{"t":0.5,"k":"up","b":0}"#,
+    );
+    for i in 0..=8 {
+        events.push_str(&format!(
+            r#",{{"t":{},"k":"key","ch":"secret","keyCode":4}}"#,
+            2.0 + f64::from(i) * 0.25
+        ));
+    }
+    events.push_str(r#",{"t":5.0,"k":"key","mods":1048576,"keyCode":1},{"t":9.0,"k":"scroll"}]}"#);
+    for path in [&sample, &silent] {
+        fs::write(path.join("takes/med_screen/events.json"), &events).unwrap();
+    }
+    let ops = |text: &str| {
+        splice_json::parse(text)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .to_vec()
+    };
+    let fill = |store: &splice_core::history::Store, batch: &[Json]| {
+        super::enrich::ops(store, batch, &mut splice_core::edit::missing_media).unwrap()
+    };
+    // With words on the timeline, auto measures the transcript: nothing to fill.
+    let spoken = splice_core::history::Store::open(&sample).unwrap();
+    let auto = ops(r#"[{"cmd":"cut.pauses"}]"#);
+    let filled = fill(&spoken, &auto).unwrap_or(auto.clone());
+    assert!(filled[0].field("activity").is_none());
+    let store = splice_core::history::Store::open(&silent).unwrap();
+    let batch = ops(r#"[{"cmd":"intent.steps","item":"clp_take"},
+            {"cmd":"intent.speedTyping","item":"clp_take","minRun":30},
+            {"cmd":"cut.pauses"}]"#);
+    let filled = fill(&store, &batch).unwrap();
+    let text = |value: &Json| {
+        let mut out = String::new();
+        splice_json::write(value, &mut out).unwrap();
+        out
+    };
+    assert!(!text(&Json::Array(filled.clone())).contains("secret"));
+    let busy =
+        r#"[{"from":7,"to":18},{"from":60,"to":123},{"from":150,"to":153},{"from":270,"to":273}]"#;
+    assert_eq!(text(filled[0].field("activity").unwrap()), busy);
+    assert_eq!(
+        text(filled[1].field("typing").unwrap()),
+        r#"[{"from":60,"to":123}]"#
+    );
+    assert_eq!(
+        text(filled[2].field("activity").unwrap()),
+        busy.replace("{\"from\"", "{\"media\":\"med_screen\",\"from\"")
+    );
+    // Each filled op applies to the silent take.
+    for op in &filled {
+        let mut project = store.project().clone();
+        splice_core::edit::apply(
+            &mut project,
+            std::slice::from_ref(op),
+            splice_core::package::journal::Source::Agent,
+            false,
+        )
+        .unwrap_or_else(|error| panic!("{}: {error}", text(op)));
+    }
+    // A clip that is not a take is refused with the rule.
+    let error = super::enrich::ops(
+        &store,
+        &ops(r#"[{"cmd":"intent.steps","item":"clp_open"}]"#),
+        &mut splice_core::edit::missing_media,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "WRONG_KIND");
+    assert_eq!(error.rule.unwrap().param, "item");
+    // T41.5: a free-text cue on the silent take exports as SRT and lists no words.
+    let mut project = store.project().clone();
+    splice_core::edit::apply(
+        &mut project,
+        &ops(r#"[{"cmd":"caption.add","text":"Open the settings","from":150,"to":210}]"#),
+        splice_core::package::journal::Source::Agent,
+        false,
+    )
+    .unwrap();
+    let srt = super::media::captions(&project, &Json::Object(Vec::new()), "srt", None).unwrap();
+    assert_eq!(
+        srt.field("text").and_then(Json::as_str),
+        Some("1\n00:00:05,000 --> 00:00:07,000\nOpen the settings\n\n")
+    );
+    let json = super::media::captions(&project, &Json::Object(Vec::new()), "json", None).unwrap();
+    let cue = &json.field("cues").unwrap().as_array().unwrap()[0];
+    assert_eq!(text(cue.field("words").unwrap()), "[]");
+}
+
 #[test]
 fn m10_enrich_resolves_refs_and_refuses_overlays() {
     let root = TestDirectory::new("enrich-refs");

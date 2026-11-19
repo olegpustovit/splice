@@ -192,6 +192,35 @@ PNG with a longest edge of up to 640 pixels. Out-of-range frame numbers return `
 `sheet:true` tiles the frames (360-pixel thumbnails in a near-square grid) into one PNG: one
 inline image and a `sheet` file URI.
 
+## Silent takes (D15)
+
+Screen takes often have no speech. The smart cuts `cut.pauses`, `intent.pace` and
+`intent.fitDuration` take `basis: "auto"|"transcript"|"activity"`. `auto` (the default) measures
+pauses between transcript words when the timeline has any and otherwise between bursts of a
+take's recorded activity; `transcript` refuses a timeline without words with `NO_TRANSCRIPT`,
+whose fix names `basis:"activity"`. On activity, `cut.pauses` cuts idle stretches of 2 s or more
+keeping 0.25 s at each end, `intent.pace` leaves at most 1 s between bursts, and
+`intent.fitDuration` cuts idle and then the shortest bursts. Only gaps between activity in one
+clip are cut, so each clip's head and tail stay.
+
+`intent.steps {item}` trims a demo to its steps. Steps start at the clip's markers, or at bursts
+after a quiet stretch over `maxGap` when it has none. Each step keeps `lead` frames before it
+(0.4 s) through its last activity plus `settle` (1 s); quiet stretches over `maxGap` (1.5 s)
+inside a step are cut. A marker named with `retakePrefix` (`retake:`) drops the attempt since the
+step before it and restarts that step. The change summary lists every step with the frames it
+keeps, so a dry run is the review list.
+
+`intent.speedTyping {item, factor, minRun}` turns typing runs of at least `minRun` (1 s) into eased
+`speed.rate` keys up to `factor` (3, 1.25–16) and shortens the clip so it shows the same source
+frames (never past its media). A clip with a speed ramp is `RETIMED`. Items anchored inside a
+ramped clip resolve at its constant rate.
+
+`caption.add {text, from, to, lane?}` adds a free-text caption cue that needs no transcript, and
+`captions.import` keeps an SRT or WebVTT cue without words under it as free text, so captions work
+on silent takes. Free cues keep their own timing (trim and move them like titles) and retype with
+`caption.set {text}`; word operations (`caption.split`, `caption.merge`, `words`) refuse them with
+`WRONG_KIND`. `transcript.get {captions}` and export sidecars list them with `words: []`.
+
 ## Inputs edit.apply fills
 
 Some 0.3 commands need inputs the core cannot read (it never opens media). `edit.apply`, `splice apply`
@@ -200,7 +229,10 @@ that replay without media. A `$ref` to an object the same batch creates (`"item"
 `"mask":"$mask"`) is read from the batch staged up to that op; an item the fill cannot read (an
 overlay for clicks or a cursor crop) is refused with `WRONG_KIND` and `param:"item"`. The fills:
 `intent.autoZoom` (clicks and typing bursts from the take's events; it writes `zoom` items on a
-camera lane), `crop.keys {follow:"cursor"|"face",
+camera lane), `intent.steps` (`activity`: the take's busy source ranges), `intent.speedTyping`
+(`typing`: its typing runs), the smart cuts `cut.pauses`, `intent.pace` and `intent.fitDuration`
+(`activity: [{media, from, to}]` for every take on the spine, when `basis` is `activity`, or
+`auto` on a timeline without transcript words; activity as in `media.analyze`, never characters), `crop.keys {follow:"cursor"|"face",
 aspect}` (keys every half second), `media.consolidate` (copies files into `media/` only when
 the batch commits, never on a dry run or a stale or failing batch; an existing copy is reused only
 when its bytes match the source), `mask.track` (Vision object tracking), `audio.sync` (envelope
@@ -342,7 +374,9 @@ return {revision: e.revision, clips: t.spine.length};
 `MEDIA_OFFLINE`, `BAD_MEDIA`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`, `EXPORT_FAILED`, `FRAME_FAILED`,
 `CAPTURE_FAILED`, `CAPTURE_SOURCE`, `CAPTURE_CANCELLED` (CLI), `DISK_FULL`,
 0.4: `UNKNOWN_PARAM` (with `didYouMean`), `NOT_KEYABLE` (keys on a parameter the evaluator does not
-animate; the fix lists the keyable ones, also marked `keys:true` in `Splice.Effects`).
+animate; the fix lists the keyable ones, also marked `keys:true` in `Splice.Effects`),
+`NO_ACTIVITY` (an activity basis or `intent.steps` with no recorded input on the timeline or
+inside the clip), `NO_TYPING` (`intent.speedTyping` found no run of at least `minRun`).
 0.3 edits: `NO_HANDLES` (roll, slip, slide; a transition whose clips lack the source it consumes),
 `NO_NEIGHBOR`, `NOT_ADJACENT`, `NOT_JOINABLE`,
 `NOT_JOINED`, `NOTHING_TO_RESTORE`, `NOTHING_TO_UNDO`, `NO_TRANSITION`, `TOO_LONG`, `FIT_IMPOSSIBLE`, `NEEDS_TEXT`,

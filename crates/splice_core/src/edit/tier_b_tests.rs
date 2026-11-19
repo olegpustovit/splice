@@ -207,7 +207,7 @@ fn tier_b_captions_generate_edit_split_merge_and_follow_cuts() {
         };
         let slot = project.items.find(*id).unwrap();
         match &project.items.data(slot).unwrap().kind {
-            ItemKind::Caption { words, edits } => (words.clone(), edits.len()),
+            ItemKind::Caption { words, edits, .. } => (words.clone(), edits.len()),
             _ => panic!(),
         }
     };

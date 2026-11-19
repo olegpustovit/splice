@@ -171,6 +171,10 @@ Rules:
   (`intent.autoZoom` writes zoom items instead).
 - **Keys only where they animate (T36.4).** A 0.3 file with keys on a parameter that is not
   keyable loads with the first key's value (0.3 rendered the default there).
+- **Free-text caption cues (T41.5).** A caption item's `params` may carry `"text"` after
+  `words` and `edits`: `{"words":[],"edits":[],"text":"Open the settings"}` is a cue that needs no
+  transcript. It keeps the item's own anchor and length (settle never retimes it), and `words`
+  must then be empty. Files without `text` read as before.
 - **Transitions consume handles (D14).** A `transition` effect belongs to a spine clip right after
   another; its length is at most the shorter clip and needs `length/2` unused source frames before
   the incoming clip and the rest after the outgoing one. Writers refuse anything else

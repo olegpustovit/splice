@@ -170,10 +170,11 @@ impl Editor {
     fn sync_captions(&mut self) -> Result<(), CommandError> {
         let mut captions = std::mem::take(&mut self.settle_scratch.captions);
         captions.clear();
+        // Free-text cues (T41.5) keep their own timing; word cues follow their words.
         captions.extend(self.project.items.order().iter().copied().filter(|&slot| {
             matches!(
                 self.project.items.data(slot).expect("live item").kind,
-                ItemKind::Caption { .. }
+                ItemKind::Caption { text: None, .. }
             )
         }));
         let result = self.settle_captions(&captions);

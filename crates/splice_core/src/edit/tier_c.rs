@@ -6,7 +6,7 @@ use super::settle::{Owner, effects, effects_vec_mut};
 use super::tier_b::{applies, check_params};
 use super::time::{anchor_at, clip_slot, item_slot, media, rounded, source_rate};
 use super::*;
-use crate::commands::{EffectSelection, FrameArg, OverlayContent};
+use crate::commands::{Basis, EffectSelection, FrameArg, OverlayContent};
 
 /// Filler words (lowercase, without punctuation).
 const FILLERS: &[&str] = &["um", "uh", "er", "erm", "ah", "hmm", "mm", "uhm"];
@@ -91,7 +91,7 @@ fn text_param(name: &str, value: &str) -> EffectParam {
     }
 }
 
-fn done(summary: String) -> Outcome {
+pub(super) fn done(summary: String) -> Outcome {
     Outcome {
         summary: Summary::Text(summary),
         primary: None,
@@ -99,13 +99,14 @@ fn done(summary: String) -> Outcome {
     }
 }
 
-/// A transcript word on the timeline: (start, end, clip, lowercase text).
-struct Spoken {
-    start: Frame,
-    end: Frame,
-    clip: ClipId,
-    filler: bool,
-    id: WordId,
+/// A transcript word or a burst of recorded activity on the timeline (D15).
+pub(super) struct Spoken {
+    pub(super) start: Frame,
+    pub(super) end: Frame,
+    pub(super) clip: ClipId,
+    pub(super) filler: bool,
+    /// The transcript word; `None` for activity.
+    pub(super) id: Option<WordId>,
 }
 
 impl Editor {
@@ -160,26 +161,85 @@ impl Editor {
                 texts,
             } => self.translate_captions(&lane, &language, &texts),
             Op::CaptionsImport { lane, text } => self.import_captions(lane.as_ref(), &text),
+            Op::CaptionAdd {
+                text,
+                from,
+                to,
+                lane,
+            } => self.add_caption(text, from, to, lane.as_ref()),
             Op::AudioUnlink { item, lane } => self.unlink_audio(&item, lane.as_ref()),
             Op::AudioLink { item } => self.link_audio(&item),
             Op::AudioSync { item, to, offset } => self.sync_audio(&item, &to, offset),
             Op::StyleSet { params } => self.set_style(params),
-            Op::CutPauses { min, keep } => {
-                let fps = self.project.fps as f64;
-                let min = min.unwrap_or((0.7 * fps).round() as Frame).max(2);
-                let keep = keep.unwrap_or(4).max(0);
-                let (count, frames) = self.cut_gaps(min, keep, keep)?;
-                Ok(done(format!("Cut {count} pause(s), {frames} frames")))
-            }
-            Op::IntentPace { max_pause } => {
-                let fps = self.project.fps as f64;
-                let max = max_pause.unwrap_or((0.4 * fps).round() as Frame).max(0);
-                let (count, frames) = self.cut_gaps(max + 1, max / 2, max - max / 2)?;
+            Op::CutPauses {
+                min,
+                keep,
+                basis,
+                activity,
+            } => {
+                let (spans, active) = self.signal(basis, &activity)?;
+                // Activity pauses are idle stretches: 2 s, keeping 0.25 s at each end.
+                let (min_default, keep_default) = if active { (2.0, 0.25) } else { (0.7, 0.0) };
+                let min = min.unwrap_or(self.seconds(min_default)).max(2);
+                let keep = keep
+                    .unwrap_or(if active {
+                        self.seconds(keep_default)
+                    } else {
+                        4
+                    })
+                    .max(0);
+                let (count, frames) = self.cut_gaps(&spans, min, keep, keep)?;
                 Ok(done(format!(
-                    "Tightened {count} pause(s) to {max} frames, {frames} frames shorter"
+                    "Cut {count} {}, {frames} frames",
+                    if active {
+                        "idle stretch(es)"
+                    } else {
+                        "pause(s)"
+                    }
                 )))
             }
-            Op::IntentFitDuration { seconds } => self.fit_duration(seconds),
+            Op::IntentPace {
+                max_pause,
+                basis,
+                activity,
+            } => {
+                let (spans, active) = self.signal(basis, &activity)?;
+                let max = max_pause
+                    .unwrap_or(self.seconds(if active { 1.0 } else { 0.4 }))
+                    .max(0);
+                let (count, frames) = self.cut_gaps(&spans, max + 1, max / 2, max - max / 2)?;
+                Ok(done(format!(
+                    "Tightened {count} pause(s) to {max} frames, {frames} frames shorter{}",
+                    if active { " (activity)" } else { "" }
+                )))
+            }
+            Op::IntentFitDuration {
+                seconds,
+                basis,
+                activity,
+            } => {
+                let (spans, _) = self.signal(basis, &activity)?;
+                self.fit_duration(seconds, &spans)
+            }
+            Op::IntentSteps {
+                item,
+                lead,
+                settle,
+                max_gap,
+                retake_prefix,
+                activity,
+            } => self.steps(
+                &item,
+                [lead, settle, max_gap],
+                retake_prefix.as_deref().unwrap_or("retake:"),
+                &activity,
+            ),
+            Op::IntentSpeedTyping {
+                item,
+                factor,
+                min_run,
+                typing,
+            } => self.speed_typing(&item, factor, min_run, &typing),
             Op::IntentKeepShots { ranges } => self.keep_ranges(&ranges),
             Op::IntentAutoZoom {
                 item,
@@ -340,14 +400,14 @@ impl Editor {
         })
     }
 
-    fn spine_clip(&self, target: &Target) -> Result<(ClipId, Slot), CommandError> {
+    pub(super) fn spine_clip(&self, target: &Target) -> Result<(ClipId, Slot), CommandError> {
         let TimelineId::Clip(id) = self.timeline(target)? else {
             return Err(wrong_kind("Pass a spine clip (clp_…)."));
         };
         Ok((id, clip_slot(&self.project, id)?))
     }
 
-    fn spine_owner(&self, target: &Target) -> Result<Owner, CommandError> {
+    pub(super) fn spine_owner(&self, target: &Target) -> Result<Owner, CommandError> {
         Ok(Owner::Clip(self.spine_clip(target)?.1))
     }
 
@@ -1181,6 +1241,7 @@ impl Editor {
 
     // ── Transcript-driven cutting ──
 
+    /// Transcript words on the timeline, in time order (empty without a transcript).
     fn spoken(&self) -> Result<Vec<Spoken>, CommandError> {
         let mut words = Vec::new();
         for &slot in self.project.clips.order() {
@@ -1190,31 +1251,57 @@ impl Editor {
                     end: span.end,
                     clip: span.clip,
                     filler: is_filler(&word.text),
-                    id: word.id,
+                    id: Some(word.id),
                 });
             })
             .map_err(time::timing_error)?;
-        }
-        if words.is_empty() {
-            return Err(error(
-                "NO_TRANSCRIPT",
-                "No transcript words are on the timeline.",
-                "Call transcript.get {transcribe:true} first.",
-            ));
         }
         words.sort_by_key(|word| word.start);
         Ok(words)
     }
 
-    /// Pauses between consecutive words in one clip, longest first: (from, to) to cut, keeping
-    /// `before` frames after the earlier word and `after` frames before the later one.
+    /// What smart cuts measure pauses against (D15): transcript words, or bursts of recorded
+    /// activity (`basis:"activity"`, or `auto` on a timeline without words). The flag is true
+    /// for activity.
+    fn signal(
+        &self,
+        basis: Basis,
+        activity: &[(MediaId, Frame, Frame)],
+    ) -> Result<(Vec<Spoken>, bool), CommandError> {
+        if basis != Basis::Activity {
+            let words = self.spoken()?;
+            if !words.is_empty() {
+                return Ok((words, false));
+            }
+            if basis == Basis::Transcript || activity.is_empty() {
+                return Err(no_transcript());
+            }
+        }
+        let spans = self.activity_spans(activity)?;
+        if spans.is_empty() {
+            return Err(error(
+                "NO_ACTIVITY",
+                "No recorded activity is on the timeline.",
+                "Cut takes recorded with input events (record.start events:true), pass activity:[{media, from, to}] busy source frames, or transcribe and use basis:\"transcript\".",
+            ));
+        }
+        Ok((spans, true))
+    }
+
+    /// Frames in `seconds` at the project rate.
+    pub(super) fn seconds(&self, seconds: f64) -> Frame {
+        (seconds * f64::from(self.project.fps)).round() as Frame
+    }
+
+    /// Pauses between consecutive spans in one clip, longest first: (from, to) to cut, keeping
+    /// `before` frames after the earlier span and `after` frames before the later one.
     fn pauses(
         &self,
+        words: &[Spoken],
         min: Frame,
         before: Frame,
         after: Frame,
-    ) -> Result<Vec<(Frame, Frame)>, CommandError> {
-        let words = self.spoken()?;
+    ) -> Vec<(Frame, Frame)> {
         let mut cuts = Vec::new();
         for pair in words.windows(2) {
             let (a, b) = (&pair[0], &pair[1]);
@@ -1227,11 +1314,14 @@ impl Editor {
             }
         }
         cuts.sort_by_key(|&(from, to)| std::cmp::Reverse(to - from));
-        Ok(cuts)
+        cuts
     }
 
     /// Ripple-cuts ranges latest first so earlier ranges keep their frames.
-    fn cut_ranges(&mut self, mut ranges: Vec<(Frame, Frame)>) -> Result<Frame, CommandError> {
+    pub(super) fn cut_ranges(
+        &mut self,
+        mut ranges: Vec<(Frame, Frame)>,
+    ) -> Result<Frame, CommandError> {
         ranges.sort_unstable_by_key(|&(from, _)| std::cmp::Reverse(from));
         let mut limit = Frame::MAX;
         let mut total = 0;
@@ -1248,17 +1338,22 @@ impl Editor {
 
     fn cut_gaps(
         &mut self,
+        words: &[Spoken],
         min: Frame,
         before: Frame,
         after: Frame,
     ) -> Result<(usize, Frame), CommandError> {
-        let cuts = self.pauses(min, before, after)?;
+        let cuts = self.pauses(words, min, before, after);
         let count = cuts.len();
         let frames = self.cut_ranges(cuts)?;
         Ok((count, frames))
     }
 
-    fn fit_duration(&mut self, seconds: f64) -> Result<Outcome, CommandError> {
+    /// Pauses (or idle stretches), then fillers, then the shortest sentences (or activity
+    /// bursts) until the spine fits.
+    // ponytail: activity fits cut idle then whole bursts; speed typing up (intent.speedTyping)
+    // before cutting bursts once fitDuration needs to keep every action of a silent take.
+    fn fit_duration(&mut self, seconds: f64, words: &[Spoken]) -> Result<Outcome, CommandError> {
         let target = (seconds * f64::from(self.project.fps)).round() as Frame;
         let start = self.spine_end()?;
         let mut excess = start - target;
@@ -1267,7 +1362,7 @@ impl Editor {
         }
         // 1. Pauses, longest first, down to 4 frames of air on each side.
         let mut cuts = Vec::new();
-        for (from, to) in self.pauses(9, 4, 4)? {
+        for (from, to) in self.pauses(words, 9, 4, 4) {
             if excess <= 0 {
                 break;
             }
@@ -1277,7 +1372,7 @@ impl Editor {
         }
         // 2. Fillers.
         if excess > 0 {
-            for word in self.spoken()?.iter().filter(|word| word.filler) {
+            for word in words.iter().filter(|word| word.filler) {
                 if excess <= 0 {
                     break;
                 }
@@ -1291,9 +1386,8 @@ impl Editor {
         // ponytail: shortest-first stands in for energy ranking; rank by loudness once
         // media.analyze peaks reach the core.
         if excess > 0 {
-            let words = self.spoken()?;
             let mut sentences: Vec<(Frame, Frame)> = Vec::new();
-            for word in &words {
+            for word in words {
                 match sentences.last_mut() {
                     Some(last) if word.start - last.1 <= 12 => last.1 = word.end,
                     _ => sentences.push((word.start, word.end)),
@@ -1504,7 +1598,11 @@ impl Editor {
 
     // ── Captions ──
 
-    fn caption_lane(&mut self, lane: Option<&Target>, name: &str) -> Result<LaneId, CommandError> {
+    pub(super) fn caption_lane(
+        &mut self,
+        lane: Option<&Target>,
+        name: &str,
+    ) -> Result<LaneId, CommandError> {
         match lane {
             Some(target) => {
                 let Target::Lane(id) = self.resolve(target)? else {
@@ -1583,22 +1681,35 @@ impl Editor {
         let mut created = Vec::new();
         for ((_, slot), text) in cues.iter().zip(texts) {
             let timing = self.project.items.timing(*slot).expect("live item");
-            let ItemKind::Caption { words, .. } =
-                &self.project.items.data(*slot).expect("live item").kind
+            let ItemKind::Caption {
+                words, text: cue, ..
+            } = &self.project.items.data(*slot).expect("live item").kind
             else {
                 continue;
             };
-            let edits = words
-                .iter()
-                .enumerate()
-                .map(|(n, &word)| CaptionEdit {
-                    word,
-                    text: Some(if n == 0 { text.clone() } else { String::new() }),
-                    emph: false,
-                    emoji: None,
-                })
-                .collect();
-            let words = words.clone();
+            let kind = if cue.is_some() {
+                ItemKind::Caption {
+                    words: Vec::new(),
+                    edits: Vec::new(),
+                    text: Some(text.clone()),
+                }
+            } else {
+                let edits = words
+                    .iter()
+                    .enumerate()
+                    .map(|(n, &word)| CaptionEdit {
+                        word,
+                        text: Some(if n == 0 { text.clone() } else { String::new() }),
+                        emph: false,
+                        emoji: None,
+                    })
+                    .collect();
+                ItemKind::Caption {
+                    words: words.clone(),
+                    edits,
+                    text: None,
+                }
+            };
             let id = ItemId::from_serial(self.mint("ovl")?);
             self.project
                 .items
@@ -1607,7 +1718,7 @@ impl Editor {
                     timing,
                     data: ItemData {
                         lane,
-                        kind: ItemKind::Caption { words, edits },
+                        kind,
                         appearance: Appearance::default(),
                     },
                 })
@@ -1637,7 +1748,7 @@ impl Editor {
         let words = self.spoken()?;
         let lane = self.caption_lane(lane, "Captions (imported)")?;
         let mut created = Vec::new();
-        let mut skipped = 0;
+        let mut free = 0;
         for (from_ms, to_ms, cue) in cues {
             let from = (from_ms as f64 * fps / 1000.0).round() as Frame;
             let to = (to_ms as f64 * fps / 1000.0).round() as Frame;
@@ -1649,14 +1760,24 @@ impl Editor {
                 })
                 .collect();
             let (Some(first), Some(last)) = (inside.first(), inside.last()) else {
-                skipped += 1;
+                // No speech under the cue (a silent take): it keeps its own timing (T41.5).
+                let end = self.spine_end()?;
+                let (from, to) = (from.max(0), to.min(end));
+                if to > from {
+                    let cue = self.free_cue(lane, cue, from, to)?;
+                    if let Target::Timeline(TimelineId::Item(id)) = cue {
+                        self.explicit_lanes.push(id);
+                    }
+                    created.push(cue);
+                    free += 1;
+                }
                 continue;
             };
             let edits = inside
                 .iter()
                 .enumerate()
                 .map(|(n, w)| CaptionEdit {
-                    word: w.id,
+                    word: w.id.expect("transcript word"),
                     text: Some(if n == 0 { cue.clone() } else { String::new() }),
                     emph: false,
                     emoji: None,
@@ -1675,8 +1796,12 @@ impl Editor {
                     data: ItemData {
                         lane,
                         kind: ItemKind::Caption {
-                            words: inside.iter().map(|w| w.id).collect(),
+                            words: inside
+                                .iter()
+                                .map(|w| w.id.expect("transcript word"))
+                                .collect(),
                             edits,
+                            text: None,
                         },
                         appearance: Appearance::default(),
                     },
@@ -1688,16 +1813,16 @@ impl Editor {
         if created.is_empty() {
             return Err(error(
                 "NO_MATCH",
-                "No cue overlaps a transcript word on the timeline.",
-                "Check the file's timing against timeline.snapshot, or transcribe first.",
+                "Every cue starts after the end of the timeline.",
+                "Check the file's timing against timeline.snapshot.",
             ));
         }
         Ok(Outcome {
             summary: Summary::Text(format!(
                 "Imported {} cue(s) onto {lane}{}",
                 created.len(),
-                if skipped > 0 {
-                    format!(", skipped {skipped} without speech")
+                if free > 0 {
+                    format!(", {free} as free text without speech")
                 } else {
                     String::new()
                 }
@@ -2502,6 +2627,14 @@ fn transition_length(project: &Project, owner: Owner) -> Frame {
         })
         .unwrap_or(15.0)
         .round() as Frame
+}
+
+fn no_transcript() -> CommandError {
+    error(
+        "NO_TRANSCRIPT",
+        "No transcript words are on the timeline.",
+        "Call transcript.get {transcribe:true} first, or pass basis:\"activity\" to cut a silent take by its recorded input (intent.steps trims a demo to its steps).",
+    )
 }
 
 fn no_transition() -> CommandError {

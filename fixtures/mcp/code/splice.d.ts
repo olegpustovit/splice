@@ -620,22 +620,34 @@ declare namespace Splice {
     /** Cut Pauses (edit, 0.3). */
     interface CutPauses extends Base {
       cmd: "cut.pauses";
-      /** pauses at least this long are cut · @default 0.7 s */
+      /** pauses at least this long are cut · @default 0.7 s (activity: 2 s) */
       min?: number;
-      /** silence kept on each side · @default 4 */
+      /** silence kept on each side · @default 4 (activity: 0.25 s) */
       keep?: number;
+      /** auto measures against transcript words when the timeline has any, else the takes' recorded activity · @default auto */
+      basis?: "auto" | "transcript" | "activity";
+      /** [{media, from, to}] · busy source frames per take; splice mcp reads them from the takes' events when the basis needs them */
+      activity?: { media: string; from: number; to: number }[];
     }
     /** Tighten Pace (edit, 0.3). */
     interface IntentPace extends Base {
       cmd: "intent.pace";
-      /** longest pause left · @default 0.4 s */
+      /** longest pause left · @default 0.4 s (activity: 1 s) */
       maxPause?: number;
+      /** auto measures against transcript words when the timeline has any, else the takes' recorded activity · @default auto */
+      basis?: "auto" | "transcript" | "activity";
+      /** [{media, from, to}] · busy source frames per take; splice mcp reads them from the takes' events when the basis needs them */
+      activity?: { media: string; from: number; to: number }[];
     }
     /** Fit to Duration (edit, 0.3). */
     interface IntentFitDuration extends Base {
       cmd: "intent.fitDuration";
-      /** number · target length; pauses go first, then fillers, then short sentences */
+      /** number · target length; pauses go first, then fillers, then short sentences (activity: idle, then the shortest bursts) */
       seconds: number;
+      /** auto measures against transcript words when the timeline has any, else the takes' recorded activity · @default auto */
+      basis?: "auto" | "transcript" | "activity";
+      /** [{media, from, to}] · busy source frames per take; splice mcp reads them from the takes' events when the basis needs them */
+      activity?: { media: string; from: number; to: number }[];
     }
     /** Keep Shots (edit, 0.3). */
     interface IntentKeepShots extends Base {
@@ -829,6 +841,46 @@ declare namespace Splice {
       clip: string;
       /** [{at, x, y, action}] · timeline frames inside the clip; x, y in 0–1 of the captured source; action move | click. Where an automation moved or clicked unseen: the cursor travels there on a human path */
       marks: { at: number; x: number; y: number; action: string }[];
+    }
+    /** Trim to Steps (edit, 0.3). */
+    interface IntentSteps extends Base {
+      cmd: "intent.steps";
+      /** clp_… · screen take */
+      item: string;
+      /** [{from, to}] · busy source frames; splice mcp reads them from the take's events when omitted */
+      activity?: { from: number; to: number }[];
+      /** kept before each step · @default 0.4 s */
+      lead?: number;
+      /** kept after a step's last activity · @default 1 s */
+      settle?: number;
+      /** longer quiet stretches inside a step are cut · @default 1.5 s */
+      maxGap?: number;
+      /** a marker named so drops the attempt since the step before it · @default retake: */
+      retakePrefix?: string;
+    }
+    /** Speed Up Typing (edit, 0.3). */
+    interface IntentSpeedTyping extends Base {
+      cmd: "intent.speedTyping";
+      /** clp_… · screen take */
+      item: string;
+      /** [{from, to}] · source frames; splice mcp reads them from the take's events when omitted */
+      typing?: { from: number; to: number }[];
+      /** 1.25–16 · rate while typing · @default 3 */
+      factor?: number;
+      /** shorter typing runs keep their speed · @default 1 s */
+      minRun?: number;
+    }
+    /** Add Caption (edit, 0.3). */
+    interface CaptionAdd extends Base {
+      cmd: "caption.add";
+      /** the cue, shown as typed (no transcript needed) */
+      text: string;
+      /** first timeline frame */
+      from: number;
+      /** timeline frame after the cue */
+      to: number;
+      /** lan_… · captions lane (default: the first, created if missing) */
+      lane?: string;
     }
   }
   /** Effect types and parameters (effects.json, the validator's own schema). */
@@ -1222,7 +1274,10 @@ declare namespace Splice {
     | op.MediaRelink
     | op.MediaConsolidate
     | op.ZoomRemove
-    | op.TakePointer;
+    | op.TakePointer
+    | op.IntentSteps
+    | op.IntentSpeedTyping
+    | op.CaptionAdd;
 }
 
 declare const splice: {
@@ -1325,6 +1380,7 @@ declare const splice: {
       set(args: Omit<Splice.op.CaptionSet, "cmd">): Splice.op.CaptionSet;
       split(args: Omit<Splice.op.CaptionSplit, "cmd">): Splice.op.CaptionSplit;
       merge(args: Omit<Splice.op.CaptionMerge, "cmd">): Splice.op.CaptionMerge;
+      add(args: Omit<Splice.op.CaptionAdd, "cmd">): Splice.op.CaptionAdd;
     };
     crop: {
       keys(args: Omit<Splice.op.CropKeys, "cmd">): Splice.op.CropKeys;
@@ -1347,6 +1403,8 @@ declare const splice: {
       fitDuration(args: Omit<Splice.op.IntentFitDuration, "cmd">): Splice.op.IntentFitDuration;
       keepShots(args: Omit<Splice.op.IntentKeepShots, "cmd">): Splice.op.IntentKeepShots;
       autoZoom(args: Omit<Splice.op.IntentAutoZoom, "cmd">): Splice.op.IntentAutoZoom;
+      steps(args: Omit<Splice.op.IntentSteps, "cmd">): Splice.op.IntentSteps;
+      speedTyping(args: Omit<Splice.op.IntentSpeedTyping, "cmd">): Splice.op.IntentSpeedTyping;
     };
     transcript: {
       set(args: Omit<Splice.op.TranscriptSet, "cmd">): Splice.op.TranscriptSet;

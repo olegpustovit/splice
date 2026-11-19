@@ -10,7 +10,7 @@ use splice_core::{
     history::StoreError,
     package,
 };
-use splice_eval::{CaptionWord, caption_tokens, resolve_effect};
+use splice_eval::{CaptionWord, FREE_TEXT, caption_tokens, resolve_effect};
 use splice_model::{timing, *};
 
 pub(super) fn duration(p: &Project) -> Result<Frame, StoreError> {
@@ -555,11 +555,19 @@ fn effects(p: &Project, id: TimelineId, schemas: &Json) -> Json {
 
 pub(super) fn tokens(p: &Project, slot: Slot) -> Result<Vec<CaptionWord>, StoreError> {
     let data = p.items.data(slot).expect("live item");
-    let ItemKind::Caption { words, edits } = &data.kind else {
+    let ItemKind::Caption { words, edits, text } = &data.kind else {
         return Ok(Vec::new());
     };
     let timing = p.items.timing(slot).unwrap();
-    caption_tokens(p, timing.anchor, words, edits, false).map_err(|error| {
+    let free = match text {
+        Some(text) => {
+            let id = p.items.id(slot).unwrap();
+            let interval = span(p, TimelineId::Item(id))?;
+            Some((text.as_str(), interval.start, interval.end))
+        }
+        None => None,
+    };
+    caption_tokens(p, timing.anchor, words, edits, free, false).map_err(|error| {
         failure(
             "INVARIANT",
             &error.to_string(),
@@ -576,10 +584,12 @@ pub(super) fn caption_text(words: &[CaptionWord]) -> String {
         .join(" ")
 }
 
+/// A cue's words; a free-text cue (T41.5) has none.
 pub(super) fn caption_json(words: &[CaptionWord]) -> Json {
     Json::Array(
         words
             .iter()
+            .filter(|word| word.id != FREE_TEXT)
             .map(|word| {
                 let mut fields = vec![
                     ("id", display(&word.id)),

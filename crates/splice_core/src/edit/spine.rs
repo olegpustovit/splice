@@ -582,7 +582,7 @@ impl Editor {
         let slot = item_slot(&self.project, id)?;
         if matches!(
             self.project.items.data(slot).expect("live item").kind,
-            ItemKind::Caption { .. }
+            ItemKind::Caption { text: None, .. }
         ) {
             return Err(wrong_kind(
                 "Use caption commands to edit word-derived timing.",

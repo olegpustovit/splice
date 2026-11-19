@@ -3,6 +3,18 @@ use splice_model::{
     LaneKind, MediaId, Placement, Rect, ShapeKind, Spring, TimelineId, WordId, Zoom,
 };
 
+/// What smart cuts measure pauses against (D15).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Basis {
+    /// Transcript words when the timeline has any, else recorded activity.
+    #[default]
+    Auto,
+    /// Transcript words only.
+    Transcript,
+    /// Recorded input activity of screen takes only.
+    Activity,
+}
+
 /// An edit command with its validated wire arguments.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
@@ -495,16 +507,28 @@ pub enum Op {
         min: Option<Frame>,
         /// Silence kept on each side of a cut (frames).
         keep: Option<Frame>,
+        /// What a pause is measured against.
+        basis: Basis,
+        /// Busy source ranges of takes, for the activity basis.
+        activity: Vec<(MediaId, Frame, Frame)>,
     },
     /// Tighten Pace.
     IntentPace {
         /// Longest pause to keep (frames).
         max_pause: Option<Frame>,
+        /// What a pause is measured against.
+        basis: Basis,
+        /// Busy source ranges of takes, for the activity basis.
+        activity: Vec<(MediaId, Frame, Frame)>,
     },
     /// Fit to Duration.
     IntentFitDuration {
         /// Target length in seconds.
         seconds: f64,
+        /// What a pause is measured against.
+        basis: Basis,
+        /// Busy source ranges of takes, for the activity basis.
+        activity: Vec<(MediaId, Frame, Frame)>,
     },
     /// Keep Shots.
     IntentKeepShots {
@@ -521,6 +545,43 @@ pub enum Op {
         typing: Vec<(Frame, Frame)>,
         /// Magnification (default 1.5).
         amount: Option<f64>,
+    },
+    /// Steps (Splice extension): a screen demo trimmed to its steps.
+    IntentSteps {
+        /// Screen take clip.
+        item: Target,
+        /// Frames kept before each step starts.
+        lead: Option<Frame>,
+        /// Frames kept after a step's last activity.
+        settle: Option<Frame>,
+        /// Longer quiet stretches inside a step are cut (frames).
+        max_gap: Option<Frame>,
+        /// Marker name prefix that restarts the step before it.
+        retake_prefix: Option<String>,
+        /// Busy source frame ranges of the take.
+        activity: Vec<(Frame, Frame)>,
+    },
+    /// Speed Up Typing (Splice extension).
+    IntentSpeedTyping {
+        /// Screen take clip.
+        item: Target,
+        /// Rate while typing.
+        factor: f64,
+        /// Shorter typing runs keep their speed (frames).
+        min_run: Option<Frame>,
+        /// Typing as source frame ranges.
+        typing: Vec<(Frame, Frame)>,
+    },
+    /// Add Caption (Splice extension): a free-text cue.
+    CaptionAdd {
+        /// Cue text.
+        text: String,
+        /// First timeline frame.
+        from: Frame,
+        /// Timeline frame after the cue.
+        to: Frame,
+        /// Destination captions lane; the first one (or a new one) when omitted.
+        lane: Option<Target>,
     },
     /// Roll Edit (Splice extension).
     ItemRoll {

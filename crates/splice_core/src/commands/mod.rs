@@ -46,6 +46,9 @@ pub const EXTENSIONS: &[&str] = &[
     "media.consolidate",
     "zoom.remove",
     "take.pointer",
+    "intent.steps",
+    "intent.speedTyping",
+    "caption.add",
 ];
 
 #[cfg(test)]

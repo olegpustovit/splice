@@ -16,6 +16,9 @@ mod style;
 pub use camera::View;
 pub use cube::{cube_atlas, parse_cube};
 pub use eval::{EvalError, Evaluator, SourceSpan, caption_tokens};
+
+/// The word ID of a free-text caption cue's single token: an unbound legacy `w0`, never a loaded word.
+pub const FREE_TEXT: WordId = WordId::legacy(0);
 pub use look::{
     AudioFx, Blend, ChromaKey, Cutout, Grade, Look, MAX_MASKS, Mask, MaskMode, MaskShape,
     Transition, TransitionKind,
@@ -233,7 +236,7 @@ pub struct Audio {
 /// Resolved text and timeline range for a caption word.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptionWord {
-    /// Stable transcript word ID.
+    /// Stable transcript word ID, or [`FREE_TEXT`] for a free-text cue's one token.
     pub id: WordId,
     /// Styled display text without the optional emoji.
     pub text: String,

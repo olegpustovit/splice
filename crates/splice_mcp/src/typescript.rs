@@ -361,7 +361,10 @@ fn param_type(kind: &str, doc: &str) -> String {
             .map(|field| field.trim().trim_end_matches('?'))
             .filter(|field| !field.is_empty())
             .map(|field| {
-                let text = matches!(field, "text" | "name" | "id" | "label" | "action" | "app");
+                let text = matches!(
+                    field,
+                    "text" | "name" | "id" | "label" | "action" | "app" | "media"
+                );
                 format!("{field}: {}", if text { "string" } else { "number" })
             })
             .collect::<Vec<_>>()

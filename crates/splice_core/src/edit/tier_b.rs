@@ -1612,6 +1612,7 @@ impl Editor {
                         kind: ItemKind::Caption {
                             words: group.iter().map(|&i| visible[i].0).collect(),
                             edits: Vec::new(),
+                            text: None,
                         },
                         appearance: Appearance::default(),
                     },
@@ -1660,10 +1661,15 @@ impl Editor {
         patches: Vec<CaptionWordPatch>,
     ) -> Result<Outcome, CommandError> {
         let slot = self.caption_slot(item)?;
-        let ItemKind::Caption { words, .. } = &self.project.items.data(slot).expect("live").kind
+        let ItemKind::Caption {
+            words, text: free, ..
+        } = &self.project.items.data(slot).expect("live").kind
         else {
             unreachable!("checked caption")
         };
+        if free.is_some() {
+            return self.set_free_cue(slot, text, &patches);
+        }
         let words = words.clone();
         let visible: Vec<(WordId, String)> = words
             .iter()
@@ -1746,6 +1752,32 @@ impl Editor {
         ))
     }
 
+    /// `caption.set` on a free-text cue: only its text changes.
+    fn set_free_cue(
+        &mut self,
+        slot: Slot,
+        text: Option<String>,
+        patches: &[CaptionWordPatch],
+    ) -> Result<Outcome, CommandError> {
+        if !patches.is_empty() {
+            return Err(free_cue("Pass text to retype the cue."));
+        }
+        let text = text
+            .map(|text| text.trim().to_owned())
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| CommandError::bad("text", "the cue's new text"))?;
+        if let ItemKind::Caption { text: cue, .. } =
+            &mut self.project.items.data_mut(slot).expect("live").kind
+        {
+            *cue = Some(text);
+        }
+        let id = self.project.items.id(slot).expect("live item");
+        Ok(Outcome::edit(
+            format!("Caption {id}"),
+            Target::Timeline(TimelineId::Item(id)),
+        ))
+    }
+
     /// Stores a media item's words (replacing any earlier transcript). Word IDs are `w:<media>:1…`;
     /// the hash covers the language and words, so captions anchored to an older version settle away.
     fn set_transcript(
@@ -1811,9 +1843,14 @@ impl Editor {
         let data = self.project.items.data_mut(slot).expect("live item");
         let lane = data.lane;
         let appearance = data.appearance.clone();
-        let ItemKind::Caption { words, edits } = &mut data.kind else {
+        let ItemKind::Caption { words, edits, text } = &mut data.kind else {
             unreachable!("checked caption")
         };
+        if text.is_some() {
+            return Err(free_cue(
+                "Change its text with caption.set, or caption.add a second cue.",
+            ));
+        }
         let word = in_cue(words, word);
         let index = words
             .iter()
@@ -1838,6 +1875,7 @@ impl Editor {
                     kind: ItemKind::Caption {
                         words: right_words,
                         edits: right_edits,
+                        text: None,
                     },
                     appearance,
                 },
@@ -1864,6 +1902,16 @@ impl Editor {
             return Err(CommandError::bad("items", "two or more captions"));
         }
         cues.sort_by_key(|&(_, start)| start);
+        if cues.iter().any(|&(slot, _)| {
+            matches!(
+                self.project.items.data(slot).expect("live").kind,
+                ItemKind::Caption { text: Some(_), .. }
+            )
+        }) {
+            return Err(free_cue(
+                "Delete one cue with item.delete and caption.set the other's text.",
+            ));
+        }
         let lane = self.project.items.data(cues[0].0).expect("live").lane;
         if cues
             .iter()
@@ -1879,7 +1927,10 @@ impl Editor {
         let mut merged = Vec::new();
         for &(slot, _) in &cues[1..] {
             let data = self.project.items.data_mut(slot).expect("live");
-            if let ItemKind::Caption { words: w, edits } = &mut data.kind {
+            if let ItemKind::Caption {
+                words: w, edits, ..
+            } = &mut data.kind
+            {
                 words.append(w);
                 merged.append(edits);
             }
@@ -1892,8 +1943,9 @@ impl Editor {
             .flat_map(|t| t.words.iter().map(|w| w.id))
             .collect();
         let keep = cues[0].0;
-        let ItemKind::Caption { words: kept, edits } =
-            &mut self.project.items.data_mut(keep).expect("live").kind
+        let ItemKind::Caption {
+            words: kept, edits, ..
+        } = &mut self.project.items.data_mut(keep).expect("live").kind
         else {
             unreachable!("checked caption")
         };
@@ -1919,6 +1971,15 @@ fn in_cue(words: &[WordId], word: WordId) -> WordId {
         .copied()
         .find(|w| w.index() == word.index())
         .unwrap_or(word)
+}
+
+/// A word operation on a free-text cue (T41.5), which has no words.
+fn free_cue(fix: &str) -> CommandError {
+    error(
+        "WRONG_KIND",
+        "That caption is a free-text cue without words.",
+        fix,
+    )
 }
 
 fn caption_edit(edits: &mut Vec<CaptionEdit>, word: WordId) -> &mut CaptionEdit {

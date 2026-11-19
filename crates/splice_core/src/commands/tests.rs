@@ -45,13 +45,14 @@ fn registry_matches_prototype_ids_order_and_status() {
         20
     );
     // 0.3 built the prototype's planned rows (less its click-zoom settings, now
-    // intent.autoZoom's job) and 16 Splice rows; nothing stays planned.
+    // intent.autoZoom's job) and 16 Splice rows; 0.4 adds intent.steps, intent.speedTyping
+    // and caption.add (T41). Nothing stays planned.
     assert_eq!(
         COMMANDS
             .iter()
             .filter(|row| row.tier == Tier::Third)
             .count(),
-        35
+        38
     );
     assert!(COMMANDS.iter().all(|row| row.tier != Tier::Planned));
 }

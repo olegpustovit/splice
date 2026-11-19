@@ -11,6 +11,7 @@ mod edits;
 mod mints;
 mod properties;
 mod settle;
+mod silent;
 mod spine;
 mod tier_b;
 mod tier_c;
@@ -22,6 +23,8 @@ pub use time::{resolve_view_frame, span};
 
 #[cfg(test)]
 mod fuzz_tests;
+#[cfg(test)]
+mod silent_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

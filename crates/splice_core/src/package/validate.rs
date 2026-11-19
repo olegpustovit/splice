@@ -368,7 +368,7 @@ pub(crate) fn migrate_words(project: &mut Project) {
                 *stored = word;
             }
         }
-        if let ItemKind::Caption { words, edits } =
+        if let ItemKind::Caption { words, edits, .. } =
             &mut project.items.data_mut(slot).expect("live item").kind
         {
             words.iter_mut().for_each(|word| bind(media, word));
@@ -382,7 +382,7 @@ pub(crate) fn migrate_words(project: &mut Project) {
             if let Anchor::Word { word, .. } = &mut item.timing.anchor {
                 bind(None, word);
             }
-            if let ItemKind::Caption { words, edits } = &mut item.data.kind {
+            if let ItemKind::Caption { words, edits, .. } = &mut item.data.kind {
                 words.iter_mut().for_each(|word| bind(None, word));
                 edits.iter_mut().for_each(|edit| bind(None, &mut edit.word));
             }

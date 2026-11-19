@@ -1,6 +1,7 @@
 //! Fills the inputs of 0.3 commands that the core can't read itself (PLAN.md T20, T21): take
-//! clicks for intent.autoZoom, cursor crops, and (macOS) tracking, sync offsets and on-device
-//! translation; and copies the files behind media.consolidate once a batch will commit. Every
+//! clicks for intent.autoZoom, take activity for intent.steps, intent.speedTyping and the
+//! activity basis of the smart cuts (T41), cursor crops, and (macOS) tracking, sync offsets and
+//! on-device translation; and copies the files behind media.consolidate once a batch will commit. Every
 //! edit path (MCP, `splice apply`, the viewer) runs it through `history::apply_batch`. Batches
 //! that need none of this pass through untouched.
 use super::{Json, object, wire::*};
@@ -20,6 +21,12 @@ fn needs(op: &Json) -> bool {
     let missing = |key: &str| op.field(key).is_none();
     match cmd(op) {
         "intent.autoZoom" => missing("clicks"),
+        "intent.steps" => missing("activity"),
+        "intent.speedTyping" => missing("typing"),
+        // Filled when the basis is activity, or auto on a timeline without words (`fill`).
+        "cut.pauses" | "intent.pace" | "intent.fitDuration" => {
+            missing("activity") && op.field("basis").and_then(Json::as_str) != Some("transcript")
+        }
         "crop.keys" => missing("keys") && op.field("follow").is_some(),
         "mask.track" => missing("keys"),
         "audio.sync" => missing("offset"),
@@ -74,7 +81,9 @@ pub(super) fn ops(
             })
             .collect();
         let project = project.as_ref().unwrap_or(store.project());
-        let (key, value) = fill(store.path(), project, &resolved)?;
+        let Some((key, value)) = fill(store.path(), project, &resolved)? else {
+            continue;
+        };
         let Json::Object(fields) = &mut filled[index] else {
             unreachable!("checked object")
         };
@@ -86,11 +95,140 @@ pub(super) fn ops(
     Ok(Some(filled))
 }
 
-/// The missing input of one op whose `$refs` are resolved, read from `project`.
+/// The missing input of one op whose `$refs` are resolved, read from `project`; `None` when the
+/// op needs none after all (an `auto` basis on a timeline with words).
 fn fill(
     dir: &Path,
     project: &Project,
     fields: &[(String, Json)],
+) -> Result<Option<(&'static str, Json)>, StoreError> {
+    let get = |key: &str| {
+        fields
+            .iter()
+            .find(|(name, _)| name == key)
+            .and_then(|(_, value)| value.as_str())
+    };
+    let command = get("cmd").unwrap_or("");
+    match command {
+        "intent.steps" | "intent.speedTyping" => {
+            let fix = if command == "intent.steps" {
+                "Pass activity:[{from, to}] busy source frames explicitly."
+            } else {
+                "Pass typing:[{from, to}] source frames explicitly."
+            };
+            let item = take_clip(get("item"), fix)?;
+            let media = clip_media(project, item)?;
+            let found = super::media::activity(dir, project, media, whole(media))?;
+            let ranges = if command == "intent.steps" {
+                &found.busy
+            } else {
+                &found.typing
+            };
+            let ranges = source_ranges(media, ranges, None);
+            return Ok(Some((
+                if command == "intent.steps" {
+                    "activity"
+                } else {
+                    "typing"
+                },
+                Json::Array(ranges),
+            )));
+        }
+        "cut.pauses" | "intent.pace" | "intent.fitDuration" => {
+            let spoken = project.clips.order().iter().any(|&slot| {
+                let media = project.clips.data(slot).and_then(|data| data.media);
+                project.transcripts.iter().any(|transcript| {
+                    Some(transcript.media) == media && !transcript.words.is_empty()
+                })
+            });
+            if get("basis") != Some("activity") && spoken {
+                return Ok(None);
+            }
+            // Every take on the spine, once.
+            let mut ranges = Vec::new();
+            let mut seen = Vec::new();
+            for &slot in project.clips.order() {
+                let Some(media) = project
+                    .clips
+                    .data(slot)
+                    .and_then(|data| data.media)
+                    .and_then(|id| project.media.iter().find(|media| media.id == id))
+                    .filter(|media| media.kind == splice_model::MediaKind::Take)
+                else {
+                    continue;
+                };
+                if seen.contains(&media.id) {
+                    continue;
+                }
+                seen.push(media.id);
+                let found = super::media::activity(dir, project, media, whole(media))?;
+                ranges.extend(source_ranges(media, &found.busy, Some(media.id)));
+            }
+            return Ok((!ranges.is_empty()).then_some(("activity", Json::Array(ranges))));
+        }
+        _ => {}
+    }
+    fill_input(dir, project, fields, command).map(Some)
+}
+
+/// A take's whole clock, in seconds.
+fn whole(media: &Media) -> [f64; 2] {
+    [
+        0.0,
+        f64::from(media.probe.frames) / media.probe.fps.max(1.0),
+    ]
+}
+
+/// Second ranges as `[{media?, from, to}]` source frames, widened to whole frames.
+fn source_ranges(
+    media: &Media,
+    ranges: &[[f64; 2]],
+    id: Option<splice_model::MediaId>,
+) -> Vec<Json> {
+    let fps = media.probe.fps.max(1.0);
+    ranges
+        .iter()
+        .map(|&[from, to]| {
+            let mut fields = Vec::with_capacity(3);
+            if let Some(id) = id {
+                fields.push(("media", Json::String(id.to_string())));
+            }
+            let from = (from * fps).floor() as i64;
+            fields.push(("from", Json::Signed(from)));
+            fields.push(("to", Json::Signed(((to * fps).ceil() as i64).max(from + 1))));
+            object(fields)
+        })
+        .collect()
+}
+
+/// The take behind a spine clip ID.
+fn clip_media(project: &Project, item: String) -> Result<&Media, StoreError> {
+    let wrong = || {
+        StoreError::from(CommandError::rule(
+            "WRONG_KIND",
+            "item",
+            Some(Json::String(item.clone())),
+            "a spine clip (clp_…) of a recorded take",
+            "Pass a take clip ID from timeline.snapshot.",
+        ))
+    };
+    let id: splice_model::ClipId = item.parse().map_err(|_| wrong())?;
+    project
+        .clips
+        .find(id)
+        .and_then(|slot| project.clips.data(slot))
+        .and_then(|data| data.media)
+        .and_then(|id| project.media.iter().find(|media| media.id == id))
+        .filter(|media| media.kind == splice_model::MediaKind::Take)
+        .ok_or_else(wrong)
+}
+
+/// The inputs of the 0.3 rows: clicks, crop keys, tracking, sync offsets and translations.
+fn fill_input(
+    dir: &Path,
+    project: &Project,
+    fields: &[(String, Json)],
+    command: &str,
 ) -> Result<(&'static str, Json), StoreError> {
     let get = |key: &str| {
         fields
@@ -98,7 +236,7 @@ fn fill(
             .find(|(name, _)| name == key)
             .and_then(|(_, value)| value.as_str())
     };
-    match get("cmd").unwrap_or("") {
+    match command {
         "intent.autoZoom" => {
             let item = take_clip(
                 get("item"),

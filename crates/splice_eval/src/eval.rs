@@ -1,7 +1,7 @@
 use super::look::{self, AudioFx, Look, Mix, Num, Rig, Transition, TransitionKind};
 use super::{
-    Audio, Background, CaptionStyle, CaptionWord, FramePlan, Group, Keys, Layer, Picture, Shift,
-    Track, layout, style,
+    Audio, Background, CaptionStyle, CaptionWord, FREE_TEXT, FramePlan, Group, Keys, Layer,
+    Picture, Shift, Track, layout, style,
 };
 use splice_model::timing::{self, TimingError};
 use splice_model::*;
@@ -1161,9 +1161,13 @@ impl Evaluator {
                     mix: Mix::new(&audio_scopes, &shifts),
                 });
             }
-            ItemKind::Caption { words, edits } => {
+            ItemKind::Caption { words, edits, text } => {
                 if let Some(style) = style::caption(&[&p.effects, lane, local]) {
-                    let words = caption_tokens(p, timing.anchor, words, edits, style.uppercase)?;
+                    let free = text
+                        .as_deref()
+                        .map(|text| (text, interval.start, interval.end));
+                    let words =
+                        caption_tokens(p, timing.anchor, words, edits, free, style.uppercase)?;
                     if !words.is_empty() {
                         self.captions.push(PreparedCaption {
                             id,
@@ -1466,13 +1470,30 @@ fn overlay_tracks(media: &Media) -> Vec<(Track, f64)> {
 }
 
 /// Resolves cue words through the source timeline and applies display edits.
+/// A free-text cue (`free`: its text and timeline `[start, end)`) is one token with the
+/// [`FREE_TEXT`] ID.
 pub fn caption_tokens(
     p: &Project,
     anchor: Anchor,
     ids: &[WordId],
     edits: &[CaptionEdit],
+    free: Option<(&str, Frame, Frame)>,
     uppercase: bool,
 ) -> Result<Vec<CaptionWord>, EvalError> {
+    if let Some((text, start, end)) = free {
+        return Ok(vec![CaptionWord {
+            id: FREE_TEXT,
+            text: if uppercase {
+                text.to_uppercase()
+            } else {
+                text.into()
+            },
+            emoji: None,
+            emph: false,
+            start,
+            end,
+        }]);
+    }
     let hash = match anchor {
         Anchor::ClipSource { clip, .. } => p
             .clips

@@ -944,12 +944,16 @@ pub(super) fn cut_pauses(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::CutPauses {
         min: a.opt_int("min")?,
         keep: a.opt_int("keep")?,
+        basis: basis(a)?,
+        activity: media_ranges(a)?,
     })
 }
 
 pub(super) fn intent_pace(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::IntentPace {
         max_pause: a.opt_int("maxPause")?,
+        basis: basis(a)?,
+        activity: media_ranges(a)?,
     })
 }
 
@@ -958,7 +962,140 @@ pub(super) fn intent_fit_duration(a: &Json, _scratch: &mut DecodeScratch) -> Dec
     if seconds.is_nan() || seconds <= 0.0 {
         return Err(Error::bad("seconds", "a positive duration"));
     }
-    Ok(Op::IntentFitDuration { seconds })
+    Ok(Op::IntentFitDuration {
+        seconds,
+        basis: basis(a)?,
+        activity: media_ranges(a)?,
+    })
+}
+
+fn basis(a: &Json) -> Result<Basis, Error> {
+    match a.field("basis").map(|value| value.as_str()) {
+        None => Ok(Basis::Auto),
+        Some(Some("auto")) => Ok(Basis::Auto),
+        Some(Some("transcript")) => Ok(Basis::Transcript),
+        Some(Some("activity")) => Ok(Basis::Activity),
+        Some(_) => Err(Error::bad("basis", "auto, transcript or activity")),
+    }
+}
+
+/// `activity: [{media, from, to}]`: busy source frame ranges per take.
+fn media_ranges(a: &Json) -> Result<Vec<(splice_model::MediaId, Frame, Frame)>, Error> {
+    let expected = "[{media, from, to}] busy source frame ranges with to > from";
+    let mut out = Vec::new();
+    for range in a.field("activity").map(list).unwrap_or(&[]) {
+        let media = range
+            .field("media")
+            .and_then(Json::as_str)
+            .and_then(|id| id.parse().ok())
+            .ok_or_else(|| Error::bad("activity.media", "a med_… take ID"))?;
+        match (range.opt_int("from")?, range.opt_int("to")?) {
+            (Some(from), Some(to)) if to > from && from >= 0 => out.push((media, from, to)),
+            _ => return Err(Error::bad("activity", expected)),
+        }
+    }
+    Ok(out)
+}
+
+/// `[{from, to}]` source frame ranges under `key`.
+fn source_ranges(a: &Json, key: &str) -> Result<Vec<(Frame, Frame)>, Error> {
+    let mut out = Vec::new();
+    for run in a.field(key).map(list).unwrap_or(&[]) {
+        match (run.opt_int("from")?, run.opt_int("to")?) {
+            (Some(from), Some(to)) if to > from => out.push((from, to)),
+            _ => {
+                return Err(Error::bad(
+                    key,
+                    "[{from, to}] source frame ranges with to > from",
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+pub(super) fn intent_steps(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let activity = source_ranges(a, "activity")?;
+    if activity.is_empty() {
+        return Err(Error::bad(
+            "activity",
+            "[{from, to}] busy source frames; splice mcp fills them from the take's events when omitted",
+        ));
+    }
+    let nonnegative = |key: &str| -> Result<Option<Frame>, Error> {
+        match a.opt_int(key)? {
+            Some(value) if value < 0 => Err(Error::rule(
+                "BAD_ARGS",
+                key,
+                Some(Json::Signed(i64::from(value))),
+                "frames ≥ 0",
+                &format!("Pass {key} as a frame count of 0 or more."),
+            )),
+            value => Ok(value),
+        }
+    };
+    Ok(Op::IntentSteps {
+        item: a.target("item")?,
+        lead: nonnegative("lead")?,
+        settle: nonnegative("settle")?,
+        max_gap: nonnegative("maxGap")?,
+        retake_prefix: a.opt_string("retakePrefix")?,
+        activity,
+    })
+}
+
+pub(super) fn intent_speed_typing(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let typing = source_ranges(a, "typing")?;
+    if typing.is_empty() {
+        return Err(Error::bad(
+            "typing",
+            "[{from, to}] typing source frames; splice mcp fills them from the take's events when omitted",
+        ));
+    }
+    let min_run = a.opt_int("minRun")?;
+    if let Some(run) = min_run.filter(|&run| run < 1) {
+        return Err(Error::rule(
+            "BAD_ARGS",
+            "minRun",
+            Some(Json::Signed(i64::from(run))),
+            "frames ≥ 1",
+            "Pass minRun as the shortest typing run to speed up, in frames.",
+        ));
+    }
+    Ok(Op::IntentSpeedTyping {
+        item: a.target("item")?,
+        factor: a.opt_within("factor", 1.25, 16.0)?.unwrap_or(3.0),
+        min_run,
+        typing,
+    })
+}
+
+pub(super) fn caption_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let text = a.string("text")?.trim().to_owned();
+    if text.is_empty() {
+        return Err(Error::bad("text", "the cue's text"));
+    }
+    let from = a
+        .opt_int("from")?
+        .ok_or_else(|| Error::bad("from", "the cue's first timeline frame"))?;
+    let to = a
+        .opt_int("to")?
+        .ok_or_else(|| Error::bad("to", "the timeline frame after the cue"))?;
+    if from < 0 || to <= from {
+        return Err(Error::rule(
+            "BAD_ARGS",
+            "to",
+            Some(Json::Signed(i64::from(to))),
+            "0 ≤ from < to",
+            "Pass from and to as timeline frames with to after from.",
+        ));
+    }
+    Ok(Op::CaptionAdd {
+        text,
+        from,
+        to,
+        lane: a.opt_target("lane")?,
+    })
 }
 
 pub(super) fn intent_keep_shots(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
@@ -1000,23 +1137,10 @@ pub(super) fn intent_auto_zoom(a: &Json, _scratch: &mut DecodeScratch) -> Decode
             "{at, x, y} source clicks; splice mcp fills them from the take's events when omitted",
         ));
     }
-    let mut typing = Vec::new();
-    for run in a.field("typing").map(list).unwrap_or(&[]) {
-        let (from, to) = (run.opt_int("from")?, run.opt_int("to")?);
-        match (from, to) {
-            (Some(from), Some(to)) if to > from => typing.push((from, to)),
-            _ => {
-                return Err(Error::bad(
-                    "typing",
-                    "[{from, to}] source frame ranges with to > from",
-                ));
-            }
-        }
-    }
     Ok(Op::IntentAutoZoom {
         item: a.target("item")?,
         clicks,
-        typing,
+        typing: source_ranges(a, "typing")?,
         amount: zoom_amount(a)?,
     })
 }

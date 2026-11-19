@@ -390,3 +390,43 @@ fn music_ducks_under_transcript_speech_and_ramps_back() {
     let cuts = evaluator.breakpoints();
     assert!(cuts.contains(&118) && cuts.contains(&126), "{cuts:?}");
 }
+
+/// T41.5: a free-text cue on a silent take renders as one caption token over its own timing.
+#[test]
+fn a_free_text_cue_renders_without_a_transcript() {
+    let mut project = sample();
+    project.transcripts.clear();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"caption.add","text":"Open the settings","from":150,"to":210,"lane":"lan_cap"}]"#,
+    )
+    .unwrap();
+    // Free the lane: the sample's word cues on it lost their words with the transcript.
+    let report = splice_core::edit::apply(
+        &mut project,
+        ops.as_array().unwrap(),
+        splice_core::history::Source::Agent,
+        false,
+    )
+    .unwrap();
+    let splice_core::commands::Target::Timeline(TimelineId::Item(cue)) =
+        report.changes[0].created[0]
+    else {
+        panic!("a caption item")
+    };
+    let shown = |plan: &FramePlan| {
+        plan.layers
+            .iter()
+            .any(|layer| matches!(layer, Layer::Caption { item, .. } if *item == cue))
+    };
+    let evaluator = Evaluator::prepare(&project).unwrap();
+    let mut plan = evaluator.buffer();
+    evaluator.frame(180, &mut plan);
+    assert!(shown(&plan), "{:?}", plan.layers);
+    let words = evaluator.caption_words(cue).unwrap();
+    assert_eq!(words.len(), 1);
+    assert_eq!(words[0].id, FREE_TEXT);
+    assert_eq!(words[0].text.to_lowercase(), "open the settings");
+    assert_eq!((words[0].start, words[0].end), (150, 210));
+    evaluator.frame(215, &mut plan);
+    assert!(!shown(&plan));
+}

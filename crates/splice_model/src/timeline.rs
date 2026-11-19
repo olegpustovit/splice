@@ -305,12 +305,14 @@ pub enum ItemKind {
         /// corner to the bottom-right one.
         rect: Rect,
     },
-    /// Cue composed from words in a transcript.
+    /// Cue composed from words in a transcript, or free text (T41.5).
     Caption {
-        /// Words in cue order.
+        /// Words in cue order; empty for a free-text cue.
         words: Vec<WordId>,
         /// Display edits for individual words.
         edits: Vec<CaptionEdit>,
+        /// A free-text cue's text: it needs no transcript and keeps the item's own timing.
+        text: Option<String>,
     },
 }
 
@@ -785,9 +787,10 @@ impl Clone for ItemKind {
                 rect: *rect,
             },
             Self::Zoom(zoom) => Self::Zoom(*zoom),
-            Self::Caption { words, edits } => Self::Caption {
+            Self::Caption { words, edits, text } => Self::Caption {
                 words: words.clone(),
                 edits: edits.clone(),
+                text: text.clone(),
             },
         }
     }
@@ -796,14 +799,16 @@ impl Clone for ItemKind {
         match (self, source) {
             (Self::Title { text }, Self::Title { text: other }) => text.clone_from(other),
             (
-                Self::Caption { words, edits },
+                Self::Caption { words, edits, text },
                 Self::Caption {
                     words: source_words,
                     edits: source_edits,
+                    text: source_text,
                 },
             ) => {
                 words.clone_from(source_words);
                 edits.clone_from(source_edits);
+                text.clone_from(source_text);
             }
             (dest, source) => *dest = source.clone(),
         }

@@ -157,9 +157,12 @@ pub(super) fn encode_item(id: ItemId, timing: ItemTiming, data: &ItemData) -> Js
             }
             ("zoom", object(fields))
         }
-        ItemKind::Caption { words, edits } => (
-            "caption",
-            object(vec![
+        ItemKind::Caption {
+            words,
+            edits,
+            text: cue,
+        } => {
+            let mut fields = vec![
                 (
                     "words",
                     Json::Array(words.iter().map(|id| display(id)).collect()),
@@ -168,8 +171,10 @@ pub(super) fn encode_item(id: ItemId, timing: ItemTiming, data: &ItemData) -> Js
                     "edits",
                     Json::Array(edits.iter().map(encode_caption_edit).collect()),
                 ),
-            ]),
-        ),
+            ];
+            push_text(&mut fields, "text", cue);
+            ("caption", object(fields))
+        }
         ItemKind::Media(overlay) => (
             "media",
             object(vec![
@@ -351,7 +356,7 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
             })
         }
         "caption" => {
-            shape(params, &["words", "edits"])?;
+            shape(params, &["words", "edits", "text"])?;
             let mut words = Vec::new();
             for word in params.array("words")? {
                 words.push(
@@ -365,7 +370,11 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
                 .iter()
                 .map(decode_caption_edit)
                 .collect::<Result<Vec<_>, _>>()?;
-            ItemKind::Caption { words, edits }
+            let text = optional_string(params, "text")?;
+            if text.is_some() && !words.is_empty() {
+                return Err(bad("caption", "words or free text, not both"));
+            }
+            ItemKind::Caption { words, edits, text }
         }
         "shape" => {
             shape(params, &["shape", "rect"])?;
