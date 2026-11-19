@@ -618,6 +618,15 @@ impl Editor {
                 timing.start = frame_add(timing.start, delta)?;
             }
         }
+        // Markers are timeline frames: they ripple with the spine. A removal (delta < 0) folds
+        // the markers inside the removed span onto its start, so none is left past the end.
+        for marker in &mut self.project.markers {
+            if marker.at >= at {
+                marker.at = frame_add(marker.at, delta)?.max(0);
+            } else if delta < 0 && marker.at > at + delta {
+                marker.at = (at + delta).max(0);
+            }
+        }
         Ok(())
     }
 }

@@ -242,10 +242,30 @@ fn decoders_reject_unknown_and_invalid_arguments() {
     let typo =
         decode(&splice_json::parse(r#"{"cmd":"item.split","item":"clp_take","att":12}"#).unwrap())
             .unwrap_err();
+    assert!(
+        typo.message.contains(r#"Did you mean "at"?"#),
+        "{}",
+        typo.message
+    );
     assert_eq!(
         (typo.code, typo.rule.unwrap().did_you_mean.as_deref()),
         ("UNKNOWN_PARAM", Some("at"))
     );
+    // Seen in evals: agents pass item or ids to item.delete, which takes items.
+    for wrong in ["item", "ids"] {
+        let error = decode(
+            &splice_json::parse(&format!(
+                r#"{{"cmd":"item.delete","{wrong}":["clp_take"]}}"#
+            ))
+            .unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.rule.unwrap().did_you_mean.as_deref(),
+            Some("items"),
+            "{wrong}"
+        );
+    }
     let import = splice_json::parse(r#"{"cmd":"clip.insert","path":"/tmp/clip.mov"}"#).unwrap();
     assert!(
         matches!(decode(&import).unwrap().op, Op::ClipInsert { source: InsertSource::Path(path), .. } if path == "/tmp/clip.mov")

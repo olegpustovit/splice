@@ -994,3 +994,24 @@ fn m9_overlay_add_zoom_is_a_validated_default() {
     let error = apply(&mut sample(), ops.as_array().unwrap(), Source::Agent, false).unwrap_err();
     assert_eq!(error.error.code, "UNKNOWN_PARAM");
 }
+
+/// Found by the tutorial-steps eval: a ripple cut moves the markers after it and folds the
+/// ones inside it onto the cut point; a lift (no ripple) leaves them.
+#[test]
+fn ripple_cuts_carry_markers() {
+    let mut project = sample();
+    // Sample markers: mrk_1 at 120, mrk_2 at 372.
+    let ops =
+        splice_json::parse(r#"[{"cmd":"cut.range","from":100,"to":200,"ripple":true}]"#).unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let at: Vec<_> = project.markers.iter().map(|m| m.at).collect();
+    assert_eq!(at, [100, 272]);
+    let mut lifted = sample();
+    let ops =
+        splice_json::parse(r#"[{"cmd":"cut.range","from":100,"to":200,"ripple":false}]"#).unwrap();
+    apply(&mut lifted, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    assert_eq!(
+        lifted.markers.iter().map(|m| m.at).collect::<Vec<_>>(),
+        [120, 372]
+    );
+}

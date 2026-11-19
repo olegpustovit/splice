@@ -248,12 +248,18 @@ impl CommandError {
         name: &str,
         known: &mut dyn Iterator<Item = &str>,
     ) -> Self {
+        let did_you_mean = closest(name, known);
+        // Agents read the text first: the suggestion goes there too.
+        let message = match &did_you_mean {
+            Some(near) => format!("{message} Did you mean {near:?}?"),
+            None => message,
+        };
         let mut error = Self::new(code, message, fix);
         error.rule = Some(Box::new(Rule {
             param: name.into(),
             got: None,
             expected: "a known name".into(),
-            did_you_mean: closest(name, known),
+            did_you_mean,
         }));
         error
     }
@@ -263,12 +269,23 @@ impl CommandError {
 pub(crate) fn closest(name: &str, known: &mut dyn Iterator<Item = &str>) -> Option<String> {
     let name = name.to_ascii_lowercase();
     let limit = (name.len() / 3).max(2);
-    known
+    let mut synonym = None;
+    let best = known
+        .inspect(|candidate| {
+            // Names agents carry over from other calls (items.inspect takes ids).
+            if SYNONYMS.contains(&(name.as_str(), *candidate)) {
+                synonym = Some(candidate.to_string());
+            }
+        })
         .map(|candidate| (distance(&name, &candidate.to_ascii_lowercase()), candidate))
         .filter(|(d, _)| *d <= limit)
         .min_by_key(|(d, _)| *d)
-        .map(|(_, candidate)| candidate.to_string())
+        .map(|(_, candidate)| candidate.to_string());
+    best.or(synonym)
 }
+
+/// Argument names that mean the same thing elsewhere in the API, for didYouMean.
+const SYNONYMS: &[(&str, &str)] = &[("ids", "items"), ("id", "item"), ("items", "ids")];
 
 /// Levenshtein distance over bytes (names are ASCII).
 fn distance(a: &str, b: &str) -> usize {
