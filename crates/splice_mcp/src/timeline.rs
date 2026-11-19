@@ -558,6 +558,7 @@ pub(super) fn caption_json(words: &[CaptionWord]) -> Json {
 /// An effect by ID, encoded as in the package with its kind and owner's ID ("project" or
 /// "lan_spine" for those scopes).
 fn effect_json(p: &Project, id: &str) -> Option<Json> {
+    let wanted: EffectId = id.parse().ok()?;
     let lists = [
         ("project".to_owned(), &p.effects),
         ("lan_spine".to_owned(), &p.spine.effects),
@@ -583,7 +584,7 @@ fn effect_json(p: &Project, id: &str) -> Option<Json> {
         )
     }));
     for (owner, effects) in lists {
-        let Some(effect) = effects.iter().find(|effect| effect.id.to_string() == id) else {
+        let Some(effect) = effects.iter().find(|effect| effect.id == wanted) else {
             continue;
         };
         let Json::Array(mut one) =

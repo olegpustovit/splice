@@ -165,10 +165,8 @@ mod looks {
             )],
         );
         let through = pixel(&Composition::prepare(&lut, &dir.0).unwrap(), 5, [48, 32]);
-        assert!(
-            near(through, base, 1),
-            "identity LUT {through:?} vs {base:?}"
-        );
+        // T18.1: an identity LUT is bit-exact.
+        assert_eq!(through, base, "identity LUT");
 
         let masked = project(
             vec![red.clone()],
