@@ -446,28 +446,10 @@ pub(super) fn sync_offset(store: &Store, fields: &[(String, Json)]) -> Result<Fr
         envelope(store.path(), a_media)?,
         envelope(store.path(), b_media)?,
     );
-    let max_lag = (30.0 * ENVELOPE_RATE) as i64;
-    let mean = |v: &[f32]| v.iter().map(|&x| f64::from(x)).sum::<f64>() / v.len().max(1) as f64;
-    let (ma, mb) = (mean(&a), mean(&b));
-    let mut best = (f64::MIN, 0i64);
-    // ponytail: correlate the first 120 s of the clip's audio (72 M multiply-adds at most); use an
-    // FFT correlation if long takes need sync deeper in.
-    let head = &b[..b.len().min((120.0 * ENVELOPE_RATE) as usize)];
-    for lag in -max_lag..=max_lag {
-        let mut sum = 0.0;
-        for (i, &x) in head.iter().enumerate() {
-            let j = i as i64 + lag;
-            if j >= 0 && (j as usize) < a.len() {
-                sum += (f64::from(a[j as usize]) - ma) * (f64::from(x) - mb);
-            }
-        }
-        if sum > best.0 {
-            best = (sum, lag);
-        }
-    }
+    let lag = super::analyze::best_lag(&a, &b, ENVELOPE_RATE);
     // Item time = clip media time + lag.
     let start = f64::from(p.clips.timing(clip_slot).expect("live clip").source) / b_media.probe.fps;
-    let seconds = start + best.1 as f64 / ENVELOPE_RATE;
+    let seconds = start + lag as f64 / ENVELOPE_RATE;
     Ok((seconds * a_media.probe.fps).round() as Frame)
 }
 

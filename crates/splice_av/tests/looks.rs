@@ -314,6 +314,210 @@ mod looks {
         assert!(!envelope.is_empty());
     }
 
+    /// T19.2: the cleanup chain drops a −40 dBFS noise floor by at least 15 dB between phrases
+    /// and keeps the phrases' level within 1 dB.
+    pub(super) fn cleanup_chain_lowers_the_noise_floor_and_keeps_speech() {
+        let dir = scratch("noise");
+        let rate = 48_000u32;
+        let mut seed = 0x1234_5678_u32;
+        let mut samples = Vec::new();
+        // 0.5 s phrases (a voiced 180 Hz tone with harmonics at about -14 dBFS RMS) and 0.5 s
+        // pauses of -40 dBFS white noise, eight times.
+        for _ in 0..8 {
+            for i in 0..rate / 2 {
+                let t = f64::from(i) / f64::from(rate);
+                let voiced = (0.5 * (2.0 * std::f64::consts::PI * 180.0 * t).sin()
+                    + 0.2 * (2.0 * std::f64::consts::PI * 360.0 * t).sin())
+                    * 0.3;
+                samples.push(voiced as f32);
+            }
+            for _ in 0..rate / 2 {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let white =
+                    (f64::from(seed) / f64::from(u32::MAX) * 2.0 - 1.0) * 0.01 * 3f64.sqrt();
+                samples.push(white as f32);
+            }
+        }
+        let mut wav = Vec::new();
+        let data = (samples.len() * 2) as u32;
+        for chunk in [
+            &b"RIFF"[..],
+            &(36 + data).to_le_bytes(),
+            b"WAVEfmt ",
+            &16u32.to_le_bytes(),
+            &1u16.to_le_bytes(),
+            &1u16.to_le_bytes(),
+            &rate.to_le_bytes(),
+            &(rate * 2).to_le_bytes(),
+            &2u16.to_le_bytes(),
+            &16u16.to_le_bytes(),
+            b"data",
+            &data.to_le_bytes(),
+        ] {
+            wav.extend_from_slice(chunk);
+        }
+        for s in &samples {
+            wav.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+        }
+        let input = dir.0.join("noisy.wav");
+        fs::write(&input, wav).unwrap();
+        let output = dir.0.join("clean.caf");
+        let chain = apple_sys::audio::Chain {
+            eq: Some([80.0, 0.0, 0.0, 0.0, 1000.0]),
+            compressor: None,
+            gate: Some(-30.0),
+            isolation: None,
+            pan: 0.0,
+        };
+        apple_sys::audio::render(&input, 0, &output, &chain).unwrap();
+        let level = |file: &std::path::Path, phrase: bool| {
+            let envelope = apple_sys::audio::envelope(file, 0, 100.0).unwrap();
+            // Middles of each half second, away from the gate's attack and release.
+            let picked: Vec<f64> = (0..8)
+                .flat_map(|n| {
+                    let base = n * 100 + if phrase { 0 } else { 50 };
+                    (base + 15..base + 35).map(|i| f64::from(envelope[i]))
+                })
+                .collect();
+            let rms = (picked.iter().map(|v| v * v).sum::<f64>() / picked.len() as f64).sqrt();
+            20.0 * rms.max(1e-9).log10()
+        };
+        let (speech_in, speech_out) = (level(&input, true), level(&output, true));
+        let (noise_in, noise_out) = (level(&input, false), level(&output, false));
+        eprintln!(
+            "speech {speech_in:.1} → {speech_out:.1} dB, noise {noise_in:.1} → {noise_out:.1} dB"
+        );
+        assert!(
+            noise_in - noise_out >= 15.0,
+            "noise floor fell {:.1} dB",
+            noise_in - noise_out
+        );
+        assert!(
+            (speech_in - speech_out).abs() <= 1.0,
+            "speech moved {:.1} dB",
+            speech_out - speech_in
+        );
+    }
+
+    /// T20.1: Vision feature prints jump at a hard cut in an exported movie.
+    pub(super) fn shot_analysis_finds_a_hard_cut() {
+        let dir = scratch("shots");
+        let mut project = project(
+            vec![
+                still(&dir.0, 1, [30, 80, 220]),
+                still(&dir.0, 2, [240, 160, 30]),
+            ],
+            vec![(1, 45, vec![]), (2, 45, vec![])],
+        );
+        project.size = [320, 180];
+        let composition = Composition::prepare(&project, &dir.0).unwrap();
+        let file = dir.0.join("cut.mp4");
+        let mut job = composition
+            .start_export(&file, &Encoding::new(Codec::H264))
+            .unwrap();
+        while let ExportState::Running(_) = job.step(Duration::from_millis(16)).unwrap() {}
+        assert_eq!(job.status(), ExportState::Complete);
+        let prints: Vec<(f64, f64)> =
+            apple_sys::vision::analyze(&file, apple_sys::vision::SHOTS, 0.25)
+                .unwrap()
+                .into_iter()
+                .filter_map(|finding| match finding {
+                    apple_sys::vision::Finding::Print { t, distance } => Some((t, distance)),
+                    _ => None,
+                })
+                .collect();
+        let (at, jump) = prints
+            .iter()
+            .copied()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap();
+        let calm = prints
+            .iter()
+            .filter(|p| (p.0 - at).abs() > 0.3)
+            .map(|p| p.1)
+            .fold(0.0, f64::max);
+        eprintln!("shot jump {jump:.3} at {at:.2} s (others ≤ {calm:.3})");
+        assert!((at - 1.5).abs() <= 0.25, "cut found at {at} s");
+        assert!(jump > 3.0 * calm.max(0.01), "jump {jump} vs {calm}");
+    }
+
+    /// A committed camera-footage fixture (fixtures/media/camera-footage.swift) as video media.
+    fn footage(dir: &std::path::Path, serial: u64, name: &str) -> Media {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/media")
+            .join(name);
+        fs::copy(&source, dir.join(name)).unwrap();
+        let probe = apple_sys::media::probe(&dir.join(name)).unwrap();
+        let video = probe.video.unwrap();
+        let fps = video.nominal_fps.unwrap_or(30.0);
+        Media {
+            id: MediaId::from_serial(serial),
+            kind: MediaKind::Video,
+            path: name.into(),
+            bookmark: None,
+            size: 0,
+            mtime: 0,
+            probe: Probe {
+                fps,
+                frames: (probe.duration_seconds * fps).round() as Frame,
+                width: video.width,
+                height: video.height,
+                audio: Vec::new(),
+                codec: None,
+                loudness: None,
+            },
+            take: None,
+        }
+    }
+
+    /// T15.2: phone and camera footage. A portrait clip renders upright, variable frame rate
+    /// sources land on integer project frames by time, and Display P3 converts to Rec. 709.
+    pub(super) fn portrait_vfr_and_p3_footage_render_correctly() {
+        let dir = scratch("footage");
+        // Portrait: stored landscape (left red, right blue) with a 90° transform.
+        let media = footage(&dir.0, 1, "portrait.mov");
+        assert_eq!([media.probe.width, media.probe.height], [36, 64]);
+        let mut upright = project(vec![media], vec![(1, 10, vec![])]);
+        upright.size = [36, 64];
+        let composition = Composition::prepare(&upright, &dir.0).unwrap();
+        let (top, bottom) = (
+            pixel(&composition, 3, [18, 12]),
+            pixel(&composition, 3, [18, 52]),
+        );
+        assert!(
+            near(top, [220, 30, 30], 30) && near(bottom, [30, 30, 220], 30),
+            "{top:?} {bottom:?}"
+        );
+        // VFR: frame n (grey 20 + 8n) starts at the cumulative sum of 1001, 2002, 500 / 30000 s.
+        let mut vfr = project(vec![footage(&dir.0, 2, "vfr.mov")], vec![(2, 20, vec![])]);
+        vfr.size = [32, 18];
+        let composition = Composition::prepare(&vfr, &dir.0).unwrap();
+        let starts: Vec<f64> = (0..24)
+            .scan(0i64, |at, n| {
+                let start = *at;
+                *at += [1001, 2002, 500][n % 3];
+                Some(start as f64 / 30000.0)
+            })
+            .collect();
+        for frame in 0..20 {
+            let t = f64::from(frame) / 30.0;
+            let shown = starts.iter().rposition(|&s| s <= t + 1e-6).unwrap();
+            let [grey, ..] = pixel(&composition, frame, [16, 9]);
+            assert!(
+                grey.abs_diff(20 + 8 * shown as u8) <= 4,
+                "frame {frame}: grey {grey}, want source frame {shown}"
+            );
+        }
+        // P3: (200, 120, 60) in P3 is about (212, 115, 46) in Rec. 709.
+        let mut p3 = project(vec![footage(&dir.0, 3, "p3.mov")], vec![(3, 10, vec![])]);
+        p3.size = [32, 18];
+        let [r, g, b] = pixel(&Composition::prepare(&p3, &dir.0).unwrap(), 3, [16, 9]);
+        eprintln!("P3 (200, 120, 60) rendered as ({r}, {g}, {b})");
+        assert!(r >= 205 && b <= 54, "P3 not converted: ({r}, {g}, {b})");
+    }
+
     pub(super) fn ocr_reads_text_and_a_blur_mask_hides_it() {
         let dir = scratch("ocr");
         // A "screen" still with black text on white, like a recorded window.
@@ -738,6 +942,18 @@ fn main() {
         (
             "looks_audio_chain_renders_offline",
             looks::audio_chain_renders_offline,
+        ),
+        (
+            "looks_cleanup_chain_lowers_the_noise_floor_and_keeps_speech",
+            looks::cleanup_chain_lowers_the_noise_floor_and_keeps_speech,
+        ),
+        (
+            "looks_shot_analysis_finds_a_hard_cut",
+            looks::shot_analysis_finds_a_hard_cut,
+        ),
+        (
+            "looks_portrait_vfr_and_p3_footage_render_correctly",
+            looks::portrait_vfr_and_p3_footage_render_correctly,
         ),
         (
             "looks_ocr_reads_text_and_a_blur_mask_hides_it",

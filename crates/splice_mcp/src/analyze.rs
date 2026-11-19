@@ -311,3 +311,57 @@ mod tests {
         assert_eq!(window.seconds(), (0.5, 2.5));
     }
 }
+
+/// The lag (in envelope samples, ±30 s) at which envelope `a` best lines up with the start of
+/// `b`: `a[i + lag]` matches `b[i]`. Mean-removed cross-correlation over `b`'s first 120 s.
+// ponytail: 72 M multiply-adds at 100 Hz; use an FFT correlation if long takes need sync deeper in.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(super) fn best_lag(a: &[f32], b: &[f32], rate: f64) -> i64 {
+    let max_lag = (30.0 * rate) as i64;
+    let mean = |v: &[f32]| v.iter().map(|&x| f64::from(x)).sum::<f64>() / v.len().max(1) as f64;
+    let (ma, mb) = (mean(a), mean(b));
+    let head = &b[..b.len().min((120.0 * rate) as usize)];
+    let mut best = (f64::MIN, 0i64);
+    for lag in -max_lag..=max_lag {
+        let mut sum = 0.0;
+        for (i, &x) in head.iter().enumerate() {
+            let j = i as i64 + lag;
+            if j >= 0 && (j as usize) < a.len() {
+                sum += (f64::from(a[j as usize]) - ma) * (f64::from(x) - mb);
+            }
+        }
+        if sum > best.0 {
+            best = (sum, lag);
+        }
+    }
+    best.1
+}
+
+#[cfg(test)]
+mod sync_tests {
+    /// T19.4: a second recording that starts 1.37 s later syncs within one 30 fps frame.
+    #[test]
+    fn a_one_point_three_seven_second_offset_syncs_within_a_frame() {
+        let rate = 100.0;
+        let mut seed = 0x2545_f491_u32;
+        // Speech-like envelope: bursts and pauses over 40 s.
+        let speech: Vec<f32> = (0..4_000)
+            .map(|i| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let syllable = ((i / 23) % 3 != 0) as u8 as f32;
+                syllable * (0.3 + (seed % 1000) as f32 / 2000.0)
+            })
+            .collect();
+        // The second mic started 1.37 s into the first one's recording, and hears it quieter.
+        let offset = 137;
+        let second: Vec<f32> = speech[offset..].iter().map(|v| v * 0.6 + 0.01).collect();
+        let lag = super::best_lag(&speech, &second, rate);
+        let error_frames = ((lag as f64 - offset as f64) / rate * 30.0).abs();
+        assert!(
+            error_frames <= 1.0,
+            "lag {lag}, off by {error_frames} frames"
+        );
+    }
+}
