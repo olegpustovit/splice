@@ -480,3 +480,59 @@ fn tier_b_transcript_set_replaces_words_and_feeds_captions() {
         assert!(run(&mut project, &format!("[{op}]")).is_err(), "{op}");
     }
 }
+
+/// Eval friction (tighten-talk): after cut.words in the same batch, captions.generate {clips:[take]}
+/// must caption every piece of the take, and a full-length pinned watermark must follow the ripple.
+#[test]
+fn tier_b_cut_words_then_captions_cover_the_whole_take_and_watermark_follows() {
+    let mut project = sample();
+    let logo = project.items.find("ovl_logo".parse().unwrap()).unwrap();
+    let end = |p: &Project| {
+        p.clips
+            .order()
+            .iter()
+            .map(|&s| {
+                let t = p.clips.timing(s).unwrap();
+                t.start + t.length
+            })
+            .max()
+            .unwrap()
+    };
+    assert_eq!(
+        (project.items.timing(logo).unwrap().length, end(&project)),
+        (660, 660)
+    );
+    run(
+        &mut project,
+        r#"[{"cmd":"cut.words","words":["w7"]},{"cmd":"captions.generate","clips":["clp_take"],"maxWords":3}]"#,
+    )
+    .unwrap();
+    let spine_end = end(&project);
+    assert!(spine_end < 660, "the cut rippled the spine");
+    assert_eq!(
+        project.items.timing(logo).unwrap().length,
+        spine_end,
+        "the watermark follows the ripple"
+    );
+    // Every live piece of the take carries captions.
+    let take = project
+        .media
+        .iter()
+        .find(|m| m.path.contains("screen"))
+        .map(|m| m.id);
+    let pieces: Vec<ClipId> = project
+        .clips
+        .order()
+        .iter()
+        .filter(|&&s| project.clips.data(s).unwrap().media == take)
+        .map(|&s| project.clips.id(s).unwrap())
+        .collect();
+    assert!(pieces.len() >= 2, "{pieces:?}");
+    for piece in pieces {
+        let captioned = project.items.order().iter().any(|&s| {
+            matches!(project.items.data(s).unwrap().kind, ItemKind::Caption { .. })
+                && matches!(project.items.timing(s).unwrap().anchor, Anchor::ClipSource { clip, .. } if clip == piece)
+        });
+        assert!(captioned, "{piece} has captions");
+    }
+}

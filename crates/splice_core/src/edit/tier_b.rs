@@ -1062,6 +1062,22 @@ impl Editor {
         }
         if ripple {
             self.shift_after(to, from - to, None)?;
+            // A pinned item spanning the removed range (a full-length watermark) keeps its start and
+            // loses the removed frames, so it still covers what it covered; other pinned items stay put.
+            for index in 0..self.project.items.order().len() {
+                let slot = self.project.items.order()[index];
+                let timing = self.project.items.timing_mut(slot).expect("live item");
+                if let Anchor::Pinned(start) = timing.anchor
+                    && start <= from
+                    && start + timing.length >= to
+                    && timing.length > to - from
+                {
+                    timing.length -= to - from;
+                    let length = timing.length;
+                    let data = self.project.items.data_mut(slot).expect("live item");
+                    super::edits::clamp_fades(&mut data.appearance, length);
+                }
+            }
         }
         let kids: Vec<(Slot, Frame)> = kids
             .into_iter()
@@ -1302,6 +1318,19 @@ impl Editor {
                     let (id, _) = self.take_clip(target)?;
                     chosen.push(id);
                 }
+                // A take split earlier in this batch (cut.words, cut.range) is still one take:
+                // caption its live pieces too.
+                let mut index = 0;
+                while index < chosen.len() {
+                    let parent = chosen[index];
+                    for &(from, to) in &self.splits {
+                        if from == parent && !chosen.contains(&to) {
+                            chosen.push(to);
+                        }
+                    }
+                    index += 1;
+                }
+                chosen.retain(|&id| self.project.clips.find(id).is_some());
             }
             None => {
                 for &slot in self.project.clips.order() {

@@ -271,6 +271,7 @@ impl ApplyWorkspace {
         edit.imports.clear();
         edit.bindings.clear();
         edit.explicit_lanes.clear();
+        edit.splits.clear();
         for (index, value) in ops.iter().enumerate() {
             edit.step(value, index, load).map_err(|error| ApplyError {
                 op: Some(index),
@@ -302,6 +303,8 @@ struct Editor {
     spare_changes: Vec<EditChange>,
     bindings: Vec<Binding>,
     explicit_lanes: Vec<ItemId>,
+    /// Clips split in this batch, as (original, new right half), so later ops can follow a take.
+    splits: Vec<(ClipId, ClipId)>,
     settle_scratch: settle::Scratch,
     validate_scratch: validate::Scratch,
     decode_scratch: commands::DecodeScratch,
@@ -321,6 +324,7 @@ impl Default for Editor {
             spare_changes: Vec::new(),
             bindings: Vec::new(),
             explicit_lanes: Vec::new(),
+            splits: Vec::new(),
             settle_scratch: settle::Scratch::default(),
             validate_scratch: validate::Scratch::default(),
             decode_scratch: commands::DecodeScratch::default(),

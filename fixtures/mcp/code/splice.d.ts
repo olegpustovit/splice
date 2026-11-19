@@ -410,7 +410,7 @@ declare namespace Splice {
     /** Generate Captions (edit, 0.2). */
     interface CaptionsGenerate extends Base {
       cmd: "captions.generate";
-      /** clp_…[] · takes to caption (default: every clip with a transcript) */
+      /** clp_…[] · takes to caption, including pieces split from them earlier in the batch (default: every clip with a transcript) */
       clips?: string[];
       /** int 1–8 · words per caption · @default 3 */
       maxWords?: number;

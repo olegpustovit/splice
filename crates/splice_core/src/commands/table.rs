@@ -419,7 +419,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "captions.generate", title: "Generate Captions", group: "Captions",
         risk: "edit", shortcut: "", tier: Tier::Second,
-        params: &[("clips", "clp_…[] · takes to caption (default: every clip with a transcript)"),
+        params: &[("clips", "clp_…[] · takes to caption, including pieces split from them earlier in the batch (default: every clip with a transcript)"),
             ("maxWords", "int 1–8 = 3 · words per caption"),
             ("fillers", "bool = false · caption um / uh too"),
             ("lane", "lan_… captions lane (default: the first, created if missing)"),

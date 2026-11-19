@@ -201,6 +201,7 @@ impl Editor {
                 data,
             })
             .ok_or_else(arena_full)?;
+        self.splits.push((id, right));
         self.project.clips.sort_by_start();
         for index in 0..self.project.items.order().len() {
             let item = self.project.items.order()[index];
