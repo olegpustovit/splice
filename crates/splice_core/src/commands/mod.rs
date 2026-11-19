@@ -187,7 +187,7 @@ impl CommandError {
     }
 
     /// An invalid or missing argument: `name` must be `expected`.
-    pub(crate) fn bad(name: &str, expected: &str) -> Self {
+    pub fn bad(name: &str, expected: &str) -> Self {
         Self::rule(
             "BAD_ARGS",
             name,
@@ -198,7 +198,7 @@ impl CommandError {
     }
 
     /// A refusal that names the broken rule.
-    pub(crate) fn rule(
+    pub fn rule(
         code: &'static str,
         param: &str,
         got: Option<Json>,
@@ -223,7 +223,7 @@ impl CommandError {
     }
 
     /// An unknown name among `known`, with the closest one when it is a likely typo.
-    pub(crate) fn unknown_name(
+    pub fn unknown_name(
         code: &'static str,
         message: String,
         fix: String,

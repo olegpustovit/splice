@@ -38,7 +38,10 @@ and [versioning rules](https://modelcontextprotocol.io/specification/2026-07-28/
 
 Send one UTF-8 JSON-RPC message per newline, up to 16 MiB. The server flushes each response, ignores
 one-way notifications, and exits at EOF. Unknown methods and malformed RPC requests use JSON-RPC
-errors. Invalid tool arguments and editor failures return `isError:true`.
+errors. Invalid tool arguments and editor failures return `isError:true`. An argument the tool does
+not take is refused with `UNKNOWN_PARAM`, its `param` and the closest accepted name as `didYouMean`
+(it is never silently ignored). A tool call that hits a Splice bug returns `INTERNAL` as an error
+result, is logged to the friction log, and the server keeps serving.
 
 ## Tools (19, fixed order)
 
@@ -273,7 +276,7 @@ return {revision: e.revision, clips: t.spine.length};
 
 ## Error codes
 
-`BAD_ARGS`, `UNKNOWN_COMMAND`, `NOT_FOUND`, `STALE_REVISION`, `CONFLICT`, `OUT_OF_RANGE`, `INVARIANT`, `PLANNED`,
+`BAD_ARGS`, `UNKNOWN_COMMAND`, `UNKNOWN_PARAM`, `INTERNAL`, `NOT_FOUND`, `STALE_REVISION`, `CONFLICT`, `OUT_OF_RANGE`, `INVARIANT`, `PLANNED`,
 `WRONG_KIND`, `OUT_OF_SOURCE`, `TOO_SHORT`, `LANE_CONFLICT`, `TRANSCRIPT_CHANGED`,
 `LANE_NOT_EMPTY`, `OVERLAP`, `REPLAY_MINTS`, `REPLAY_MEDIA`, `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
 `MEDIA_OFFLINE`, `BAD_MEDIA`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`, `EXPORT_FAILED`, `FRAME_FAILED`,

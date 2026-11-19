@@ -1352,7 +1352,7 @@ declare const splice: {
   };
   items: {
     /** Inspect up to 50 objects by ID, including anchors, resolved frames, children and inherited effects. */
-    inspect(args: { projectId?: string; ids: string[]; }): { revision: Splice.Revision; items: unknown[]; };
+    inspect(args: { projectId?: string; ids: string[]; items?: string[]; }): { revision: Splice.Revision; items: unknown[]; };
   };
   takes: {
     /** Read the take's cursor, clicks and keys in timeline frames, with keystrokes redacted by project policy. */
@@ -1360,11 +1360,11 @@ declare const splice: {
   };
   transcript: {
     /** Page through words by ID or get caption cues as JSON, SRT or WebVTT. Use the returned hash with word anchors. With transcribe:true (and sessionId), first recognizes the clip's speech on device and saves the words. */
-    get(args?: { projectId?: string; clip?: string; item?: string; transcribe?: boolean; language?: string; sessionId?: string; cursor?: string; limit?: number; captions?: "json" | "srt" | "vtt"; lane?: string; }): { revision: Splice.Revision; hash: string | null; clip?: string; words: unknown[]; fillers?: string[]; nextCursor?: string | null; lanes?: unknown[]; cues?: unknown[] | number; format?: "srt" | "vtt"; text?: string; };
+    get(args?: { projectId?: string; clip?: string; item?: string; transcribe?: boolean; async?: boolean; language?: string; sessionId?: string; cursor?: string; limit?: number; captions?: "json" | "srt" | "vtt"; lane?: string; }): { revision: Splice.Revision; hash: string | null; clip?: string; words: unknown[]; fillers?: string[]; nextCursor?: string | null; lanes?: unknown[]; cues?: unknown[] | number; format?: "srt" | "vtt"; text?: string; };
   };
   media: {
     /** Analyze a clip's media, in timeline frames: loudness and pauses (default); peaks, beats and sound labels (speech, music, laughter); shot cuts, on-screen text with boxes, faces and people every second; matte builds the person matte for a cutout effect. Results are cached per file. Native kinds need macOS. */
-    analyze(args: { projectId?: string; clip: string; kinds?: ("loudness" | "pauses" | "peaks" | "beats" | "sounds" | "shots" | "text" | "faces" | "people" | "matte")[]; }): { revision: Splice.Revision; clip: string; components?: unknown[]; pauses?: unknown[]; peaks?: Record<string, unknown>; beats?: unknown[]; sounds?: unknown[]; shots?: unknown[]; text?: unknown[]; faces?: unknown[]; people?: unknown[]; matte?: string; };
+    analyze(args: { projectId?: string; clip: string; kinds?: ("loudness" | "pauses" | "peaks" | "beats" | "sounds" | "shots" | "text" | "faces" | "people" | "matte")[]; async?: boolean; }): { revision: Splice.Revision; clip: string; components?: unknown[]; pauses?: unknown[]; peaks?: Record<string, unknown>; beats?: unknown[]; sounds?: unknown[]; shots?: unknown[]; text?: unknown[]; faces?: unknown[]; people?: unknown[]; matte?: string; };
   };
   view: {
     /** Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count; sheet:true returns one contact-sheet image of them all. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */

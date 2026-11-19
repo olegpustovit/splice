@@ -1,5 +1,7 @@
 use super::{Json, friction::Recorder, object, paths, project::Projects, text, tools};
+use splice_core::history::StoreError;
 use std::io::{self, BufRead, Read, Write};
+use std::panic;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
@@ -498,7 +500,29 @@ impl Connection {
         }
     }
 
+    /// Runs one tool call; a panic becomes an `INTERNAL` error result instead of ending the
+    /// server. Calls nested in `code.run` come back here, so a panic never unwinds through
+    /// the JavaScript engine.
     fn call(
+        &mut self,
+        name: &str,
+        args: &Json,
+        meta: Option<&Json>,
+    ) -> Result<Json, splice_json::NonFiniteNumber> {
+        let result =
+            panic::catch_unwind(panic::AssertUnwindSafe(|| self.call_tool(name, args, meta)));
+        match result {
+            Ok(result) => result,
+            Err(payload) => {
+                let result = tools::reply(Err(internal(name, payload.as_ref())), Vec::new())?;
+                self.friction
+                    .call(&self.projects, name, args, &result, meta);
+                Ok(result)
+            }
+        }
+    }
+
+    fn call_tool(
         &mut self,
         name: &str,
         args: &Json,
@@ -543,6 +567,20 @@ impl Connection {
             .call(&self.projects, name, args, &result, meta);
         Ok(result)
     }
+}
+
+/// The error result for a tool call that panicked.
+fn internal(tool: &str, payload: &(dyn std::any::Any + Send)) -> StoreError {
+    let reason = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown panic");
+    StoreError::new(
+        "INTERNAL",
+        &format!("{tool} failed inside Splice: {reason}."),
+        "This is a Splice bug and was logged; re-read the project state before retrying.",
+    )
 }
 
 fn capabilities() -> Json {
@@ -614,6 +652,31 @@ mod tests {
             .and_then(|result| result.field("structuredContent"))
             .cloned()
             .expect("a tool result")
+    }
+
+    #[test]
+    fn low_a_panicking_tool_call_is_an_internal_error_result() {
+        let error = internal("edit.apply", &"index out of bounds");
+        assert_eq!(error.code, "INTERNAL");
+        assert!(error.message.contains("index out of bounds"));
+        let owned: Box<dyn std::any::Any + Send> = Box::new(String::from("boom"));
+        assert!(internal("x", owned.as_ref()).message.contains("boom"));
+    }
+
+    #[test]
+    fn low_unknown_tool_arguments_are_refused_with_the_closest_name() {
+        let mut connection = connection();
+        let error = call(
+            &mut connection,
+            1,
+            "commands.describe",
+            r#"{"querry":"clip"}"#,
+        );
+        let error = error.field("error").unwrap();
+        assert_eq!(error.string("code").unwrap(), "UNKNOWN_PARAM");
+        assert_eq!(error.string("param").unwrap(), "querry");
+        assert_eq!(error.string("didYouMean").unwrap(), "query");
+        connection.close().unwrap();
     }
 
     #[test]

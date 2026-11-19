@@ -200,13 +200,15 @@ impl Recorder {
         };
         if let Some(error) = error {
             let record = entry(base(), error, "ERROR", "");
-            if persist(self.global.as_deref(), scope.project.as_deref(), &record) {
-                let id = record.field("id").and_then(Json::as_str).unwrap().into();
+            if persist(self.global.as_deref(), scope.project.as_deref(), &record)
+                && let Some(id) = record.field("id").and_then(Json::as_str)
+                && let Some(intent) = intent
+            {
                 self.pending.push(Pending {
-                    id,
+                    id: id.into(),
                     scope: scope.clone(),
                     session: session.clone(),
-                    intent: intent.expect("error keeps its intent"),
+                    intent,
                     remaining: 3,
                     commit: !dry_run,
                 });

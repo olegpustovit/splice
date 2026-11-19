@@ -119,6 +119,7 @@ pub(super) const TOOLS: &[Tool] = &[
                 "ids",
                 r#"{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":50}"#,
             ),
+            ("items", IDS),
         ],
         required: &["projectId", "ids"],
         output: &[("revision", REVISION), ("items", "array")],
@@ -175,6 +176,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ("clip", "string"),
             ("item", "string"),
             ("transcribe", "boolean"),
+            ("async", "boolean"),
             ("language", "string"),
             ("sessionId", "string"),
             ("cursor", "string"),
@@ -209,6 +211,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ("projectId", "string"),
             ("clip", "string"),
             ("kinds", KINDS),
+            ("async", "boolean"),
         ],
         required: &["projectId", "clip"],
         output: &[
@@ -669,6 +672,33 @@ pub(super) fn reply(
     ]))
 }
 
+/// Refuses an argument the tool does not take, naming the closest one it does (T37.8).
+fn known_params(name: &str, args: &Json) -> Result<(), StoreError> {
+    let Some(tool) = TOOLS.iter().find(|tool| tool.name == name) else {
+        return Ok(());
+    };
+    // Every call may carry a friction note and the session it belongs to (docs/LOOP.md §2).
+    let accepted = |key: &str| {
+        matches!(key, "friction" | "sessionId") || tool.input.iter().any(|(k, _)| *k == key)
+    };
+    match args
+        .as_object()
+        .into_iter()
+        .flatten()
+        .find(|(key, _)| !accepted(key))
+    {
+        None => Ok(()),
+        Some((key, _)) => Err(commands::CommandError::unknown_name(
+            "UNKNOWN_PARAM",
+            format!("{name} has no argument {key:?}."),
+            format!("Remove {key:?}; tools/list shows what {name} accepts."),
+            key,
+            &mut tool.input.iter().map(|(k, _)| *k),
+        )
+        .into()),
+    }
+}
+
 fn execute(
     projects: &mut Projects,
     name: &str,
@@ -676,6 +706,7 @@ fn execute(
     content: &mut Vec<Json>,
 ) -> Result<Json, StoreError> {
     args.optional_string("friction")?;
+    known_params(name, args)?;
     match name {
         "commands.describe" => {
             args.optional_string("projectId")?;
