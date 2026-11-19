@@ -462,12 +462,12 @@ eight places; the board below already carries the changes.
 - [x] T41.5 [L] Free-text caption cues (`text, from, to`) so SRT import and agent captions work on silent takes. (c815d7d)
 
 ### T42 · Text & motion, native (D16, D20) [L + M]
-- [ ] T42.1 [L] Eases: `{spring:{duration,bounce}}` (closed form, settle time reported), `back`, `elastic`, `bounce`, `steps(n)`; keys default `inOut`.
-- [ ] T42.2 [L] `title.add/set` inline `box{x,y,w,h,fit,wrap}`, `style`, `in`/`out`/`loop` compiling to text/animate/transform effects; result returns final and swept bounds.
-- [ ] T42.3 [M] Text layout: wrap, shrink-to-fit, no truncation, emoji kept; units by grapheme cluster.
-- [ ] T42.4 [L] One z-order (higher = front) and `item.order`; lane/project transforms apply as parents.
-- [ ] T42.5 [L] `motion.preset {items, preset}` writing ordinary keys (bounceIn, shake, pulse, float, wiggle, pop).
-- [ ] T42.6 [L] Templates use brand colors and safe zones.
+- [x] T42.1 [L] Eases: `{spring:{duration,bounce}}` (closed form, settle time reported), `back`, `elastic`, `bounce`, `steps(n)`; keys default `inOut`. (c7e9571)
+- [x] T42.2 [L] `title.add/set` inline `box{x,y,w,h,fit,wrap}`, `style`, `in`/`out`/`loop` compiling to text/animate/transform effects; result returns final and swept bounds. (8283875)
+- [x] T42.3 [M] Text layout: wrap, shrink-to-fit, no truncation, emoji kept; units by grapheme cluster. (af107fa)
+- [x] T42.4 [L] One z-order (higher = front) and `item.order`; lane/project transforms apply as parents. (8283875; lane/project transforms are parents, M21 refusal removed)
+- [x] T42.5 [L] `motion.preset {items, preset}` writing ordinary keys (bounceIn, shake, pulse, float, wiggle, pop). (8283875)
+- [x] T42.6 [L] Templates use brand colors and safe zones. (7ba711c)
 
 ### T43 · QA loop (D18) [L]
 - [x] T43.1 [L] Lints in every `apply`/`dryRun`: zoom ≠ 1 at an item's end, text bounds vs safe zone and window, transition on windowed clip without handles, title past the timeline, pacing stats (cut rate, longest static) vs profile. (splice_mcp::lints on every apply/dryRun: OUTSIDE_SAFE_ZONE tiktok-2026, TEXT_OVER_WINDOW, ZOOM_OVERFLOW, LONG_STATIC, with fixes and ops; pacing stats. A transition without handles is refused (T36.3) and an item past the end is trimmed by the edit (T37.2) instead.)
@@ -477,7 +477,7 @@ eight places; the board below already carries the changes.
 ### T44 · Evals & gates [L + M]
 - [ ] T44.1 [M] `silent-demo-short` eval (silent take → 15–25 s short; every action kept; zero lint errors; cursor continuous; no zoom snap; clean transitions).
 - [ ] T44.2 [M] `tutorial-steps` eval (retake removed) and window-transition goldens (6 kinds × window).
-- [ ] T44.3 [L] One regression test per report bug id (C1–M23), named after it.
+- [x] T44.3 [L] One regression test per report bug id (C1–M23), named after it. (1603d40: one named test per report id; M22 and M23 below)
 - [ ] T44.4 [M] All evals 3/3 both arms; budgets stay green.
 
 ### 0.4.x (gated or asset-bound; not in the 0.4 exit)

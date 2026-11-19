@@ -870,6 +870,7 @@ fn native_style(style: Option<&TextStyle>, stroke: f64) -> apple_sys::compositio
             box_color: s.box_color,
             align: u32::from(s.align),
             line_height: s.line_height,
+            wrap: true,
         },
         None => apple_sys::composition::TextStyle {
             stroke_width: stroke,
