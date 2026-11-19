@@ -133,13 +133,16 @@ fn encode_probe(probe: &Probe) -> Json {
         ),
     ];
     push_text(&mut fields, "codec", &probe.codec);
+    if let Some(lufs) = probe.loudness {
+        fields.push(("lufs", Json::Float(lufs)));
+    }
     object(fields)
 }
 
 fn decode_probe(value: &Json) -> Result<Probe, PackageError> {
     shape(
         value,
-        &["fps", "frames", "width", "height", "audio", "codec"],
+        &["fps", "frames", "width", "height", "audio", "codec", "lufs"],
     )?;
     let mut audio = Vec::new();
     for track in value.array("audio")? {
@@ -163,6 +166,10 @@ fn decode_probe(value: &Json) -> Result<Probe, PackageError> {
         height: u32_field(value, "height")?,
         audio,
         codec: optional_string(value, "codec")?,
+        loudness: value
+            .field("lufs")
+            .map(|_| number(value, "lufs"))
+            .transpose()?,
     })
 }
 

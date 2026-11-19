@@ -446,7 +446,11 @@ pub(super) fn lane_kind(value: &str) -> Result<LaneKind, Error> {
         "overlay" => Ok(LaneKind::Overlay),
         "motion" => Ok(LaneKind::Motion),
         "captions" => Ok(LaneKind::Captions),
-        _ => Err(Error::bad("kind", "graphics, overlay, motion, or captions")),
+        "audio" => Ok(LaneKind::Audio),
+        _ => Err(Error::bad(
+            "kind",
+            "graphics, overlay, motion, captions, or audio",
+        )),
     }
 }
 

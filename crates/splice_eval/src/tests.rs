@@ -277,3 +277,83 @@ fn composition_breakpoints_partition_the_sample_render_plan() {
         }
     }
 }
+
+#[test]
+fn music_ducks_under_transcript_speech_and_ramps_back() {
+    use splice_model::{
+        Anchor, Appearance, AudioTrack, Duck, Item, ItemData, ItemId, ItemKind, ItemTiming, Lane,
+        LaneId, LaneKind, Media, MediaKind, Probe, Sound, TimelineId,
+    };
+    let mut project = sample();
+    project.media.push(Media {
+        id: "med_music".parse().unwrap(),
+        kind: MediaKind::Audio,
+        path: "music.m4a".into(),
+        bookmark: None,
+        size: 1,
+        mtime: 0,
+        probe: Probe {
+            fps: 30.0,
+            frames: 600,
+            width: 0,
+            height: 0,
+            audio: vec![AudioTrack {
+                name: "audio".into(),
+                channels: Some(2),
+            }],
+            codec: None,
+            loudness: Some(-20.0),
+        },
+        take: None,
+    });
+    let lane = LaneId::from_serial(9_999);
+    project.lanes.push(Lane {
+        id: lane,
+        name: "Music".into(),
+        kind: LaneKind::Audio,
+        effects: Vec::new(),
+    });
+    let music: ItemId = "ovl_music".parse().unwrap();
+    project
+        .items
+        .insert(Item {
+            id: music,
+            timing: ItemTiming {
+                anchor: Anchor::Pinned(0),
+                length: 600,
+            },
+            data: ItemData {
+                lane,
+                kind: ItemKind::Sound(Sound {
+                    media: "med_music".parse().unwrap(),
+                    source: 0,
+                    volume: 0.5,
+                    duck: Some(Duck {
+                        amount: 0.3,
+                        attack: 8,
+                        release: 15,
+                    }),
+                }),
+                appearance: Appearance::default(),
+            },
+        })
+        .unwrap();
+    let evaluator = Evaluator::prepare(&project).unwrap();
+    let mut plan = evaluator.buffer();
+    let gain = |plan: &mut FramePlan, at| {
+        evaluator.frame(at, plan);
+        plan.audio
+            .iter()
+            .find(|a| a.item == TimelineId::Item(music))
+            .map(|a| a.gain)
+            .unwrap()
+    };
+    // The opener has no speech: full volume. The take's first word starts at frame 126.
+    assert!((gain(&mut plan, 60) - 0.5).abs() < 1e-9);
+    assert!((gain(&mut plan, 130) - 0.15).abs() < 1e-9);
+    let ramp = gain(&mut plan, 122);
+    assert!(ramp < 0.5 && ramp > 0.15, "attack ramp {ramp}");
+    // The duck's edges are breakpoints, so renderers ramp exactly.
+    let cuts = evaluator.breakpoints();
+    assert!(cuts.contains(&118) && cuts.contains(&126), "{cuts:?}");
+}

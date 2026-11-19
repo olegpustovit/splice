@@ -78,6 +78,7 @@ unsafe extern "C" {
     fn splice_media_probe(path: *const c_char, out: *mut RawProbe, error: *mut *mut c_char)
     -> bool;
     fn splice_media_bookmark(path: *const c_char, error: *mut *mut c_char) -> *mut c_char;
+    fn splice_media_loudness(path: *const c_char, error: *mut *mut c_char) -> f64;
     fn splice_media_dispose(probe: *mut RawProbe);
 }
 
@@ -86,6 +87,19 @@ impl Drop for RawProbe {
         // SAFETY: this struct owns the allocation made by splice_media_probe, if present.
         unsafe { splice_media_dispose(self) };
     }
+}
+
+/// Integrated loudness of the file's audio in LUFS (ITU-R BS.1770-4); `None` without audio.
+pub fn loudness(path: &Path) -> Result<Option<f64>, Error> {
+    let path = native_path(path)?;
+    let mut error = ptr::null_mut();
+    // SAFETY: the path lives for the call; the diagnostic is transferred on failure.
+    let lufs = unsafe { splice_media_loudness(path.as_ptr(), &mut error) };
+    if !error.is_null() {
+        // SAFETY: native transferred ownership of the diagnostic.
+        return Err(unsafe { Error::from_native(error, "Measuring loudness failed.") });
+    }
+    Ok(lufs.is_finite().then_some(lufs))
 }
 
 /// Loads metadata with AVFoundation. Call from a worker when blocking the caller

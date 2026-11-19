@@ -143,6 +143,100 @@ bool splice_media_probe(const char *path, SpliceMediaProbe *out, char **error) {
 
 #pragma clang diagnostic pop
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+// Integrated loudness (ITU-R BS.1770-4) of the file's audio, mixed to stereo at 48 kHz: K-weighting,
+// 400 ms blocks every 100 ms, absolute (-70 LUFS) and relative (-10 LU) gates. NaN without audio.
+double splice_media_loudness(const char *path, char **error) {
+    @autoreleasepool {
+        NSURL *url = [NSURL fileURLWithFileSystemRepresentation:path isDirectory:NO relativeToURL:nil];
+        AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
+        NSArray<AVAssetTrack *> *tracks = [asset tracksWithMediaType:AVMediaTypeAudio];
+        if (tracks.count == 0) return NAN;
+        NSError *failure = nil;
+        AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&failure];
+        AVAssetReaderAudioMixOutput *output = [AVAssetReaderAudioMixOutput
+            assetReaderAudioMixOutputWithAudioTracks:tracks audioSettings:@{
+                AVFormatIDKey: @(kAudioFormatLinearPCM), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2,
+                AVLinearPCMBitDepthKey: @32, AVLinearPCMIsFloatKey: @YES, AVLinearPCMIsNonInterleaved: @NO,
+                AVLinearPCMIsBigEndianKey: @NO}];
+        if (reader == nil || ![reader canAddOutput:output]) {
+            if (error != NULL) *error = strdup(failure.localizedDescription.UTF8String ?: "Could not read the audio.");
+            return NAN;
+        }
+        [reader addOutput:output];
+        if (![reader startReading]) {
+            if (error != NULL) *error = strdup("Could not start reading the audio.");
+            return NAN;
+        }
+        // K-weighting biquads at 48 kHz: a high shelf, then a high pass (BS.1770-4 table 1, 2).
+        const double b1[3] = {1.53512485958697, -2.69169618940638, 1.19839281085285};
+        const double a1[3] = {1.0, -1.69065929318241, 0.73248077421585};
+        const double b2[3] = {1.0, -2.0, 1.0};
+        const double a2[3] = {1.0, -1.99004745483398, 0.99007225036621};
+        double state[2][4] = {{0}};  // per channel: stage 1 z1, z2, stage 2 z1, z2
+        const size_t hop = 4800;     // 100 ms
+        double sub[4] = {0};         // the last four 100 ms sums of squares
+        size_t filled = 0, count = 0, subs = 0;
+        double current = 0;
+        NSMutableData *blocks = [NSMutableData data];  // mean square per 400 ms block
+        CMSampleBufferRef sample;
+        while ((sample = [output copyNextSampleBuffer]) != NULL) {
+            CMBlockBufferRef block = CMSampleBufferGetDataBuffer(sample);
+            size_t length = 0;
+            char *data = NULL;
+            if (block != NULL && CMBlockBufferGetDataPointer(block, 0, NULL, &length, &data) == kCMBlockBufferNoErr) {
+                const float *pcm = (const float *)data;
+                for (size_t frame = 0; frame + 1 < length / sizeof(float); frame += 2) {
+                    double energy = 0;
+                    for (int c = 0; c < 2; c++) {
+                        double *z = state[c];
+                        double x = pcm[frame + c];
+                        double y = b1[0] * x + z[0];
+                        z[0] = b1[1] * x - a1[1] * y + z[1];
+                        z[1] = b1[2] * x - a1[2] * y;
+                        double w = b2[0] * y + z[2];
+                        z[2] = b2[1] * y - a2[1] * w + z[3];
+                        z[3] = b2[2] * y - a2[2] * w;
+                        energy += w * w;
+                    }
+                    current += energy;
+                    if (++count == hop) {
+                        sub[filled % 4] = current;
+                        filled++, subs++, count = 0, current = 0;
+                        if (subs >= 4) {
+                            double z = (sub[0] + sub[1] + sub[2] + sub[3]) / (4.0 * hop);
+                            [blocks appendBytes:&z length:sizeof z];
+                        }
+                    }
+                }
+            }
+            CFRelease(sample);
+        }
+        if (reader.status == AVAssetReaderStatusFailed) {
+            if (error != NULL) *error = strdup(reader.error.localizedDescription.UTF8String ?: "Reading the audio failed.");
+            return NAN;
+        }
+        const double *z = blocks.bytes;
+        size_t n = blocks.length / sizeof(double);
+        double sum = 0;
+        size_t kept = 0;
+        for (size_t i = 0; i < n; i++) {
+            if (-0.691 + 10 * log10(z[i]) > -70) sum += z[i], kept++;
+        }
+        if (kept == 0) return -70;  // silence
+        double relative = -0.691 + 10 * log10(sum / kept) - 10;
+        double gated = 0;
+        size_t final = 0;
+        for (size_t i = 0; i < n; i++) {
+            double l = -0.691 + 10 * log10(z[i]);
+            if (l > -70 && l > relative) gated += z[i], final++;
+        }
+        return final == 0 ? -70 : -0.691 + 10 * log10(gated / final);
+    }
+}
+#pragma clang diagnostic pop
+
 char *splice_media_bookmark(const char *path, char **error) {
     @autoreleasepool {
         NSURL *url = [NSURL fileURLWithFileSystemRepresentation:path isDirectory:NO relativeToURL:nil];

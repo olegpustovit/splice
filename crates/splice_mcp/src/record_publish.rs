@@ -180,6 +180,7 @@ mod tests {
                 height: 60,
                 audio: Vec::new(),
                 codec: Some("hevc".into()),
+                loudness: None,
             },
             take: Some(TakeComponents {
                 screen: Some("screen.mov".into()),

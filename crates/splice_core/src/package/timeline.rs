@@ -167,6 +167,24 @@ pub(super) fn encode_item(id: ItemId, timing: ItemTiming, data: &ItemData) -> Js
                 ("fit", encode_fit(overlay.framing.fit)),
             ]),
         ),
+        ItemKind::Sound(sound) => {
+            let mut fields = vec![
+                ("media", display(&sound.media)),
+                ("source", frame_json(sound.source)),
+                ("volume", Json::Float(sound.volume)),
+            ];
+            if let Some(duck) = sound.duck {
+                fields.push((
+                    "duck",
+                    object(vec![
+                        ("amount", Json::Float(duck.amount)),
+                        ("attack", frame_json(duck.attack)),
+                        ("release", frame_json(duck.release)),
+                    ]),
+                ));
+            }
+            ("sound", object(fields))
+        }
     };
     let mut fields = vec![
         ("id", display(&id)),
@@ -246,6 +264,29 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
                 behind_presenter: boolean(params, "behindPresenter")?,
                 muted: boolean(params, "muted")?,
                 framing: decode_framing(params)?,
+            })
+        }
+        "sound" => {
+            shape(params, &["media", "source", "volume", "duck"])?;
+            let duck = match params.field("duck") {
+                None => None,
+                Some(duck) => {
+                    shape(duck, &["amount", "attack", "release"])?;
+                    Some(Duck {
+                        amount: number(duck, "amount")?,
+                        attack: frame(duck, "attack")?,
+                        release: frame(duck, "release")?,
+                    })
+                }
+            };
+            ItemKind::Sound(Sound {
+                media: params
+                    .string("media")?
+                    .parse()
+                    .map_err(|_| bad_id("item.media"))?,
+                source: frame(params, "source")?,
+                volume: number(params, "volume")?,
+                duck,
             })
         }
         "caption" => {

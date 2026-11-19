@@ -50,7 +50,7 @@ pub fn probe(package: &Path, request: &Path, project_fps: u32) -> Result<Media, 
             "The media duration is outside the supported frame range.".into(),
         ));
     }
-    let audio = asset
+    let audio: Vec<AudioTrack> = asset
         .audio
         .iter()
         .map(|track| AudioTrack {
@@ -68,6 +68,12 @@ pub fn probe(package: &Path, request: &Path, project_fps: u32) -> Result<Media, 
         ),
     };
     let bookmark = media::bookmark(&absolute).map_err(|failure| offline(&path, &failure))?;
+    // Measured once at import so `audio.set {normalize}` can level it headlessly.
+    let loudness = if audio.is_empty() {
+        None
+    } else {
+        media::loudness(&absolute).map_err(|failure| bad_media(failure.to_string()))?
+    };
     Ok(Media {
         id: MediaId::from_serial(0),
         kind,
@@ -82,6 +88,7 @@ pub fn probe(package: &Path, request: &Path, project_fps: u32) -> Result<Media, 
             height,
             audio,
             codec: codec.and_then(codec_label),
+            loudness,
         },
         take: None,
     })
@@ -135,5 +142,41 @@ mod tests {
         assert_eq!(descriptor.probe.audio.len(), 1);
         assert_eq!(descriptor.probe.audio[0].channels, Some(2));
         assert!(descriptor.bookmark.is_some_and(|value| !value.is_empty()));
+    }
+
+    /// BS.1770's reference: a 997 Hz sine at -20 dBFS in both channels measures -20 LUFS.
+    #[test]
+    fn imports_measure_integrated_loudness() {
+        let dir = std::env::temp_dir().join(format!("splice-lufs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rate = 48_000u32;
+        let mut samples = Vec::with_capacity(rate as usize * 4 * 2);
+        let peak = 10f64.powf(-20.0 / 20.0) * 32767.0;
+        for n in 0..rate * 2 {
+            let value = (peak
+                * (2.0 * std::f64::consts::PI * 997.0 * f64::from(n) / f64::from(rate)).sin())
+                as i16;
+            samples.extend(value.to_le_bytes());
+            samples.extend(value.to_le_bytes());
+        }
+        let mut wav = Vec::new();
+        wav.extend(b"RIFF");
+        wav.extend((36 + samples.len() as u32).to_le_bytes());
+        wav.extend(b"WAVEfmt ");
+        wav.extend(16u32.to_le_bytes());
+        wav.extend(1u16.to_le_bytes());
+        wav.extend(2u16.to_le_bytes());
+        wav.extend(rate.to_le_bytes());
+        wav.extend((rate * 4).to_le_bytes());
+        wav.extend(4u16.to_le_bytes());
+        wav.extend(16u16.to_le_bytes());
+        wav.extend(b"data");
+        wav.extend((samples.len() as u32).to_le_bytes());
+        wav.extend(&samples);
+        std::fs::write(dir.join("tone.wav"), wav).unwrap();
+        let descriptor = probe(&dir, Path::new("tone.wav"), 30).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let lufs = descriptor.probe.loudness.unwrap();
+        assert!((lufs + 20.0).abs() < 0.3, "measured {lufs} LUFS");
     }
 }

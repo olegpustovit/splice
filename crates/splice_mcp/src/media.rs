@@ -311,16 +311,25 @@ pub(super) fn audio(store: &Store, args: &Json) -> Result<Json, StoreError> {
                             });
                     let missing =
                         component.map_or_else(|| !file.is_file(), |name| !dir.join(name).is_file());
-                    // ponytail: keep levels unknown until the native audio backend can measure the file.
+                    // Imported files are measured at import. ponytail: recorded take components
+                    // stay unmeasured until a take's loudness matters to an agent (normalize).
+                    let lufs = component
+                        .is_none()
+                        .then_some(media.probe.loudness)
+                        .flatten();
                     object(vec![
                         ("component", text(&track.name)),
                         ("enabled", Json::Bool(enabled)),
                         ("volume", Json::Float(gain)),
-                        ("integratedLufs", Json::Null),
+                        ("integratedLufs", lufs.map_or(Json::Null, Json::Float)),
                         ("peakDbfs", Json::Null),
                         (
                             "state",
-                            text(if missing { "offline" } else { "unmeasured" }),
+                            text(match (missing, lufs) {
+                                (true, _) => "offline",
+                                (false, Some(_)) => "measured",
+                                (false, None) => "unmeasured",
+                            }),
                         ),
                     ])
                 })

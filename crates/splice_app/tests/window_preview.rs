@@ -48,6 +48,7 @@ fn window_program_4k_reuses_shared_textures_without_allocations() {
             height: 64,
             audio: Vec::new(),
             codec: None,
+            loudness: None,
         },
         take: None,
     });

@@ -43,6 +43,7 @@ mod native {
                 height: 64,
                 audio: Vec::new(),
                 codec: Some("h264".into()),
+                loudness: None,
             },
             take: None,
         }
@@ -150,6 +151,7 @@ mod native {
                 channels: Some(2),
             }],
             codec: Some("pcm".into()),
+            loudness: None,
         };
         let media = audio.id;
         let mut project = Project {
@@ -410,6 +412,95 @@ mod native {
         );
         assert!(at[0] >= 60, "cursor center after zoom {at:?}");
     }
+
+    /// T13.1: a sound item on an audio lane reaches the exported mix.
+    pub(super) fn native_music_on_an_audio_lane_is_exported() {
+        let mut project = Project {
+            size: [96, 64],
+            media: vec![video()],
+            ..Project::default()
+        };
+        let mut music = video();
+        music.id = MediaId::from_serial(2);
+        music.kind = MediaKind::Audio;
+        music.path = "stereo.wav".into();
+        music.probe = Probe {
+            fps: 30.0,
+            frames: 3,
+            width: 0,
+            height: 0,
+            audio: vec![AudioTrack {
+                name: "track 1".into(),
+                channels: Some(2),
+            }],
+            codec: None,
+            loudness: None,
+        };
+        project.media.push(music);
+        let lane = LaneId::from_serial(7);
+        project.lanes.push(Lane {
+            id: lane,
+            name: "Music".into(),
+            kind: LaneKind::Audio,
+            effects: Vec::new(),
+        });
+        project
+            .clips
+            .insert(Clip {
+                id: ClipId::from_serial(1),
+                timing: ClipTiming {
+                    start: 0,
+                    length: 9,
+                    source: 0,
+                    speed: 1.0,
+                },
+                data: ClipData {
+                    media: Some(MediaId::from_serial(1)),
+                    ..ClipData::default()
+                },
+            })
+            .unwrap();
+        project
+            .items
+            .insert(Item {
+                id: ItemId::from_serial(1),
+                timing: ItemTiming {
+                    anchor: Anchor::Pinned(0),
+                    length: 3,
+                },
+                data: ItemData {
+                    lane,
+                    kind: ItemKind::Sound(Sound {
+                        media: MediaId::from_serial(2),
+                        source: 0,
+                        volume: 0.5,
+                        duck: None,
+                    }),
+                    appearance: Appearance::default(),
+                },
+            })
+            .unwrap();
+        let composition = Composition::prepare(&project, &fixture()).unwrap();
+        let mut plan = composition.evaluator().buffer();
+        composition.evaluator().frame(1, &mut plan);
+        assert!(
+            plan.audio
+                .iter()
+                .any(|a| a.item == TimelineId::Item(ItemId::from_serial(1)) && a.gain == 0.5)
+        );
+        let scratch =
+            Output(std::env::temp_dir().join(format!("splice-av-music-{}", std::process::id())));
+        fs::create_dir(&scratch.0).unwrap();
+        let file = scratch.0.join("music.mp4");
+        let mut job = composition.start_export(&file, false).unwrap();
+        while let ExportState::Running(_) = job.step(Duration::from_millis(16)).unwrap() {}
+        assert_eq!(job.status(), ExportState::Complete);
+        let exported = apple_sys::media::probe(&file).unwrap();
+        assert_eq!(
+            exported.audio.first().and_then(|track| track.channels),
+            Some(2)
+        );
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -427,6 +518,10 @@ fn main() {
         (
             "native_take_draws_the_recorded_cursor_and_zooms_on_click",
             native::native_take_draws_the_recorded_cursor_and_zooms_on_click,
+        ),
+        (
+            "native_music_on_an_audio_lane_is_exported",
+            native::native_music_on_an_audio_lane_is_exported,
         ),
     ]);
 }

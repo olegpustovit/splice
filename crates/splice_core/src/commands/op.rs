@@ -1,6 +1,6 @@
 use splice_model::{
-    Access, Aspect, Edge, EffectId, EffectParam, Fit, Frame, LaneId, LaneKind, MediaId, Placement,
-    Rect, TimelineId, WordId,
+    Access, Aspect, Duck, Edge, EffectId, EffectParam, Fit, Frame, LaneId, LaneKind, MediaId,
+    Placement, Rect, TimelineId, WordId,
 };
 
 /// An edit command with its validated wire arguments.
@@ -83,6 +83,8 @@ pub enum Op {
         ripple: bool,
         /// Whether to create a clip after registering the file.
         insert: bool,
+        /// Audio lane for a sound item.
+        lane: Option<Target>,
     },
     /// Lift to Overlay.
     ClipLift {
@@ -212,12 +214,16 @@ pub enum Op {
     },
     /// Volume.
     AudioSet {
-        /// Recorded clip.
-        clip: Target,
-        /// Microphone or system audio.
-        component: Component,
+        /// Recorded clip and its microphone or system component.
+        clip: Option<(Target, Component)>,
+        /// Sound items.
+        items: Vec<Target>,
         /// New gain.
-        volume: f64,
+        volume: Option<f64>,
+        /// Ducking for sound items. Null removes it.
+        duck: Option<Option<Duck>>,
+        /// LUFS target for sound items.
+        normalize: Option<f64>,
     },
     /// Cursor Settings.
     CursorSet {

@@ -133,6 +133,8 @@ _Static_assert(offsetof(SpliceMediaProbe, audio) == 40, "audio pointer layout");
 // Writes one probe result for a local file. Dispose the result after reading it.
 bool splice_media_probe(const char *path, SpliceMediaProbe *out, char **error);
 char *splice_media_bookmark(const char *path, char **error);
+// Integrated loudness in LUFS (ITU-R BS.1770-4); NaN when the file has no audio or on error.
+double splice_media_loudness(const char *path, char **error);
 void splice_media_dispose(SpliceMediaProbe *probe);
 
 typedef struct {

@@ -109,6 +109,8 @@ declare namespace Splice {
       ripple?: boolean;
       /** @default true (set false with path to register media only) */
       insert?: boolean;
+      /** lan_… audio lane · audio files always land on an audio lane (default: the first, created if missing) at frame 0 unless at is given */
+      lane?: string;
     }
     /** Lift to Overlay (edit, 0.2). */
     interface ClipLift extends Base {
@@ -262,11 +264,17 @@ declare namespace Splice {
     /** Volume (edit, 0.2). */
     interface AudioSet extends Base {
       cmd: "audio.set";
-      /** clp_… */
-      clip: string;
-      component: "mic" | "system";
-      /** 0–2 */
-      volume: number;
+      /** clp_… take, with component */
+      clip?: string;
+      component?: "mic" | "system";
+      /** 0–2 · linear gain */
+      volume?: number;
+      /** ovl_…[] sound items on an audio lane (instead of clip) */
+      items?: string[];
+      /** {amount 0–1, attack, release frames} lowers sound items under speech, or null */
+      duck?: string;
+      /** LUFS target for sound items (e.g. -14 for social), from the measured loudness */
+      normalize?: string;
     }
     /** Cursor Settings (edit, 0.2). */
     interface CursorSet extends Base {

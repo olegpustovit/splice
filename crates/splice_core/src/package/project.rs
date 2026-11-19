@@ -184,6 +184,7 @@ fn encode_lane(lane: &Lane) -> Json {
                 LaneKind::Overlay => "overlay",
                 LaneKind::Motion => "motion",
                 LaneKind::Captions => "captions",
+                LaneKind::Audio => "audio",
             }),
         ),
         ("effects", timeline::encode_effects(&lane.effects)),
@@ -197,6 +198,7 @@ fn decode_lane(value: &Json) -> Result<Lane, PackageError> {
         "overlay" => LaneKind::Overlay,
         "motion" => LaneKind::Motion,
         "captions" => LaneKind::Captions,
+        "audio" => LaneKind::Audio,
         _ => return Err(bad("lane.kind", "graphics, overlay, motion, or captions")),
     };
     Ok(Lane {

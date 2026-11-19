@@ -40,7 +40,12 @@ impl Options {
             })
             .transpose()?;
         let mic = args.flag("mic")?;
-        let system_audio = args.flag("systemAudio")?;
+        let source = source(args)?;
+        // A window or app capture usually wants its sound: record it unless told otherwise.
+        let system_audio = match args.field("systemAudio") {
+            Some(_) => args.flag("systemAudio")?,
+            None => !still && !matches!(source, Source::Display(_) | Source::Area(..)),
+        };
         let camera = args.flag("camera")?;
         let input = args.flag("events")?;
         if still && (duration.is_some() || mic || system_audio || camera || input) {
@@ -50,7 +55,7 @@ impl Options {
             ));
         }
         Ok(Self {
-            source: source(args)?,
+            source,
             duration,
             countdown: Duration::from_secs(args.frame("countdown")?.unwrap_or(0) as u64),
             mic,
@@ -157,6 +162,12 @@ mod tests {
         assert_eq!(options.countdown.as_secs(), 1);
         assert!(options.mic && options.events);
         assert!(!options.camera && !options.system_audio && !options.still);
+        let window = splice_json::parse(r#"{"source":{"window":{"app":"TextEdit"}}}"#).unwrap();
+        assert!(Options::parse(&window).unwrap().system_audio);
+        let quiet =
+            splice_json::parse(r#"{"source":{"window":{"app":"TextEdit"}},"systemAudio":false}"#)
+                .unwrap();
+        assert!(!Options::parse(&quiet).unwrap().system_audio);
         let by_app =
             splice_json::parse(r#"{"source":{"window":{"app":"com.apple.Safari"}}}"#).unwrap();
         assert_eq!(

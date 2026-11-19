@@ -1,7 +1,7 @@
 //! Tier B commands (0.2): framing, take components, effects, cutting, lift/replace and captions.
 //! Behavior follows `docs/reference/core.js`.
 use super::settle::{Owner, effects, effects_vec_mut};
-use super::time::{anchor_at, clip_slot, item_slot, media};
+use super::time::{anchor_at, clip_slot, item_slot, media, rounded};
 use super::*;
 use crate::commands::{
     CaptionWordPatch, Component, EffectSelection, FrameArg, OverlayContent, effect_schemas,
@@ -130,9 +130,11 @@ impl Editor {
             } => self.set_component(&clip, component, enabled),
             Op::AudioSet {
                 clip,
-                component,
+                items,
                 volume,
-            } => self.set_volume(&clip, component, volume),
+                duck,
+                normalize,
+            } => self.set_volume(clip, &items, volume, duck, normalize),
             Op::CursorSet {
                 clip,
                 size,
@@ -418,26 +420,148 @@ impl Editor {
 
     fn set_volume(
         &mut self,
-        clip: &Target,
-        component: Component,
-        volume: f64,
+        clip: Option<(Target, Component)>,
+        items: &[Target],
+        volume: Option<f64>,
+        duck: Option<Option<Duck>>,
+        normalize: Option<f64>,
     ) -> Result<Outcome, CommandError> {
-        let (id, slot) = self.take_clip(clip)?;
-        let data = self.project.clips.data_mut(slot).expect("live clip");
-        let volume = volume.clamp(0.0, 2.0);
-        let gain = match component {
-            Component::Mic if data.enabled.mic.is_some() => &mut data.volume.mic,
-            Component::System if data.enabled.system.is_some() => &mut data.volume.system,
-            _ => return Err(no_component(id, component)),
+        if let Some((clip, component)) = clip {
+            let (id, slot) = self.take_clip(&clip)?;
+            let data = self.project.clips.data_mut(slot).expect("live clip");
+            let volume = volume.expect("decoded volume").clamp(0.0, 2.0);
+            let gain = match component {
+                Component::Mic if data.enabled.mic.is_some() => &mut data.volume.mic,
+                Component::System if data.enabled.system.is_some() => &mut data.volume.system,
+                _ => return Err(no_component(id, component)),
+            };
+            *gain = volume;
+            return Ok(Outcome::edit(
+                format!(
+                    "{} volume {}%",
+                    component_name(component),
+                    (volume * 100.0).round()
+                ),
+                Target::Timeline(TimelineId::Clip(id)),
+            ));
+        }
+        let ids = self.selection(items)?;
+        for &id in &ids {
+            let TimelineId::Item(item) = id else {
+                return Err(wrong_kind("Pass sound items (ovl_…) from an audio lane."));
+            };
+            let slot = item_slot(&self.project, item)?;
+            let ItemKind::Sound(sound) = self.project.items.data(slot).expect("live item").kind
+            else {
+                return Err(wrong_kind("Pass sound items (ovl_…) from an audio lane."));
+            };
+            let mut next = sound;
+            if let Some(volume) = volume {
+                next.volume = volume.clamp(0.0, 2.0);
+            }
+            if let Some(target) = normalize {
+                let loudness = media(&self.project, sound.media)?
+                    .probe
+                    .loudness
+                    .ok_or_else(|| {
+                        error(
+                            "LOUDNESS_UNKNOWN",
+                            &format!("{} has no measured loudness.", sound.media),
+                            "Import the file with clip.insert on macOS, which measures it.",
+                        )
+                    })?;
+                next.volume = 10f64.powf((target - loudness) / 20.0).clamp(0.0, 2.0);
+            }
+            if let Some(duck) = duck {
+                next.duck = duck;
+            }
+            let ItemKind::Sound(sound) =
+                &mut self.project.items.data_mut(slot).expect("live item").kind
+            else {
+                unreachable!("checked sound")
+            };
+            *sound = next;
+        }
+        Ok(Outcome {
+            summary: Summary::Update(ids.len()),
+            primary: ids.first().copied().map(Target::Timeline),
+            created: Vec::new(),
+        })
+    }
+
+    /// Places an audio file on an audio lane at `at` (default frame 0), pinned to the timeline.
+    pub(super) fn add_sound(
+        &mut self,
+        media_id: MediaId,
+        at: Option<&FrameArg>,
+        lane: Option<&Target>,
+    ) -> Result<Outcome, CommandError> {
+        let descriptor = media(&self.project, media_id)?;
+        if descriptor.probe.audio.is_empty() {
+            return Err(error(
+                "WRONG_KIND",
+                &format!("{media_id} has no audio."),
+                "Place pictures on the spine or an overlay lane.",
+            ));
+        }
+        let length = rounded(
+            (f64::from(descriptor.probe.frames) * f64::from(self.project.fps)
+                / descriptor.probe.fps)
+                .floor(),
+        )?;
+        if length < 3 {
+            return Err(error(
+                "TOO_SHORT",
+                "The audio is shorter than three frames.",
+                "Use a longer file.",
+            ));
+        }
+        let at = at.map(|at| self.frame(at)).transpose()?.unwrap_or(0).max(0);
+        let lane_id = match lane {
+            Some(lane) => {
+                let Target::Lane(id) = self.resolve(lane)? else {
+                    return Err(wrong_kind("Pass an audio lane ID or omit lane."));
+                };
+                let found = self
+                    .project
+                    .lanes
+                    .iter()
+                    .find(|l| l.id == id)
+                    .ok_or_else(|| not_found(&id, "project.info lists lanes."))?;
+                if found.kind != LaneKind::Audio {
+                    return Err(wrong_kind("Pass an audio lane or omit lane."));
+                }
+                id
+            }
+            None => self.default_lane(LaneKind::Audio)?,
         };
-        *gain = volume;
-        Ok(Outcome::edit(
-            format!(
-                "{} volume {}%",
-                component_name(component),
-                (volume * 100.0).round()
-            ),
-            Target::Timeline(TimelineId::Clip(id)),
+        let id = ItemId::from_serial(self.mint("ovl")?);
+        self.project
+            .items
+            .insert(Item {
+                id,
+                timing: ItemTiming {
+                    anchor: Anchor::Pinned(at),
+                    length,
+                },
+                data: ItemData {
+                    lane: lane_id,
+                    kind: ItemKind::Sound(Sound {
+                        media: media_id,
+                        source: 0,
+                        volume: 1.0,
+                        duck: None,
+                    }),
+                    appearance: Appearance::default(),
+                },
+            })
+            .ok_or_else(edits::arena_full)?;
+        if lane.is_some() {
+            self.explicit_lanes.push(id);
+        }
+        Ok(Outcome::create(
+            format!("Added {id} on {lane_id} at frame {at}"),
+            Target::Timeline(TimelineId::Item(id)),
         ))
     }
 

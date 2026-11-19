@@ -80,6 +80,7 @@ impl Editor {
                 LaneKind::Graphics => "Graphics",
                 LaneKind::Overlay => "Overlay",
                 LaneKind::Motion => "Motion",
+                LaneKind::Audio => "Music",
             };
             if count > 0 || kind == LaneKind::Overlay {
                 format!("{base} {}", count + 1)
@@ -411,6 +412,7 @@ fn rank(kind: LaneKind) -> u8 {
         LaneKind::Graphics => 1,
         LaneKind::Overlay => 2,
         LaneKind::Motion => 3,
+        LaneKind::Audio => 4,
     }
 }
 

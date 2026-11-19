@@ -49,6 +49,8 @@ pub struct Probe {
     pub audio: Vec<AudioTrack>,
     /// Codec label, if known.
     pub codec: Option<String>,
+    /// Integrated loudness (ITU-R BS.1770, LUFS) of the audio, when measured.
+    pub loudness: Option<f64>,
 }
 
 /// A named audio track and its channel count.
@@ -140,6 +142,7 @@ impl Clone for Probe {
             height: self.height,
             audio: self.audio.clone(),
             codec: self.codec.clone(),
+            loudness: self.loudness,
         }
     }
 
@@ -150,6 +153,7 @@ impl Clone for Probe {
         self.height = source.height;
         self.audio.clone_from(&source.audio);
         self.codec.clone_from(&source.codec);
+        self.loudness = source.loudness;
     }
 }
 

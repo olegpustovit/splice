@@ -61,6 +61,8 @@ pub enum LaneKind {
     Motion,
     /// Caption cues.
     Captions,
+    /// Music and sound effects.
+    Audio,
 }
 
 /// Full spine clip record used when adding a clip to storage.
@@ -300,6 +302,8 @@ pub enum ItemKind {
         /// Ease in and out instead of a linear ramp.
         ease: bool,
     },
+    /// Music or a sound effect on an audio lane.
+    Sound(Sound),
     /// Cue composed from words in a transcript.
     Caption {
         /// Words in cue order.
@@ -317,8 +321,33 @@ impl ItemKind {
             Self::Media(_) => LaneKind::Overlay,
             Self::Motion { .. } => LaneKind::Motion,
             Self::Caption { .. } => LaneKind::Captions,
+            Self::Sound(_) => LaneKind::Audio,
         }
     }
+}
+
+/// A sound item: an audio file placed on an audio lane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sound {
+    /// Audio media descriptor.
+    pub media: MediaId,
+    /// First source frame.
+    pub source: Frame,
+    /// Linear gain, 0…2.
+    pub volume: f64,
+    /// Lowers the sound while someone speaks.
+    pub duck: Option<Duck>,
+}
+
+/// Ducking under speech.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Duck {
+    /// Linear gain while ducked, 0…1.
+    pub amount: f64,
+    /// Frames to duck before speech starts.
+    pub attack: Frame,
+    /// Frames to recover after speech ends.
+    pub release: Frame,
 }
 
 /// Settings specific to a video or still overlay.
@@ -579,6 +608,7 @@ impl Clone for ItemKind {
         match self {
             Self::Title { text } => Self::Title { text: text.clone() },
             Self::Media(overlay) => Self::Media(*overlay),
+            Self::Sound(sound) => Self::Sound(*sound),
             Self::Motion {
                 from,
                 to,

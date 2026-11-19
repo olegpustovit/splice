@@ -284,6 +284,7 @@ fn history_verify_accepts_transcripts_stored_in_media_order() {
                     height: 0,
                     audio: Vec::new(),
                     codec: None,
+                    loudness: None,
                 },
                 take: None,
             })
@@ -332,6 +333,7 @@ fn history_media_import_is_atomic_and_replays_without_a_loader() {
                 height: 64,
                 audio: Vec::new(),
                 codec: Some("h264".into()),
+                loudness: None,
             },
             take: None,
         })

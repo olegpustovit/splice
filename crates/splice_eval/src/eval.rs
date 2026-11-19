@@ -46,6 +46,16 @@ pub struct Evaluator {
     titles: Vec<PreparedTitle>,
     captions: Vec<PreparedCaption>,
     motions: Vec<PreparedMotion>,
+    sounds: Vec<PreparedSound>,
+    /// Timeline spans of speech, sorted and merged, for ducking.
+    speech: Vec<(Frame, Frame)>,
+}
+
+struct PreparedSound {
+    id: ItemId,
+    interval: Interval,
+    input: Input,
+    duck: Option<Duck>,
 }
 
 /// An item's timeline interval and linear mapping to its source clock.
@@ -239,6 +249,8 @@ impl Evaluator {
             titles: Vec::new(),
             captions: Vec::new(),
             motions: Vec::new(),
+            sounds: Vec::new(),
+            speech: Vec::new(),
         };
         let mut end = 0;
         for &slot in project.clips.order() {
@@ -266,6 +278,9 @@ impl Evaluator {
         }
         // Prefer motion from the highest active lane.
         result.motions.reverse();
+        if result.sounds.iter().any(|sound| sound.duck.is_some()) {
+            result.speech = speech(project, &result.clips)?;
+        }
         Ok(result)
     }
 
@@ -296,6 +311,19 @@ impl Evaluator {
                     .map(|word| word.start)
                     .filter(|&at| caption.interval.contains(at)),
             );
+        }
+        for sound in &self.sounds {
+            sound.interval.add_breakpoints(&mut cuts);
+            if let Some(duck) = sound.duck {
+                let inside = |at: &Frame| sound.interval.contains(*at);
+                for &(start, end) in &self.speech {
+                    cuts.extend(
+                        [start - duck.attack, start, end, end + duck.release]
+                            .into_iter()
+                            .filter(inside),
+                    );
+                }
+            }
         }
         for motion in &self.motions {
             motion.interval.add_breakpoints(&mut cuts);
@@ -335,12 +363,16 @@ impl Evaluator {
                 let clip = self.clips.iter().find(|clip| clip.id == id)?;
                 (clip.interval, clip.input.as_ref()?)
             }
-            TimelineId::Item(_) => {
-                let overlay = self
-                    .overlays
-                    .iter()
-                    .find(|overlay| overlay.visual.picture.item == item)?;
-                (overlay.interval, &overlay.input)
+            TimelineId::Item(id) => {
+                if let Some(sound) = self.sounds.iter().find(|sound| sound.id == id) {
+                    (sound.interval, &sound.input)
+                } else {
+                    let overlay = self
+                        .overlays
+                        .iter()
+                        .find(|overlay| overlay.visual.picture.item == item)?;
+                    (overlay.interval, &overlay.input)
+                }
             }
             TimelineId::Marker(_) => return None,
         };
@@ -360,6 +392,7 @@ impl Evaluator {
             .overlays
             .iter()
             .map(|overlay| overlay.input.tracks.len())
+            .chain(self.sounds.iter().map(|sound| sound.input.tracks.len()))
             .sum::<usize>();
         FramePlan {
             layers: Vec::with_capacity(
@@ -386,6 +419,17 @@ impl Evaluator {
             self.draw_clip(clip, at, out);
         }
         self.draw_overlays(at, clip.is_some_and(|clip| clip.take), false, out);
+        for sound in self
+            .sounds
+            .iter()
+            .filter(|sound| sound.interval.contains(at))
+        {
+            let source = sound.input.frame(at - sound.interval.start);
+            let gain = sound.interval.alpha(at) * self.duck_gain(sound.duck, at);
+            sound
+                .input
+                .audio(source, TimelineId::Item(sound.id), gain, out);
+        }
         let [w, h] = self.size.map(f64::from);
         let height = h.min(w) * 0.1;
         for (index, title) in self
@@ -513,6 +557,29 @@ impl Evaluator {
         }
     }
 
+    /// The sound's gain under its ducking at `at`: ramps down over `attack` before speech and
+    /// back up over `release` after it.
+    fn duck_gain(&self, duck: Option<Duck>, at: Frame) -> f64 {
+        let Some(duck) = duck else { return 1.0 };
+        let first = self
+            .speech
+            .partition_point(|&(_, end)| end + duck.release <= at);
+        let mut depth: f64 = 0.0;
+        for &(start, end) in self.speech[first..].iter().take(2) {
+            let ramp = if at >= start && at < end {
+                1.0
+            } else if at < start && at >= start - duck.attack {
+                f64::from(at - (start - duck.attack)) / f64::from(duck.attack.max(1))
+            } else if at >= end && at < end + duck.release {
+                1.0 - f64::from(at - end) / f64::from(duck.release.max(1))
+            } else {
+                0.0
+            };
+            depth = depth.max(ramp);
+        }
+        1.0 - (1.0 - duck.amount) * depth
+    }
+
     fn prepare_item(
         &mut self,
         p: &Project,
@@ -549,6 +616,27 @@ impl Evaluator {
                     to: *to,
                     focus: *focus,
                     ease: *ease,
+                });
+            }
+            ItemKind::Sound(sound) => {
+                let media = media(p, sound.media)?;
+                if !sound.volume.is_finite() || sound.volume < 0.0 {
+                    return Err(EvalError::Range);
+                }
+                let tracks = file_tracks(media)
+                    .into_iter()
+                    .map(|(track, gain)| (track, gain * sound.volume))
+                    .collect();
+                self.sounds.push(PreparedSound {
+                    id,
+                    interval,
+                    input: input(
+                        media,
+                        sound.source,
+                        media.probe.fps / f64::from(p.fps),
+                        tracks,
+                    )?,
+                    duck: sound.duck,
                 });
             }
             ItemKind::Media(overlay) => {
@@ -765,6 +853,40 @@ fn blank_visual(
             click_zoom: None,
         },
     }
+}
+
+/// Speech on the timeline, for ducking: transcript words, or else clips with a microphone.
+/// Spans closer than 12 frames merge.
+fn speech(p: &Project, clips: &[PreparedClip]) -> Result<Vec<(Frame, Frame)>, EvalError> {
+    let mut spans = Vec::new();
+    for transcript in &p.transcripts {
+        for word in &transcript.words {
+            if let Some(span) = timing::word_span(p, word.id, Some(transcript.hash))? {
+                spans.push((span.start, span.end));
+            }
+        }
+    }
+    if spans.is_empty() {
+        spans.extend(
+            clips
+                .iter()
+                .filter(|clip| {
+                    clip.input
+                        .as_ref()
+                        .is_some_and(|input| input.tracks.iter().any(|&(t, _)| t == Track::Mic))
+                })
+                .map(|clip| (clip.interval.start, clip.interval.end)),
+        );
+    }
+    spans.sort_unstable();
+    let mut merged: Vec<(Frame, Frame)> = Vec::with_capacity(spans.len());
+    for (start, end) in spans {
+        match merged.last_mut() {
+            Some(last) if start - last.1 <= 12 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    Ok(merged)
 }
 
 fn take_tracks(enabled: &ComponentStates, gains: AudioGains) -> Vec<(Track, f64)> {

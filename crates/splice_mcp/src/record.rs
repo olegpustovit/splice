@@ -156,6 +156,10 @@ pub(super) fn command(
             still,
             size,
         )?;
+        let silent = descriptor
+            .take
+            .as_ref()
+            .is_some_and(|take| take.mic.is_none() && take.system.is_none());
         let sealed = publish(store, id, insert, descriptor, &options)?;
         let Json::Object(mut fields) = reply else {
             unreachable!("job status object")
@@ -174,6 +178,17 @@ pub(super) fn command(
                 ),
             ],
         );
+        if silent && !still {
+            reply = extend(
+                reply,
+                vec![(
+                    "warning",
+                    text(
+                        "This take has no audio. Add music with clip.insert, or record with mic or systemAudio.",
+                    ),
+                )],
+            );
+        }
         if still {
             reply = extend(
                 reply,
@@ -211,6 +226,7 @@ fn describe(stage: &Path, fps: u32, still: bool, size: u64) -> Result<Media, Sto
                 width,
                 height,
                 codec: Some("png".into()),
+                loudness: None,
                 audio: Vec::new(),
             },
             None,
@@ -257,6 +273,7 @@ fn describe(stage: &Path, fps: u32, still: bool, size: u64) -> Result<Media, Sto
                     }
                 }),
                 audio,
+                loudness: None,
             },
             Some(take),
         )

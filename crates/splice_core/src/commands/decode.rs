@@ -1,5 +1,5 @@
 use super::{CommandError as Error, DecodeScratch, Json, args::*, op::*};
-use splice_model::{Fit, Placement};
+use splice_model::{Duck, Fit, Placement};
 
 type DecodedOp = Result<Op, Error>;
 
@@ -115,6 +115,7 @@ pub(super) fn clip_insert(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         at: a.opt_frame("at")?,
         ripple: a.flag("ripple", true)?,
         insert,
+        lane: a.opt_target("lane")?,
     })
 }
 
@@ -303,14 +304,69 @@ pub(super) fn component_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp
 }
 
 pub(super) fn audio_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
-    let component = component(a.string("component")?)?;
-    if !matches!(component, Component::Mic | Component::System) {
-        return Err(Error::bad("component", "mic or system"));
+    let clip = match a.opt_target("clip")? {
+        Some(clip) => {
+            let component = component(a.string("component")?)?;
+            if !matches!(component, Component::Mic | Component::System) {
+                return Err(Error::bad("component", "mic or system"));
+            }
+            Some((clip, component))
+        }
+        None => None,
+    };
+    let items = match a.field("items") {
+        Some(_) => a.targets("items")?,
+        None => Vec::new(),
+    };
+    if clip.is_some() == !items.is_empty() {
+        return Err(Error::bad(
+            "clip or items",
+            "a take clip with component, or sound items",
+        ));
+    }
+    let duck = match a.field("duck") {
+        None => None,
+        Some(Json::Null) => Some(None),
+        Some(duck) => {
+            let amount = duck.number("amount")?;
+            let attack = duck.opt_int("attack")?.unwrap_or(8);
+            let release = duck.opt_int("release")?.unwrap_or(15);
+            if !(0.0..=1.0).contains(&amount)
+                || !(0..=120).contains(&attack)
+                || !(0..=240).contains(&release)
+            {
+                return Err(Error::bad(
+                    "duck",
+                    "{amount 0–1, attack 0–120, release 0–240 frames}",
+                ));
+            }
+            Some(Some(Duck {
+                amount,
+                attack,
+                release,
+            }))
+        }
+    };
+    let normalize = a.opt_number("normalize")?;
+    if normalize.is_some_and(|lufs| !(-40.0..=-5.0).contains(&lufs)) {
+        return Err(Error::bad("normalize", "a LUFS target from -40 to -5"));
+    }
+    let volume = a.opt_number("volume")?;
+    if clip.is_some() && volume.is_none() {
+        return Err(Error::bad("volume", "a gain from 0 to 2"));
+    }
+    if !items.is_empty() && volume.is_none() && duck.is_none() && normalize.is_none() {
+        return Err(Error::bad(
+            "volume, duck or normalize",
+            "at least one change for the items",
+        ));
     }
     Ok(Op::AudioSet {
-        clip: a.target("clip")?,
-        component,
-        volume: a.number("volume")?,
+        clip,
+        items,
+        volume,
+        duck,
+        normalize,
     })
 }
 

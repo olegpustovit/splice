@@ -330,3 +330,106 @@ fn tier_b_crop_aspect_reframes_to_fill_without_bands() {
         assert!(run(&mut project, &format!("[{op}]")).is_err(), "{op}");
     }
 }
+
+/// A 10-second stereo music file measured at -20 LUFS.
+pub(super) fn with_music(project: &mut Project) {
+    project.media.push(Media {
+        id: "med_music".parse().unwrap(),
+        kind: MediaKind::Audio,
+        path: "music.m4a".into(),
+        bookmark: None,
+        size: 1,
+        mtime: 0,
+        probe: Probe {
+            fps: 30.0,
+            frames: 300,
+            width: 0,
+            height: 0,
+            audio: vec![AudioTrack {
+                name: "audio".into(),
+                channels: Some(2),
+            }],
+            codec: Some("aac".into()),
+            loudness: Some(-20.0),
+        },
+        take: None,
+    });
+}
+
+#[test]
+fn tier_b_music_lands_on_an_audio_lane_with_volume_duck_and_loudness() {
+    let mut project = sample();
+    with_music(&mut project);
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"clip.insert","media":"med_music","ref":"$music"},
+            {"cmd":"audio.set","items":["$music"],"normalize":-14,"duck":{"amount":0.3}}]"#,
+    )
+    .unwrap();
+    let commands::Target::Timeline(TimelineId::Item(id)) = &report.changes[0].created[0] else {
+        panic!("created item")
+    };
+    let slot = project.items.find(*id).unwrap();
+    let data = project.items.data(slot).unwrap();
+    let lane = project
+        .lanes
+        .iter()
+        .find(|lane| lane.id == data.lane)
+        .unwrap();
+    assert_eq!(lane.kind, LaneKind::Audio);
+    assert_eq!(
+        project.items.timing(slot).unwrap(),
+        ItemTiming {
+            anchor: Anchor::Pinned(0),
+            length: 300
+        }
+    );
+    let ItemKind::Sound(sound) = data.kind else {
+        panic!("sound")
+    };
+    // -20 LUFS raised to -14: +6 dB.
+    assert!(
+        (sound.volume - 10f64.powf(6.0 / 20.0)).abs() < 1e-9,
+        "{}",
+        sound.volume
+    );
+    assert_eq!(
+        sound.duck,
+        Some(Duck {
+            amount: 0.3,
+            attack: 8,
+            release: 15
+        })
+    );
+    // The spine is untouched, and the sound survives a save.
+    assert_eq!(project.clips.order().len(), 3);
+    let dir = std::env::temp_dir().join(format!("splice-music-{}.splice", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    drop(crate::package::Package::create(&dir, &project).unwrap());
+    let (package, reopened) = crate::package::Package::open(&dir).unwrap();
+    drop(package);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(
+        reopened.items.data(slot).unwrap().kind,
+        project.items.data(slot).unwrap().kind
+    );
+    assert_eq!(reopened.media.last().unwrap().probe.loudness, Some(-20.0));
+    for (op, code) in [
+        (
+            r#"{"cmd":"audio.set","items":["ovl_hook"],"volume":1}"#,
+            "WRONG_KIND",
+        ),
+        (r#"{"cmd":"audio.set","items":["ovl_hook"]}"#, "BAD_ARGS"),
+        (
+            r#"{"cmd":"audio.set","clip":"clp_take","component":"mic"}"#,
+            "BAD_ARGS",
+        ),
+        (
+            r#"{"cmd":"clip.insert","media":"med_music","lane":"lan_gfx"}"#,
+            "WRONG_KIND",
+        ),
+    ] {
+        let error = run(&mut project, &format!("[{op}]")).unwrap_err();
+        assert_eq!(error.error.code, code, "{op}");
+    }
+}

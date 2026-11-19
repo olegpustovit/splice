@@ -193,6 +193,7 @@ impl Editor {
         at: Option<&FrameArg>,
         ripple: bool,
         insert: bool,
+        lane: Option<&Target>,
         load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
     ) -> Result<Outcome, CommandError> {
         let media_id = match source {
@@ -211,6 +212,9 @@ impl Editor {
             ));
         }
         let descriptor = media(&self.project, media_id)?;
+        if descriptor.kind == MediaKind::Audio || lane.is_some() {
+            return self.add_sound(media_id, at, lane);
+        }
         let length = rounded(
             (f64::from(descriptor.probe.frames) * f64::from(self.project.fps)
                 / descriptor.probe.fps
