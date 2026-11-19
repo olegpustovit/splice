@@ -186,6 +186,9 @@ pub(crate) struct DecodeScratch {
     pub(crate) targets: Vec<Target>,
     pub(crate) name: String,
     pub(crate) color: String,
+    /// Effect parameters (names reused) and a `type.param` path, handed back by the set handlers.
+    pub(crate) params: Vec<splice_model::EffectParam>,
+    pub(crate) path: String,
 }
 
 pub(crate) fn decode_reusing(

@@ -213,7 +213,11 @@ impl Editor {
                 target,
                 path,
                 value,
-            } => self.set_param(&target, &path, EffectValue::Number(value), false),
+            } => {
+                let result = self.set_param(&target, &path, EffectValue::Number(value), false);
+                self.decode_scratch.path = path;
+                result
+            }
             Op::ParamKeys {
                 target,
                 path,
@@ -552,10 +556,8 @@ impl Editor {
         let lane = self.project.lanes.remove(from);
         let to = to.min(self.project.lanes.len());
         self.project.lanes.insert(to, lane);
-        Ok(Outcome::edit(
-            format!("Moved {id} to position {to}"),
-            Target::Lane(id),
-        ))
+        self.say(format_args!("Moved {id} to position {to}"));
+        Ok(Outcome::noted(Target::Lane(id)))
     }
 
     fn roll(&mut self, item: &Target, by: Frame) -> Result<Outcome, CommandError> {
@@ -594,10 +596,8 @@ impl Editor {
             .appearance
             .effects;
         super::edits::shift_keys(effects, by);
-        Ok(Outcome::edit(
-            format!("Rolled the edit after {id} by {by} frames"),
-            Target::Timeline(TimelineId::Clip(id)),
-        ))
+        self.say(format_args!("Rolled the edit after {id} by {by} frames"));
+        Ok(Outcome::noted(Target::Timeline(TimelineId::Clip(id))))
     }
 
     fn slip(&mut self, item: &Target, by: Frame) -> Result<Outcome, CommandError> {
@@ -619,10 +619,8 @@ impl Editor {
                     .timing_mut(slot)
                     .expect("live clip")
                     .source = source;
-                Ok(Outcome::edit(
-                    format!("Slipped {id} by {by} source frames"),
-                    Target::Timeline(TimelineId::Clip(id)),
-                ))
+                self.say(format_args!("Slipped {id} by {by} source frames"));
+                Ok(Outcome::noted(Target::Timeline(TimelineId::Clip(id))))
             }
             TimelineId::Item(id) => {
                 let slot = item_slot(&self.project, id)?;
@@ -642,10 +640,8 @@ impl Editor {
                 {
                     overlay.source = source;
                 }
-                Ok(Outcome::edit(
-                    format!("Slipped {id} by {by} source frames"),
-                    Target::Timeline(TimelineId::Item(id)),
-                ))
+                self.say(format_args!("Slipped {id} by {by} source frames"));
+                Ok(Outcome::noted(Target::Timeline(TimelineId::Item(id))))
             }
             TimelineId::Marker(_) => Err(wrong_kind("Slip a spine clip or a media overlay.")),
         }
@@ -689,10 +685,8 @@ impl Editor {
         timing.start += by;
         timing.length -= by;
         timing.source = rounded(source_n)?;
-        Ok(Outcome::edit(
-            format!("Slid {id} by {by} frames"),
-            Target::Timeline(TimelineId::Clip(id)),
-        ))
+        self.say(format_args!("Slid {id} by {by} frames"));
+        Ok(Outcome::noted(Target::Timeline(TimelineId::Clip(id))))
     }
 
     fn freeze(
@@ -836,22 +830,28 @@ impl Editor {
             }
             (value, _) => value,
         };
-        let param = EffectParam {
-            name: name.into(),
-            value,
-        };
-        let effect_kind = effects(&self.project, owner)[index].kind.clone();
-        check_params(&effect_kind, std::slice::from_ref(&param))?;
         let effect = &mut effects_vec_mut(&mut self.project, owner)[index];
-        match effect.params.iter_mut().find(|old| old.name == name) {
-            Some(old) => old.value = param.value,
-            None => effect.params.push(param),
+        match effect.params.iter_mut().position(|old| old.name == name) {
+            Some(at) => {
+                let old = std::mem::replace(&mut effect.params[at].value, value);
+                if let Err(error) = check_params(&effect.kind, &effect.params[at..=at]) {
+                    effect.params[at].value = old;
+                    return Err(error);
+                }
+            }
+            None => {
+                let param = EffectParam {
+                    name: name.into(),
+                    value,
+                };
+                check_params(&effect.kind, std::slice::from_ref(&param))?;
+                effect.params.push(param);
+            }
         }
         let id = effect.id;
-        Ok(Outcome::edit(
-            format!("Set {path} on {}", self.owner_label(owner)),
-            Target::Effect(id),
-        ))
+        let label = self.owner_label(owner);
+        self.say(format_args!("Set {path} on {label}"));
+        Ok(Outcome::noted(Target::Effect(id)))
     }
 
     fn crop_keys(
@@ -935,16 +935,17 @@ impl Editor {
             frames - self.source_end(previous).unwrap_or(frames)
         }) / source_rate(&self.project, previous)?;
         let held = head < f64::from(length / 2) || tail < f64::from(length - length / 2);
+        let verb = if add { "Added" } else { "Updated" };
+        let held = if held {
+            " (short handles: edge frames hold)"
+        } else {
+            ""
+        };
+        self.say(format_args!(
+            "{verb} a {length}-frame transition into {id}{held}"
+        ));
         Ok(Outcome {
-            summary: Summary::Text(format!(
-                "{} a {length}-frame transition into {id}{}",
-                if add { "Added" } else { "Updated" },
-                if held {
-                    " (short handles: edge frames hold)"
-                } else {
-                    ""
-                }
-            )),
+            summary: Summary::Note,
             primary: Some(Target::Effect(fx)),
             created,
         })

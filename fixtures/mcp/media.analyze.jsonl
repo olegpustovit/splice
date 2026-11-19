@@ -2,3 +2,5 @@
 < {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"projectId":"prj_1","revision":"r0","fps":30,"durationFrames":660,"offlineMedia":"…"},"isError":false}}
 > {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"media.analyze","arguments":{"projectId":"prj_1","clip":"clp_take"}}}
 < {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"clip":"clp_take","components":[{"component":"mic","volume":1,"integratedLufs":null},{"component":"system","volume":0.8}],"pauses":"…"},"isError":false}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"media.analyze","arguments":{"projectId":"prj_1","clip":"clp_take","kinds":["text"]}}}
+< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"error":{"code":"MEDIA_OFFLINE","message":"…","fix":"…"}},"isError":true}}

@@ -98,12 +98,17 @@ pub(crate) fn with_scratch(project: &Project, scratch: &mut Scratch) -> Result<(
         end = timing
             .end()
             .ok_or_else(|| bad("clip end", "an integer frame in range"))?;
-        if let Some(id) = data.media {
-            let descriptor = project
-                .media
-                .iter()
-                .find(|media| media.id == id)
-                .ok_or_else(|| bad("clip.media", "a media table ID"))?;
+        if let Some(id) = data.media
+            && !project.media.iter().any(|media| media.id == id)
+        {
+            return Err(bad("clip.media", "a media table ID"));
+        }
+        // A still has no duration of its own: it spans any clip length.
+        if let Some(descriptor) = data
+            .media
+            .and_then(|id| project.media.iter().find(|media| media.id == id))
+            .filter(|media| media.kind != MediaKind::Image)
+        {
             // A speed ramp consumes the integral of its rate instead of the clip length.
             let consumed = data
                 .appearance

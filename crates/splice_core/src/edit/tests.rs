@@ -675,3 +675,76 @@ fn budget_apply_p99_under_one_millisecond() {
     );
     assert!(p99 < Duration::from_millis(1));
 }
+
+/// T24.3: warm 0.3 edits of existing state (roll, slip, slide, lane order, param.set,
+/// transition.set, mask.set) allocate nothing, each op paired with its inverse.
+#[test]
+fn budget_warm_tier_c_edits_allocate_nothing() {
+    let mut project = budget_project();
+    let mut workspace = ApplyWorkspace::default();
+    let setup = splice_json::parse(
+        r#"[{"cmd":"item.trim","item":"clp_end","edge":"in","delta":12},
+            {"cmd":"item.trim","item":"clp_take","edge":"in","delta":12},
+            {"cmd":"item.trim","item":"clp_take","edge":"out","delta":-12},
+            {"cmd":"transition.add","item":"clp_end","kind":"dissolve","length":10},
+            {"cmd":"mask.add","item":"clp_take","mode":"blur","x":0.6,"y":0.1,"w":0.2,"h":0.1},
+            {"cmd":"param.set","target":"ovl_broll","path":"transform.rotation","value":-4}]"#,
+    )
+    .unwrap();
+    workspace
+        .apply(
+            &mut project,
+            setup.as_array().unwrap(),
+            Source::Human,
+            false,
+        )
+        .unwrap();
+    let slot = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    let mask = project
+        .clips
+        .data(slot)
+        .unwrap()
+        .appearance
+        .effects
+        .iter()
+        .find(|e| e.kind == "mask")
+        .unwrap()
+        .id;
+    let operations = [
+        r#"{"cmd":"item.roll","item":"clp_take","by":-4}"#.to_owned(),
+        r#"{"cmd":"item.roll","item":"clp_take","by":4}"#.to_owned(),
+        r#"{"cmd":"item.slip","item":"clp_take","by":6}"#.to_owned(),
+        r#"{"cmd":"item.slip","item":"clp_take","by":-6}"#.to_owned(),
+        r#"{"cmd":"item.slide","item":"clp_take","by":-3}"#.to_owned(),
+        r#"{"cmd":"item.slide","item":"clp_take","by":3}"#.to_owned(),
+        r#"{"cmd":"lane.reorder","lane":"lan_ov1","to":0}"#.to_owned(),
+        r#"{"cmd":"lane.reorder","lane":"lan_ov1","to":3}"#.to_owned(),
+        r#"{"cmd":"param.set","target":"ovl_broll","path":"transform.rotation","value":8}"#
+            .to_owned(),
+        r#"{"cmd":"param.set","target":"ovl_broll","path":"transform.rotation","value":-4}"#
+            .to_owned(),
+        r#"{"cmd":"transition.set","item":"clp_end","length":14}"#.to_owned(),
+        r#"{"cmd":"transition.set","item":"clp_end","length":10}"#.to_owned(),
+        format!(r#"{{"cmd":"mask.set","mask":"{mask}","feather":0.2}}"#),
+        format!(r#"{{"cmd":"mask.set","mask":"{mask}","feather":0.05}}"#),
+    ]
+    .map(|op| splice_json::parse(&op).unwrap());
+    // Warm every pair (recycled buffers settle at their largest size), then count per op.
+    for _ in 0..3 {
+        for op in &operations {
+            workspace
+                .apply(&mut project, std::slice::from_ref(op), Source::Human, false)
+                .unwrap();
+        }
+    }
+    let mut counts = Vec::new();
+    for op in &operations {
+        mem_sys::local_reset();
+        workspace
+            .apply(&mut project, std::slice::from_ref(op), Source::Human, false)
+            .unwrap();
+        let cmd = op.field("cmd").and_then(Json::as_str).unwrap();
+        counts.push((cmd, mem_sys::local_alloc_count()));
+    }
+    assert!(counts.iter().all(|(_, n)| *n == 0), "{counts:?}");
+}

@@ -523,7 +523,6 @@ fn code_mode_declarations_golden() {
             );
         }
     }
-    assert!(!text.contains("record."));
     assert!(typescript::declarations(Some("item.split")).contains("interface ItemSplit"));
     assert!(!typescript::declarations(Some("item.split")).contains("interface ItemTrim"));
     let path = mcp_fixtures().join("code/splice.d.ts");
@@ -620,10 +619,7 @@ fn code_mode_declarations_index_and_multi_query() {
             row.id
         );
     }
-    for tool in super::tools::TOOLS
-        .iter()
-        .filter(|tool| !tool.name.starts_with("record."))
-    {
+    for tool in super::tools::TOOLS {
         let method = tool.name.split_once('.').unwrap().1;
         assert!(index.contains(&format!("    {method}(")), "{}", tool.name);
     }
@@ -982,5 +978,60 @@ fn capability_sweep_applies_every_row_and_restores_the_start() {
         result.field("restored"),
         Some(&Json::Bool(true)),
         "{output}"
+    );
+}
+
+/// Eval friction: agents passed `items` to items.inspect, inspected effect IDs, and saw shapes
+/// labelled "Scale animation".
+#[test]
+fn inspect_takes_items_reads_effects_and_labels_shapes() {
+    let mut project = sample_project();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"mask.add","item":"clp_take","ref":"mask"},{"cmd":"generator.add","shape":"arrow","at":200,"length":45}]"#,
+    )
+    .unwrap();
+    splice_core::edit::apply(
+        &mut project,
+        ops.as_array().unwrap(),
+        splice_core::history::Source::Agent,
+        false,
+    )
+    .unwrap();
+    let take = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    let effects = &project.clips.data(take).unwrap().appearance.effects;
+    let mask = effects
+        .iter()
+        .find(|e| e.kind == "mask")
+        .unwrap()
+        .id
+        .to_string();
+    let shape = project
+        .items
+        .order()
+        .iter()
+        .find(|&&slot| {
+            matches!(
+                project.items.data(slot).unwrap().kind,
+                splice_model::ItemKind::Shape { .. }
+            )
+        })
+        .map(|&slot| project.items.id(slot).unwrap().to_string())
+        .unwrap();
+    let args = splice_json::parse(&format!(r#"{{"items":["{mask}","{shape}"]}}"#)).unwrap();
+    let reply = super::timeline::inspect(&project, &args).unwrap();
+    let items = reply.field("items").and_then(Json::as_array).unwrap();
+    assert_eq!(
+        items[0].field("kind").and_then(Json::as_str),
+        Some("effect")
+    );
+    assert_eq!(
+        items[0].field("owner").and_then(Json::as_str),
+        Some("clp_take")
+    );
+    assert_eq!(items[0].field("type").and_then(Json::as_str), Some("mask"));
+    assert_eq!(
+        items[1].field("label").and_then(Json::as_str),
+        Some("arrow"),
+        "{reply:?}"
     );
 }

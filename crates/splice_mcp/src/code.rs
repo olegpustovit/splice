@@ -53,7 +53,7 @@ const PRELUDE: &str = r#"(() => {
 
 /// Tools code can call: everything but recording (it needs a human-facing job) and code.run.
 fn callable(name: &str) -> bool {
-    !name.starts_with("record.") && name != "code.run" && tools::known(name, false)
+    name != "code.run" && tools::known(name, false)
 }
 
 /// Runs `args.code`; `call` dispatches one tool exactly like a top-level `tools/call`.
@@ -223,10 +223,7 @@ fn dispatch(
                 "message",
                 Json::String(format!("Code cannot call {name:?}.")),
             ),
-            (
-                "fix",
-                text("Call one of the tools in `valid`. Recording runs outside code.run."),
-            ),
+            ("fix", text("Call one of the tools in `valid`.")),
             (
                 "valid",
                 Json::Array(valid.map(|tool| text(tool.name)).collect()),

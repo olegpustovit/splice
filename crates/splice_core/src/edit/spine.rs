@@ -218,12 +218,17 @@ impl Editor {
         if descriptor.kind == MediaKind::Audio || lane.is_some() {
             return self.add_sound(media_id, at, lane);
         }
-        let length = rounded(
-            (f64::from(descriptor.probe.frames) * f64::from(self.project.fps)
-                / descriptor.probe.fps
-                + 0.000_001)
-                .floor(),
-        )?;
+        // A still lasts 5 s on the spine until trimmed.
+        let length = if descriptor.kind == MediaKind::Image {
+            Frame::try_from(self.project.fps * 5).unwrap_or(150)
+        } else {
+            rounded(
+                (f64::from(descriptor.probe.frames) * f64::from(self.project.fps)
+                    / descriptor.probe.fps
+                    + 0.000_001)
+                    .floor(),
+            )?
+        };
         ensure_length(length)?;
         let enabled = descriptor
             .take

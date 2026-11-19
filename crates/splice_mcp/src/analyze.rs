@@ -163,6 +163,13 @@ pub(super) fn analyze(
             rate: timing::source_rate(p, slot).unwrap_or(1.0),
             fps: media.probe.fps,
         };
+        if !store.path().join(&media.path).exists() {
+            return Err(failure(
+                "MEDIA_OFFLINE",
+                &format!("{} is offline: {}", media.id, media.path),
+                "Restore the file or media.relink it; project.info lists offlineMedia.",
+            ));
+        }
         // Long media analyze on a worker (T15.3); the job's result is this same answer.
         #[cfg(target_os = "macos")]
         if f64::from(media.probe.frames) / media.probe.fps > super::background::LONG_SECONDS

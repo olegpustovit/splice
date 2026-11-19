@@ -35,6 +35,9 @@ pub fn probe(package: &Path, request: &Path, project_fps: u32) -> Result<Media, 
     let stored = stored
         .to_str()
         .ok_or_else(|| bad_media("The resolved media path must be valid UTF-8.".into()))?;
+    if let Some(codec) = still_codec(&absolute) {
+        return still(stored, &absolute, &metadata, codec, project_fps);
+    }
     let asset = media::probe(&absolute).map_err(|failure| bad_media(failure.to_string()))?;
     let fps = asset
         .video
@@ -94,6 +97,53 @@ pub fn probe(package: &Path, request: &Path, project_fps: u32) -> Result<Media, 
     })
 }
 
+/// Image files ImageIO decodes, by extension.
+fn still_codec(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "png",
+        "jpg" | "jpeg" => "jpeg",
+        "heic" | "heif" => "heic",
+        "gif" => "gif",
+        "tif" | "tiff" => "tiff",
+        "bmp" => "bmp",
+        "webp" => "webp",
+        _ => return None,
+    })
+}
+
+/// A still image: no duration of its own, so it spans any length on the project clock.
+// ponytail: animated GIFs import as their first frame; read every frame if users ask for them.
+fn still(
+    stored: &str,
+    absolute: &Path,
+    metadata: &fs::Metadata,
+    codec: &str,
+    project_fps: u32,
+) -> Result<Media, Error> {
+    let (_, [width, height]) = apple_sys::image::decode_rgba(absolute)
+        .map_err(|failure| bad_media(failure.to_string()))?;
+    let bookmark = media::bookmark(absolute).map_err(|failure| offline(absolute, &failure))?;
+    Ok(Media {
+        id: MediaId::from_serial(0),
+        kind: MediaKind::Image,
+        path: stored.into(),
+        bookmark: Some(bookmark),
+        size: metadata.len(),
+        mtime: metadata.mtime(),
+        probe: Probe {
+            fps: f64::from(project_fps),
+            frames: 1_000_000_000,
+            width,
+            height,
+            audio: Vec::new(),
+            codec: Some(codec.into()),
+            loudness: None,
+        },
+        take: None,
+    })
+}
+
 fn codec_label(code: [u8; 4]) -> Option<String> {
     match &code {
         b"avc1" => Some("h264".into()),
@@ -122,13 +172,30 @@ fn bad_media(message: String) -> Error {
     Error {
         code: "BAD_MEDIA",
         message,
-        fix: "Use a readable audio or video file with a supported format and duration.",
+        fix: "Use a readable audio, video or image file (PNG, JPEG, HEIC, GIF, TIFF) with a supported format.",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imports_a_png_as_a_still_on_the_project_clock() {
+        let package = std::env::temp_dir().join(format!("splice-still-{}", std::process::id()));
+        fs::create_dir_all(&package).unwrap();
+        let pixels: Vec<u8> = (0..48 * 32).flat_map(|i| [i as u8, 90, 200, 255]).collect();
+        fs::write(
+            package.join("photo.png"),
+            apple_sys::image::png(&pixels, [48, 32], 0).unwrap(),
+        )
+        .unwrap();
+        let descriptor = probe(&package, Path::new("photo.png"), 30).unwrap();
+        assert_eq!(descriptor.kind, MediaKind::Image);
+        assert_eq!([descriptor.probe.width, descriptor.probe.height], [48, 32]);
+        assert_eq!(descriptor.probe.codec.as_deref(), Some("png"));
+        fs::remove_dir_all(&package).unwrap();
+    }
 
     #[test]
     fn imports_stereo_audio_on_the_project_clock() {

@@ -316,6 +316,8 @@ struct Editor {
     decode_scratch: commands::DecodeScratch,
     selection_scratch: Vec<TimelineId>,
     move_scratch: spine::MoveScratch,
+    /// The current op's summary, written in place (`Summary::Note`) so warm edits allocate nothing.
+    note: String,
 }
 
 impl Default for Editor {
@@ -336,6 +338,7 @@ impl Default for Editor {
             decode_scratch: commands::DecodeScratch::default(),
             selection_scratch: Vec::new(),
             move_scratch: spine::MoveScratch::default(),
+            note: String::new(),
         }
     }
 }
@@ -348,6 +351,8 @@ struct Binding {
 
 enum Summary {
     Text(String),
+    /// The text is in `Editor::note`.
+    Note,
     Trim(TimelineId, Frame),
     Move(usize, Frame),
     Update(usize),
@@ -362,6 +367,10 @@ struct Outcome {
 impl Outcome {
     fn edit(summary: String, primary: Target) -> Self {
         Self::with_summary(Summary::Text(summary), primary)
+    }
+
+    fn noted(primary: Target) -> Self {
+        Self::with_summary(Summary::Note, primary)
     }
 
     fn with_summary(summary: Summary, primary: Target) -> Self {
@@ -382,6 +391,12 @@ impl Outcome {
 }
 
 impl Editor {
+    /// Writes the current op's summary into the reused note buffer (see `Outcome::noted`).
+    fn say(&mut self, args: std::fmt::Arguments) {
+        self.note.clear();
+        self.note.write_fmt(args).expect("writing to a String");
+    }
+
     fn step(
         &mut self,
         value: &Json,
@@ -417,6 +432,7 @@ impl Editor {
         summary.clear();
         match outcome.summary {
             Summary::Text(text) => summary = text,
+            Summary::Note => summary.push_str(&self.note),
             Summary::Trim(id, to) => write!(summary, "Trimmed {id} to frame {to}").unwrap(),
             Summary::Move(count, delta) => {
                 write!(summary, "Moved {count} item(s) by {delta} frames").unwrap()

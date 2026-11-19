@@ -70,6 +70,7 @@ impl Row {
                     ItemKind::Sound(sound) if name.is_none() => {
                         Json::String(media_name(p, sound.media))
                     }
+                    ItemKind::Shape { shape, .. } => text(name.unwrap_or(shape.name())),
                     _ => text(name.unwrap_or("Scale animation")),
                 })
             }
@@ -233,11 +234,18 @@ pub(super) fn snapshot(p: &Project, args: &Json) -> Result<Json, StoreError> {
 }
 
 pub(super) fn inspect(p: &Project, args: &Json) -> Result<Json, StoreError> {
+    // `items` is what every edit calls a list of IDs; agents reach for it here too.
     let ids = args
         .field("ids")
+        .or_else(|| args.field("items"))
         .and_then(Json::as_array)
         .filter(|ids| (1..=50).contains(&ids.len()))
-        .ok_or_else(|| bad("ids", "an array of 1 to 50 timeline IDs"))?;
+        .ok_or_else(|| {
+            bad(
+                "ids",
+                "an array of 1 to 50 IDs (clp_, ovl_, lan_, mrk_ or fx_)",
+            )
+        })?;
     let rows = rows(p)?;
     let schemas = effect_schemas();
     let items = ids
@@ -257,6 +265,9 @@ pub(super) fn inspect(p: &Project, args: &Json) -> Result<Json, StoreError> {
                         splice_core::package::encode_effects(&lane.effects),
                     ),
                 ]));
+            }
+            if let Some(effect) = id.starts_with("fx_").then(|| effect_json(p, id)).flatten() {
+                return Ok(effect);
             }
             let row = rows.iter().find(|row| row.value.field("id") == Some(value));
             row.map_or_else(
@@ -542,4 +553,50 @@ pub(super) fn caption_json(words: &[CaptionWord]) -> Json {
             })
             .collect(),
     )
+}
+
+/// An effect by ID, encoded as in the package with its kind and owner's ID ("project" or
+/// "lan_spine" for those scopes).
+fn effect_json(p: &Project, id: &str) -> Option<Json> {
+    let lists = [
+        ("project".to_owned(), &p.effects),
+        ("lan_spine".to_owned(), &p.spine.effects),
+    ]
+    .into_iter()
+    .chain(
+        p.lanes
+            .iter()
+            .map(|lane| (lane.id.to_string(), &lane.effects)),
+    )
+    .chain(p.clips.order().iter().map(|&slot| {
+        let id = p.clips.id(slot).expect("live clip").to_string();
+        (
+            id,
+            &p.clips.data(slot).expect("live clip").appearance.effects,
+        )
+    }))
+    .chain(p.items.order().iter().map(|&slot| {
+        let id = p.items.id(slot).expect("live item").to_string();
+        (
+            id,
+            &p.items.data(slot).expect("live item").appearance.effects,
+        )
+    }));
+    for (owner, effects) in lists {
+        let Some(effect) = effects.iter().find(|effect| effect.id.to_string() == id) else {
+            continue;
+        };
+        let Json::Array(mut one) =
+            splice_core::package::encode_effects(std::slice::from_ref(effect))
+        else {
+            unreachable!("effects encode as an array")
+        };
+        let Json::Object(mut fields) = one.remove(0) else {
+            unreachable!("an effect encodes as an object")
+        };
+        fields.insert(1, ("kind".into(), text("effect")));
+        fields.insert(2, ("owner".into(), text(&owner)));
+        return Some(Json::Object(fields));
+    }
+    None
 }

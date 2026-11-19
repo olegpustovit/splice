@@ -480,16 +480,16 @@ pub(super) fn cut_words(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     })
 }
 
-pub(super) fn effect_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+pub(super) fn effect_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::EffectAdd {
         target: a.target("target")?,
         kind: a.string("type")?.into(),
-        params: effect_params(a)?,
+        params: effect_params(a, &mut scratch.params)?,
         enabled: a.opt_flag("enabled")?,
     })
 }
 
-pub(super) fn effect_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+pub(super) fn effect_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     let target = if let Some(effect) = a.opt_target("effect")? {
         EffectSelection::Id(effect)
     } else {
@@ -510,7 +510,7 @@ pub(super) fn effect_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     }
     Ok(Op::EffectSet {
         target,
-        params: effect_params(a)?,
+        params: effect_params(a, &mut scratch.params)?,
         enabled: a.opt_flag("enabled")?,
         reset,
     })
@@ -760,17 +760,17 @@ pub(super) fn crop_keys(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     })
 }
 
-pub(super) fn transition_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+pub(super) fn transition_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::TransitionAdd {
         item: a.target("item")?,
-        params: schema_params(a, "transition")?,
+        params: schema_params(a, "transition", &mut scratch.params)?,
     })
 }
 
-pub(super) fn transition_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+pub(super) fn transition_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::TransitionSet {
         item: a.target("item")?,
-        params: schema_params(a, "transition")?,
+        params: schema_params(a, "transition", &mut scratch.params)?,
     })
 }
 
@@ -780,25 +780,25 @@ pub(super) fn transition_remove(a: &Json, _scratch: &mut DecodeScratch) -> Decod
     })
 }
 
-pub(super) fn zoom_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+pub(super) fn zoom_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::ZoomSet {
         target: a.target("target")?,
         enabled: a.opt_flag("enabled")?,
-        params: schema_params(a, "clickZoom")?,
+        params: schema_params(a, "clickZoom", &mut scratch.params)?,
     })
 }
 
-pub(super) fn mask_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+pub(super) fn mask_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::MaskAdd {
         item: a.target("item")?,
-        params: schema_params(a, "mask")?,
+        params: schema_params(a, "mask", &mut scratch.params)?,
     })
 }
 
-pub(super) fn mask_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+pub(super) fn mask_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::MaskSet {
         mask: a.target("mask")?,
-        params: schema_params(a, "mask")?,
+        params: schema_params(a, "mask", &mut scratch.params)?,
         enabled: a.opt_flag("enabled")?,
     })
 }
@@ -882,8 +882,8 @@ pub(super) fn audio_sync(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     })
 }
 
-pub(super) fn style_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
-    let params = schema_params(a, "brand")?;
+pub(super) fn style_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
+    let params = schema_params(a, "brand", &mut scratch.params)?;
     if params.is_empty() {
         return Err(Error::bad(
             "font",
@@ -993,10 +993,10 @@ pub(super) fn clip_uncompound(a: &Json, _scratch: &mut DecodeScratch) -> Decoded
     })
 }
 
-fn param_path(a: &Json) -> Result<String, Error> {
+fn param_path(a: &Json, reuse: &mut String) -> Result<String, Error> {
     let path = a.string("path")?;
     match path.split_once('.') {
-        Some((kind, name)) if !kind.is_empty() && !name.is_empty() => Ok(path.into()),
+        Some((kind, name)) if !kind.is_empty() && !name.is_empty() => Ok(reuse_string(reuse, path)),
         _ => Err(Error::bad(
             "path",
             "type.param, e.g. transform.scale or volume.gain",
@@ -1004,10 +1004,10 @@ fn param_path(a: &Json) -> Result<String, Error> {
     }
 }
 
-pub(super) fn param_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+pub(super) fn param_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::ParamSet {
         target: a.target("target")?,
-        path: param_path(a)?,
+        path: param_path(a, &mut scratch.path)?,
         value: a.number("value")?,
     })
 }
@@ -1020,7 +1020,7 @@ pub(super) fn param_keys(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     };
     Ok(Op::ParamKeys {
         target: a.target("target")?,
-        path: param_path(a)?,
+        path: param_path(a, &mut String::new())?,
         keys: keys(a, "keys")?,
         merge,
     })
@@ -1047,7 +1047,7 @@ fn normalized_rect(a: &Json, key: &str) -> Result<Option<Rect>, Error> {
     Ok(Some(rect))
 }
 
-pub(super) fn generator_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+pub(super) fn generator_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     let shape = ShapeKind::parse(a.string("shape")?).ok_or_else(|| {
         Error::bad(
             "shape",
@@ -1060,7 +1060,7 @@ pub(super) fn generator_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp
         length: a.opt_int("length")?,
         rect: normalized_rect(a, "rect")?,
         lane: a.opt_target("lane")?,
-        params: schema_params(a, "shape")?,
+        params: schema_params(a, "shape", &mut scratch.params)?,
     })
 }
 

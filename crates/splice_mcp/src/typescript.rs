@@ -105,13 +105,13 @@ pub(super) fn declarations(filter: Option<&str>) -> String {
     }
     let tools: Vec<&tools::Tool> = tools::TOOLS
         .iter()
-        .filter(|tool| !tool.name.starts_with("record.") && wanted(tool.name))
+        .filter(|tool| wanted(tool.name))
         .collect();
     for (group, names) in groups(&tools.iter().map(|tool| tool.name).collect::<Vec<_>>()) {
         let _ = writeln!(out, "  {group}: {{");
         for name in names {
             let tool = tools.iter().find(|tool| tool.name == name).expect("listed");
-            tool_signature(&mut out, tool);
+            tool_signature(&mut out, tool, false);
         }
         out.push_str("  };\n");
     }
@@ -125,7 +125,8 @@ fn index() -> String {
     out.push_str(concat!(
         "  /** edit.apply ops are `{cmd, ...params}`; refs are \"$name\". Before using commands, get\n",
         "   * their types in one call: splice.describe(\"clip.crop,effect.add\") (or commands.describe\n",
-        "   * {format:\"ts\", query}); \"*\" returns everything. Commands:\n",
+        "   * {format:\"ts\", query}); \"*\" returns everything. Tool docs below are first\n",
+        "   * sentences; splice.describe(\"record.start\") gives a tool's full text. Commands:\n",
     ));
     // One line per group keeps discovery small as rows grow (T23.1).
     let mut by_group: Vec<(&str, Vec<&str>)> = Vec::new();
@@ -142,11 +143,7 @@ fn index() -> String {
         "   */\n  type Op = { cmd: string; ref?: `$${string}`; [param: string]: unknown };\n}\n",
     );
     out.push_str(API);
-    let names: Vec<&str> = tools::TOOLS
-        .iter()
-        .map(|tool| tool.name)
-        .filter(|name| !name.starts_with("record."))
-        .collect();
+    let names: Vec<&str> = tools::TOOLS.iter().map(|tool| tool.name).collect();
     for (group, names) in groups(&names) {
         let _ = writeln!(out, "  {group}: {{");
         for name in names {
@@ -154,7 +151,7 @@ fn index() -> String {
                 .iter()
                 .find(|tool| tool.name == name)
                 .expect("listed");
-            tool_signature(&mut out, tool);
+            tool_signature(&mut out, tool, true);
         }
         out.push_str("  };\n");
     }
@@ -300,8 +297,13 @@ fn param_type(kind: &str, doc: &str) -> String {
     "string".into()
 }
 
-fn tool_signature(out: &mut String, tool: &tools::Tool) {
-    let _ = writeln!(out, "    /** {} */", tool.description);
+/// One tool's declaration; `brief` (the index) keeps the description's first sentence.
+fn tool_signature(out: &mut String, tool: &tools::Tool, brief: bool) {
+    let description = match tool.description.split_once(". ") {
+        Some((first, _)) if brief => first,
+        _ => tool.description.trim_end_matches('.'),
+    };
+    let _ = writeln!(out, "    /** {description}. */");
     let mut args = String::new();
     let mut any_required = false;
     for (name, spec) in tool.input {

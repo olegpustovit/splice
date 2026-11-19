@@ -195,7 +195,7 @@ pub(super) fn prepare_error(
 ) -> StoreError {
     match error {
         splice_av::Error::Offline(_) => failure(
-            "OFFLINE_MEDIA",
+            "MEDIA_OFFLINE",
             &error.to_string(),
             "Restore the file, or remove the items that use it; project.info lists offlineMedia.",
         ),

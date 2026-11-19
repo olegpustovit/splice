@@ -555,6 +555,13 @@ declare namespace Splice {
       /** number */
       amount?: number;
       mode?: "blur" | "pixelate" | "cover" | "spotlight";
+      shape?: "rect" | "roundRect" | "ellipse";
+      /** number */
+      feather?: number;
+      /** boolean */
+      invert?: boolean;
+      /** #rrggbb · cover color */
+      color?: string;
     }
     /** Translate Captions (edit, 0.3). */
     interface CaptionsTranslate extends Base {
@@ -1101,5 +1108,11 @@ declare const splice: {
     status(args: { projectId?: string; jobId: string; }): { jobId: string; id?: string; kind?: string; state: string; progress?: number; settings?: Record<string, unknown>; output?: string; elapsed?: number; bytes?: number; droppedFrames?: number; fps?: number; eta?: number; revision?: Splice.Revision; };
     /** Cancel a running or pending job. */
     cancel(args: { projectId?: string; jobId: string; sessionId?: string; ifRevision?: Splice.Revision; }): { jobId: string; id?: string; state: string; };
+  };
+  record: {
+    /** Start headless capture of a display, window or area. dryRun lists sources, microphones, cameras and permissions. voiceover:true records the mic onto a new audio lane at frame at; camera:true with screen:false is a camera-only take; retakeOf places the take after an earlier one; exclude hides apps. resume:jobId resumes a take paused with record.stop {pause:true}; resume with marker drops a marker. recover:true publishes takes a crash left staged. */
+    start(args?: { projectId?: string; path?: string; create?: boolean; sessionId?: string; ifRevision?: Splice.Revision; source?: Record<string, unknown>; display?: string | number; window?: string | number | Record<string, unknown>; area?: Record<string, unknown>; mic?: boolean; systemAudio?: boolean; camera?: boolean; events?: boolean; insert?: boolean; still?: boolean; countdown?: number; dryRun?: boolean; duration?: number; voiceover?: boolean; at?: number; screen?: boolean; retakeOf?: string; exclude?: string[]; resume?: string; marker?: string; recover?: boolean; }): { jobId: string; state: string; projectId?: string; sessionId?: string; settings?: Record<string, unknown>; sources?: Record<string, unknown>; devices?: unknown[]; recovered?: unknown[]; markers?: unknown[]; permissions?: Record<string, unknown>; identity?: Record<string, unknown>; };
+    /** Finish a recording and insert the take as one undoable edit. Use insert:false to keep it in media only; pause:true pauses instead (resume with record.start {resume}). */
+    stop(args: { projectId?: string; jobId: string; sessionId?: string; ifRevision?: Splice.Revision; insert?: boolean; pause?: boolean; }): { jobId: string; id?: string; state: string; revision?: Splice.Revision; mediaId?: string; clipId?: string | null; output?: string; };
   };
 };

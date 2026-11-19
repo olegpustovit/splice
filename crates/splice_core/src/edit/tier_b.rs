@@ -66,11 +66,16 @@ pub(super) fn applies(kind: &str) -> Result<(Applies, bool), CommandError> {
 
 pub(super) use crate::commands::check_effect as check_params;
 
-fn merge(into: &mut Vec<EffectParam>, params: Vec<EffectParam>) {
+/// Moves `params`' values into `into`; `params` keeps its name buffers for reuse.
+fn merge(into: &mut Vec<EffectParam>, params: &mut [EffectParam]) {
     for param in params {
+        let value = std::mem::replace(&mut param.value, EffectValue::Bool(false));
         match into.iter_mut().find(|old| old.name == param.name) {
-            Some(old) => old.value = param.value,
-            None => into.push(param),
+            Some(old) => old.value = value,
+            None => into.push(EffectParam {
+                name: param.name.clone(),
+                value,
+            }),
         }
     }
 }
@@ -657,13 +662,13 @@ impl Editor {
         }
     }
 
-    pub(super) fn owner_label(&self, owner: Owner) -> String {
+    pub(super) fn owner_label(&self, owner: Owner) -> Label {
         match owner {
-            Owner::Project => "the project".into(),
-            Owner::Spine => "lan_spine".into(),
-            Owner::Lane(index) => self.project.lanes[index].id.to_string(),
-            Owner::Clip(slot) => self.project.clips.id(slot).expect("live clip").to_string(),
-            Owner::Item(slot) => self.project.items.id(slot).expect("live item").to_string(),
+            Owner::Project => Label::Project,
+            Owner::Spine => Label::Spine,
+            Owner::Lane(index) => Label::Lane(self.project.lanes[index].id),
+            Owner::Clip(slot) => Label::Clip(self.project.clips.id(slot).expect("live clip")),
+            Owner::Item(slot) => Label::Item(self.project.items.id(slot).expect("live item")),
         }
     }
 
@@ -713,7 +718,7 @@ impl Editor {
         &mut self,
         owner: Owner,
         kind: &str,
-        params: Vec<EffectParam>,
+        mut params: Vec<EffectParam>,
         enabled: Option<bool>,
         created: &mut Vec<Target>,
     ) -> Result<EffectId, CommandError> {
@@ -751,28 +756,25 @@ impl Editor {
             }
         };
         let effect = &mut effects_vec_mut(&mut self.project, owner)[index];
-        merge(&mut effect.params, params);
+        merge(&mut effect.params, &mut params);
         if enabled.is_some() {
             effect.enabled = enabled;
         }
-        Ok(effect.id)
-    }
-
-    fn owners(&self) -> Vec<Owner> {
-        [Owner::Project, Owner::Spine]
-            .into_iter()
-            .chain((0..self.project.lanes.len()).map(Owner::Lane))
-            .chain(self.project.clips.order().iter().copied().map(Owner::Clip))
-            .chain(self.project.items.order().iter().copied().map(Owner::Item))
-            .collect()
+        let id = effect.id;
+        // The decoded buffer (names kept) goes back for the next op.
+        self.decode_scratch.params = params;
+        Ok(id)
     }
 
     pub(super) fn find_effect(&self, target: &Target) -> Result<(Owner, usize), CommandError> {
         let Target::Effect(id) = self.resolve(target)? else {
             return Err(wrong_kind("Pass an effect ID (fx_…)."));
         };
-        self.owners()
+        [Owner::Project, Owner::Spine]
             .into_iter()
+            .chain((0..self.project.lanes.len()).map(Owner::Lane))
+            .chain(self.project.clips.order().iter().copied().map(Owner::Clip))
+            .chain(self.project.items.order().iter().copied().map(Owner::Item))
             .find_map(|owner| {
                 effects(&self.project, owner)
                     .iter()
@@ -793,10 +795,11 @@ impl Editor {
         let (owner, index) = match target {
             EffectSelection::Id(id) => {
                 let (owner, index) = self.find_effect(&id)?;
-                let kind = effects(&self.project, owner)[index].kind.clone();
-                check_params(&kind, &params)?;
+                check_params(&effects(&self.project, owner)[index].kind, &params)?;
                 let effect = &mut effects_vec_mut(&mut self.project, owner)[index];
-                merge(&mut effect.params, params);
+                let mut params = params;
+                merge(&mut effect.params, &mut params);
+                self.decode_scratch.params = params;
                 if enabled.is_some() {
                     effect.enabled = enabled;
                 }
@@ -812,23 +815,22 @@ impl Editor {
                 (owner, index)
             }
         };
+        let label = self.owner_label(owner);
         let list = effects_vec_mut(&mut self.project, owner);
         let id = list[index].id;
-        let kind = list[index].kind.clone();
         list[index]
             .params
             .retain(|param| !reset.contains(&param.name));
         let removed =
             !reset.is_empty() && list[index].params.is_empty() && list[index].enabled.is_none();
+        self.note.clear();
+        let reset = if removed { " reset" } else { "" };
+        write!(self.note, "{} on {label}{reset}", list[index].kind).expect("writing to a String");
         if removed {
             list.remove(index);
         }
         Ok(Outcome {
-            summary: Summary::Text(format!(
-                "{kind} on {}{}",
-                self.owner_label(owner),
-                if removed { " reset" } else { "" }
-            )),
+            summary: Summary::Note,
             primary: (!removed).then_some(Target::Effect(id)),
             created,
         })
@@ -1816,4 +1818,26 @@ fn no_component(id: ClipId, component: Component) -> CommandError {
         &format!("{id} has no {} component.", component_name(component)),
         "items.inspect lists the clip's components.",
     )
+}
+
+/// An effect owner's name for summaries and errors, printed without allocating.
+#[derive(Clone, Copy)]
+pub(super) enum Label {
+    Project,
+    Spine,
+    Lane(LaneId),
+    Clip(ClipId),
+    Item(ItemId),
+}
+
+impl std::fmt::Display for Label {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Project => f.write_str("the project"),
+            Self::Spine => f.write_str("lan_spine"),
+            Self::Lane(id) => id.fmt(f),
+            Self::Clip(id) => id.fmt(f),
+            Self::Item(id) => id.fmt(f),
+        }
+    }
 }

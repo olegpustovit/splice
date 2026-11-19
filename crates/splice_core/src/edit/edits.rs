@@ -391,10 +391,20 @@ impl Editor {
     }
 
     fn add_marker(&mut self, at: Frame, name: Option<String>) -> Result<Outcome, CommandError> {
-        if at < 0 || self.project.markers.iter().any(|m| m.at == at) {
-            return Err(CommandError::bad(
-                "at",
-                "a nonnegative frame without an existing marker",
+        if at < 0 {
+            return Err(CommandError::bad("at", "a nonnegative frame"));
+        }
+        if let Some(existing) = self.project.markers.iter().find(|m| m.at == at) {
+            return Err(error(
+                "MARKER_EXISTS",
+                &format!(
+                    "{} \"{}\" is already at frame {at}.",
+                    existing.id, existing.name
+                ),
+                &format!(
+                    "Rename it with marker.set {{marker:\"{}\", name}}, or add the marker at another frame.",
+                    existing.id
+                ),
             ));
         }
         let id = MarkerId::from_serial(self.mint("mrk")?);

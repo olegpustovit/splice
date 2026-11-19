@@ -129,6 +129,15 @@ impl Clone for Project {
         self.access = source.access;
         self.effects.clone_from(&source.effects);
         self.spine.clone_from(&source.spine);
+        // lane.reorder permutes lanes: keep each lane's buffers with its ID, as markers do.
+        for (index, original) in source.lanes.iter().enumerate().take(self.lanes.len()) {
+            let rest = &mut self.lanes[index..];
+            if rest[0].id != original.id
+                && let Some(found) = rest.iter().position(|lane| lane.id == original.id)
+            {
+                rest[..=found].rotate_right(1);
+            }
+        }
         self.lanes.clone_from(&source.lanes);
         self.clips.clone_from(&source.clips);
         self.items.clone_from(&source.items);

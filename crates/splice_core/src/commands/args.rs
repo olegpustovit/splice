@@ -379,11 +379,17 @@ pub(super) fn caption_patches(value: &Json) -> Result<Vec<CaptionWordPatch>, Err
     Ok(patches)
 }
 
-pub(super) fn effect_params(value: &Json) -> Result<Vec<EffectParam>, Error> {
+/// The `params` object, built in `reuse` (its name buffers kept).
+pub(super) fn effect_params(
+    value: &Json,
+    reuse: &mut Vec<EffectParam>,
+) -> Result<Vec<EffectParam>, Error> {
+    let mut result = std::mem::take(reuse);
     let Some(params) = value.field("params") else {
-        return Ok(Vec::new());
+        result.clear();
+        return Ok(result);
     };
-    let mut result = Vec::new();
+    let mut used = 0;
     for (key, parameter) in params
         .as_object()
         .ok_or_else(|| Error::bad("params", "an object of effect parameters"))?
@@ -402,21 +408,37 @@ pub(super) fn effect_params(value: &Json) -> Result<Vec<EffectParam>, Error> {
                 "a finite number, boolean, string or {keys:[{at, value, ease}]}",
             ));
         };
-        result.push(EffectParam {
-            name: key.clone(),
-            value,
-        });
+        match result.get_mut(used) {
+            Some(slot) => {
+                slot.name.clear();
+                slot.name.push_str(key);
+                slot.value = value;
+            }
+            None => result.push(EffectParam {
+                name: key.clone(),
+                value,
+            }),
+        }
+        used += 1;
     }
+    result.truncate(used);
     Ok(result)
 }
 
-/// Top-level arguments that name parameters of effect `kind`, as effect parameters.
-pub(super) fn schema_params(value: &Json, kind: &str) -> Result<Vec<EffectParam>, Error> {
+/// Top-level arguments that name parameters of effect `kind`, built in `reuse` (its name
+/// buffers kept).
+pub(super) fn schema_params(
+    value: &Json,
+    kind: &str,
+    reuse: &mut Vec<EffectParam>,
+) -> Result<Vec<EffectParam>, Error> {
     let schemas = super::effect_schemas();
+    let mut result = std::mem::take(reuse);
     let Some(schema) = schemas.field(kind).and_then(|s| s.field("params")) else {
-        return Ok(Vec::new());
+        result.clear();
+        return Ok(result);
     };
-    let mut result = Vec::new();
+    let mut used = 0;
     for (key, parameter) in value.as_object().into_iter().flatten() {
         if schema.field(key).is_none() {
             continue;
@@ -432,11 +454,20 @@ pub(super) fn schema_params(value: &Json, kind: &str) -> Result<Vec<EffectParam>
         } else {
             return Err(Error::bad(key, "a number, boolean, string or {keys}"));
         };
-        result.push(EffectParam {
-            name: key.clone(),
-            value,
-        });
+        match result.get_mut(used) {
+            Some(slot) => {
+                slot.name.clear();
+                slot.name.push_str(key);
+                slot.value = value;
+            }
+            None => result.push(EffectParam {
+                name: key.clone(),
+                value,
+            }),
+        }
+        used += 1;
     }
+    result.truncate(used);
     Ok(result)
 }
 

@@ -188,3 +188,46 @@ fn keys_stay_on_their_content_across_split_trim_and_roll() {
     apply(&mut project, trim.as_array().unwrap(), Source::Agent, false).unwrap();
     assert!((scale_at(&project, 300) - before[2]).abs() < 1e-9);
 }
+
+/// Rows that decode an effect schema accept every parameter of it (no BAD_ARGS for a schema
+/// parameter that `effect.add` would take).
+#[test]
+fn schema_backed_rows_list_every_schema_parameter() {
+    let schemas = commands::effect_schemas();
+    for (id, schema, skip) in [
+        ("mask.add", "mask", &[][..]),
+        ("mask.set", "mask", &[]),
+        ("transition.add", "transition", &[]),
+        ("transition.set", "transition", &[]),
+        ("zoom.set", "clickZoom", &[]),
+        ("style.set", "brand", &[]),
+        ("generator.add", "shape", &[]),
+    ] {
+        let row = commands::COMMANDS.iter().find(|row| row.id == id).unwrap();
+        let Some(Json::Object(params)) = schemas.field(schema).and_then(|s| s.field("params"))
+        else {
+            panic!("{schema}")
+        };
+        let missing: Vec<&str> = params
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .filter(|name| !skip.contains(name) && !row.params.iter().any(|(p, _)| p == name))
+            .collect();
+        assert!(missing.is_empty(), "{id} lacks {missing:?}");
+    }
+}
+
+#[test]
+fn an_inserted_still_lasts_five_seconds() {
+    let mut project = sample();
+    let ops = splice_json::parse(r#"[{"cmd":"clip.insert","media":"med_logo","at":120}]"#).unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let still = project
+        .clips
+        .order()
+        .iter()
+        .find(|&&slot| project.clips.data(slot).unwrap().media == Some("med_logo".parse().unwrap()))
+        .map(|&slot| project.clips.timing(slot).unwrap())
+        .unwrap();
+    assert_eq!((still.start, still.length), (120, 5 * project.fps as Frame));
+}

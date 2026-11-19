@@ -205,7 +205,7 @@ can catch. Uncaught, it becomes the reply's `error` with the tool's own code and
 errors use `CODE_ERROR`. Limits per run, each with its own code: 64 KB of source (`CODE_TOO_LARGE`),
 2 s of JavaScript excluding time inside tool calls (`CODE_TIMEOUT`), 32 MB heap (`CODE_MEMORY`),
 1 MB stack (`CODE_STACK`), 200 tool calls (`CODE_CALLS`), 32 KB of result JSON (`CODE_OUTPUT`);
-logs are truncated at 32 KB. Calling `record.*` or `code.run` throws `UNKNOWN_TOOL`.
+logs are truncated at 32 KB. Calling `code.run` from code throws `UNKNOWN_TOOL`; `record.start` returns a job at once, so code can start, mark and stop takes.
 
 `commands.describe {format:"ts", query?}` returns `{format:"ts", text}`: TypeScript declarations
 generated from the command registry and the tool schemas, with an interface per command

@@ -50,10 +50,11 @@ impl Placement {
             .map(|id| id.parse().map_err(|_| bad("retakeOf", "a take clip ID")))
             .transpose()?;
         let no_screen = args.field("screen").and_then(Json::as_bool) == Some(false);
-        if no_screen && !args.flag("camera")? {
+        // A voice-over never records the screen, so screen:false is redundant there, not wrong.
+        if no_screen && voiceover.is_none() && !args.flag("camera")? {
             return Err(bad(
                 "screen",
-                "false only with camera:true (a camera-only take)",
+                "false only with camera:true (a camera-only take) or voiceover:true",
             ));
         }
         Ok(Self {
