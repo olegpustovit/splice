@@ -477,12 +477,19 @@ pub(super) fn keys(value: &Json, key: &str) -> Result<Vec<Key>, Error> {
         .field(key)
         .ok_or_else(|| Error::bad(key, "an array of {at, value, ease}"))?;
     let wrapped = Json::Object(vec![("keys".into(), list.clone())]);
-    crate::package::decode_keys(&wrapped).ok_or_else(|| {
+    let mut keys = crate::package::decode_keys(&wrapped).ok_or_else(|| {
         Error::bad(
             key,
             "a nonempty array of {at, value, ease?} with increasing integer at; ease linear, hold, in, out, inOut or [x1, y1, x2, y2]",
         )
-    })
+    })?;
+    // Agent keys are eased unless they say otherwise (D20).
+    for (key, entry) in keys.iter_mut().zip(list.as_array().into_iter().flatten()) {
+        if entry.field("ease").is_none() {
+            key.ease = Ease::InOut;
+        }
+    }
+    Ok(keys)
 }
 
 /// An ease name or Bezier, linear when absent.

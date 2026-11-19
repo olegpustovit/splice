@@ -656,6 +656,7 @@ pub(super) fn decode_effects(value: &Json) -> Result<Vec<Effect>, PackageError> 
         if value.field("type").and_then(Json::as_str) == Some("clickZoom") {
             continue;
         }
+        let kind = value.field("type").and_then(Json::as_str).unwrap_or("");
         let mut params = Vec::new();
         for (name, value) in value
             .required("params")?
@@ -669,7 +670,18 @@ pub(super) fn decode_effects(value: &Json) -> Result<Vec<Effect>, PackageError> 
             } else if let Some(s) = value.as_str() {
                 EffectValue::Text(s.into())
             } else if let Some(keys) = decode_keys(value) {
-                EffectValue::Keys(keys)
+                // 0.3 accepted keys everywhere and rendered the default where the evaluator
+                // did not sample them; 0.4 keeps the first key's value there (T36.4).
+                let keyable = crate::commands::effect_schemas()
+                    .field(kind)
+                    .and_then(|schema| schema.field("params"))
+                    .and_then(|params| params.field(name))
+                    .is_none_or(crate::commands::keyable);
+                if keyable {
+                    EffectValue::Keys(keys)
+                } else {
+                    EffectValue::Number(keys[0].value)
+                }
             } else {
                 return Err(bad(name, "a number, boolean, string or {keys}"));
             };

@@ -494,11 +494,54 @@ fn param_spec(kind: &str, name: &str) -> Result<&'static Json, CommandError> {
     })
 }
 
+/// Whether a parameter schema entry accepts keys (`"keys": true`).
+pub fn keyable(spec: &Json) -> bool {
+    spec.field("keys").and_then(Json::as_bool) == Some(true)
+}
+
+/// The keyable parameters of an effect type, comma-separated (or "none").
+fn keyable_names(kind: &str) -> String {
+    let mut names = String::new();
+    for (name, spec) in effect_schemas()
+        .field(kind)
+        .and_then(|schema| schema.field("params"))
+        .and_then(Json::as_object)
+        .into_iter()
+        .flatten()
+    {
+        if keyable(spec) {
+            if !names.is_empty() {
+                names.push_str(", ");
+            }
+            names.push_str(name);
+        }
+    }
+    if names.is_empty() {
+        names.push_str("none");
+    }
+    names
+}
+
 /// Checks parameter names and values against `effects.json` (decoding, apply and package
 /// validation share it).
 pub fn check_effect(kind: &str, params: &[EffectParam]) -> Result<(), CommandError> {
     for param in params {
         let spec = param_spec(kind, &param.name)?;
+        // Keys only where the evaluator samples per frame; anything else would render its
+        // default silently (M20, T36.4).
+        if matches!(param.value, EffectValue::Keys(_)) && !keyable(spec) {
+            return Err(CommandError::rule(
+                "NOT_KEYABLE",
+                &param.name,
+                None,
+                "a single value (this parameter is not animated)",
+                &format!(
+                    "Pass {kind}.{} as a constant. Keyable {kind} parameters: {}.",
+                    param.name,
+                    keyable_names(kind)
+                ),
+            ));
+        }
         let number = |key| spec.field(key).and_then(Json::as_f64).unwrap_or(0.0);
         let in_range = |n: f64| n.is_finite() && n >= number("min") && n <= number("max");
         let ok = match (spec.field("type").and_then(Json::as_str), &param.value) {

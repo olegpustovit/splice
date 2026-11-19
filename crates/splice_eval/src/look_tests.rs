@@ -131,7 +131,7 @@ fn dissolve_blends_both_clips_with_equal_power_audio() {
 #[test]
 fn speed_ramps_integrate_and_freezes_hold() {
     let project = applied(
-        r#"[{"cmd":"param.keys","target":"clp_take","path":"speed.rate","keys":[{"at":0,"value":1},{"at":60,"value":2},{"at":120,"value":1}]}]"#,
+        r#"[{"cmd":"param.keys","target":"clp_take","path":"speed.rate","keys":[{"at":0,"value":1,"ease":"linear"},{"at":60,"value":2,"ease":"linear"},{"at":120,"value":1}]}]"#,
     );
     let evaluator = Evaluator::prepare(&project).unwrap();
     let mut plan = evaluator.buffer();
@@ -301,4 +301,55 @@ fn many_sibling_compounds_render_like_their_clips() {
         b.frame(at, &mut pb);
         assert_eq!(pa.layers, pb.layers, "frame {at}");
     }
+}
+
+/// T36.4 (M20): every parameter the schema marks keyable changes the evaluated frame when it
+/// is keyed, and nothing else accepts keys. A keyed parameter that renders its constant would
+/// fail here.
+#[test]
+fn every_keyable_parameter_renders_its_keys() {
+    use splice_core::commands::{effect_schemas, keyable};
+    use splice_json::Value as Json;
+    let render = |ops: &str| {
+        let evaluator = Evaluator::prepare(&applied(ops)).unwrap();
+        let mut plan = evaluator.buffer();
+        evaluator.frame(180, &mut plan);
+        format!("{:?} {:?}", plan.layers, plan.audio)
+    };
+    let mut checked = 0;
+    for (kind, schema) in effect_schemas().as_object().unwrap() {
+        let params = schema.field("params").and_then(Json::as_object);
+        for (name, spec) in params.into_iter().flatten() {
+            if !keyable(spec) {
+                continue;
+            }
+            let bound = |key: &str| spec.field(key).and_then(Json::as_f64).unwrap();
+            let (min, max) = (bound("min"), bound("max"));
+            let (a, b) = match (kind.as_str(), name.as_str()) {
+                // The take has 120 spare media frames: ramp gently.
+                ("speed", "rate") => (1.0, 1.1),
+                _ => (min + 0.25 * (max - min), min + 0.75 * (max - min)),
+            };
+            // A crop pans inside the slack its size leaves.
+            let context = match (kind.as_str(), name.as_str()) {
+                ("crop", "x" | "y") => {
+                    r#"{"cmd":"param.set","target":"clp_take","path":"crop.w","value":0.5},
+                       {"cmd":"param.set","target":"clp_take","path":"crop.h","value":0.5},"#
+                }
+                _ => "",
+            };
+            let held = render(&format!(
+                r#"[{context}{{"cmd":"param.set","target":"clp_take","path":"{kind}.{name}","value":{a}}}]"#
+            ));
+            let keyed = render(&format!(
+                r#"[{context}{{"cmd":"param.keys","target":"clp_take","path":"{kind}.{name}","keys":[{{"at":0,"value":{a}}},{{"at":120,"value":{b}}}]}}]"#
+            ));
+            assert_ne!(
+                held, keyed,
+                "{kind}.{name} accepts keys but renders a constant"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 33, "keyable parameters");
 }

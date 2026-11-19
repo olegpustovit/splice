@@ -152,12 +152,12 @@ fn package_recovers_abandoned_lock_record() {
 /// 0.3 → 0.4 (D12): motion lanes load as camera lanes, motion items as zoom segments that hold
 /// their end scale, and click-zoom effects are dropped (intent.autoZoom makes explicit zooms).
 #[test]
-fn a_0_3_project_migrates_motion_and_click_zoom_to_camera_segments() {
+fn a_0_3_project_migrates_motion_click_zoom_and_unanimated_keys() {
     let temp = Temp::new("migrate-0.3");
     let path = temp.project();
     fs::create_dir_all(&path).unwrap();
     let project = r#"{"format":"splice/1","rev":0,"hash":"0000000000000001","serial":9,"fps":30,"size":[1080,1920],"aspect":"9:16","access":"live",
-"effects":[{"id":"fx_1","type":"clickZoom","params":{"scale":1.6}}],
+"effects":[{"id":"fx_1","type":"clickZoom","params":{"scale":1.6}},{"id":"fx_5","type":"window","params":{"padding":{"keys":[{"at":0,"value":0.12,"ease":"linear"},{"at":9,"value":0.2,"ease":"linear"}]}}}],
 "spine":{"id":"lan_spine","name":"Video","effects":[]},
 "lanes":[{"id":"lan_2","name":"Motion","kind":"motion","effects":[]}],
 "clips":[{"id":"clp_3","media":null,"start":0,"length":120,"source":0,"speed":1,"fadeIn":0,"fadeOut":0,"volume":{"mic":1,"system":0.8},"enabled":{},"crop":null,"fit":"fit","effects":[]}],
@@ -171,7 +171,12 @@ fn a_0_3_project_migrates_motion_and_click_zoom_to_camera_segments() {
     .unwrap();
     let (_, loaded) = Package::open(&path).unwrap();
     assert_eq!(loaded.lanes[0].kind, splice_model::LaneKind::Camera);
-    assert!(loaded.effects.is_empty(), "clickZoom dropped");
+    // clickZoom dropped; keys on a non-keyable parameter keep the first value (T36.4).
+    assert_eq!(loaded.effects.len(), 1);
+    assert_eq!(
+        loaded.effects[0].params[0].value,
+        splice_model::EffectValue::Number(0.12)
+    );
     let slot = loaded.items.order()[0];
     let splice_model::ItemKind::Zoom(zoom) = loaded.items.data(slot).unwrap().kind else {
         panic!("motion became a zoom")

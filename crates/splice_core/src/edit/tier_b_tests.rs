@@ -544,3 +544,18 @@ fn tier_b_cut_words_then_captions_cover_the_whole_take_and_watermark_follows() {
         assert!(captioned, "{piece} has captions");
     }
 }
+
+/// T36.4: keys on a parameter the evaluator does not animate are refused with the rule, never
+/// accepted and rendered as the default.
+#[test]
+fn keys_on_a_non_keyable_parameter_are_refused() {
+    let mut project = sample();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"param.keys","target":"clp_take","path":"window.padding","keys":[{"at":0,"value":0.05},{"at":30,"value":0.2}]}]"#,
+    )
+    .unwrap();
+    let error = apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap_err();
+    assert_eq!(error.error.code, "NOT_KEYABLE");
+    assert_eq!(error.error.rule.unwrap().param, "padding");
+    assert!(error.error.fix.contains("none"), "{}", error.error.fix);
+}

@@ -257,7 +257,8 @@
         "min": -2,
         "max": 2,
         "step": 0.01,
-        "label": "X"
+        "label": "X",
+        "keys": true
       },
       "y": {
         "type": "number",
@@ -265,7 +266,8 @@
         "min": -2,
         "max": 2,
         "step": 0.01,
-        "label": "Y"
+        "label": "Y",
+        "keys": true
       },
       "scale": {
         "type": "number",
@@ -273,7 +275,8 @@
         "min": 0.05,
         "max": 10,
         "step": 0.01,
-        "label": "Scale"
+        "label": "Scale",
+        "keys": true
       },
       "rotation": {
         "type": "number",
@@ -281,7 +284,8 @@
         "min": -720,
         "max": 720,
         "step": 1,
-        "label": "Rotation"
+        "label": "Rotation",
+        "keys": true
       },
       "opacity": {
         "type": "number",
@@ -289,7 +293,8 @@
         "min": 0,
         "max": 1,
         "step": 0.01,
-        "label": "Opacity"
+        "label": "Opacity",
+        "keys": true
       },
       "anchorX": {
         "type": "number",
@@ -297,7 +302,8 @@
         "min": 0,
         "max": 1,
         "step": 0.01,
-        "label": "Anchor X"
+        "label": "Anchor X",
+        "keys": true
       },
       "anchorY": {
         "type": "number",
@@ -305,7 +311,8 @@
         "min": 0,
         "max": 1,
         "step": 0.01,
-        "label": "Anchor Y"
+        "label": "Anchor Y",
+        "keys": true
       },
       "blend": {
         "type": "enum",
@@ -334,7 +341,8 @@
         "min": 0,
         "max": 1,
         "step": 0.001,
-        "label": "Left"
+        "label": "Left",
+        "keys": true
       },
       "y": {
         "type": "number",
@@ -342,7 +350,8 @@
         "min": 0,
         "max": 1,
         "step": 0.001,
-        "label": "Top"
+        "label": "Top",
+        "keys": true
       },
       "w": {
         "type": "number",
@@ -350,7 +359,8 @@
         "min": 0.01,
         "max": 1,
         "step": 0.001,
-        "label": "Width"
+        "label": "Width",
+        "keys": true
       },
       "h": {
         "type": "number",
@@ -358,7 +368,8 @@
         "min": 0.01,
         "max": 1,
         "step": 0.001,
-        "label": "Height"
+        "label": "Height",
+        "keys": true
       }
     }
   },
@@ -373,7 +384,8 @@
         "min": -3,
         "max": 3,
         "step": 0.05,
-        "label": "Exposure"
+        "label": "Exposure",
+        "keys": true
       },
       "contrast": {
         "type": "number",
@@ -381,7 +393,8 @@
         "min": 0,
         "max": 2,
         "step": 0.01,
-        "label": "Contrast"
+        "label": "Contrast",
+        "keys": true
       },
       "saturation": {
         "type": "number",
@@ -389,7 +402,8 @@
         "min": 0,
         "max": 2,
         "step": 0.01,
-        "label": "Saturation"
+        "label": "Saturation",
+        "keys": true
       },
       "vibrance": {
         "type": "number",
@@ -397,7 +411,8 @@
         "min": -1,
         "max": 1,
         "step": 0.01,
-        "label": "Vibrance"
+        "label": "Vibrance",
+        "keys": true
       },
       "temperature": {
         "type": "number",
@@ -405,7 +420,8 @@
         "min": -1,
         "max": 1,
         "step": 0.01,
-        "label": "Temperature"
+        "label": "Temperature",
+        "keys": true
       },
       "tint": {
         "type": "number",
@@ -413,7 +429,8 @@
         "min": -1,
         "max": 1,
         "step": 0.01,
-        "label": "Tint"
+        "label": "Tint",
+        "keys": true
       },
       "highlights": {
         "type": "number",
@@ -421,7 +438,8 @@
         "min": -1,
         "max": 1,
         "step": 0.01,
-        "label": "Highlights"
+        "label": "Highlights",
+        "keys": true
       },
       "shadows": {
         "type": "number",
@@ -429,7 +447,8 @@
         "min": -1,
         "max": 1,
         "step": 0.01,
-        "label": "Shadows"
+        "label": "Shadows",
+        "keys": true
       },
       "lut": {
         "type": "file",
@@ -442,7 +461,8 @@
         "min": 0,
         "max": 1,
         "step": 0.01,
-        "label": "LUT amount"
+        "label": "LUT amount",
+        "keys": true
       }
     }
   },
@@ -468,7 +488,8 @@
         "min": -1,
         "max": 2,
         "step": 0.001,
-        "label": "Left"
+        "label": "Left",
+        "keys": true
       },
       "y": {
         "type": "number",
@@ -476,7 +497,8 @@
         "min": -1,
         "max": 2,
         "step": 0.001,
-        "label": "Top"
+        "label": "Top",
+        "keys": true
       },
       "w": {
         "type": "number",
@@ -484,7 +506,8 @@
         "min": 0,
         "max": 2,
         "step": 0.001,
-        "label": "Width"
+        "label": "Width",
+        "keys": true
       },
       "h": {
         "type": "number",
@@ -492,7 +515,8 @@
         "min": 0,
         "max": 2,
         "step": 0.001,
-        "label": "Height"
+        "label": "Height",
+        "keys": true
       },
       "mode": {
         "type": "enum",
@@ -511,7 +535,8 @@
         "min": 0,
         "max": 1,
         "step": 0.01,
-        "label": "Amount"
+        "label": "Amount",
+        "keys": true
       },
       "feather": {
         "type": "number",
@@ -519,7 +544,8 @@
         "min": 0,
         "max": 0.2,
         "step": 0.005,
-        "label": "Feather"
+        "label": "Feather",
+        "keys": true
       },
       "invert": {
         "type": "bool",
@@ -549,7 +575,8 @@
         "min": 0,
         "max": 1,
         "step": 0.01,
-        "label": "Tolerance"
+        "label": "Tolerance",
+        "keys": true
       },
       "softness": {
         "type": "number",
@@ -557,7 +584,8 @@
         "min": 0,
         "max": 1,
         "step": 0.01,
-        "label": "Softness"
+        "label": "Softness",
+        "keys": true
       },
       "spill": {
         "type": "number",
@@ -565,7 +593,8 @@
         "min": 0,
         "max": 1,
         "step": 0.01,
-        "label": "Spill"
+        "label": "Spill",
+        "keys": true
       }
     }
   },
@@ -589,7 +618,8 @@
         "min": 0,
         "max": 1,
         "step": 0.01,
-        "label": "Amount"
+        "label": "Amount",
+        "keys": true
       }
     }
   },
@@ -648,7 +678,8 @@
         "min": 0,
         "max": 16,
         "step": 0.01,
-        "label": "Rate (0 holds the frame)"
+        "label": "Rate (0 holds the frame)",
+        "keys": true
       },
       "pitch": {
         "type": "bool",
@@ -668,7 +699,8 @@
         "min": 0,
         "max": 4,
         "step": 0.01,
-        "label": "Gain"
+        "label": "Gain",
+        "keys": true
       },
       "pan": {
         "type": "number",
@@ -676,7 +708,8 @@
         "min": -1,
         "max": 1,
         "step": 0.01,
-        "label": "Pan"
+        "label": "Pan",
+        "keys": true
       },
       "mute": {
         "type": "bool",
