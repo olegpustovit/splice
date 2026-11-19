@@ -483,6 +483,8 @@ eight places; the board below already carries the changes.
 ### 0.4.x (gated or asset-bound; not in the 0.4 exit)
 - T45.1 HTML escape hatch (HyperFrames-compatible seek contract) behind a determinism gate on macOS.
 - T45.2 Native Lottie/SVG/GIF vector engine (ThorVG-class): needs a dependency decision (std + cc rule).
+  Report bug M23 (animated GIF/APNG stickers play their first frame) lands here: ImageIO can decode
+  the frames natively, but frame timing belongs with the vector engine's playback model.
 - T45.3 Bundled CC0 music/SFX library: needs curated, licensed assets.
 - T45.4 Particles, counters, look packs, glyph atlas per-glyph quads, caret track via AX.
 
@@ -567,3 +569,8 @@ Append one line per loop iteration: date, task, result, commit, wall time of the
 - 2026-11-19 · T23.5 · cb53017, 9c0f164 · code.run frame previews and sessionless export: 24 + 6 eval runs all pass; code mode cheaper on every re-run task except hand-off (+7%).
 - 2026-11-19 · gap closed · transcript.get {item} transcribes and reads sound items and media overlays (podcast WAVs, voice-overs): live, 74 s of speech as a sound item gave 225 words. cut.words still cuts spine clips only.
 - 2026-11-19 · 0.3 · eede27f…326885b · 47 of 48 tasks: 4K full-stack compose 14.7–15.6 ms (hardware source-over, occlusion culling, mask early-out); sound items transcribe; code mode cheaper on every eval task. Only T15.6 notarization (HUMAN credentials) remains.
+- 2026-11-19 · 0.4 · T36–T43 done (see the board's commit notes), T44.1–T44.3 done, T44.4 running ·
+  3e57bec · `make check` ~8 s (209+ tests), `make mac-check` green, 4K compose p90 15.2 ms · built
+  with three worktree agents (T37, T41, T42, jobs/media) merged and gated on both machines, and an
+  independent review whose 22 findings were fixed or answered (one Look::placed, speed-aware
+  anchors, linear cursor build, dead lowering code removed)
