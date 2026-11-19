@@ -41,10 +41,22 @@ declare const splice: {
   describe(query?: string): string;
 "#;
 
-/// The full declarations, or only the commands and tools whose name contains `filter`.
+/// Without a filter: the index (shared types, every tool signature, one line per command), so a
+/// session does not pay for the whole surface up front. `"*"`: everything. Otherwise the commands
+/// and tools whose name contains any comma-separated term, with full types.
 pub(super) fn declarations(filter: Option<&str>) -> String {
-    let filter = filter.unwrap_or("").to_lowercase();
-    let wanted = |name: &str| name.to_lowercase().contains(&filter);
+    let filter = filter.unwrap_or("").trim().to_lowercase();
+    if filter.is_empty() {
+        return index();
+    }
+    let terms: Vec<&str> = filter
+        .split(',')
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .collect();
+    let all = terms.contains(&"*");
+    let wanted = |name: &str| all || terms.iter().any(|term| name.to_lowercase().contains(term));
+    let filter = if all { "" } else { filter.as_str() };
     let mut out = String::from(HEADER);
     // Planned rows only fail with NOT_IMPLEMENTED; commands.describe still lists them.
     let commands: Vec<&Command> = COMMANDS
@@ -94,6 +106,41 @@ pub(super) fn declarations(filter: Option<&str>) -> String {
         let _ = writeln!(out, "  {group}: {{");
         for name in names {
             let tool = tools.iter().find(|tool| tool.name == name).expect("listed");
+            tool_signature(&mut out, tool);
+        }
+        out.push_str("  };\n");
+    }
+    out.push_str("};\n");
+    out
+}
+
+/// Shared types, the command list and every tool signature; command params come from a query.
+fn index() -> String {
+    let mut out = String::from(HEADER);
+    out.push_str(concat!(
+        "  /** edit.apply ops are `{cmd, ...params}`; refs are \"$name\". Before using commands, get\n",
+        "   * their types in one call: splice.describe(\"clip.crop,effect.add\") (or commands.describe\n",
+        "   * {format:\"ts\", query}); \"*\" returns everything. Commands:\n",
+    ));
+    for row in COMMANDS.iter().filter(|row| row.tier != Tier::Planned) {
+        let _ = writeln!(out, "   *   {} — {}", row.id, row.title);
+    }
+    out.push_str(
+        "   */\n  type Op = { cmd: string; ref?: `$${string}`; [param: string]: unknown };\n}\n",
+    );
+    out.push_str(API);
+    let names: Vec<&str> = tools::TOOLS
+        .iter()
+        .map(|tool| tool.name)
+        .filter(|name| !name.starts_with("record."))
+        .collect();
+    for (group, names) in groups(&names) {
+        let _ = writeln!(out, "  {group}: {{");
+        for name in names {
+            let tool = tools::TOOLS
+                .iter()
+                .find(|tool| tool.name == name)
+                .expect("listed");
             tool_signature(&mut out, tool);
         }
         out.push_str("  };\n");

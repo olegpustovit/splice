@@ -498,7 +498,7 @@ fn code_profile_transcript_runs_tools_in_one_call() {
 
 #[test]
 fn code_mode_declarations_golden() {
-    let text = typescript::declarations(None);
+    let text = typescript::declarations(Some("*"));
     for row in splice_core::commands::COMMANDS {
         if row.tier == splice_core::commands::Tier::Planned {
             // Planned rows only fail; code mode leaves them out (commands.describe lists them).
@@ -593,4 +593,38 @@ fn write_arguments_distinguish_missing_from_invalid() {
             .unwrap(),
         7
     );
+}
+
+/// T14.6: the unfiltered declarations are an index: every tool's signature and every command's
+/// name, at a fraction of the full surface; a comma-separated query returns full types for each.
+#[test]
+fn code_mode_declarations_index_and_multi_query() {
+    let index = typescript::declarations(None);
+    let full = typescript::declarations(Some("*"));
+    assert!(
+        index.len() * 2 < full.len(),
+        "index {} vs full {}",
+        index.len(),
+        full.len()
+    );
+    for row in splice_core::commands::COMMANDS {
+        let listed = index.contains(&format!("   *   {} — ", row.id));
+        assert_eq!(
+            listed,
+            row.tier != splice_core::commands::Tier::Planned,
+            "{}",
+            row.id
+        );
+    }
+    for tool in super::tools::TOOLS
+        .iter()
+        .filter(|tool| !tool.name.starts_with("record."))
+    {
+        let method = tool.name.split_once('.').unwrap().1;
+        assert!(index.contains(&format!("    {method}(")), "{}", tool.name);
+    }
+    assert!(!index.contains("interface ClipCrop"));
+    let slice = typescript::declarations(Some("clip.crop, effect.add"));
+    assert!(slice.contains("interface ClipCrop") && slice.contains("interface EffectAdd"));
+    assert!(!slice.contains("interface ItemSplit"));
 }
