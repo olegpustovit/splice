@@ -353,3 +353,28 @@ fn every_keyable_parameter_renders_its_keys() {
     }
     assert_eq!(checked, 33, "keyable parameters");
 }
+
+/// T40.4: whip, zoomPunch and swipe move content only: the outgoing side's backdrop is never
+/// shifted and the incoming side composites as one group.
+#[test]
+fn content_only_transitions_never_move_the_backdrop() {
+    for kind in ["whip", "zoomPunch", "swipe"] {
+        let project = applied(&format!(
+            r#"[{{"cmd":"transition.add","item":"clp_end","kind":"{kind}","length":20}}]"#
+        ));
+        let evaluator = Evaluator::prepare(&project).unwrap();
+        let mut plan = evaluator.buffer();
+        evaluator.frame(540, &mut plan);
+        let shift = plan.shift.unwrap_or_else(|| panic!("{kind}: no shift"));
+        let group = plan.group.unwrap_or_else(|| panic!("{kind}: no group"));
+        assert!(matches!(plan.layers[0], Layer::Background { .. }), "{kind}");
+        assert!(shift.layers[0] >= 1, "{kind}: backdrop moved");
+        assert!(group.layers[0] >= shift.layers[1], "{kind}");
+        assert!(
+            plan.layers[shift.layers[0]..shift.layers[1]]
+                .iter()
+                .any(|l| matches!(l, Layer::Picture(p) if p.item == clip("clp_take"))),
+            "{kind}: the take moves"
+        );
+    }
+}

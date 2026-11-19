@@ -303,19 +303,33 @@ mod looks {
         // At frame 29 (t = 0.475) only 5% of the outgoing content is left over it.
         let dipped = pixel(&windowed("dip"), 29, [48, 32]);
         assert!(near(dipped, [11, 192, 2], 4), "dip: {dipped:?}");
-        for kind in ["wipe", "push", "slide", "zoom"] {
+        for kind in [
+            "wipe",
+            "push",
+            "slide",
+            "zoom",
+            "whip",
+            "zoomPunch",
+            "swipe",
+        ] {
             let composition = windowed(kind);
             // The backdrop never moves or doubles; inside, every pixel is a clip or the backdrop.
+            // A punch to 1.6× covers the corner with content (its backdrop staying put is
+            // content_only_transitions_never_move_the_backdrop in splice_eval).
+            let corner = pixel(&composition, 30, [1, 1]);
             assert!(
-                near(pixel(&composition, 30, [1, 1]), [0, 200, 0], 4),
-                "{kind}"
+                kind == "zoomPunch" || near(corner, [0, 200, 0], 4),
+                "{kind}: corner {corner:?}"
             );
             for x in [28, 48, 66] {
                 let p = pixel(&composition, 30, [x, 32]);
                 let pure = [[220, 30, 30], [30, 30, 220], [0, 200, 0]]
                     .iter()
                     .any(|&c| near(p, c, 6));
-                assert!(pure || kind == "zoom", "{kind} at x {x}: {p:?}");
+                assert!(
+                    pure || matches!(kind, "zoom" | "zoomPunch"),
+                    "{kind} at x {x}: {p:?}"
+                );
             }
         }
 

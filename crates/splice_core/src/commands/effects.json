@@ -680,7 +680,10 @@
           "wipe",
           "push",
           "slide",
-          "zoom"
+          "zoom",
+          "whip",
+          "zoomPunch",
+          "swipe"
         ],
         "label": "Kind"
       },

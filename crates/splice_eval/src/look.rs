@@ -519,6 +519,12 @@ pub enum TransitionKind {
     Slide,
     /// Zoom and dissolve.
     Zoom,
+    /// A fast push that accelerates out and decelerates in (a whip pan, content only).
+    Whip,
+    /// The outgoing picture punches in and the incoming one settles from a punch (content only).
+    ZoomPunch,
+    /// The incoming picture swipes over while the outgoing one drifts a third as far (parallax).
+    Swipe,
 }
 
 pub(crate) fn transition(local: &[Effect]) -> Option<Transition> {
@@ -530,6 +536,9 @@ pub(crate) fn transition(local: &[Effect]) -> Option<Transition> {
             Some("push") => TransitionKind::Push,
             Some("slide") => TransitionKind::Slide,
             Some("zoom") => TransitionKind::Zoom,
+            Some("whip") => TransitionKind::Whip,
+            Some("zoomPunch") => TransitionKind::ZoomPunch,
+            Some("swipe") => TransitionKind::Swipe,
             _ => TransitionKind::Dissolve,
         },
         length: (t.number("length", 15.0).round() as Frame).max(2),

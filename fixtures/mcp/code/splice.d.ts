@@ -993,7 +993,7 @@ declare namespace Splice {
     /** Transition: spine clips (into the clip from the one before). */
     transition: {
       /** Kind · @default "dissolve" */
-      kind?: "dissolve" | "dip" | "wipe" | "push" | "slide" | "zoom";
+      kind?: "dissolve" | "dip" | "wipe" | "push" | "slide" | "zoom" | "whip" | "zoomPunch" | "swipe";
       /** Length · 2–240 · @default 15 */
       length?: number;
       /** Direction · @default "left" */

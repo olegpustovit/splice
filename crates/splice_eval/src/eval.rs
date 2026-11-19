@@ -950,6 +950,57 @@ impl Evaluator {
                 ];
                 out.group = Some(group(1.0, 1.0, [0.0, 0.0], Some(clip)));
             }
+            // The kinds below move content only: the shared backdrop stays put (D14, T40.4).
+            TransitionKind::Whip => {
+                // Cubic in-out: most of the travel happens in the middle third.
+                let e = if t < 0.5 {
+                    4.0 * t * t * t
+                } else {
+                    1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+                };
+                out.shift = Some(Shift {
+                    layers: content,
+                    scale: 1.0,
+                    offset: [dx * e * w, dy * e * h],
+                });
+                out.group = Some(group(
+                    1.0,
+                    1.0,
+                    [-dx * (1.0 - e) * w, -dy * (1.0 - e) * h],
+                    None,
+                ));
+            }
+            TransitionKind::ZoomPunch => {
+                // Out: punch to 1.6× while fading; in: settle from 1.6× while appearing.
+                let out_t = (2.0 * t).min(1.0);
+                let in_t = (2.0 * t - 1.0).max(0.0);
+                out.shift = Some(Shift {
+                    layers: content,
+                    scale: 1.0 + 0.6 * out_t * out_t,
+                    offset: [0.0, 0.0],
+                });
+                let settle = 1.0 - (1.0 - in_t).powi(3);
+                out.group = Some(group(
+                    smooth(((t - 0.35) / 0.3).clamp(0.0, 1.0)),
+                    1.6 - 0.6 * settle,
+                    [0.0, 0.0],
+                    None,
+                ));
+            }
+            TransitionKind::Swipe => {
+                let e = 1.0 - (1.0 - t).powi(3);
+                out.shift = Some(Shift {
+                    layers: content,
+                    scale: 1.0,
+                    offset: [dx * e * w / 3.0, dy * e * h / 3.0],
+                });
+                out.group = Some(group(
+                    1.0,
+                    1.0,
+                    [-dx * (1.0 - e) * w, -dy * (1.0 - e) * h],
+                    None,
+                ));
+            }
             TransitionKind::Push | TransitionKind::Slide => {
                 if transition.kind == TransitionKind::Push {
                     out.shift = Some(Shift {
@@ -1478,4 +1529,9 @@ pub fn caption_tokens(
         });
     }
     Ok(words)
+}
+
+/// Smoothstep on [0, 1].
+fn smooth(x: f64) -> f64 {
+    x * x * (3.0 - 2.0 * x)
 }

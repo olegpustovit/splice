@@ -452,7 +452,7 @@ eight places; the board below already carries the changes.
 - [x] T40.1 [L] Backdrop drawn once per frame; clips render content inside their frame. (3f078f7)
 - [x] T40.2 [M] Group compositing: outgoing stack drawn direct, incoming into one pooled offscreen, composited at t (premultiplied). Accept: dissolve black→black over blue backdrop stays black; 4K warm compose p90 < 16 ms. (3f078f7: pooled offscreen group, straight alpha like the canvas; 4K compose p90 15.2 ms)
 - [x] T40.3 [L] Transitions consume handles (no length change); `NO_HANDLES {need, have, fix}`; OTIO invariants (no overlap, no adjacent transitions on one clip). (length ≤ the shorter clip and handles checked on every path; one transition per clip by construction)
-- [ ] T40.4 [L] New content-only kinds: `whip`, `zoomPunch`, `swipe`.
+- [x] T40.4 [L] New content-only kinds: `whip`, `zoomPunch`, `swipe`. (whip: cubic in-out push; zoomPunch: out punches to 1.6×, in settles from it; swipe: in slides over, out drifts a third; all on group/shift so the backdrop stays)
 
 ### T41 · Activity editing for silent takes (D15) [L]
 - [ ] T41.1 [L] `media.analyze {kinds:["activity"]}`: idle/typing/clicks/scroll ranges from events (+ frame diff on macOS), no characters.
