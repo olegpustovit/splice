@@ -33,6 +33,8 @@ pub struct Composition {
     plan: lower::Plan,
     /// The frame-grab renderer, made on first use.
     offscreen: std::cell::RefCell<Option<Offscreen>>,
+    /// The last read's decode, compose (draw and GPU completion) and readback times.
+    timings: std::cell::Cell<[std::time::Duration; 3]>,
 }
 
 struct Offscreen {
@@ -170,6 +172,7 @@ impl Composition {
             text,
             plan,
             offscreen: std::cell::RefCell::new(None),
+            timings: Default::default(),
         })
     }
 
@@ -234,9 +237,11 @@ impl Composition {
         }
         let offscreen = slot.as_mut().expect("offscreen renderer");
         let device_ptr = offscreen.program.mtl_device();
+        let started = std::time::Instant::now();
         let count = self
             .native
             .grab(device_ptr, at, offscreen.program.sources_mut())?;
+        let decoded = std::time::Instant::now();
         let commands = b::begin_commands(&offscreen.queue).map_err(gpu)?;
         let native = b::native_commands(&commands)
             .map_err(gpu)?
@@ -257,8 +262,16 @@ impl Composition {
         }
         let receipt = b::commit(&commands).map_err(gpu)?;
         b::complete_through(&offscreen.queue, receipt.epoch).map_err(gpu)?;
+        let composed = std::time::Instant::now();
         b::read_texture_into(&offscreen.texture, (width * 4) as i64, rgba).map_err(gpu)?;
+        self.timings
+            .set([decoded - started, composed - decoded, composed.elapsed()]);
         Ok(())
+    }
+
+    /// Decode, compose (draw and GPU completion) and readback times of the last `read_frame`.
+    pub fn last_frame_timings(&self) -> [std::time::Duration; 3] {
+        self.timings.get()
     }
 
     /// Starts encoding the composition and its audio mix with `encoding` (its range clamped to

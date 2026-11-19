@@ -523,6 +523,10 @@ static int64_t fill_sources(NSArray *entry, id<MTLDevice> device, NSMutableDicti
         splice_set_error(error, "A frame has more layers than the compositor accepts.");
         return -1;
     }
+    // Decoder pools recycle buffers; drop the cache if a pool keeps turning over. Only here,
+    // before this frame hands out texture pointers: evicting mid-frame freed textures already
+    // given to earlier layers (a dissolve under an overlay crashed in objc_retain).
+    if (surfaces.count >= 64) [surfaces removeAllObjects];
     for (NSUInteger index = 1; index < entry.count; index++) {
         SpliceAVFrameSource *out = &sources[index - 1];
         *out = (SpliceAVFrameSource){0};
@@ -537,8 +541,6 @@ static int64_t fill_sources(NSArray *entry, id<MTLDevice> device, NSMutableDicti
         id<MTLTexture> texture = surfaces[key];
         size_t width = CVPixelBufferGetWidth(pixels), height = CVPixelBufferGetHeight(pixels);
         if (texture == nil || texture.width != width || texture.height != height || texture.device != device) {
-            // Decoder pools recycle buffers; drop the cache if a pool keeps turning over.
-            if (surfaces.count >= 64) [surfaces removeAllObjects];
             MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
                 texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:width height:height mipmapped:NO];
             descriptor.usage = MTLTextureUsageShaderRead;
@@ -750,6 +752,11 @@ bool splice_av_finish(void *raw, char **error) {
         video.customVideoCompositorClass = [SpliceCompositor class];
         video.renderSize = assembly.size;
         video.frameDuration = time_for(assembly, 1);
+        // Work in Rec. 709 (what export tags): wide-color sources such as P3 phone video are
+        // converted on decode instead of passing their values through (PLAN.md T15.2).
+        video.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2;
+        video.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2;
+        video.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2;
         video.instructions = assembly.instructions;
         assembly.video = video;
         NSMutableArray *audio = [NSMutableArray array];
