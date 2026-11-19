@@ -40,7 +40,7 @@ fn window(sources: &[Source], app: &str, title: Option<&str>) -> Result<u32, Sto
             } else {
                 "Multiple shareable windows match this selector."
             },
-            "Supply the window title or use a window ID from record.start with dryRun:true.",
+            "Use source:{window:{app, title}} with the window's title, or a win_ ID from record.start {dryRun:true, titles:true}.",
         )),
     }
 }

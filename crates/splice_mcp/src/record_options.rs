@@ -87,6 +87,9 @@ impl Options {
     }
 }
 
+/// What a capture source may be; window:{app} needs no window ID or title (T36.10).
+const SELECTOR: &str = "one selector: display:\"main\", window:{app:\"Safari\", title?} (or a win_ ID), or area:{display, rect}";
+
 fn source(args: &Json) -> Result<Source, StoreError> {
     let fields = ["display", "window", "area"];
     let selectors = args.field("source");
@@ -96,7 +99,7 @@ fn source(args: &Json) -> Result<Source, StoreError> {
                 .as_object()
                 .is_some_and(|fields| fields.len() == 1))
     {
-        return Err(bad("source", "one display, window or area selector"));
+        return Err(bad("source", SELECTOR));
     }
     let input = selectors.unwrap_or(args);
     match (
@@ -118,7 +121,7 @@ fn source(args: &Json) -> Result<Source, StoreError> {
         (None, Some(value), None) => id(value, "win_").map(Source::Window).ok_or_else(|| {
             bad(
                 "window",
-                "a window ID or an app name with an optional title from record.start dryRun",
+                "{app:\"Safari\"} (an app name or bundle ID, with an optional title) or a win_ ID from record.start dryRun",
             )
         }),
         (None, None, Some(value)) => {
@@ -147,7 +150,7 @@ fn source(args: &Json) -> Result<Source, StoreError> {
             }
         }
         (None, None, None) if selectors.is_none() => Ok(Source::Display(0)),
-        _ => Err(bad("source", "one display, window or area selector")),
+        _ => Err(bad("source", SELECTOR)),
     }
 }
 

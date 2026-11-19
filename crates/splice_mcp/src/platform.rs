@@ -370,6 +370,33 @@ pub(super) fn missing_job(id: JobId) -> StoreError {
     )
 }
 
+/// Window titles can name private documents and conversations (D19): a capture dry run lists
+/// them only when the caller passes `titles:true`. `window:{app}` selects without them.
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn window_titles(mut reply: Json, titles: bool) -> Json {
+    if titles {
+        return reply;
+    }
+    let windows = match &mut reply {
+        Json::Object(fields) => fields
+            .iter_mut()
+            .find(|(key, _)| key == "sources")
+            .and_then(|(_, sources)| match sources {
+                Json::Object(sources) => sources.iter_mut().find(|(key, _)| key == "windows"),
+                _ => None,
+            }),
+        _ => None,
+    };
+    if let Some((_, Json::Array(windows))) = windows {
+        for window in windows {
+            if let Json::Object(fields) = window {
+                fields.retain(|(key, _)| key != "title");
+            }
+        }
+    }
+    reply
+}
+
 pub(super) fn record_start(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
     // record.start {resume: jobId} resumes a paused take; with marker, it marks the running take.
     if let Some(job) = args.optional_string("resume")? {
@@ -423,7 +450,9 @@ pub(super) fn record_start(projects: &mut Projects, args: &Json) -> Result<Json,
     #[cfg(target_os = "macos")]
     {
         if dry {
+            let titles = args.flag("titles")?;
             super::capture_agent::request("record.start", args)
+                .map(|reply| window_titles(reply, titles))
         } else {
             super::record::start(projects, args)
         }

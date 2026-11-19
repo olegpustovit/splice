@@ -26,7 +26,8 @@ permission separately. Run `splice permissions` after responding to check the up
 A capture blocked by a missing grant returns `TCC_DENIED` with `needsHuman:true` and the matching
 privacy pane. Preflight lists active displays in points, with `main` as the default display ID.
 With screen recording permission, it also lists shareable windows and applications, excluding
-Splice. Window IDs use `win_<id>`.
+Splice. Window IDs use `win_<id>`. Window titles can carry private text (D19), so a dry run lists
+them only when you pass `titles:true`; `source:{window:{app}}` needs no title or ID.
 
 ## Stdio lifecycle
 
@@ -218,8 +219,8 @@ omit `sessionId` and `ifRevision` with `path`. The start receipt identifies the 
 and job. Include the session in later edits or undo calls.
 
 Pass one `source` containing `display`, `window`, or `area`. A display is `"main"` or a display ID.
-A window is a `win_<id>` from preflight or an object with `app` and an optional `title` that
-identifies one shareable window. An area has a display
+A window is `{app:"Safari"}` (an app name or bundle ID; add `title` when the app has several
+windows) or a `win_<id>` from preflight. Selector errors name this form. An area has a display
 and a `rect` with `x`, `y`, `width` and `height` in display-local points. The default is the main
 display. Enable `mic`, `systemAudio` and `camera` to add those tracks. Set `events:false` to omit
 cursor and input events. `countdown` and optional `duration` are in seconds.

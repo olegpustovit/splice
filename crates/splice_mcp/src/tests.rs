@@ -982,6 +982,36 @@ fn low_a_sessionless_failed_export_closes_its_session() {
 }
 
 #[test]
+fn t36_10_capture_dry_run_omits_window_titles_unless_asked() {
+    let reply = splice_json::parse(
+        r#"{"sources":{"displays":[],"windows":[{"id":"win_7","app":"Mail","title":"Re: salary","pid":1}],"applications":[]}}"#,
+    )
+    .unwrap();
+    let windows = |reply: &Json| reply.field("sources").unwrap().field("windows").cloned();
+    let private = windows(&platform::window_titles(reply.clone(), false)).unwrap();
+    let window = &private.as_array().unwrap()[0];
+    assert!(window.field("title").is_none());
+    assert_eq!(window.field("app").and_then(Json::as_str), Some("Mail"));
+    let open = platform::window_titles(reply, true);
+    assert!(
+        windows(&open).unwrap().as_array().unwrap()[0]
+            .field("title")
+            .is_some()
+    );
+    // The selector errors teach window:{app}.
+    let error = record_options::Options::parse(
+        &splice_json::parse(r#"{"source":{"window":7.5}}"#).unwrap(),
+    )
+    .err()
+    .unwrap();
+    assert!(
+        error.fix.contains("window:{app") || error.fix.contains("{app:"),
+        "{}",
+        error.fix
+    );
+}
+
+#[test]
 fn save_as_copies_the_package_and_opens_the_copy() {
     let root = TestDirectory::new("save-as");
     let sample = root.0.join("sample.splice");

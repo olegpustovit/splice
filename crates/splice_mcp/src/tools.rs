@@ -477,7 +477,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "record.start",
-        description: "Start headless capture of a display, window or area. dryRun lists sources, microphones, cameras and permissions. voiceover:true records the mic onto a new audio lane at frame at; camera:true with screen:false is a camera-only take; retakeOf places the take after an earlier one; exclude hides apps. resume:jobId resumes a take paused with record.stop {pause:true}; resume with marker drops a marker. recover:true publishes takes a crash left staged.",
+        description: "Start headless capture of a display, window or area. To record an app, pass source:{window:{app:\"Safari\"}} (app name or bundle ID; add title when it has several windows). dryRun lists sources, microphones, cameras and permissions; window titles only with titles:true. voiceover:true records the mic onto a new audio lane at frame at; camera:true with screen:false is a camera-only take; retakeOf places the take after an earlier one; exclude hides apps. resume:jobId resumes a take paused with record.stop {pause:true}; resume with marker drops a marker. recover:true publishes takes a crash left staged.",
         read_only: false,
         input: &[
             ("projectId", "string"),
@@ -506,6 +506,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ("resume", "string"),
             ("marker", "string"),
             ("recover", "boolean"),
+            ("titles", "boolean"),
         ],
         required: &[],
         output: &[
@@ -529,7 +530,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "record.stop",
-        description: "Finish a recording and insert the take as one undoable edit. Use insert:false to keep it in media only; pause:true pauses instead (resume with record.start {resume}).",
+        description: "Finish a recording (started with record.start, e.g. source:{window:{app}}) and insert the take as one undoable edit. Use insert:false to keep it in media only; pause:true pauses instead (resume with record.start {resume}).",
         read_only: false,
         input: &[
             ("projectId", "string"),
