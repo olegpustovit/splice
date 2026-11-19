@@ -908,3 +908,59 @@ return {state: job.state, polls};"#
     drop(input);
     child.wait().unwrap();
 }
+
+/// T24.4 chaos: `kill -9` at random points of `splice apply` never leaves a torn project. Every
+/// reopen is a whole revision, the journal and the content agree (one marker per committed
+/// batch), and work continues from there.
+#[test]
+fn kill_dash_nine_during_apply_leaves_a_whole_revision() {
+    let scratch = Scratch::new("chaos");
+    success(scratch.run(&["new", "p.splice"]));
+    let mut titles = String::new();
+    for n in 0..150 {
+        titles.push_str(&format!(
+            r#",{{"cmd":"title.add","at":{n},"length":30,"text":"Line {n} of a long batch"}}"#
+        ));
+    }
+    let mut seed = 0x9e37_79b9_u32;
+    let mut last_rev = 0;
+    let mut killed = 0;
+    for round in 0..40u32 {
+        let ops = format!(
+            r#"[{{"cmd":"marker.add","at":{},"name":"Round {round}"}}{titles}]"#,
+            round * 10
+        );
+        fs::write(scratch.0.join("ops.json"), ops).unwrap();
+        let mut child = scratch
+            .command()
+            .args(["apply", "ops.json", "p.splice"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        std::thread::sleep(std::time::Duration::from_micros(u64::from(seed % 25_000)));
+        if child.try_wait().unwrap().is_none() {
+            child.kill().unwrap();
+            killed += 1;
+        }
+        child.wait().unwrap();
+        let snapshot = success(scratch.run(&["snapshot", "p.splice"]));
+        let rev = snapshot.field("rev").and_then(Json::as_u64).unwrap();
+        let markers = snapshot
+            .field("markers")
+            .and_then(Json::as_array)
+            .unwrap()
+            .len() as u64;
+        assert!(
+            rev == last_rev || rev == last_rev + 1,
+            "round {round}: r{last_rev} → r{rev}"
+        );
+        assert_eq!(markers, rev, "round {round}: content and journal disagree");
+        success(scratch.run(&["check", "p.splice"]));
+        last_rev = rev;
+    }
+    assert!(killed >= 5 && last_rev >= 5, "{killed} killed, r{last_rev}");
+}
