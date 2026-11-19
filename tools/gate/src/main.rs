@@ -148,8 +148,10 @@ fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
         "splice_capture" => &["apple_sys", "splice_json"],
         "splice_core" => &["splice_model", "splice_json"],
         "splice_eval" => &["splice_model"],
+        // D2: QuickJS-NG for code mode; size and build time in crates/quickjs_sys/README.md.
         "splice_mcp" => &[
             "apple_sys",
+            "quickjs_sys",
             "splice_av",
             "splice_capture",
             "splice_core",
@@ -193,8 +195,9 @@ fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
         let allowed_test = (matches!(key, "mem_sys" | "splice_testkit")
             || (name == "splice_eval" && key == "splice_core"))
             && table.ends_with("dev-dependencies");
-        let allowed_build =
-            key == "cc" && name == "apple_sys" && table.ends_with("build-dependencies");
+        let allowed_build = key == "cc"
+            && matches!(name, "apple_sys" | "quickjs_sys")
+            && table.ends_with("build-dependencies");
         if !(allowed.contains(&key) || allowed_test || allowed_build) {
             issues.push("dependency is outside this crate's allowlist");
         }
@@ -262,6 +265,15 @@ mod tests {
             .is_empty()
         );
         assert!(manifest_violations("apple_sys", "[build-dependencies]\ncc = \"1\"").is_empty());
+        assert!(manifest_violations("quickjs_sys", "[build-dependencies]\ncc = \"1\"").is_empty());
+        assert!(!manifest_violations("splice_core", "[build-dependencies]\ncc = \"1\"").is_empty());
+        assert!(
+            manifest_violations(
+                "splice_mcp",
+                "[dependencies]\nquickjs_sys = { path = \"../quickjs_sys\" }"
+            )
+            .is_empty()
+        );
         assert!(is_mac("splice_capture"));
         assert!(!mac_gated("// #![cfg(target_os = \"macos\")]"));
         assert!(mac_gated("#![cfg(target_os = \"macos\")]\nmod capture;"));

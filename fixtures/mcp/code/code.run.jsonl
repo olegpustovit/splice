@@ -1,0 +1,20 @@
+> {"jsonrpc":"2.0","id":1,"method":"tools/list"}
+< {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"code.run"},{"name":"commands.describe"}]}}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"$sample"}}}
+< {"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Unknown tool: project.info"}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"code.run","arguments":{"code":"const p = splice.project.info({path: \"$sample\"});\nconst s = splice.session.start({projectId: p.projectId, agent: \"code\"});\nconst e = splice.edit.apply({projectId: p.projectId, sessionId: s.sessionId, ifRevision: p.revision,\n  ops: [splice.op.item.set({items: [\"clp_take\"], name: \"Edited\"})]});\nconst t = splice.timeline.snapshot({projectId: p.projectId, detail: \"full\"});\nconsole.log(\"spine\", t.spine.length);\nreturn {project: p.projectId, session: s.sessionId, revision: e.revision, take: t.spine.find(c => c.id === \"clp_take\").name};"}}}
+< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"result":{"project":"prj_1","session":"ses_1","revision":"r1","take":"Edited"},"logs":["spine 3"],"calls":[{"tool":"project.info","ok":true},{"tool":"session.start","ok":true},{"tool":"edit.apply","ok":true},{"tool":"timeline.snapshot","ok":true}],"revisions":{"from":"r0","to":"r1"}},"isError":false}}
+> {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"code.run","arguments":{"projectId":"prj_1","sessionId":"ses_1","code":"try {\n  splice.edit.apply({ifRevision: \"r1\", ops: [{cmd: \"item.nope\"}]});\n} catch (e) {\n  return {name: e.name, spliceError: e instanceof SpliceError, code: e.code, fix: e.fix};\n}"}}}
+< {"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"result":{"name":"SpliceError","spliceError":true,"code":"UNKNOWN_COMMAND","fix":"…"},"calls":[{"tool":"edit.apply","ok":false}],"revisions":null},"isError":false}}
+> {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"code.run","arguments":{"projectId":"prj_1","code":"const a = 1;\n\nsplice.timeline.snapshot({projectId: \"prj_9\"});"}}}
+< {"jsonrpc":"2.0","id":5,"result":{"structuredContent":{"result":null,"error":{"code":"NOT_FOUND","message":"Project prj_9 is not open.","fix":"Call project.info with the package path.","line":3}},"isError":true}}
+> {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"code.run","arguments":{"code":"splice.call(\"record.start\", {dryRun: true});"}}}
+< {"jsonrpc":"2.0","id":6,"result":{"structuredContent":{"error":{"code":"UNKNOWN_TOOL","fix":"…","valid":"…","line":1}},"isError":true}}
+> {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"code.run","arguments":{"code":"// a comment\nconst x = null;\nreturn x.y;"}}}
+< {"jsonrpc":"2.0","id":7,"result":{"structuredContent":{"error":{"code":"CODE_ERROR","message":"TypeError: cannot read property 'y' of null","line":3}},"isError":true}}
+> {"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"code.run","arguments":{"code":"const a = [];\nfor (;;) a.push(\"x\".repeat(65536) + a.length);"}}}
+< {"jsonrpc":"2.0","id":8,"result":{"structuredContent":{"error":{"code":"CODE_MEMORY"}},"isError":true}}
+> {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"code.run","arguments":{"code":"const f = (n) => f(n + 1) + 1;\nreturn f(0);"}}}
+< {"jsonrpc":"2.0","id":9,"result":{"structuredContent":{"error":{"code":"CODE_STACK","line":1}},"isError":true}}
+> {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"code.run","arguments":{"projectId":"prj_1","code":"return [splice.describe(\"item.split\").includes(\"interface ItemSplit\"), splice.projectId, typeof splice.op.item.delete, Date.now()];"}}}
+< {"jsonrpc":"2.0","id":10,"result":{"structuredContent":{"result":[true,"prj_1","function",1767225600000]},"isError":false}}

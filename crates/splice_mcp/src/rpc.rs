@@ -13,6 +13,8 @@ const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
 
 struct Connection {
     initialized: bool,
+    /// The code profile (`splice mcp --code`): only `code.run` and `commands.describe`.
+    code: bool,
     projects: Projects,
     friction: Recorder,
     #[cfg(target_os = "macos")]
@@ -39,6 +41,7 @@ pub(super) fn record_project(
 ) -> Result<Json, Json> {
     let mut connection = Connection {
         initialized: true,
+        code: false,
         projects: Projects::default(),
         friction: Recorder::new(paths::state_dir().ok()),
         routes: Default::default(),
@@ -66,7 +69,12 @@ pub(super) fn record_project(
 }
 
 /// Serves one MCP connection, flushing each reply and returning on end of input.
-pub fn serve(input: &mut (dyn BufRead + Send), output: &mut dyn Write) -> io::Result<()> {
+/// `code` selects the code profile (`code.run` and `commands.describe`).
+pub fn serve(
+    input: &mut (dyn BufRead + Send),
+    output: &mut dyn Write,
+    code: bool,
+) -> io::Result<()> {
     let global = match paths::state_dir() {
         Ok(dir) => Some(dir),
         Err(error) => {
@@ -74,17 +82,19 @@ pub fn serve(input: &mut (dyn BufRead + Send), output: &mut dyn Write) -> io::Re
             None
         }
     };
-    serve_with_log(input, output, global)
+    serve_with_log(input, output, global, code)
 }
 
 pub(super) fn serve_with_log(
     input: &mut (dyn BufRead + Send),
     output: &mut dyn Write,
     global: Option<PathBuf>,
+    code: bool,
 ) -> io::Result<()> {
     let (events, incoming) = mpsc::channel();
     let mut connection = Connection {
         initialized: false,
+        code,
         projects: Projects::default(),
         friction: Recorder::new(global),
         #[cfg(target_os = "macos")]
@@ -340,7 +350,7 @@ fn dispatch(id: &Json, method: &str, params: &Json, connection: &mut Connection)
             if params.field("cursor").is_some() {
                 return rpc_error(id, -32602, "The tool list has no next page");
             }
-            object(vec![("tools", tools::list())])
+            object(vec![("tools", tools::list(connection.code))])
         }
         "tools/call" => {
             let name = params.field("name").and_then(Json::as_str);
@@ -352,7 +362,7 @@ fn dispatch(id: &Json, method: &str, params: &Json, connection: &mut Connection)
                     "tools/call requires a name and object arguments",
                 );
             };
-            if !tools::known(name) {
+            if !tools::known(name, connection.code) {
                 return rpc_error(id, -32602, &format!("Unknown tool: {name}"));
             }
             match connection.call(name, args, modern.then_some(meta)) {
@@ -379,6 +389,17 @@ impl Connection {
         args: &Json,
         meta: Option<&Json>,
     ) -> Result<Json, splice_json::NonFiniteNumber> {
+        if name == "code.run" {
+            // Each tool call inside the code takes the same path, so viewer forwarding and
+            // friction logging work unchanged.
+            let payload = super::code::run(args, &mut |tool, tool_args| {
+                self.call(tool, tool_args, meta)
+            });
+            let result = super::code::reply(payload)?;
+            self.friction
+                .call(&self.projects, name, args, &result, meta);
+            return Ok(result);
+        }
         #[cfg(target_os = "macos")]
         let result = match self.routes.tool_args(name, args) {
             Ok(routed) => match self.routes.forward(

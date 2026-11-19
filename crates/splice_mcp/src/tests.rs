@@ -46,7 +46,7 @@ use std::io::{self, BufRead, Cursor, Write};
 use std::path::{Path, PathBuf};
 
 fn isolated_serve(input: &mut (dyn BufRead + Send), output: &mut dyn Write) -> io::Result<()> {
-    rpc::serve_with_log(input, output, None)
+    rpc::serve_with_log(input, output, None, false)
 }
 
 const LEGACY_PRELUDE: &str = concat!(
@@ -291,7 +291,12 @@ fn friction_transcript_tracks_session_recovery_and_writes_repro() {
         &[("$new", &project)],
         &mut |input| {
             let mut output = Vec::new();
-            rpc::serve_with_log(&mut Cursor::new(input), &mut output, Some(global.clone()))?;
+            rpc::serve_with_log(
+                &mut Cursor::new(input),
+                &mut output,
+                Some(global.clone()),
+                false,
+            )?;
             connections += 1;
             if connections == 1 {
                 for path in [
@@ -470,4 +475,48 @@ fn frame_selection_checks_bounds_and_rounds_filmstrip_samples() {
         let args = splice_json::parse(invalid).unwrap();
         assert!(FrameSelection::parse(&args).is_err(), "{invalid}");
     }
+}
+
+#[test]
+fn code_profile_transcript_runs_tools_in_one_call() {
+    let root = TestDirectory::new("code-profile");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    // Paths inside JavaScript are not `path` fields, so bind them as text.
+    let fixture = fs::read_to_string(mcp_fixtures().join("code/code.run.jsonl")).unwrap();
+    let case = root.0.join("code.run.jsonl");
+    fs::write(&case, fixture.replace("$sample", sample.to_str().unwrap())).unwrap();
+    transcript::run(&case, LEGACY_PRELUDE, &[], &mut |input| {
+        let mut output = Vec::new();
+        rpc::serve_with_log(&mut Cursor::new(input), &mut output, None, true)?;
+        Ok(output)
+    })
+    .unwrap();
+    let reopened = splice_core::history::Store::open(&sample).unwrap();
+    assert_eq!(reopened.project().rev, 1);
+}
+
+#[test]
+fn code_mode_declarations_golden() {
+    let text = typescript::declarations(None);
+    for row in splice_core::commands::COMMANDS {
+        assert!(
+            text.contains(&format!("cmd: \"{}\";", row.id)),
+            "{}",
+            row.id
+        );
+        for (name, hint) in row.params {
+            let optional = if hint.starts_with('!') { "" } else { "?" };
+            assert!(
+                text.contains(&format!("      {name}{optional}: ")),
+                "{} {name}",
+                row.id
+            );
+        }
+    }
+    assert!(!text.contains("record."));
+    assert!(typescript::declarations(Some("item.split")).contains("interface ItemSplit"));
+    assert!(!typescript::declarations(Some("item.split")).contains("interface ItemTrim"));
+    let path = mcp_fixtures().join("code/splice.d.ts");
+    splice_testkit::golden(&path, text.as_bytes()).unwrap();
 }

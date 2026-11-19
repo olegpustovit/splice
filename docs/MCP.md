@@ -171,6 +171,53 @@ undoable edit. Set `insert:false` at start or stop to save the media without a c
 discards a take before publication. `still:true` captures a PNG with a three-frame default span
 if inserted. A successful still stop also returns its package-relative `output` path.
 
+## Code mode profile
+
+`splice mcp --code` lists exactly two tools: `code.run` and `commands.describe`. The other tools
+are reached from JavaScript, so a whole read–edit–check loop is one round trip.
+
+`code.run {code, projectId?, sessionId?}` runs `code` as a function body (top-level `return` sets
+the result) in a fresh QuickJS-NG runtime (`crates/quickjs_sys`): no modules, files, network,
+timers or clock. `Date.now()` and `new Date()` are fixed at 2026-01-01T00:00:00Z and
+`Math.random` is seeded, so runs replay identically. The reply is
+`{result, logs, calls:[{tool, ok, ms}], revisions:{from, to}|null, error?:{code, message, fix, line}}`
+with `isError:true` when `error` is set; logs and calls are kept on failure. `revisions` covers
+the first project the code touched; `line` is the line in `code`.
+
+Inside the code, the global `splice` has:
+
+- `splice.<group>.<name>(args)` for every default-profile tool except `record.*`, e.g.
+  `splice.project.info({path})`, `splice.edit.apply({...})`, `splice.timeline.snapshot()`.
+  `splice.call(name, args)` is the same by name. Calls are synchronous and return the tool's
+  structured result; `view.frames` returns paths only (no image content). `projectId` and
+  `sessionId` default to the ones passed to `code.run` (`splice.projectId`, `splice.sessionId`).
+- `splice.op.<group>.<name>(fields)` builds a registry op, e.g. `splice.op.item.split({item, at})`
+  is `{cmd:"item.split", item, at}`.
+- `splice.describe(query?)` returns the TypeScript declarations below, filtered by name.
+
+A business error throws `SpliceError` (`code`, `message`, `fix`, `valid?`, `current?`), which code
+can catch. Uncaught, it becomes the reply's `error` with the tool's own code and fix. JavaScript
+errors use `CODE_ERROR`. Limits per run, each with its own code: 64 KB of source (`CODE_TOO_LARGE`),
+2 s of JavaScript excluding time inside tool calls (`CODE_TIMEOUT`), 32 MB heap (`CODE_MEMORY`),
+1 MB stack (`CODE_STACK`), 200 tool calls (`CODE_CALLS`), 32 KB of result JSON (`CODE_OUTPUT`);
+logs are truncated at 32 KB. Calling `record.*` or `code.run` throws `UNKNOWN_TOOL`.
+
+`commands.describe {format:"ts", query?}` returns `{format:"ts", text}`: TypeScript declarations
+generated from the command registry and the tool schemas, with an interface per command
+(`Splice.op.ItemSplit`), the `Splice.Op` union, builders and tool signatures. Optional fields are
+optional (`?`); `null` appears only where it is a value (e.g. `item.set {name: null}` clears the
+name). `fixtures/mcp/code/splice.d.ts` is the golden.
+
+```js
+// code.run {"code": "..."}
+const p = splice.project.info({path: "/Users/me/Movies/demo.splice"});
+const s = splice.session.start({projectId: p.projectId, agent: "claude"});
+const e = splice.edit.apply({projectId: p.projectId, sessionId: s.sessionId, ifRevision: p.revision,
+  ops: [splice.op.item.set({items: ["clp_take"], name: "Intro"})]});
+const t = splice.timeline.snapshot({projectId: p.projectId});
+return {revision: e.revision, clips: t.spine.length};
+```
+
 ## Error codes
 
 `BAD_ARGS`, `UNKNOWN_COMMAND`, `NOT_FOUND`, `STALE_REVISION`, `CONFLICT`, `OUT_OF_RANGE`, `INVARIANT`, `PLANNED`,
@@ -195,4 +242,5 @@ Expectations can name a subset of object fields. Arrays match in order and in fu
 
 The tool tests bind `$sample` and `$new` in request paths to disposable packages. A project-bound
 friction repro can name a sibling `<fixture-stem>.splice` seed, whose copy becomes `$project`.
-`tools/list` is checked against its own golden.
+`tools/list` is checked against its own golden. `fixtures/mcp/code/code.run.jsonl` runs against the code
+profile; its `$sample` is replaced as text because the path sits inside the JavaScript.

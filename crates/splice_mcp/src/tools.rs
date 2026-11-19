@@ -1,4 +1,6 @@
-use super::{Json, history, media, object, platform, project::Projects, text, timeline, wire::*};
+use super::{
+    Json, history, media, object, platform, project::Projects, text, timeline, typescript, wire::*,
+};
 use splice_core::{commands, history::StoreError};
 
 const REVISION: &str =
@@ -12,17 +14,37 @@ const LIMIT: &str = r#"{"type":"integer","minimum":1}"#;
 const RANGE: &str = r#"{"type":"object","properties":{"from":{"type":"integer","minimum":0},"to":{"type":"integer","minimum":0}},"required":["from","to"]}"#;
 const ERROR_SCHEMA: &str = r#"{"type":"object","properties":{"code":{"type":"string"},"message":{"type":"string"},"fix":{"type":"string"},"valid":{"type":"array"},"current":{},"changedSince":{"type":"array"},"op":{"type":"integer","minimum":0}},"required":["code","message","fix"]}"#;
 
-struct Tool {
-    name: &'static str,
-    description: &'static str,
+pub(super) struct Tool {
+    pub(super) name: &'static str,
+    pub(super) description: &'static str,
     read_only: bool,
-    input: &'static [(&'static str, &'static str)],
-    required: &'static [&'static str],
-    output: &'static [(&'static str, &'static str)],
-    success: &'static [&'static [&'static str]],
+    pub(super) input: &'static [(&'static str, &'static str)],
+    pub(super) required: &'static [&'static str],
+    pub(super) output: &'static [(&'static str, &'static str)],
+    pub(super) success: &'static [&'static [&'static str]],
 }
 
-const TOOLS: &[Tool] = &[
+/// The code profile's runner (`splice mcp --code`); the default profile does not list it.
+const CODE_RUN: Tool = Tool {
+    name: "code.run",
+    description: "Run JavaScript that calls Splice tools synchronously through the global `splice`, e.g. `const s = splice.timeline.snapshot({}); return s.spine.length;`. Call commands.describe {format:\"ts\"} for the typed API.",
+    read_only: false,
+    input: &[
+        ("code", r#"{"type":"string","maxLength":65536}"#),
+        ("projectId", "string"),
+        ("sessionId", "string"),
+    ],
+    required: &["code"],
+    output: &[
+        ("result", "{}"),
+        ("logs", r#"{"type":"array","items":{"type":"string"}}"#),
+        ("calls", "array"),
+        ("revisions", r#"{"type":["object","null"]}"#),
+    ],
+    success: &[&["result", "logs", "calls", "revisions"]],
+};
+
+pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "project.info",
         description: "Open a .splice project by path or inspect an open project by ID. Use create:true to make a new project.",
@@ -206,6 +228,7 @@ const TOOLS: &[Tool] = &[
             ("projectId", "string"),
             ("id", "string"),
             ("query", "string"),
+            ("format", r#"{"enum":["json","ts"]}"#),
         ],
         required: &[],
         output: &[
@@ -224,8 +247,14 @@ const TOOLS: &[Tool] = &[
             ("presets", IDS),
             ("effectTypes", "object"),
             ("resolution", "string"),
+            ("format", r#"{"enum":["ts"]}"#),
+            ("text", "string"),
         ],
-        success: &[&["commands"], &["id", "params", "example"]],
+        success: &[
+            &["commands"],
+            &["id", "params", "example"],
+            &["format", "text"],
+        ],
     },
     Tool {
         name: "session.start",
@@ -453,12 +482,27 @@ const TOOLS: &[Tool] = &[
     },
 ];
 
-pub(super) fn known(name: &str) -> bool {
-    TOOLS.iter().any(|tool| tool.name == name)
+/// The code profile lists only `code.run` and `commands.describe`.
+pub(super) fn known(name: &str, code: bool) -> bool {
+    if code {
+        matches!(name, "code.run" | "commands.describe")
+    } else {
+        TOOLS.iter().any(|tool| tool.name == name)
+    }
 }
 
-pub(super) fn list() -> Json {
-    Json::Array(TOOLS.iter().map(Tool::description).collect())
+pub(super) fn list(code: bool) -> Json {
+    let tools = TOOLS
+        .iter()
+        .filter(|tool| !code || tool.name == "commands.describe");
+    let code_run = code.then_some(&CODE_RUN);
+    Json::Array(
+        code_run
+            .into_iter()
+            .chain(tools)
+            .map(Tool::description)
+            .collect(),
+    )
 }
 
 impl Tool {
@@ -567,10 +611,15 @@ fn execute(
     match name {
         "commands.describe" => {
             args.optional_string("projectId")?;
-            Ok(commands::describe(
-                args.optional_string("id")?,
-                args.optional_string("query")?,
-            )?)
+            let (id, query) = (args.optional_string("id")?, args.optional_string("query")?);
+            match args.optional_string("format")? {
+                None | Some("json") => Ok(commands::describe(id, query)?),
+                Some("ts") => Ok(object(vec![
+                    ("format", text("ts")),
+                    ("text", Json::String(typescript::declarations(id.or(query)))),
+                ])),
+                Some(_) => Err(bad("format", "json or ts")),
+            }
         }
         "project.info" => projects.info(args),
         "ui.show" => {

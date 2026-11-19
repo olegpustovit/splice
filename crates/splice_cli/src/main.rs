@@ -19,7 +19,7 @@ const HELP: &str = "Usage: splice [<project.splice>]
        splice open [<project.splice>]
        splice open <project.splice> --snapshot <out.png> [--at <frame>]
        splice new <project.splice>
-       splice mcp
+       splice mcp [--code]
        splice record --dry-run
        splice record <project.splice> [--display <main|id> | --window <id|app> [--title <title>]
                      | --area <main|id> <x> <y> <width> <height> | --source <json>]
@@ -75,8 +75,9 @@ fn run(args: &[String], output: &mut dyn Write) -> Result<(), StoreError> {
         ("version" | "--version", []) => {
             return writeln!(output, "splice {}", env!("CARGO_PKG_VERSION")).map_err(io_error);
         }
-        ("mcp", []) => {
-            return match splice_mcp::serve(&mut io::BufReader::new(io::stdin()), output) {
+        ("mcp", []) | ("mcp", [_]) if tail.first().is_none_or(|flag| flag == "--code") => {
+            let code = !tail.is_empty();
+            return match splice_mcp::serve(&mut io::BufReader::new(io::stdin()), output, code) {
                 Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
                 result => result.map_err(io_error),
             };
