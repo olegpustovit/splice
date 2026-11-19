@@ -163,6 +163,17 @@ pub struct Rule {
     pub did_you_mean: Option<String>,
 }
 
+impl Rule {
+    /// Fills `got` from the arguments the refused value came from (`param` may be a dotted
+    /// path such as `box.x`; its first segment names the argument).
+    pub fn fill_got(&mut self, args: &Json) {
+        if self.got.is_none() {
+            let key = self.param.split(['.', '[']).next().unwrap_or("");
+            self.got = args.field(key).cloned();
+        }
+    }
+}
+
 /// Typed edit or discovery failure with a fix hint.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandError {

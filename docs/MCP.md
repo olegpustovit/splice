@@ -141,7 +141,8 @@ Cuts keep connected items (D21). `cut.range`, `cut.words` and `item.delete` take
 `connected:"reparent"|"delete"|"trim"`. Unset, an item on a piece of a clip that partly survives
 moves to the nearest surviving clip at the cut point (`cause:"reparent"`), and a clip removed
 whole takes its items with it (`cause:"cascade"`). `delete` removes the items on cut frames
-(`cause:"cut"`); `trim` keeps the part of each item that runs past the cut, on the same content.
+(`cause:"cut"`); `trim` keeps the part of each item that runs past the cut, on the same content
+(on a clip removed whole there is nothing to keep, so `trim` deletes like `delete`).
 A ripple cut also shortens any item that runs into the cut, so the items after it close up
 instead of bumping to new lanes. `cut.range` refuses a negative `from`.
 
@@ -239,10 +240,11 @@ when its bytes match the source), `mask.track` (Vision object tracking), `audio.
 cross-correlation offset) and `captions.translate` without `texts` (on-device Translation).
 Pass the inputs yourself to skip the native step.
 
-`media.relink` always probes the new file (the journal keeps the probe, so replay never opens it):
+On macOS `media.relink` probes the new file (the journal keeps the probe, so replay never opens it;
+without a media backend, as on Linux, it trusts the `frames` you pass and checks nothing else):
 fps, size and audio tracks follow the file, and a file of a different length or kind is refused with
 `MEDIA_MISMATCH` and the broken rule (`param:"path"`, or `param:"frames"` when the `frames` you
-passed disagrees with the probe) unless `force:true`. A missing file is `MEDIA_OFFLINE`.
+passed disagrees with the probe) unless `force:true`. A missing file is `MEDIA_OFFLINE` (macOS).
 
 On Linux, rendering, export and capture return `UNSUPPORTED_PLATFORM`. A job ID with no retained
 job returns `NOT_FOUND`. Headless `ui.show` returns `{"applied":false,"reason":"headless"}`.

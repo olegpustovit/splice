@@ -20,9 +20,11 @@ fn main() {
         _ => "unknown".to_owned(),
     };
     println!("cargo:rustc-env=SPLICE_BUILD={build}");
-    // Rerun when HEAD moves or the index changes; source edits in this crate rerun it anyway.
+    // Rerun when HEAD moves (the SHA is exact). `-dirty` describes the tree when this crate last
+    // built: watching the index would rebuild splice_mcp and everything above it on every
+    // `git add`, which costs more than a stale flag on a dev build.
     let branch = git(&["rev-parse", "--symbolic-full-name", "HEAD"]).unwrap_or_default();
-    for path in ["HEAD", "index", "packed-refs", branch.as_str()] {
+    for path in ["HEAD", "packed-refs", branch.as_str()] {
         if let Some(file) = git(&["rev-parse", "--git-path", path]).filter(|_| !path.is_empty()) {
             println!("cargo:rerun-if-changed={file}");
         }

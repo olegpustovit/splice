@@ -1440,7 +1440,7 @@ declare const splice: {
   };
   items: {
     /** Inspect up to 50 objects by ID, including anchors, resolved frames, children and inherited effects. */
-    inspect(args: { projectId?: string; ids: string[]; items?: string[]; }): { revision: Splice.Revision; items: unknown[]; };
+    inspect(args?: { projectId?: string; ids?: string[]; items?: string[]; }): { revision: Splice.Revision; items: unknown[]; };
   };
   takes: {
     /** Read the take's cursor, clicks and keys in timeline frames, with keystrokes redacted by project policy. */

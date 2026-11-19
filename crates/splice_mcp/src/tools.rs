@@ -121,7 +121,8 @@ pub(super) const TOOLS: &[Tool] = &[
             ),
             ("items", IDS),
         ],
-        required: &["projectId", "ids"],
+        // ids or its alias items; the handler refuses a call with neither.
+        required: &["projectId"],
         output: &[("revision", REVISION), ("items", "array")],
         success: &[&["revision", "items"]],
     },
@@ -669,10 +670,8 @@ pub(super) fn call(
     let mut content = Vec::new();
     let result = execute(projects, name, args, &mut content).map_err(|mut error| {
         // The handler knows the rule; the arguments know what was passed (D18).
-        if let Some(rule) = &mut error.rule
-            && rule.got.is_none()
-        {
-            rule.got = args.field(&rule.param).cloned();
+        if let Some(rule) = &mut error.rule {
+            rule.fill_got(args);
         }
         error
     });

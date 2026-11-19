@@ -45,21 +45,26 @@ pub(super) fn view_check(
         }
     };
     let wants = |name: &str| wanted.iter().any(|w| w == name);
-    let issues = model_issues(project, [from, to], wants("camera"), wants("offCanvas")).map_err(
-        |error| {
-            failure(
-                "INVARIANT",
-                &error,
-                "Fix the project with edit.apply first.",
-            )
-        },
-    )?;
+    let evaluator = Evaluator::prepare(project).map_err(|error| {
+        failure(
+            "INVARIANT",
+            &error.to_string(),
+            "Fix the project with edit.apply first.",
+        )
+    })?;
+    let issues = model_issues(
+        project,
+        &evaluator,
+        [from, to],
+        wants("camera"),
+        wants("offCanvas"),
+    );
     let pixels = wants("black") || wants("frozen") || wants("bleed");
     #[cfg(target_os = "macos")]
     let (issues, sheet) = {
         let mut issues = issues;
         let sheet = if pixels {
-            pixel_issues(store, [from, to], &wants, &mut issues, content)?
+            pixel_issues(store, &evaluator, [from, to], &wants, &mut issues, content)?
         } else {
             None
         };
@@ -94,15 +99,15 @@ fn issue(check: &str, [from, to]: [Frame; 2], message: &str, fix: &str) -> Json 
 /// Camera jumps and off-canvas pictures from the evaluated frames (every frame of the range).
 pub(crate) fn model_issues(
     project: &Project,
+    evaluator: &Evaluator,
     [from, to]: [Frame; 2],
     camera: bool,
     off_canvas: bool,
-) -> Result<Vec<Json>, String> {
-    let evaluator = Evaluator::prepare(project).map_err(|error| error.to_string())?;
+) -> Vec<Json> {
     let mut plan = evaluator.buffer();
     let [cw, ch] = project.size.map(f64::from);
     let mut issues = Vec::new();
-    let mut previous: Option<(Frame, splice_eval::View)> = None;
+    let mut previous: Option<(Frame, splice_eval::View, Option<splice_model::ClipId>)> = None;
     let mut off: Option<(Frame, Frame, TimelineId)> = None;
     for at in from..to {
         evaluator.frame(at, &mut plan);
@@ -117,9 +122,9 @@ pub(crate) fn model_issues(
         if camera {
             let view = picture.view;
             // A cut legitimately changes the framing; only a jump within one clip counts.
-            if let Some((frame, last)) = previous
+            if let Some((frame, last, clip)) = previous
                 && frame + 1 == at
-                && plan.clip.is_some()
+                && clip == plan.clip
             {
                 let [ax, ay, aw, _] = last.viewport();
                 let [bx, by, bw, _] = view.viewport();
@@ -133,17 +138,11 @@ pub(crate) fn model_issues(
                     ));
                 }
             }
-            previous = Some((at, view));
+            previous = Some((at, view, plan.clip));
         }
         if off_canvas {
-            let d = picture.destination;
-            let s = picture.look.scale;
-            let [x, y, w, h] = [
-                d.x + picture.look.offset[0] - (s - 1.0) * d.w * picture.look.anchor[0],
-                d.y + picture.look.offset[1] - (s - 1.0) * d.h * picture.look.anchor[1],
-                d.w * s,
-                d.h * s,
-            ];
+            let placed = picture.look.placed(picture.destination);
+            let [x, y, w, h] = [placed.x, placed.y, placed.w, placed.h];
             let inside =
                 ((x + w).min(cw) - x.max(0.0)).max(0.0) * ((y + h).min(ch) - y.max(0.0)).max(0.0);
             let outside = 1.0 - inside / (w * h).max(1e-9);
@@ -161,7 +160,7 @@ pub(crate) fn model_issues(
     if let Some(span) = off {
         issues.push(off_issue(span));
     }
-    Ok(issues)
+    issues
 }
 
 fn off_issue((from, to, item): (Frame, Frame, TimelineId)) -> Json {
@@ -204,6 +203,7 @@ fn spans(samples: &[(Frame, bool)], stride: Frame, min: Frame) -> Vec<[Frame; 2]
 #[cfg(target_os = "macos")]
 fn pixel_issues(
     store: &Store,
+    evaluator: &Evaluator,
     [from, to]: [Frame; 2],
     wants: &dyn Fn(&str) -> bool,
     issues: &mut Vec<Json>,
@@ -266,7 +266,14 @@ fn pixel_issues(
         }
     }
     if wants("bleed") {
-        bleed(project, &composition, [from, to], &mut pixels, issues)?;
+        bleed(
+            project,
+            evaluator,
+            &composition,
+            [from, to],
+            &mut pixels,
+            issues,
+        )?;
     }
     if flagged.is_empty() {
         return Ok(None);
@@ -292,14 +299,12 @@ fn pixel_issues(
 #[cfg(target_os = "macos")]
 fn bleed(
     project: &Project,
+    evaluator: &Evaluator,
     composition: &splice_av::Composition,
     [from, to]: [Frame; 2],
     pixels: &mut [u8],
     issues: &mut Vec<Json>,
 ) -> Result<(), StoreError> {
-    let Ok(evaluator) = Evaluator::prepare(project) else {
-        return Ok(());
-    };
     let size = composition.size();
     for &slot in project.clips.order() {
         let (Some(id), Some(timing)) = (project.clips.id(slot), project.clips.timing(slot)) else {
@@ -321,13 +326,13 @@ fn bleed(
                 .read_frame(at, pixels)
                 .map_err(|error| failure("FRAME_FAILED", &error.to_string(), "Retry."))
         };
-        read(start - 1, pixels)?;
         // Only a windowed clip has a backdrop corner to protect.
         let mut plan = evaluator.buffer();
         evaluator.frame(start - 1, &mut plan);
         if !matches!(plan.layers.first(), Some(Layer::Background { .. })) {
             continue;
         }
+        read(start - 1, pixels)?;
         let before = corner(pixels, size);
         let mid = (start + end) / 2;
         read(mid, pixels)?;
@@ -407,9 +412,14 @@ mod tests {
     fn model_checks_find_camera_jumps_and_off_canvas_pictures() {
         let mut project = crate::tests::sample_project();
         assert!(
-            model_issues(&project, [120, 540], true, true)
-                .unwrap()
-                .is_empty()
+            model_issues(
+                &project,
+                &Evaluator::prepare(&project).unwrap(),
+                [120, 540],
+                true,
+                true
+            )
+            .is_empty()
         );
         let ops = splice_json::parse(
             r#"[{"cmd":"zoom.set","zoom":"ovl_detail","amount":2.5,"spring":"instant"},
@@ -417,7 +427,13 @@ mod tests {
         )
         .unwrap();
         edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
-        let issues = model_issues(&project, [120, 540], true, true).unwrap();
+        let issues = model_issues(
+            &project,
+            &Evaluator::prepare(&project).unwrap(),
+            [120, 540],
+            true,
+            true,
+        );
         let checks: Vec<&str> = issues
             .iter()
             .filter_map(|issue| issue.field("check").and_then(Json::as_str))

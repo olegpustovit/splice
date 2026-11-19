@@ -849,19 +849,12 @@ impl GpuProgram {
 /// Applies a look's scale (about its anchor) and offset to a destination; returns the new
 /// destination and the rotation pivot in canvas pixels.
 fn transform([x, y, w, h]: [f64; 4], look: &Look) -> ([f32; 4], [f32; 2]) {
-    let pivot = [x + look.anchor[0] * w, y + look.anchor[1] * h];
-    let s = look.scale;
-    let dest = [
-        pivot[0] + (x - pivot[0]) * s + look.offset[0],
-        pivot[1] + (y - pivot[1]) * s + look.offset[1],
-        w * s,
-        h * s,
-    ];
+    let d = look.placed(splice_model::Rect { x, y, w, h });
     (
-        dest.map(|v| v as f32),
+        [d.x, d.y, d.w, d.h].map(|v| v as f32),
         [
-            (pivot[0] + look.offset[0]) as f32,
-            (pivot[1] + look.offset[1]) as f32,
+            (x + look.anchor[0] * w + look.offset[0]) as f32,
+            (y + look.anchor[1] * h + look.offset[1]) as f32,
         ],
     )
 }

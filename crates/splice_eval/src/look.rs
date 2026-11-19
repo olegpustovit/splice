@@ -209,6 +209,18 @@ impl Look {
     pub fn is_identity(&self) -> bool {
         *self == Self::default()
     }
+
+    /// Where a layer laid out in `r` lands: scaled about its anchor, then offset (rotation
+    /// aside). The renderer, lints and checks all place layers through this.
+    pub fn placed(&self, r: splice_model::Rect) -> splice_model::Rect {
+        let s = self.scale;
+        splice_model::Rect {
+            x: r.x + self.anchor[0] * r.w * (1.0 - s) + self.offset[0],
+            y: r.y + self.anchor[1] * r.h * (1.0 - s) + self.offset[1],
+            w: r.w * s,
+            h: r.h * s,
+        }
+    }
 }
 
 struct RigMask {

@@ -44,7 +44,9 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
                 let mid = (from + to) / 2;
                 evaluator.frame(mid.min(end.max(1) - 1), &mut plan);
                 let Some(bounds) = plan.layers.iter().find_map(|layer| match layer {
-                    Layer::Title { item, bounds, .. } if *item == id => Some(*bounds),
+                    Layer::Title {
+                        item, bounds, look, ..
+                    } if *item == id => Some(look.placed(*bounds)),
                     _ => None,
                 }) else {
                     continue;
@@ -64,7 +66,7 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
                             ),
                             &[id.to_string()],
                             "Move or shrink the title inside the safe zone (title.set box, or a template that uses safe zones).",
-                            "",
+                            None,
                         ));
                     }
                 }
@@ -76,7 +78,7 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
                             &format!("{id} covers the recorded window, hiding what the viewer should read."),
                             &[id.to_string()],
                             "Place the title in the backdrop's margin, or shrink the window (window padding).",
-                            "",
+                            None,
                         ));
                     }
                 }
@@ -92,7 +94,11 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
                         ),
                         &[id.to_string()],
                         "Lower the amount to fitSafeScale, or use mode content (zoom inside the frame).",
-                        &format!(r#"[{{"cmd":"zoom.set","zoom":"{id}","amount":{safe}}}]"#),
+                        Some(Json::Array(vec![object(vec![
+                            ("cmd", text("zoom.set")),
+                            ("zoom", text(&id.to_string())),
+                            ("amount", Json::Float(safe)),
+                        ])])),
                     ));
                 }
             }
@@ -109,13 +115,13 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
             &format!("Nothing changes on screen for {longest:.1} s; short-form viewers leave during static stretches."),
             &[],
             "Cut the stretch (cut.pauses, intent.pace), or add a zoom or title inside it.",
-            "",
+            None,
         ));
     }
     (lints, pacing)
 }
 
-fn lint(code: &str, message: &str, items: &[String], fix: &str, ops: &str) -> Json {
+fn lint(code: &str, message: &str, items: &[String], fix: &str, ops: Option<Json>) -> Json {
     let mut fields = vec![
         ("code", text(code)),
         ("severity", text("warning")),
@@ -126,7 +132,7 @@ fn lint(code: &str, message: &str, items: &[String], fix: &str, ops: &str) -> Js
         ),
         ("fix", text(fix)),
     ];
-    if let Ok(ops) = splice_json::parse(ops) {
+    if let Some(ops) = ops {
         fields.push(("ops", ops));
     }
     object(fields)
@@ -242,5 +248,39 @@ mod tests {
                 .unwrap()
                 > 0.0
         );
+    }
+
+    /// Review #17: a title over the recorded window and a long stretch with nothing changing
+    /// are flagged; the sample as shipped has neither.
+    #[test]
+    fn lints_flag_text_over_the_window_and_long_static_stretches() {
+        let has = |project: &Project, code: &str| {
+            check(project)
+                .0
+                .iter()
+                .any(|lint| lint.field("code").and_then(Json::as_str) == Some(code))
+        };
+        let mut project = crate::tests::sample_project();
+        assert!(!has(&project, "TEXT_OVER_WINDOW") && !has(&project, "LONG_STATIC"));
+        let ops = splice_json::parse(
+            r#"[{"cmd":"title.add","text":"Look here","at":200,"length":60,"ref":"t"},
+                {"cmd":"param.set","target":"$t","path":"transform.y","value":0.4}]"#,
+        )
+        .unwrap();
+        splice_core::edit::apply(
+            &mut project,
+            ops.as_array().unwrap(),
+            splice_core::package::journal::Source::Agent,
+            false,
+        )
+        .unwrap();
+        let mut bare = crate::tests::sample_project();
+        let slots: Vec<_> = bare.items.order().to_vec();
+        for slot in slots {
+            bare.items.remove(slot);
+        }
+        // Only the cuts at 120 and 540 remain: 14 s of take with nothing changing.
+        assert!(has(&bare, "LONG_STATIC"));
+        assert!(has(&project, "TEXT_OVER_WINDOW"));
     }
 }

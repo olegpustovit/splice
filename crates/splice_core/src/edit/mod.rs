@@ -359,11 +359,8 @@ impl ApplyWorkspace {
         for (index, value) in ops.iter().enumerate() {
             edit.step(value, index, load).map_err(|mut error| {
                 // The refusing code knows the rule; the op knows what was passed.
-                if let Some(rule) = &mut error.rule
-                    && rule.got.is_none()
-                {
-                    let key = rule.param.split(['.', '[']).next().unwrap_or("");
-                    rule.got = value.field(key).cloned();
+                if let Some(rule) = &mut error.rule {
+                    rule.fill_got(value);
                 }
                 ApplyError {
                     op: Some(index),
