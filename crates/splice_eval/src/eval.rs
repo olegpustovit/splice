@@ -1575,7 +1575,7 @@ impl Evaluator {
                     media.probe.fps / f64::from(p.fps),
                     tracks,
                 )?;
-                let bounds = layout::overlay(overlay.placement, size);
+                let bounds = overlay.placement.bounds(size);
                 let visual = if media.kind == MediaKind::Audio {
                     blank_visual(media.id, TimelineId::Item(id), bounds, None)
                 } else {

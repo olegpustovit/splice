@@ -14,6 +14,7 @@ mod mints;
 mod motion;
 mod music;
 mod properties;
+mod recrop;
 mod settle;
 mod silent;
 mod spine;
@@ -115,6 +116,27 @@ pub enum SideEffect {
         /// Why it moved.
         cause: Cause,
     },
+    /// A zoom focus or a mask kept on the same source content when its picture's crop or fit
+    /// changed (AC-CROP-2): its numbers changed, the content it frames or covers did not.
+    Recropped {
+        /// The zoom or mask.
+        id: Recropped,
+        /// The clip or overlay whose framing changed.
+        owner: TimelineId,
+        /// Part of that content (all of a zoom's focus point) is now cropped away.
+        outside: bool,
+        /// Always [`Cause::Crop`].
+        cause: Cause,
+    },
+}
+
+/// What a crop change re-expressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recropped {
+    /// A zoom item's `focus`.
+    Zoom(ItemId),
+    /// A mask effect's `x, y, w, h` (and their keys).
+    Mask(EffectId),
 }
 
 /// Why a side effect happened (D21: results say what moved and why).
@@ -139,6 +161,8 @@ pub enum Cause {
     LaneDeleted,
     /// A re-run of the intent that made it replaced it (intent.autoZoom).
     Replaced,
+    /// Its picture's crop or fit changed (`clip.crop`).
+    Crop,
 }
 
 impl Cause {
@@ -154,6 +178,7 @@ impl Cause {
             Self::Overlap(_) => "overlap",
             Self::LaneDeleted => "laneDeleted",
             Self::Replaced => "replaced",
+            Self::Crop => "crop",
         }
     }
 }

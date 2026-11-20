@@ -183,7 +183,7 @@ would be minted. It leaves the project and its next ID serial untouched.
 
 Every side effect carries a `cause`: `cascade` (its parent was deleted), `follow` (it followed
 its content through a split, trim or join), `reparent`, `cut`, `spineEnd`, `words` (its caption
-words left the timeline or were re-captioned), `laneDeleted`, `replaced` (a re-run of `intent.autoZoom` replaced its earlier zooms), or `overlap` with `with` naming the
+words left the timeline or were re-captioned), `laneDeleted`, `replaced` (a re-run of `intent.autoZoom` replaced its earlier zooms), `crop` (a `recropped` zoom or mask, see Coordinate spaces), or `overlap` with `with` naming the
 item that held the lane.
 
 Text and motion changes say what they made (T42). A change that wrote spring keys
@@ -317,7 +317,7 @@ crop, the whole source when uncropped): zoom `focus` (`zoom.add`, `zoom.set`); `
 converts source clicks into it, and a click outside the crop moves no zoom (the summary counts
 them). **Picture** (0–1 of an item's visible picture after crop and fit): `mask.add`/`mask.set`
 `x, y, w, h`; a camera zoom moves masks with the content. **Canvas** (0–1 of the output frame):
-title `box`, shape and particle `rect`, a motion overlay's `focus`.
+title `box`, shape and particle `rect`, a motion overlay's `focus`. A later `clip.crop` (a new `rect` or `fit`) keeps crop and picture space on the same source content (AC-CROP-2): it rewrites the picture's mask `x, y, w, h` (and their keys) and the `focus` of each zoom that starts over a spine clip, and reports each as a `recropped` side effect (`id` the zoom or mask, `owner` the clip or overlay, `outside:true` when the new crop cuts that content away; a cropped-away zoom focus holds the nearest edge). A crop that would push a mask past its range is refused with `OUT_OF_RANGE`. A clip with `crop.keys` keeps its numbers (the keyed crop is its picture).
 `media.analyze {clip|media, kinds}` returns track settings and transcript-derived pauses, plus the
 requested native kinds: `loudness`, `peaks`, `beats` (onsets and tempo), `sounds` (SoundAnalysis
 labels as runs), `shots`, `text` (Vision OCR with boxes), `faces`, `people` and `matte` (a person

@@ -165,6 +165,19 @@ fn parity(project: &Project, report: &ApplyReport) -> Json {
                     ),
                 ])
             }
+            SideEffect::Recropped {
+                id, owner, outside, ..
+            } => object(vec![
+                (
+                    "id",
+                    match id {
+                        Recropped::Zoom(id) => str_json(id),
+                        Recropped::Mask(id) => str_json(id),
+                    },
+                ),
+                ("recropped", str_json(owner)),
+                ("outside", Json::Bool(*outside)),
+            ]),
         })
         .collect();
     object(vec![

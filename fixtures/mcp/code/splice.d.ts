@@ -1136,8 +1136,10 @@ declare namespace Splice {
       corner?: number;
       /** Shadow · 0–1 · @default 0.6 */
       shadow?: number;
-      /** Inset · 0–0.02 · @default 0 */
+      /** Inset (an inner border over the picture's edge, fraction of its shorter edge) · 0–0.02 · @default 0 */
       inset?: number;
+      /** Inset color · #rrggbb · @default "#000000" */
+      insetColor?: string;
       /** Background · @default "gradient" */
       background?: "gradient" | "color" | "none" | "image" | "wallpaper";
       /** Color · #rrggbb · @default "#5b6f63" */

@@ -232,6 +232,30 @@ pub struct Framing {
     pub fit: Fit,
 }
 
+impl Framing {
+    /// The part of the source (normalized) the picture shows inside a `[w, h]` box (a placement
+    /// less its window padding) for a `size` pixel source: the crop, trimmed to the box's shape
+    /// around its center by `Fill`. Picture space (masks) is 0–1 of this rectangle.
+    pub fn visible(&self, size: [u32; 2], [bw, bh]: [f64; 2]) -> Rect {
+        let mut source = self.crop.unwrap_or(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        });
+        if self.fit == Fit::Fill {
+            let [w, h] = size.map(f64::from);
+            let scale = (bw / (w * source.w)).max(bh / (h * source.h));
+            let (width, height) = (bw / scale / w, bh / scale / h);
+            source.x += (source.w - width) / 2.0;
+            source.y += (source.h - height) / 2.0;
+            source.w = width;
+            source.h = height;
+        }
+        source
+    }
+}
+
 /// Normalized rectangle.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
@@ -620,6 +644,24 @@ pub enum Placement {
     BottomLeft,
     /// Bottom right.
     BottomRight,
+}
+
+impl Placement {
+    /// The overlay's box on a `[w, h]` pixel canvas.
+    pub fn bounds(self, [w, h]: [f64; 2]) -> Rect {
+        let rect = |x, y, w, h| Rect { x, y, w, h };
+        let cw = w * 0.34;
+        let ch = cw * 0.62;
+        let margin = w * 0.05;
+        match self {
+            Self::Full => rect(0.0, 0.0, w, h),
+            Self::Card => rect(w * 0.1, h * 0.5 - w * 0.8 * 0.31, w * 0.8, w * 0.8 * 0.62),
+            Self::TopLeft => rect(margin, margin, cw, ch),
+            Self::TopRight => rect(w - margin - cw * 0.6, margin, cw * 0.6, cw * 0.6 * 0.32),
+            Self::BottomLeft => rect(margin, h - margin - ch, cw, ch),
+            Self::BottomRight => rect(w - margin - cw, h - margin - ch, cw, ch),
+        }
+    }
 }
 
 /// Custom display overrides for a caption word.

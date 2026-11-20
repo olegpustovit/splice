@@ -1805,6 +1805,154 @@ fn auto_zoom_on_a_cropped_clip_lands_on_the_clicked_source_point() {
     }
 }
 
+/// AC-CROP-2: a later re-crop (or fit change) keeps a blur mask over the same source rectangle
+/// and a zoom's focus on the same source point, in fit and fill; the batch reports both as
+/// `recropped`, flags content the new crop cuts away, and refuses a crop no mask could follow.
+#[test]
+fn re_cropping_keeps_masks_and_zoom_focus_on_the_same_source_content() {
+    use splice_core::edit::{Recropped, SideEffect};
+    let apply = |project: &mut splice_model::Project, ops: &str| {
+        let ops = splice_json::parse(ops).unwrap();
+        splice_core::edit::apply(
+            project,
+            ops.as_array().unwrap(),
+            splice_core::package::journal::Source::Agent,
+            false,
+        )
+    };
+    let picture = |project: &splice_model::Project, item: &str, at: splice_model::Frame| {
+        let evaluator = splice_eval::Evaluator::prepare(project).unwrap();
+        let mut plan = evaluator.buffer();
+        evaluator.frame(at, &mut plan);
+        plan.layers
+            .iter()
+            .find_map(|layer| match layer {
+                splice_eval::Layer::Picture(p) if p.item.to_string() == item => Some(*p),
+                _ => None,
+            })
+            .expect("the picture")
+    };
+    // The source rectangle under the mask, and the source point at the camera's center, with
+    // the zoom settled (ovl_detail runs 180..330).
+    let seen = |project: &splice_model::Project| {
+        let p = picture(project, "clp_take", 320);
+        let s = p.source;
+        let [x, y, w, h] = p.look.masks[0].expect("the mask").rect;
+        let [vx, vy, vw, vh] = p.view.viewport();
+        (
+            [s.x + x * s.w, s.y + y * s.h, w * s.w, h * s.h],
+            [s.x + (vx + vw / 2.0) * s.w, s.y + (vy + vh / 2.0) * s.h],
+        )
+    };
+    let close = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 2e-3);
+    for (fit, other) in [("fit", "fill"), ("fill", "fit")] {
+        let mut project = sample_project();
+        // The sample's take is cropped to {x 0.36, y 0.1, w 0.46, h 0.8}.
+        apply(
+            &mut project,
+            &format!(
+                r#"[{{"cmd":"clip.crop","items":["clp_take"],"fit":"{fit}"}},
+                    {{"cmd":"zoom.set","zoom":"ovl_detail","amount":2,"focus":{{"x":0.5,"y":0.45}}}},
+                    {{"cmd":"mask.add","item":"clp_take","mode":"blur","x":0.4,"y":0.3,"w":0.2,"h":0.1}}]"#
+            ),
+        )
+        .unwrap();
+        let (mask, center) = seen(&project);
+        let report = apply(
+            &mut project,
+            r#"[{"cmd":"clip.crop","items":["clp_take"],"rect":{"x":0.3,"y":0.05,"w":0.6,"h":0.85}}]"#,
+        )
+        .unwrap();
+        let (moved_mask, moved_center) = seen(&project);
+        assert!(
+            close(&mask, &moved_mask),
+            "{fit}: mask {mask:?} -> {moved_mask:?}"
+        );
+        assert!(
+            close(&center, &moved_center),
+            "{fit}: zoom center {center:?} -> {moved_center:?}"
+        );
+        let recropped: Vec<_> = report
+            .side_effects
+            .iter()
+            .filter_map(|e| match e {
+                SideEffect::Recropped { id, outside, .. } => Some((*id, *outside)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            recropped.len() == 2
+                && recropped.iter().all(|(_, outside)| !outside)
+                && recropped
+                    .iter()
+                    .any(|(id, _)| matches!(id, Recropped::Zoom(_)))
+                && recropped
+                    .iter()
+                    .any(|(id, _)| matches!(id, Recropped::Mask(_))),
+            "{fit}: {recropped:?}"
+        );
+        // Changing only the fit moves what the picture shows: the mask follows its content.
+        apply(
+            &mut project,
+            &format!(r#"[{{"cmd":"clip.crop","items":["clp_take"],"fit":"{other}"}}]"#),
+        )
+        .unwrap();
+        let (refit, _) = seen(&project);
+        assert!(
+            close(&mask, &refit),
+            "{fit} -> {other}: mask {mask:?} -> {refit:?}"
+        );
+        // A crop that cuts the masked content away says so.
+        let report = apply(
+            &mut project,
+            r#"[{"cmd":"clip.crop","items":["clp_take"],"rect":{"x":0.7,"y":0.05,"w":0.25,"h":0.85}}]"#,
+        )
+        .unwrap();
+        assert!(
+            report.side_effects.iter().any(|e| matches!(
+                e,
+                SideEffect::Recropped {
+                    id: Recropped::Mask(_),
+                    outside: true,
+                    ..
+                }
+            )),
+            "{fit}: {:?}",
+            report.side_effects
+        );
+        // A crop so far off the mask that its numbers leave what a mask can hold is refused.
+        let error = apply(
+            &mut project,
+            r#"[{"cmd":"clip.crop","items":["clp_take"],"rect":{"x":0.9,"y":0.9,"w":0.05,"h":0.05}}]"#,
+        )
+        .unwrap_err();
+        assert_eq!(error.error.code, "OUT_OF_RANGE", "{fit}: {error}");
+    }
+    // A media overlay's masks follow its crop the same way (ovl_broll: a fill card, 420..495).
+    let mut project = sample_project();
+    let masked = |project: &splice_model::Project| {
+        let p = picture(project, "ovl_broll", 450);
+        let (s, [x, y, w, h]) = (p.source, p.look.masks[0].expect("the mask").rect);
+        [s.x + x * s.w, s.y + y * s.h, w * s.w, h * s.h]
+    };
+    apply(
+        &mut project,
+        r#"[{"cmd":"mask.add","item":"ovl_broll","mode":"cover","x":0.3,"y":0.4,"w":0.3,"h":0.2}]"#,
+    )
+    .unwrap();
+    let before = masked(&project);
+    apply(
+        &mut project,
+        r#"[{"cmd":"clip.crop","items":["ovl_broll"],"rect":{"x":0.1,"y":0.2,"w":0.7,"h":0.7}}]"#,
+    )
+    .unwrap();
+    let after = masked(&project);
+    assert!(
+        close(&before, &after),
+        "overlay mask {before:?} -> {after:?}"
+    );
+}
+
 /// A10: items.inspect on a fresh take lists what draws without any effect: the recorded cursor
 /// as captured, the camera bubble and chips with their defaults, and each one's component.
 #[test]

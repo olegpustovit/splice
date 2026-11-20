@@ -36,8 +36,11 @@ pub struct Window {
     pub corner: f64,
     /// Shadow intensity.
     pub shadow: f64,
-    /// Inset stroke intensity.
+    /// Inner border drawn over the picture's edge inside the card, as a fraction of the shorter
+    /// picture edge (0 none).
     pub inset: f64,
+    /// Inner border RGB.
+    pub inset_color: u32,
     /// Background treatment.
     pub background: Background,
 }
@@ -189,6 +192,7 @@ pub(super) fn window(scopes: &[&[Effect]]) -> Option<Window> {
         corner: style.number("corner", 0.03).clamp(0.0, 0.12),
         shadow: style.number("shadow", 0.6).clamp(0.0, 1.0),
         inset: style.number("inset", 0.0).clamp(0.0, 0.02),
+        inset_color: style.color("insetColor", 0x000000),
         background,
     })
 }

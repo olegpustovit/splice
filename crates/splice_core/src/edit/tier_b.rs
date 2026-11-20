@@ -309,12 +309,14 @@ impl Editor {
                 }
                 TimelineId::Marker(_) => return Err(no_source_frame()),
             };
+            let before = *framing;
             if let Some(rect) = rect {
                 framing.crop = rect;
             }
             if let Some(fit) = fit {
                 framing.fit = fit;
             }
+            self.recrop(id, before)?;
         }
         Ok(Outcome {
             summary: Summary::Update(ids.len()),

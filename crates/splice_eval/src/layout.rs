@@ -1,22 +1,8 @@
 use crate::style::{CameraStyle, Corner};
-use splice_model::{Ease, Fit, Framing, Placement, Rect};
+use splice_model::{Ease, Fit, Framing, Rect};
 
 pub(super) fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
     Rect { x, y, w, h }
-}
-
-pub(super) fn overlay(placement: Placement, [w, h]: [f64; 2]) -> Rect {
-    let cw = w * 0.34;
-    let ch = cw * 0.62;
-    let margin = w * 0.05;
-    match placement {
-        Placement::Full => rect(0.0, 0.0, w, h),
-        Placement::Card => rect(w * 0.1, h * 0.5 - w * 0.8 * 0.31, w * 0.8, w * 0.8 * 0.62),
-        Placement::TopLeft => rect(margin, margin, cw, ch),
-        Placement::TopRight => rect(w - margin - cw * 0.6, margin, cw * 0.6, cw * 0.6 * 0.32),
-        Placement::BottomLeft => rect(margin, h - margin - ch, cw, ch),
-        Placement::BottomRight => rect(w - margin - cw, h - margin - ch, cw, ch),
-    }
 }
 
 pub(super) fn picture(
@@ -32,15 +18,12 @@ pub(super) fn picture(
         bounds.w - 2.0 * margin,
         bounds.h - 2.0 * margin,
     );
-    let mut source = framing.crop.unwrap_or(rect(0.0, 0.0, 1.0, 1.0));
-    let [w, h] = size.map(f64::from);
-    let source_width = w * source.w;
-    let source_height = h * source.h;
-    let fit = inner.w / source_width;
-    let fill = inner.h / source_height;
+    let source = framing.visible(size, [inner.w, inner.h]);
     let dest = match framing.fit {
         Fit::Fit => {
-            let scale = fit.min(fill);
+            let [w, h] = size.map(f64::from);
+            let (source_width, source_height) = (w * source.w, h * source.h);
+            let scale = (inner.w / source_width).min(inner.h / source_height);
             let width = source_width * scale;
             let height = source_height * scale;
             rect(
@@ -50,16 +33,7 @@ pub(super) fn picture(
                 height,
             )
         }
-        Fit::Fill => {
-            let scale = fit.max(fill);
-            let width = inner.w / scale / w;
-            let height = inner.h / scale / h;
-            source.x += (source.w - width) / 2.0;
-            source.y += (source.h - height) / 2.0;
-            source.w = width;
-            source.h = height;
-            inner
-        }
+        Fit::Fill => inner,
     };
     (source, dest)
 }

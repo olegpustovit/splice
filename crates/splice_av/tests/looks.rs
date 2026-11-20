@@ -870,6 +870,49 @@ mod looks {
         assert!(near(card, [110, 115, 15], 8), "card {card:?}");
     }
 
+    /// Recorder parity (inset): the window `inset` draws an opaque inner border of `insetColor`
+    /// (black by default) over the picture's edge, inside the card; 0 draws none.
+    pub(super) fn window_inset_draws_an_inner_border() {
+        let dir = scratch("inset");
+        let grey = still(&dir.0, 1, [128, 128, 128]);
+        let render = |extra: Vec<(&'static str, EffectValue)>| {
+            let mut project = project(vec![grey.clone()], vec![(1, 10, vec![])]);
+            // 960 x 640, padding 0.25, fill: the card is 640 x 320 at (160, 160); 0.02 is 6.4 px.
+            project.size = [960, 640];
+            let mut params = vec![
+                ("padding", n(0.25)),
+                ("corner", n(0.0)),
+                ("shadow", n(0.0)),
+                ("background", s("color")),
+                ("color", s("#00c800")),
+            ];
+            params.extend(extra);
+            project.effects.push(fx(9, "window", params));
+            Composition::prepare(&project, &dir.0).unwrap()
+        };
+        let plain = render(vec![]);
+        assert!(near(pixel(&plain, 5, [162, 320]), [128, 128, 128], 4));
+        let black = render(vec![("inset", n(0.02))]);
+        for at in [[162, 320], [480, 162], [797, 320], [480, 477]] {
+            let p = pixel(&black, 5, at);
+            assert!(
+                near(p, [0, 0, 0], 4),
+                "default inset is black at {at:?}: {p:?}"
+            );
+        }
+        assert!(
+            near(pixel(&black, 5, [170, 320]), [128, 128, 128], 4),
+            "inside the border"
+        );
+        assert!(
+            near(pixel(&black, 5, [156, 320]), [0, 200, 0], 4),
+            "backdrop outside"
+        );
+        let red = render(vec![("inset", n(0.02)), ("insetColor", s("#ff0000"))]);
+        let p = pixel(&red, 5, [162, 320]);
+        assert!(near(p, [255, 0, 0], 4), "insetColor: {p:?}");
+    }
+
     /// A 96 × 64 PNG still: left half red, right half blue.
     fn split_still(dir: &std::path::Path, serial: u64) -> Media {
         let pixels: Vec<u8> = (0..96 * 64)
@@ -1619,6 +1662,10 @@ fn main() {
         (
             "looks_cutout_uses_the_person_matte",
             looks::cutout_uses_the_person_matte,
+        ),
+        (
+            "looks_window_inset_draws_an_inner_border",
+            looks::window_inset_draws_an_inner_border,
         ),
         (
             "looks_t46_backdrops_and_the_camera_bubble_render",

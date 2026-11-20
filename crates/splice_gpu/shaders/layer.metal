@@ -20,7 +20,7 @@ struct Layer {
     float opacity;
     float corner;    // radius in pixels
     float shadow;    // 0..1
-    float ring;      // ring width in pixels (kind 3); stroke width for shapes
+    float ring;      // ring width in pixels (kind 3); stroke width for shapes; texture: window inset width (color0)
     uint kind;       // 0 texture, 1 solid, 2 gradient, 3 ring, 4 ellipse, 5 line, 6 arrow, 7 callout, 8 box, 9 arc, 10 heart
     uint flags;      // 1 BGRA source, 2 BGRA output, 4 grade, 8 LUT, 16 key, 32 cutout, 64 cutout blur, 128 clip, 256 motion
     float2 pivot;    // rotation pivot in target pixels
@@ -321,6 +321,8 @@ static inline float4 layer_body(Out in, constant Layer &l, texture2d<float> sour
                     color.a *= mix(1.0, m, l.lut.z);
                 }
             }
+            // Window inset (ring px, color0): an opaque inner border along the card's rounded edge.
+            if (l.ring > 0.0) color = mix(color, float4(l.color0.rgb, 1.0), clamp(d + l.ring + 0.5, 0.0, 1.0));
         } else if (l.kind == 1) {
             color = l.color0;
         } else {

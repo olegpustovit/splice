@@ -1,7 +1,7 @@
 use super::{Json, object, project::access, text, wire::*};
 use splice_core::{
     commands::Target,
-    edit::{self, Cause, SideEffect, Span},
+    edit::{self, Cause, Recropped, SideEffect, Span},
     history::{EditResult, Scope, Store, StoreError, WriteOptions},
     package::{
         self,
@@ -413,6 +413,26 @@ fn effect(effect: SideEffect) -> Json {
                 ("id", display(&id)),
                 ("from", display(&from)),
                 ("to", display(&to)),
+            ],
+            cause,
+        ),
+        SideEffect::Recropped {
+            id,
+            owner,
+            outside,
+            cause,
+        } => (
+            vec![
+                ("type", text("recropped")),
+                (
+                    "id",
+                    match id {
+                        Recropped::Zoom(id) => display(&id),
+                        Recropped::Mask(id) => display(&id),
+                    },
+                ),
+                ("owner", display(&owner)),
+                ("outside", Json::Bool(outside)),
             ],
             cause,
         ),

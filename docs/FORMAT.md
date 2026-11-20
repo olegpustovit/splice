@@ -253,6 +253,10 @@ Rules:
   0.3 s with its own ease (`hold` cuts). `mask` adds `start`/`end`: frames relative to the
   owner's start (`end` exclusive) outside which the mask does nothing; `mask.add {from, to}`
   writes them from timeline frames. Files without these read and render as before.
+- **Window inset (Recorder parity).** `window` `inset` (0–0.02, already stored) now draws: an
+  opaque inner border that wide (a fraction of the picture's shorter edge) over the picture's
+  edge inside the card's corners, in `insetColor` (`#rrggbb`, default `#000000`, new). Files
+  with `inset` 0 or without it render as before.
 - **Look files (T46.3).** `look.save` writes `{"splice":"look","version":1,"effects":{type:
   {param: value}}}` outside the package format (any path; relative paths land in the package):
   the target's own `window`, `camera`, `cursor`, `color` and `captions` values, keys as

@@ -245,6 +245,7 @@ fn effect_parameters_merge_by_scope_and_enable_override() {
             corner: 0.09,
             shadow: 0.6,
             inset: 0.0,
+            inset_color: 0,
             background: Background::Gradient(0x6b5a7d, 0x1e1a26),
         }
     );

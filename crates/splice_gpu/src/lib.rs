@@ -60,7 +60,7 @@ pub struct Layer {
     pub dest: [f32; 4],
     /// u, v, w, h normalized to the oriented source; a negative w or h samples mirrored.
     pub crop: [f32; 4],
-    /// Fill, ring or shape color.
+    /// Fill, ring or shape color; a texture's window inset color.
     pub color0: [f32; 4],
     /// Gradient end color.
     pub color1: [f32; 4],
@@ -72,7 +72,8 @@ pub struct Layer {
     pub corner: f32,
     /// Drop shadow 0…1.
     pub shadow: f32,
-    /// Ring width, or a shape's stroke width, in pixels.
+    /// Ring width, a shape's stroke width, or a texture's window inset width (in `color0`), in
+    /// pixels.
     pub ring: f32,
     /// One of the `Layer::*` kinds.
     pub kind: u32,

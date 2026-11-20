@@ -33,7 +33,12 @@
         "min": 0,
         "max": 0.02,
         "step": 0.001,
-        "label": "Inset"
+        "label": "Inset (an inner border over the picture's edge, fraction of its shorter edge)"
+      },
+      "insetColor": {
+        "type": "color",
+        "def": "#000000",
+        "label": "Inset color"
       },
       "background": {
         "type": "enum",

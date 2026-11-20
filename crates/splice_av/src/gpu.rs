@@ -569,6 +569,9 @@ impl GpuProgram {
         if let Some(window) = p.window {
             layer.corner = (window.corner * dw.min(dh) * card * look.scale) as f32;
             layer.shadow = window.shadow.clamp(0.0, 1.0) as f32;
+            // The inset: an inner border over the picture's edge, inside the card's corners.
+            layer.ring = (window.inset * dw.min(dh) * card * look.scale) as f32;
+            layer.color0 = rgb(window.inset_color);
         }
         layer.flags |= Layer::BGRA;
         layer.orient = orient;
