@@ -137,7 +137,9 @@ impl Placement {
                 ("name", text(&format!("Retake of {clip}"))),
             ]));
         }
-        if self.no_screen {
+        // A voice-over is a sound item, not a spine clip: it has no screen to switch off (found
+        // live on a Mac with a microphone: voiceover with screen:false failed to publish).
+        if self.no_screen && self.voiceover.is_none() {
             after.push(object(vec![
                 ("cmd", text("component.set")),
                 ("clip", text("$take")),
@@ -237,8 +239,15 @@ pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreE
         .string("jobId")?
         .parse()
         .map_err(|_| bad("jobId", "a capture agent job ID"))?;
+    // A take without a picture reports no picture source (the agent records a display by
+    // default, which a voice-over or screen:false take does not keep).
+    let reply = if placement.no_screen || placement.voiceover.is_some() {
+        without_source(public_status(reply))
+    } else {
+        public_status(reply)
+    };
     let reply = extend(
-        with_canvas(public_status(reply), placement.canvas.as_deref(), kept),
+        with_canvas(reply, placement.canvas.as_deref(), kept),
         vec![
             ("projectId", text(&project)),
             ("sessionId", display(&session)),
@@ -536,6 +545,25 @@ pub(super) fn command(
     projects.recordings[index].terminal = Some(reply.clone());
     projects.recordings[index].peer = None;
     Ok(reply)
+}
+
+/// The start receipt with `settings.source` null.
+fn without_source(reply: Json) -> Json {
+    let Json::Object(mut fields) = reply else {
+        return reply;
+    };
+    for (key, value) in &mut fields {
+        if key == "settings"
+            && let Json::Object(settings) = value
+        {
+            for (name, source) in settings.iter_mut() {
+                if name == "source" {
+                    *source = Json::Null;
+                }
+            }
+        }
+    }
+    Json::Object(fields)
 }
 
 /// Adds the canvas decision to the start receipt's settings: `auto` (the shape nearest the
@@ -896,6 +924,15 @@ mod tests {
         assert_eq!(field(&insert, "at"), Some(Json::Signed(90)));
         assert_eq!(cmds(&after), ["marker.add"]);
         assert_eq!(after[0].field("at"), Some(&Json::Signed(90 + 60)));
+        // Found live on a Mac with a microphone: voiceover with screen:false switched the
+        // sound item's "screen" off and failed to publish (WRONG_KIND).
+        let silent_screen = Placement {
+            voiceover: Some(90),
+            no_screen: true,
+            ..Placement::default()
+        };
+        let (_, _, after) = silent_screen.ops(&project, &[], [1920, 1080]);
+        assert!(cmds(&after).is_empty(), "{after:?}");
 
         let retake = Placement {
             retake_of: Some("clp_take".parse().unwrap()),

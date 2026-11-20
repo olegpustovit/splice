@@ -5,6 +5,14 @@
 #include <math.h>
 #include <string.h>
 
+// The last cursor encoded on the application thread: its raw pixels, hotspot and hash. A poll
+// runs many times a second and the cursor rarely changes, so an unchanged one is recognised
+// from its pixels without re-encoding a PNG and hashing it (that was ~90 % of the capture
+// agent's CPU over a long take).
+static NSData *last_pixels;
+static NSPoint last_hot;
+static uint8_t last_hash[32];
+
 static void *cursor_image(NSCursor *cursor, const uint8_t *previous, SpliceCursorInfo *out,
                           const uint8_t **data, size_t *length, char **error) {
     if (cursor == nil) return NULL;
@@ -20,6 +28,17 @@ static void *cursor_image(NSCursor *cursor, const uint8_t *previous, SpliceCurso
         CGImageRef pixels = [image CGImageForProposedRect:NULL context:nil hints:nil];
         if (pixels != NULL) bitmap = [[NSBitmapImageRep alloc] initWithCGImage:pixels];
     }
+    NSData *pixels = bitmap.bitmapData != NULL && !bitmap.isPlanar
+        ? [NSData dataWithBytesNoCopy:bitmap.bitmapData
+                               length:(NSUInteger)bitmap.bytesPerRow * (NSUInteger)bitmap.pixelsHigh
+                         freeWhenDone:NO]
+        : nil;
+    if (previous != NULL && pixels != nil && last_pixels != nil &&
+        memcmp(previous, last_hash, sizeof(last_hash)) == 0 && NSEqualPoints(cursor.hotSpot, last_hot) &&
+        [pixels isEqualToData:last_pixels]) {
+        memcpy(out->hash, last_hash, sizeof(last_hash));
+        return NULL;
+    }
     NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
     double scale = bitmap.pixelsWide / image.size.width;
     if (png.length == 0 || png.length > UINT32_MAX || !isfinite(scale) || scale <= 0.0) {
@@ -32,6 +51,9 @@ static void *cursor_image(NSCursor *cursor, const uint8_t *previous, SpliceCurso
     CC_SHA256_Update(&digest, metadata, (CC_LONG)sizeof(metadata));
     CC_SHA256_Update(&digest, png.bytes, (CC_LONG)png.length);
     CC_SHA256_Final(out->hash, &digest);
+    last_pixels = pixels != nil ? [pixels copy] : nil;
+    last_hot = cursor.hotSpot;
+    memcpy(last_hash, out->hash, sizeof(last_hash));
     if (previous != NULL && memcmp(previous, out->hash, sizeof(out->hash)) == 0) return NULL;
     out->hot_x = metadata[0];
     out->hot_y = metadata[1];

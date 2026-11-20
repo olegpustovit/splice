@@ -648,7 +648,9 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const SpliceCapt
         if (filter == nil) return NULL;
         configuration.width = configuration.width & ~(size_t)1;
         configuration.height = configuration.height & ~(size_t)1;
-        configuration.minimumFrameInterval = CMTimeMake(1, 60);
+        // A hair under 1/60 s: frames arriving a little early were dropped at exactly 1/60
+        // (~5 % of a long take); 1/120 would double frames on 120 Hz displays.
+        configuration.minimumFrameInterval = CMTimeMake(1, 64);
         configuration.queueDepth = 6;
         configuration.pixelFormat = target->kind == SPLICE_CAPTURE_WINDOW ?
             kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
@@ -692,7 +694,7 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const SpliceCapt
             if (window == nil) return NULL;
             picture.width = picture.width & ~(size_t)1;
             picture.height = picture.height & ~(size_t)1;
-            picture.minimumFrameInterval = CMTimeMake(1, 60);
+            picture.minimumFrameInterval = CMTimeMake(1, 64);
             picture.queueDepth = 6;
             picture.pixelFormat = kCVPixelFormatType_32BGRA;
             picture.ignoreShadowsSingleWindow = YES;
