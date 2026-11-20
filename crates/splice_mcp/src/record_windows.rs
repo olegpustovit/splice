@@ -41,6 +41,12 @@ pub(super) struct Plan {
     /// has the same native corner radius in pixels, so a smaller window needs a larger
     /// fraction to round its native corners away (they record black).
     pub corners: Vec<f64>,
+    /// The spine look's other set parameters (background, shadow, …): a focus take's overlays
+    /// carry them, since each draws its own backdrop over the spine's.
+    pub look: Vec<(String, Json)>,
+    /// Focus shots (`record.start {focus:true}`): from each start (take seconds) only that
+    /// window shows. Empty: every window shows where it was captured.
+    pub shots: Vec<(f64, usize)>,
 }
 
 /// Each layer's box in arrangement space (points) and the space's extent. Windows that overlap
@@ -155,6 +161,23 @@ pub(super) fn plan(
         .map(|layer| (corner * shorter(&layers[0]) / shorter(layer)).clamp(0.0, 0.12))
         .collect();
     let windowed = window.is_none_or(|(enabled, _)| *enabled);
+    let look = window
+        .map(|(_, params)| {
+            params
+                .iter()
+                .filter(|param| param.name != "padding" && param.name != "corner")
+                .filter_map(|param| {
+                    let value = match &param.value {
+                        splice_model::EffectValue::Number(n) if n.is_finite() => Json::Float(*n),
+                        splice_model::EffectValue::Bool(b) => Json::Bool(*b),
+                        splice_model::EffectValue::Text(t) => text(t),
+                        _ => return None,
+                    };
+                    Some((param.name.clone(), value))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     // The look a take gets without one pads by the effect's default.
     let padding = match window {
         Some((false, _)) => 0.0,
@@ -216,7 +239,159 @@ pub(super) fn plan(
         has_window,
         windowed,
         corners,
+        look,
+        shots: Vec::new(),
     }
+}
+
+/// A focus shot lasts at least this long (seconds; Recorder's minimum).
+pub(super) const MIN_SHOT: f64 = 1.5;
+/// Seconds one window takes to replace another.
+pub(super) const EASE: f64 = 0.25;
+
+/// Recorder's focus shots from a take's event log: the window that received the latest click
+/// is the one shown, switching `EASE` before the click (so it is in full view when it lands),
+/// never sooner than `MIN_SHOT` after the last switch (a later click on another window in the
+/// meantime wins). Clicks are mapped onto each window where it was at the time (`window`
+/// samples, `source.windows` before any). The first shot is the first clicked window, or
+/// window 0 without clicks.
+pub(super) fn shots(events: &Json, count: usize) -> Vec<(f64, usize)> {
+    let bounds = |value: &Json| {
+        let get = |key: &str| value.field(key).and_then(Json::as_f64);
+        Some([get("x")?, get("y")?, get("width")?, get("height")?])
+    };
+    let start: Vec<[f64; 4]> = events
+        .field("source")
+        .and_then(|source| source.field("windows"))
+        .and_then(Json::as_array)
+        .map(|list| list.iter().filter_map(bounds).collect())
+        .unwrap_or_default();
+    if start.len() != count {
+        return vec![(0.0, 0)];
+    }
+    let mut frames = splice_eval::cursor::Frames::new(&start);
+    let mut clicks = Vec::new();
+    for event in events
+        .field("events")
+        .and_then(Json::as_array)
+        .unwrap_or(&[])
+    {
+        let number = |key: &str| event.field(key).and_then(Json::as_f64);
+        let Some(t) = number("t").filter(|t| t.is_finite() && *t >= 0.0) else {
+            continue;
+        };
+        match event.field("k").and_then(Json::as_str) {
+            Some("window") => {
+                if let (Some(i), Some(x), Some(y), Some(w), Some(h)) = (
+                    event.field("i").and_then(Json::as_u64),
+                    number("x"),
+                    number("y"),
+                    number("w"),
+                    number("h"),
+                ) {
+                    frames.sample(i as usize, t, [x, y, w, h]);
+                }
+            }
+            Some("down") => {
+                if let (Some(x), Some(y)) = (number("x"), number("y")) {
+                    clicks.push((t, [x, y]));
+                }
+            }
+            _ => {}
+        }
+    }
+    clicks.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut shown = 0;
+    let mut shots: Vec<(f64, usize)> = Vec::new();
+    let mut pending: Option<(f64, usize)> = None;
+    for &(t, point) in &clicks {
+        let Some(window) = frames.window_at(t, point, pending.map_or(shown, |p| p.1)) else {
+            continue;
+        };
+        if let Some((at, next)) = pending.take_if(|(at, _)| *at <= t) {
+            shots.push((at, next));
+            shown = next;
+        }
+        if shots.is_empty() {
+            shots.push((0.0, window));
+            shown = window;
+            continue;
+        }
+        let last = shots.last().map_or(0.0, |s| s.0);
+        // Another click on the window already coming keeps its time.
+        pending = match pending {
+            _ if window == shown => None,
+            Some(next) if next.1 == window => Some(next),
+            _ => Some(((t - EASE).max(last + MIN_SHOT), window)),
+        };
+    }
+    shots.extend(pending);
+    if shots.is_empty() {
+        shots.push((0.0, 0));
+    }
+    shots
+}
+
+/// Turns `plan` into a focus plan: every window fills the padded canvas like a single-window
+/// take (no transform) and `shots` say which one shows.
+pub(super) fn focus(
+    mut plan: Plan,
+    layers: &[Layer],
+    [width, height]: [f64; 2],
+    shots: Vec<(f64, usize)>,
+) -> Plan {
+    let margin = width.min(height) * plan.padding;
+    let inner = [margin, margin, width - 2.0 * margin, height - 2.0 * margin];
+    plan.boxes = layers
+        .iter()
+        .map(|layer| {
+            let [w, h] = layer.size.map(|side| f64::from(side.max(1)));
+            let fit = (inner[2] / w).min(inner[3] / h);
+            [
+                inner[0] + (inner[2] - w * fit) / 2.0,
+                inner[1] + (inner[3] - h * fit) / 2.0,
+                w * fit,
+                h * fit,
+            ]
+        })
+        .collect();
+    plan.transforms = vec![[0.0, 0.0, 1.0]; layers.len()];
+    plan.arrangement = "focus";
+    plan.shots = shots;
+    plan
+}
+
+/// Opacity keys (project frames from the take's start) that show layer `n` (1 and up: overlays
+/// stack over the spine and over lower layers) only during its shots. A layer coming in over
+/// the one shown fades in over it; one going out over the one coming in fades out over it; the
+/// other side holds until then, so nothing behind shows through.
+fn opacity_keys(shots: &[(f64, usize)], n: usize, fps: f64) -> Json {
+    let frame = |seconds: f64| Json::Signed((seconds * fps).round() as i64);
+    let key = |at: f64, value: f64, ease: &str| {
+        object(vec![
+            ("at", frame(at)),
+            ("value", Json::Float(value)),
+            ("ease", text(ease)),
+        ])
+    };
+    let ease = EASE.max(1.0 / fps);
+    let shown = |window: usize| if window == n { 1.0 } else { 0.0 };
+    let mut keys = vec![key(0.0, shown(shots[0].1), "hold")];
+    for pair in shots.windows(2) {
+        let ((_, from), (at, to)) = (pair[0], pair[1]);
+        if to == n && to > from {
+            keys.push(key(at, 0.0, "inOut"));
+            keys.push(key(at + ease, 1.0, "hold"));
+        } else if to == n {
+            keys.push(key(at, 1.0, "hold"));
+        } else if from == n && to > from {
+            keys.push(key(at + ease, 0.0, "hold"));
+        } else if from == n {
+            keys.push(key(at, 1.0, "inOut"));
+            keys.push(key(at + ease, 0.0, "hold"));
+        }
+    }
+    object(vec![("keys", Json::Array(keys))])
 }
 
 /// The batch reference of window `n`'s media entry (`clip.insert {insert:false}`).
@@ -227,7 +402,7 @@ pub(super) fn media_ref(n: usize) -> String {
 /// Ops after the take's `clip.insert {ref:"take"}` and the window media entries: the window
 /// look when the spine has none, each layer's transform, and every other window as a media
 /// overlay anchored to the take's first frame with the look (no backdrop of its own: D14).
-pub(super) fn ops(layers: &[Layer], plan: &Plan) -> Vec<Json> {
+pub(super) fn ops(layers: &[Layer], plan: &Plan, fps: u32) -> Vec<Json> {
     let transform = |target: &str, [x, y, scale]: [f64; 3]| {
         object(vec![
             ("cmd", text("effect.add")),
@@ -251,7 +426,10 @@ pub(super) fn ops(layers: &[Layer], plan: &Plan) -> Vec<Json> {
             ("type", text("window")),
         ]));
     }
-    ops.push(transform("$take", plan.transforms[0]));
+    let focused = !plan.shots.is_empty();
+    if !focused {
+        ops.push(transform("$take", plan.transforms[0]));
+    }
     let length = layers[0].frames;
     for (n, (layer, &moved)) in layers.iter().zip(&plan.transforms).enumerate().skip(1) {
         let item = format!("layer{n}");
@@ -272,21 +450,37 @@ pub(super) fn ops(layers: &[Layer], plan: &Plan) -> Vec<Json> {
             ("ref", text(&item)),
         ]));
         if plan.windowed {
+            // A focus layer covers the one below with a backdrop of its own (the spine's look).
+            let mut params: Vec<(String, Json)> = if focused {
+                plan.look.clone()
+            } else {
+                vec![("background".into(), text("none"))]
+            };
+            params.push(("padding".into(), Json::Float(plan.padding)));
+            params.push(("corner".into(), Json::Float(plan.corners[n])));
             ops.push(object(vec![
                 ("cmd", text("effect.add")),
                 ("target", text(&format!("${item}"))),
                 ("type", text("window")),
-                (
-                    "params",
-                    object(vec![
-                        ("background", text("none")),
-                        ("padding", Json::Float(plan.padding)),
-                        ("corner", Json::Float(plan.corners[n])),
-                    ]),
-                ),
+                ("params", Json::Object(params)),
             ]));
         }
-        ops.push(transform(&format!("${item}"), moved));
+        if focused {
+            ops.push(object(vec![
+                ("cmd", text("effect.add")),
+                ("target", text(&format!("${item}"))),
+                ("type", text("transform")),
+                (
+                    "params",
+                    object(vec![(
+                        "opacity",
+                        opacity_keys(&plan.shots, n, f64::from(fps.max(1))),
+                    )]),
+                ),
+            ]));
+        } else {
+            ops.push(transform(&format!("${item}"), moved));
+        }
     }
     ops
 }
@@ -387,6 +581,7 @@ mod tests {
         store: &mut Store,
         job: u64,
         layers: &[Layer],
+        shots: Option<Vec<(f64, usize)>>,
     ) -> (Vec<[f64; 4]>, Plan, Json, WriteOptions) {
         let id = JobId::from_serial(job);
         let staged = stage_path(store.path(), id);
@@ -400,6 +595,11 @@ mod tests {
             splice_eval::resolve_effect(&[&project.effects, &project.spine.effects], "window");
         let canvas = canvas(project, None);
         let plan = plan(layers, canvas, window.as_ref());
+        let plan = match shots {
+            Some(shots) => focus(plan, layers, canvas, shots),
+            None => plan,
+        };
+        let fps = project.fps;
         let write = WriteOptions {
             source: Source::Agent,
             session: Some(session),
@@ -421,7 +621,11 @@ mod tests {
             media(MediaKind::Take, layers[0].size, layers[0].frames),
             windows,
             &write,
-            (Vec::new(), vec![("ref", text("take"))], ops(layers, &plan)),
+            (
+                Vec::new(),
+                vec![("ref", text("take"))],
+                ops(layers, &plan, fps),
+            ),
         )
         .unwrap();
         let (take, lints, _) = summary(
@@ -492,7 +696,7 @@ mod tests {
             layer(1, [920.0, 50.0, 600.0, 600.0], 90),
             layer(2, [100.0, 670.0, 1420.0, 300.0], 88),
         ];
-        let (drawn, plan, take, mut write) = record(&mut store, 1, &layers);
+        let (drawn, plan, take, mut write) = record(&mut store, 1, &layers, None);
         assert_eq!(plan.arrangement, "captured");
         assert!(!plan.has_window);
         assert_near(&drawn, &plan.boxes);
@@ -562,7 +766,7 @@ mod tests {
             layer(2, [0.0, 0.0, 600.0, 900.0], 60),
             layer(3, [10.0, 10.0, 600.0, 900.0], 60),
         ];
-        let (drawn, plan, _, _) = record(&mut store, 2, &layers);
+        let (drawn, plan, _, _) = record(&mut store, 2, &layers, None);
         assert_eq!(plan.arrangement, "row");
         assert!(plan.has_window && plan.padding == 0.12);
         assert_near(&drawn, &plan.boxes);
@@ -606,5 +810,106 @@ mod tests {
             canvas(&project, Some("16:10")),
             [(short * 1.6).round(), short]
         );
+    }
+
+    /// Recorder's focus shots: the window clicked last is shown, never for less than 1.5 s, a
+    /// click is mapped onto the windows where they were at the time (a moved window's old place
+    /// is empty), and repeated clicks keep a coming switch's time.
+    #[test]
+    fn focus_shots_follow_the_clicked_window_where_it_is() {
+        let events = splice_json::parse(
+            r#"{"source":{"kind":"window","rect":{"x":0,"y":0,"width":800,"height":600},
+                "windows":[{"x":0,"y":0,"width":800,"height":600},{"x":900,"y":0,"width":400,"height":600}]},
+              "events":[
+                {"t":0.5,"k":"down","x":0.5,"y":0.5,"b":0},
+                {"t":1.0,"k":"down","x":1.5,"y":0.5,"b":0},
+                {"t":1.2,"k":"down","x":0.4,"y":0.5,"b":0},
+                {"t":3.0,"k":"down","x":1.5,"y":0.5,"b":0},
+                {"t":3.5,"k":"down","x":1.4,"y":0.4,"b":0},
+                {"t":4.0,"k":"window","i":1,"x":900,"y":700,"w":400,"h":600},
+                {"t":5.0,"k":"down","x":1.5,"y":0.5,"b":0},
+                {"t":6.0,"k":"down","x":1.5,"y":1.5,"b":0},
+                {"t":7.0,"k":"down","x":0.5,"y":0.5,"b":0}]}"#,
+        )
+        .unwrap();
+        // 1.0 on window 1 is cancelled by 1.2 back on window 0; 3.0 switches at 2.75 (eased in
+        // before the click) and 3.5 keeps that; 5.0 hits where window 1 was (nothing), 6.0
+        // where it is now; 7.0 goes back to window 0.
+        assert_eq!(shots(&events, 2), [(0.0, 0), (2.75, 1), (6.75, 0)]);
+        // A click on window 1 first opens on it; a switch never comes within 1.5 s of the last.
+        let quick = splice_json::parse(
+            r#"{"source":{"windows":[{"x":0,"y":0,"width":800,"height":600},{"x":900,"y":0,"width":400,"height":600}]},
+              "events":[{"t":0.2,"k":"down","x":1.5,"y":0.5},{"t":0.6,"k":"down","x":0.5,"y":0.5},{"t":4,"k":"move","x":0.5,"y":0.5}]}"#,
+        )
+        .unwrap();
+        assert_eq!(shots(&quick, 2), [(0.0, 1), (1.5, 0)]);
+        // No clicks, or no window bounds: window 0 throughout.
+        assert_eq!(shots(&Json::Null, 2), [(0.0, 0)]);
+    }
+
+    /// `record.start {focus:true}`: every window fills the padded canvas and only the shot's
+    /// window shows; an overlay coming in over a lower one fades in while that one holds, one
+    /// going out fades out over the one coming in, and each overlay carries a backdrop.
+    #[test]
+    fn focus_takes_show_only_the_shot_window_with_eased_switches() {
+        let temp = TestDirectory::new("record-windows-focus");
+        let mut store = Store::create(&temp.0.join("p.splice"), &Project::default()).unwrap();
+        let fps = f64::from(store.project().fps);
+        let layers = [
+            layer(0, [0.0, 0.0, 800.0, 600.0], 300),
+            layer(1, [900.0, 0.0, 400.0, 600.0], 300),
+            layer(2, [0.0, 700.0, 1300.0, 300.0], 300),
+        ];
+        let shots = vec![(0.0, 0), (2.0, 2), (4.0, 1), (6.0, 0)];
+        let (drawn, plan, take, _) = record(&mut store, 3, &layers, Some(shots));
+        assert_eq!(plan.arrangement, "focus");
+        assert!(plan.transforms.iter().all(|t| *t == [0.0, 0.0, 1.0]));
+        // At frame 10 only window 0 shows; every layer is placed where the plan says.
+        assert_near(&drawn, &plan.boxes);
+        let mut summary = String::new();
+        splice_json::write(&take, &mut summary).unwrap();
+        assert!(
+            summary.contains(
+                r#""arrangement":"focus","shots":[{"at":0,"window":0},{"at":2,"window":2}"#
+            ),
+            "{summary}"
+        );
+        let evaluator = Evaluator::prepare(store.project()).unwrap();
+        let mut frame = evaluator.buffer();
+        // The opacity of windows 1 and 2 (the overlays) at `seconds`.
+        let mut shown = |seconds: f64| {
+            evaluator.frame((seconds * fps).round() as Frame, &mut frame);
+            let pictures: Vec<(f64, bool)> = frame
+                .layers
+                .iter()
+                .filter_map(|drawn| match drawn {
+                    Drawn::Picture(p) if matches!(p.item, splice_model::TimelineId::Item(_)) => {
+                        let backdrop = p.window.is_some_and(|w| {
+                            !matches!(w.background, splice_eval::Background::None)
+                        });
+                        Some((p.opacity * p.look.opacity, backdrop))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(pictures.iter().all(|p| p.1), "{pictures:?}");
+            pictures.iter().map(|p| p.0).collect::<Vec<f64>>()
+        };
+        assert_eq!(shown(1.0), [0.0, 0.0]);
+        // Window 2 comes in over window 0 (below it): fading in.
+        let coming = shown(2.0 + EASE / 2.0);
+        assert!(coming[1] > 0.1 && coming[1] < 0.9, "{coming:?}");
+        assert_eq!(shown(3.0), [0.0, 1.0]);
+        // Window 1 comes in under window 2: there at once, window 2 fades out over it.
+        let going = shown(4.0 + EASE / 2.0);
+        assert!(
+            going[0] == 1.0 && going[1] > 0.1 && going[1] < 0.9,
+            "{going:?}"
+        );
+        assert_eq!(shown(5.0), [1.0, 0.0]);
+        // Back to the spine window: window 1 fades out over it.
+        let back = shown(6.0 + EASE / 2.0);
+        assert!(back[0] > 0.1 && back[0] < 0.9 && back[1] == 0.0, "{back:?}");
+        assert_eq!(shown(8.0), [0.0, 0.0]);
     }
 }

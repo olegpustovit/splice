@@ -152,6 +152,22 @@ impl EventLog {
             let event = InputEvent::decode(record).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "Invalid native input record.")
             })?;
+            if event.kind == InputKind::Window {
+                // A window moved or resized (global points). Positions are normalized to window
+                // 0 where it is now, so its caret samples follow it too.
+                let [x, y] = event.point;
+                let [w, h] = event.scroll;
+                if event.code == 0 {
+                    self.bounds = [x, y, w, h];
+                }
+                self.begin(seconds(event.time_ns), "window")?;
+                write!(
+                    self.file,
+                    ",\"i\":{},\"x\":{x},\"y\":{y},\"w\":{w},\"h\":{h}}}",
+                    event.code
+                )?;
+                continue;
+            }
             let kind = match event.kind {
                 InputKind::Move => "move",
                 InputKind::Down => "down",
@@ -160,6 +176,7 @@ impl EventLog {
                 InputKind::Scroll => "scroll",
                 InputKind::Key => "key",
                 InputKind::Flags => "flags",
+                InputKind::Window => continue,
             };
             self.begin(seconds(event.time_ns), kind)?;
             match event.kind {
@@ -393,6 +410,45 @@ mod tests {
         );
         assert_eq!(fs::read_dir(path.join("cursors")).unwrap().count(), 4);
         assert!(!path.join(".events.json.tmp").exists());
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    /// A window moved during the take: its frame is a `window` event with its index, and window
+    /// 0's new frame is what later caret samples normalize against.
+    #[test]
+    fn event_log_writes_window_frame_samples() {
+        let path = std::env::temp_dir().join(format!("splice-event-window-{}", std::process::id()));
+        fs::create_dir(&path).unwrap();
+        let source = InputState {
+            kind: InputSourceKind::Window,
+            rect: Rect {
+                x: 100.0,
+                y: 50.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            scale: 2.0,
+            origin_ns: 0,
+            elapsed_ns: 0,
+            active: true,
+        };
+        let mut log = EventLog::open(&path, source, &[]).unwrap();
+        let mut moved = Event {
+            kind: 8,
+            time_ns: 1_500_000_000,
+            ..Event::default()
+        };
+        for (n, value) in [140.0_f64, 90.0, 820.0, 610.0].into_iter().enumerate() {
+            moved.payload[n * 8..n * 8 + 8].copy_from_slice(&value.to_ne_bytes());
+        }
+        log.append(&[moved]).unwrap();
+        assert_eq!(log.bounds, [140.0, 90.0, 820.0, 610.0]);
+        log.finish(0).unwrap();
+        let saved = fs::read_to_string(path.join("events.json")).unwrap();
+        assert!(
+            saved.contains(r#"{"t":1.5,"k":"window","i":0,"x":140,"y":90,"w":820,"h":610}"#),
+            "{saved}"
+        );
         fs::remove_dir_all(path).unwrap();
     }
 

@@ -54,6 +54,9 @@ pub enum InputKind {
     Key,
     /// Modifier state changed.
     Flags,
+    /// A captured window moved or resized: `code` is its index in the take (0 is the source),
+    /// `point` its origin and `scroll` its size, in global points.
+    Window,
 }
 
 /// One normalized, take-relative input event.
@@ -100,6 +103,7 @@ impl InputEvent {
             5 => InputKind::Scroll,
             6 => InputKind::Key,
             7 => InputKind::Flags,
+            8 => InputKind::Window,
             _ => return None,
         };
         // SAFETY: the payload ABI is 64 initialized bytes consisting only of

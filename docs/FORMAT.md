@@ -22,7 +22,7 @@ Name.splice/
                         source.windows[n], same codec and clock as screen.mov (which is window 0)
     mic.m4a  system.m4a camera.mov   optional, one file per source, AAC 48 kHz / HEVC; system.m4a
                         holds only the chosen apps' sound when recorded with systemAudio:{apps}
-    events.json         {"t0","source":{kind,rect,scale,windows?},"events":[{t,k:move|down|up|drag|scroll|key|flags|cursor|caret,…}],"dropped"?:count}
+    events.json         {"t0","source":{kind,rect,scale,windows?},"events":[{t,k:move|down|up|drag|scroll|key|flags|cursor|caret|window,…}],"dropped"?:count}
     cursors/<hash>.png  + <hash>.json {hotX, hotY, scale}
   media/                consolidated copies (media.consolidate, med_<id>.<ext>) and html.add's
                         rendered pages (html-<hash>.mov, ProRes 4444 with alpha)
@@ -34,7 +34,14 @@ Name.splice/
 
 For a recorded take, `t0` is the host-clock time of the first complete screen frame in seconds.
 Event `t` values are seconds from that frame with pauses removed. Positions are normalized to
-0…1 within the source rectangle. `dropped` counts input events lost if the native queue fills.
+0…1 within the source rectangle; for a window source that is the window where it is at the
+event's time (the recorder re-reads its frame at least 10 times a second), so a pointer stays on
+the window's content however the window moves. A window event (0.4)
+`{"t","k":"window","i","x","y","w","h"}` records that captured window `i` (0 the source, n
+`source.windows[n]`) moved or resized to that frame in global points; it is written only on a
+change, and before the first one a window is where `source.rect`/`source.windows` say. Caret
+events follow window 0 the same way. Logs without window events (older takes) keep the start
+bounds. `dropped` counts input events lost if the native queue fills.
 A cursor event references a SHA-256 digest of the PNG, hotspot and scale. The hotspot is in
 PNG pixels, and `scale` is pixels per point. A caret event (0.4, T45.4)
 `{"t","k":"caret","x","y","w","h"}` is the focused text element's insertion point or selection
@@ -49,9 +56,12 @@ its own `kind:"video"` media entry whose `path` is `takes/<med>/window-<n>.mov` 
 directory, shown by a media overlay anchored to the take clip (no new kind or field: 0.3 readers
 and files are unaffected). Events stay in one space, window 0's: `source.rect` is window 0, and
 positions are normalized to it as for a single window, so a pointer over another window reads
-outside 0…1. `source.windows` lists every window's bounds at the start of the take in global
-points, in file order (`[0]` equals `rect`); window n's point is
-`(x·rect.width + rect.x − windows[n].x) / windows[n].width` (and likewise for y). The drawn
+outside 0…1 (pointer events over any captured window are recorded; keys only for window 0's
+app). `source.windows` lists every window's bounds at the start of the take in global
+points, in file order (`[0]` equals `rect`); window n's point at time t is
+`(x·W0.width + W0.x − Wn.x) / Wn.width` (and likewise for y), where W0 and Wn are the frames
+the latest window events before t give (the start bounds before any;
+`splice_eval::cursor::Frames`). The drawn
 cursor, click rings, click zooms and `intent.autoZoom` use window 0's space, so they show only
 over window 0 and never land on the wrong window.
 

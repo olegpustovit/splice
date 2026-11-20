@@ -315,7 +315,8 @@ static BOOL complete_frame(CMSampleBufferRef sample) {
     return YES;
 }
 
-- (BOOL)prepareInput:(SpliceCaptureGeometry)geometry denied:(bool *)denied error:(char **)error {
+- (BOOL)prepareInput:(SpliceCaptureGeometry)geometry windows:(const SpliceCaptureGeometry *)windows
+                count:(size_t)count denied:(bool *)denied error:(char **)error {
     if (!CGPreflightListenEventAccess()) {
         *denied = true;
         splice_set_error(error, "Input Monitoring permission is unavailable.");
@@ -323,6 +324,7 @@ static BOOL complete_frame(CMSampleBufferRef sample) {
     }
     _inputMonitor = [[SpliceInputMonitor alloc] initWithGeometry:geometry error:error];
     if (_inputMonitor == nil) return NO;
+    [_inputMonitor watchWindows:windows count:count];
     if (![_inputMonitor start]) {
         *denied = !CGPreflightListenEventAccess();
         splice_set_error(error, "Could not start the listen-only input monitor.");
@@ -682,9 +684,10 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const SpliceCapt
         }
         // Every other window: its own stream and movie on the take's clock (T46.6).
         NSMutableArray<SCStream *> *extra = [NSMutableArray array];
+        SpliceCaptureGeometry placed[SPLICE_EXTRA_WINDOWS];
         for (size_t index = 0; index < window_count; ++index) {
             SCStreamConfiguration *picture = [SCStreamConfiguration new];
-            SCContentFilter *window = splice_capture_prepare(&windows[index], picture, NULL, denied, error);
+            SCContentFilter *window = splice_capture_prepare(&windows[index], picture, &placed[index], denied, error);
             if (window == nil) return NULL;
             picture.width = picture.width & ~(size_t)1;
             picture.height = picture.height & ~(size_t)1;
@@ -704,7 +707,7 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const SpliceCapt
             }
             [extra addObject:stream];
         }
-        if (events && ![recording prepareInput:geometry denied:denied error:error]) {
+        if (events && ![recording prepareInput:geometry windows:placed count:window_count denied:denied error:error]) {
             [recording cancel];
             return NULL;
         }

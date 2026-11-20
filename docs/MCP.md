@@ -567,6 +567,16 @@ and the overlays a `window` effect with `background:"none"` (one backdrop, D14) 
 padding. A take into a spine with no window look gets one (the defaults); a look turned off stays
 off. `create:true` picks the canvas nearest the arranged windows. Move or resize a layer with its
 `transform` (`effect.set`); camera zooms frame the spine window.
+`focus:true` (with `windows` only; Recorder's focus shots) shows one window at a time instead:
+the one that received the latest click, found by mapping each recorded click onto the windows
+where they were at that moment (`window` events, docs/FORMAT.md). Each window fills the padded
+canvas like a single-window take (no `transform` offset, `arrangement:"focus"`, `create:true`
+picks the canvas nearest the first window); a switch lands 0.25 s before the click and never
+within 1.5 s of the last one (a later click elsewhere in the meantime wins). The overlays carry
+the spine's window look with its backdrop and a keyed `transform` `opacity`: a window coming in
+over the one shown fades in over 0.25 s, one going out fades out over the one coming in, so
+nothing behind shows through. The receipt's `take` adds `shots:[{at, window}]` (take seconds,
+window index); without clicks window 0 shows throughout. Edit the keys like any other.
 
 Tracks: `mic` and `camera` take `true` (the system default device) or a device `id` (or exact
 name) from the dry run; an unknown one returns `NO_DEVICE` with the valid IDs in `fix` and

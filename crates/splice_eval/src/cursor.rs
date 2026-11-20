@@ -106,6 +106,75 @@ impl Default for Motion {
     }
 }
 
+/// Where each window of a window take was on screen over time, in global points: its bounds at
+/// the start (`events.json` `source.rect`, or `source.windows` for a multi-window take) and the
+/// `window` samples the recorder writes when one moves or resizes. Pointer positions are
+/// normalized to window 0 where it is at the event's time, so they stay on its content however it
+/// moves; these frames carry a position into another window's space at that time. A log without
+/// samples (older takes) keeps the start bounds throughout.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Frames {
+    /// Per window: `(t, [x, y, w, h])` in time order, the start bounds first at `t = -∞`.
+    windows: Vec<Vec<(f64, [f64; 4])>>,
+}
+
+impl Frames {
+    /// Frames that hold `start` (each window's bounds at the start of the take).
+    pub fn new(start: &[[f64; 4]]) -> Self {
+        Self {
+            windows: start
+                .iter()
+                .map(|&frame| vec![(f64::NEG_INFINITY, frame)])
+                .collect(),
+        }
+    }
+
+    /// Records that window `window` is at `frame` from source second `t` on. Samples of an
+    /// unknown window, with a non-finite time or an empty frame are ignored.
+    pub fn sample(&mut self, window: usize, t: f64, frame: [f64; 4]) {
+        let Some(list) = self.windows.get_mut(window) else {
+            return;
+        };
+        if !t.is_finite()
+            || !frame.iter().all(|v| v.is_finite())
+            || frame[2] <= 0.0
+            || frame[3] <= 0.0
+        {
+            return;
+        }
+        let at = list.partition_point(|(time, _)| *time <= t);
+        list.insert(at, (t, frame));
+    }
+
+    /// Window `window`'s frame at source second `t`. Allocation-free.
+    pub fn at(&self, window: usize, t: f64) -> Option<[f64; 4]> {
+        let list = self.windows.get(window)?;
+        let at = list.partition_point(|(time, _)| *time <= t);
+        list.get(at.checked_sub(1)?).map(|(_, frame)| *frame)
+    }
+
+    /// A position normalized to window 0 at second `t`, normalized to window `window` instead
+    /// (outside 0…1 when the pointer is not over it). Allocation-free.
+    pub fn to_window(&self, window: usize, t: f64, [x, y]: [f64; 2]) -> Option<[f64; 2]> {
+        let [x0, y0, w0, h0] = self.at(0, t)?;
+        let [xn, yn, wn, hn] = self.at(window, t)?;
+        Some([(x0 + x * w0 - xn) / wn, (y0 + y * h0 - yn) / hn])
+    }
+
+    /// The window under a window-0 position at second `t`: `prefer` when it is under the pointer
+    /// too (the window clicked last is in front), else the first in take order. Allocation-free.
+    pub fn window_at(&self, t: f64, point: [f64; 2], prefer: usize) -> Option<usize> {
+        let over = |n: usize| {
+            self.to_window(n, t, point)
+                .is_some_and(|[x, y]| (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y))
+        };
+        if over(prefer) {
+            return Some(prefer);
+        }
+        (0..self.windows.len()).find(|&n| over(n))
+    }
+}
+
 /// The cursor of a looping clip (the `loop` param, T46.2): over the clip's last `frames` it
 /// eases (minimum jerk) from where it is to `first`, where it is at the clip's first frame, so
 /// the last frame matches the first. `left` is how many frames remain after this one.
@@ -1060,5 +1129,50 @@ mod tests {
             .fold(0.0, f64::max);
         assert!(jump < 3.0, "{jump}");
         assert!(steps.iter().any(|t| *t > 6.0));
+    }
+
+    /// Window moves during a take: positions are normalized to window 0 where it is, and the
+    /// window samples carry them onto another window's content where that window is at the
+    /// time; without samples the start bounds hold (the 0.4 formula).
+    #[test]
+    fn window_samples_keep_pointer_positions_on_the_moved_window() {
+        // Window 0 at (100, 100) 800×600; window 1 to its right at (1000, 100) 400×300.
+        let start = [[100.0, 100.0, 800.0, 600.0], [1000.0, 100.0, 400.0, 300.0]];
+        let mut frames = Frames::new(&start);
+        // The pointer at global (1100, 250): 1.25, 0.25 in window 0's space.
+        let point = [1.25, 0.25];
+        assert_eq!(frames.to_window(1, 1.0, point), Some([0.25, 0.5]));
+        assert_eq!(frames.window_at(1.0, point, 0), Some(1));
+        // At 2 s window 1 is dragged 200 points left and down; at 3 s window 0 moves too.
+        frames.sample(1, 2.0, [800.0, 200.0, 400.0, 300.0]);
+        frames.sample(0, 3.0, [0.0, 0.0, 800.0, 600.0]);
+        frames.sample(5, 3.0, [0.0, 0.0, 1.0, 1.0]);
+        frames.sample(1, f64::NAN, [0.0, 0.0, 1.0, 1.0]);
+        // The same window-0 position now lands elsewhere on window 1, then off it.
+        assert_eq!(frames.to_window(1, 2.5, point), Some([0.75, 1.0 / 6.0]));
+        assert_eq!(frames.at(0, 2.9), Some(start[0]));
+        let [x, y] = frames.to_window(1, 3.5, point).unwrap();
+        assert!(
+            (x - 0.5).abs() < 1e-12 && (y + 1.0 / 6.0).abs() < 1e-12,
+            "{x} {y}"
+        );
+        assert_eq!(frames.window_at(3.5, point, 1), None);
+        // Window 0's own space is the identity at any time.
+        assert_eq!(frames.to_window(0, 3.5, [0.3, 0.7]), Some([0.3, 0.7]));
+        // Overlapping windows: the one clicked last wins when the pointer is over both.
+        let overlap = Frames::new(&[[0.0, 0.0, 100.0, 100.0], [50.0, 0.0, 100.0, 100.0]]);
+        assert_eq!(overlap.window_at(0.0, [0.75, 0.5], 1), Some(1));
+        assert_eq!(overlap.window_at(0.0, [0.75, 0.5], 0), Some(0));
+        let mut sum = 0.0;
+        splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset).warm(
+            &mut || {
+                for i in 0..100 {
+                    let t = f64::from(i) * 0.05;
+                    sum += frames.to_window(1, t, point).map_or(0.0, |p| p[0]);
+                    sum += frames.window_at(t, point, 0).unwrap_or(0) as f64;
+                }
+            },
+        );
+        assert!(sum > 0.0);
     }
 }

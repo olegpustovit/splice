@@ -98,6 +98,15 @@ pub(super) fn summary(
         // The windows are arranged into the canvas: no single picture has to fill it.
         Some((layers, plan, canvas)) => {
             fields.push(("arrangement", text(plan.arrangement)));
+            if !plan.shots.is_empty() {
+                let shots = plan.shots.iter().map(|&(at, window)| {
+                    object(vec![
+                        ("at", Json::Float((at * 1000.0).round() / 1000.0)),
+                        ("window", Json::Unsigned(window as u64)),
+                    ])
+                });
+                fields.push(("shots", Json::Array(shots.collect())));
+            }
             fields.push((
                 "layers",
                 crate::record_windows::summary(layers, plan, canvas, &publication.layers),

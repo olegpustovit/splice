@@ -48,6 +48,26 @@ fn input_events_respect_capture_scope_and_drain_without_allocations() {
     });
 }
 
+/// Multi-window takes: a click over another captured window is kept (normalized to window 0,
+/// so outside 0…1) and window frame samples decode with their index and global frame.
+#[test]
+fn input_events_keep_other_windows_and_sample_window_frames() {
+    unsafe extern "C" {
+        fn splice_window_fixture(click: *mut Event, sample: *mut Event) -> bool;
+    }
+    let (mut click, mut sample) = (Event::default(), Event::default());
+    // SAFETY: the fixture fills two writable records and does not modify system input.
+    assert!(unsafe { splice_window_fixture(&mut click, &mut sample) });
+    let click = InputEvent::decode(&click).unwrap();
+    assert_eq!((click.kind, click.point), (InputKind::Down, [2.5, 0.5]));
+    let sample = InputEvent::decode(&sample).unwrap();
+    assert_eq!(sample.kind, InputKind::Window);
+    assert_eq!(
+        (sample.code, sample.point, sample.scroll, sample.time_ns),
+        (1, [220.0, 30.0], [120.0, 90.0], 1_100_000_000)
+    );
+}
+
 #[test]
 fn probes_native_fixture_movie() {
     let asset = media::probe(&fixture("probe.mov")).unwrap();

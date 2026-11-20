@@ -45,6 +45,8 @@ struct Placement {
     /// A project this recording created: its canvas shape (`auto` picks the nearest to the
     /// recorded picture at publish).
     canvas: Option<String>,
+    /// A multi-window take shows only the window clicked last (Recorder's focus shots).
+    focus: bool,
 }
 
 impl Placement {
@@ -65,11 +67,24 @@ impl Placement {
                 "false only with camera:true (a camera-only take) or voiceover:true",
             ));
         }
+        let focus = args.flag("focus")?;
+        if focus
+            && args
+                .field("source")
+                .and_then(|source| source.field("windows"))
+                .is_none()
+        {
+            return Err(bad(
+                "focus",
+                "true only with source.windows (a multi-window take)",
+            ));
+        }
         Ok(Self {
             voiceover,
             retake_of,
             no_screen,
             canvas: None,
+            focus,
         })
     }
 
@@ -297,7 +312,7 @@ pub(super) fn recover(projects: &mut Projects, args: &Json) -> Result<Json, Stor
         if !layers.is_empty() {
             let (plan, _) = arrange(store.project(), &layers, None);
             ops.1.push(("ref", text("take")));
-            ops.2 = record_windows::ops(&layers, &plan);
+            ops.2 = record_windows::ops(&layers, &plan, store.project().fps);
         }
         let sealed = publish(store, id, true, descriptor, windows, &options, ops)?;
         recovered.push(object(vec![
@@ -406,7 +421,8 @@ pub(super) fn command(
             .take
             .as_ref()
             .is_some_and(|take| take.mic.is_none() && take.system.is_none());
-        let picture = if layers.is_empty() {
+        // Focus shots show one window at a time, each fitted like the first.
+        let picture = if layers.is_empty() || placement.focus {
             [descriptor.probe.width, descriptor.probe.height]
         } else {
             record_windows::picture(&layers)
@@ -431,10 +447,21 @@ pub(super) fn command(
                 "auto" => crate::lints::nearest_aspect(picture[0], picture[1]),
                 aspect => aspect,
             });
-            arrange(store.project(), &layers, aspect)
+            let (plan, canvas) = arrange(store.project(), &layers, aspect);
+            if !placement.focus {
+                return (plan, canvas);
+            }
+            // Focus shots: from the clicks in the take's event log (window 0 only without one).
+            let events = fs::read_to_string(stage.join("events.json"))
+                .ok()
+                .and_then(|events| splice_json::parse(&events).ok())
+                .unwrap_or(Json::Null);
+            let shots = record_windows::shots(&events, layers.len());
+            (record_windows::focus(plan, &layers, canvas, shots), canvas)
         });
         if let Some((plan, _)) = &arranged {
-            ops.2.extend(record_windows::ops(&layers, plan));
+            ops.2
+                .extend(record_windows::ops(&layers, plan, store.project().fps));
         }
         let sealed =
             publish(store, id, insert, descriptor, windows, &options, ops).map_err(retry_stop)?;
@@ -950,7 +977,7 @@ mod tests {
         let ops = (
             Vec::new(),
             vec![("ref", text("take"))],
-            record_windows::ops(&layers, &plan),
+            record_windows::ops(&layers, &plan, store.project().fps),
         );
         let sealed = publish(
             &mut store,

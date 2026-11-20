@@ -11,7 +11,12 @@ typedef enum {
     SPLICE_INPUT_SCROLL,
     SPLICE_INPUT_KEY,
     SPLICE_INPUT_FLAGS,
+    // A captured window's frame changed: code is its index, x/y/dx/dy its global-point frame.
+    SPLICE_INPUT_WINDOW,
 } SpliceInputKind;
+
+// Window 0 plus up to three more windows of a multi-window take.
+#define SPLICE_INPUT_WINDOWS 4
 
 typedef struct {
     double x, y, dx, dy;
@@ -29,6 +34,9 @@ _Static_assert(sizeof(SpliceInputPayload) == sizeof(((SpliceEvent *)0)->payload)
 
 @interface SpliceInputMonitor : NSObject
 - (instancetype)initWithGeometry:(SpliceCaptureGeometry)geometry error:(char **)error;
+// The other windows of a multi-window take (before start): pointer events over them are kept,
+// normalized to window 0 like the rest, and every window's frame changes are sampled.
+- (void)watchWindows:(const SpliceCaptureGeometry *)windows count:(size_t)count;
 - (BOOL)start;
 - (BOOL)stop;
 - (void)updateClock:(SpliceInputClock)clock;
