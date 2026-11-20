@@ -1,13 +1,43 @@
 {
   "id": "crop-autozoom",
   "platform": "macos",
-  "seed": {"record": {"app": "TextEdit", "duration": 8,
-           "events": [{"t": 2.0, "do": "click", "x": 0.2, "y": 0.3}, {"t": 5.0, "do": "click", "x": 0.4, "y": 0.6}]}},
+  "seed": {
+    "record": {
+      "app": "TextEdit",
+      "duration": 8,
+      "events": [
+        {
+          "t": 2.0,
+          "do": "click",
+          "x": 0.2,
+          "y": 0.3
+        },
+        {
+          "t": 5.0,
+          "do": "click",
+          "x": 0.4,
+          "y": 0.6
+        }
+      ]
+    }
+  },
   "prompt": "The Splice project {project} is a screen recording; everything that matters happens in the left half of the screen. Crop the recording to its left half, make the video vertical 9:16, and zoom in on each click. Use the splice MCP tools only.",
   "checks": [
-    {"name": "9:16", "expr": "project['aspect'] == '9:16'"},
-    {"name": "left half cropped", "expr": "all(c.get('crop') and c['crop']['x'] < 0.1 and 0.35 <= c['crop']['w'] <= 0.65 for c in take_clips())"},
-    {"name": "a zoom on each click", "expr": "all(any(i['kind'] == 'zoom' and (i['anchor'].get('sourceFrame', i['anchor'].get('frame', -1)) - 15) <= s * project['fps'] < i['anchor'].get('sourceFrame', i['anchor'].get('frame', -1)) + i['length'] for i in items) for s in [2.0, 5.0])"},
-    {"name": "zooms aim at the clicks (crop space)", "expr": "all(any(i['kind'] == 'zoom' and isinstance(i['params'].get('focus'), dict) and abs(i['params']['focus']['x'] - (cx - take_clips()[0]['crop']['x']) / take_clips()[0]['crop']['w']) < 0.15 and (i['anchor'].get('sourceFrame', i['anchor'].get('frame', -1)) - 15) <= s * project['fps'] < i['anchor'].get('sourceFrame', i['anchor'].get('frame', -1)) + i['length'] for i in items) for s, cx in [(2.0, 0.2), (5.0, 0.4)])"}
+    {
+      "name": "9:16",
+      "expr": "project['aspect'] == '9:16'"
+    },
+    {
+      "name": "left half cropped",
+      "expr": "all(c.get('crop') and c['crop']['x'] < 0.1 and 0.35 <= c['crop']['w'] <= 0.65 for c in take_clips())"
+    },
+    {
+      "name": "a zoom on each click",
+      "expr": "all(any(i['kind'] == 'zoom' and (i['anchor'].get('sourceFrame', i['anchor'].get('frame', -1)) - 15) <= s * project['fps'] < i['anchor'].get('sourceFrame', i['anchor'].get('frame', -1)) + i['length'] for i in items) for s in [2.0, 5.0])"
+    },
+    {
+      "name": "each click inside its zoomed view (crop space)",
+      "expr": "all(any(i['kind'] == 'zoom' and isinstance(i['params'].get('focus'), dict) and (i['anchor'].get('sourceFrame', i['anchor'].get('frame', -1)) - 15) <= s * project['fps'] < i['anchor'].get('sourceFrame', i['anchor'].get('frame', -1)) + i['length'] and all(f - f / a + 0.02 <= v <= f - f / a + 1 / a - 0.02 for f, v, a in [(i['params']['focus']['x'], (cx - take_clips()[0]['crop']['x']) / take_clips()[0]['crop']['w'], i['params'].get('amount', 1.5)), (i['params']['focus']['y'], (cy - take_clips()[0]['crop']['y']) / take_clips()[0]['crop']['h'], i['params'].get('amount', 1.5))]) for i in items) for s, cx, cy in [(2.0, 0.2, 0.3), (5.0, 0.4, 0.6)])"
+    }
   ]
 }

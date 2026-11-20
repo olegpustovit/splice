@@ -1,11 +1,44 @@
 {
   "id": "gif-teaser",
   "platform": "macos",
-  "seed": {"copy": "fixtures/projects/sample.splice"},
-  "prompt": "From the Splice project {project}, make a 15-second GIF teaser of the start of the video, and an MP4 of the whole video. Tell me if anything could not be done exactly as asked. Use the splice MCP tools only.",
+  "seed": {
+    "record": {
+      "app": "TextEdit",
+      "duration": 20,
+      "events": [
+        {
+          "t": 1.0,
+          "do": "click",
+          "x": 0.4,
+          "y": 0.4
+        },
+        {
+          "t": 1.5,
+          "do": "type",
+          "for": 4
+        },
+        {
+          "t": 12.0,
+          "do": "click",
+          "x": 0.6,
+          "y": 0.6
+        }
+      ]
+    }
+  },
+  "prompt": "From the Splice project {project}, make a 15-second GIF teaser of the start of the recording, and an MP4 of the whole video. Tell me if anything could not be done exactly as asked. Use the splice MCP tools only.",
   "checks": [
-    {"name": "a GIF", "expr": "len(exports('.gif')) >= 1"},
-    {"name": "an MP4", "expr": "len(exports('.mp4')) >= 1"},
-    {"name": "GIF limit reported", "expr": "agent_said(r'10[ -]?(s\\b|sec)|150 frames|limit')"}
+    {
+      "name": "a GIF",
+      "expr": "len(exports('.gif')) >= 1"
+    },
+    {
+      "name": "an MP4",
+      "expr": "len(exports('.mp4')) >= 1"
+    },
+    {
+      "name": "GIF limit reported",
+      "expr": "agent_said(r'10[ -]?(s\\b|sec)|150 frames|limit')"
+    }
   ]
 }
