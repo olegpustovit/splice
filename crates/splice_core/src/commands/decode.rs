@@ -545,9 +545,21 @@ pub(super) fn cursor_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
 }
 
 pub(super) fn keys_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let show = match a.opt_string("show")?.as_deref() {
+        None => None,
+        Some("all") => Some("all"),
+        Some("shortcuts") => Some("shortcuts"),
+        Some("none") => Some("none"),
+        Some(_) => return Err(Error::bad("show", "all, shortcuts or none")),
+    };
+    let size = a.opt_within("size", 0.5, 3.0)?;
+    if size.is_none() && show.is_none() {
+        return Err(Error::bad("show or size", "at least one change"));
+    }
     Ok(Op::KeysSet {
         clip: a.target("clip")?,
-        size: a.opt_within("size", 0.5, 3.0)?,
+        size,
+        show,
     })
 }
 

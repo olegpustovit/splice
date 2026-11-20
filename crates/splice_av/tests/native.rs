@@ -457,7 +457,8 @@ mod native {
                 .count();
             assert_eq!(red, 0, "cursor drawn outside the visible crop");
         }
-        // D19: a typed key shows as a chip for people; renders an agent sees leave it out.
+        // D19, A1: a typed key shows as a chip for people; renders an agent sees draw the same
+        // chip at the same place with its text redacted.
         fs::write(
             take.join("events.json"),
             r#"{"t0":0,"source":{"kind":"display","rect":{"x":0,"y":0,"width":96,"height":64},"scale":1},"events":[
@@ -479,19 +480,49 @@ mod native {
         };
         let human = frame(&Composition::prepare(&project, &scratch.0).unwrap());
         let agent = frame(&Composition::prepare_for_agent(&project, &scratch.0).unwrap());
-        // Renders are deterministic: the only difference is the chip.
-        let changed = human
-            .chunks(4)
-            .zip(agent.chunks(4))
-            .filter(|(a, b)| a != b)
-            .count();
-        assert!(changed > 0, "the chip draws for people");
+        let width = project.size[0] as usize;
+        // The bounding box of the pixels that differ between two renders.
+        let changed = |a: &[u8], b: &[u8]| {
+            let mut bounds: Option<[usize; 4]> = None;
+            for (index, _) in a
+                .chunks(4)
+                .zip(b.chunks(4))
+                .enumerate()
+                .filter(|(_, (p, q))| p != q)
+            {
+                let (x, y) = (index % width, index / width);
+                let b = bounds.get_or_insert([x, y, x, y]);
+                *b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+            }
+            bounds
+        };
+        assert!(
+            changed(&human, &agent).is_some(),
+            "the agent chip is redacted"
+        );
+        // Shortcuts only: the typed key draws no chip for anyone.
+        let slot = project.clips.order()[0];
+        let data = project.clips.data_mut(slot).unwrap();
+        data.appearance.effects.retain(|e| e.kind != "keystrokes");
+        data.appearance.effects.push(effect(
+            2,
+            "keystrokes",
+            vec![("show", EffectValue::Text("shortcuts".into()))],
+        ));
+        let shortcuts = frame(&Composition::prepare(&project, &scratch.0).unwrap());
         let slot = project.clips.order()[0];
         let data = project.clips.data_mut(slot).unwrap();
         data.appearance.effects.retain(|e| e.kind != "keystrokes");
         data.enabled.keys = Some(false);
         let plain = frame(&Composition::prepare(&project, &scratch.0).unwrap());
-        assert!(agent == plain, "the agent render shows no keystroke chip");
+        assert!(shortcuts == plain, "show:shortcuts hides a typed key");
+        let people = changed(&human, &plain).expect("the chip draws for people");
+        let agents = changed(&agent, &plain).expect("the agent sees a chip");
+        // Same place: the chips start at the same corner (their text widths differ).
+        assert!(
+            people[0].abs_diff(agents[0]) <= 1 && people[1].abs_diff(agents[1]) <= 1,
+            "chip for people {people:?}, for agents {agents:?}"
+        );
     }
 
     /// T13.1: a sound item on an audio lane reaches the exported mix.

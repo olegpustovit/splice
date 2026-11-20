@@ -191,6 +191,69 @@ fn tier_b_components_crop_and_keys() {
     }
 }
 
+/// A1, A11: a new take's keystroke chips start off (they can show typed text); keys.set
+/// {show} turns them on for every key or shortcuts only, or off again.
+#[test]
+fn new_takes_start_without_keystroke_chips_and_keys_set_picks_the_category() {
+    let mut project = sample();
+    run(
+        &mut project,
+        r#"[{"cmd":"clip.insert","media":"med_screen"}]"#,
+    )
+    .unwrap();
+    let slot = project.clips.order().last().copied().unwrap();
+    let id = project.clips.id(slot).unwrap();
+    let enabled = &project.clips.data(slot).unwrap().enabled;
+    assert_eq!((enabled.pointer, enabled.keys), (Some(true), Some(false)));
+    let show = |project: &Project| {
+        let data = project.clips.data(slot).unwrap();
+        let param = data
+            .appearance
+            .effects
+            .iter()
+            .filter(|effect| effect.kind == "keystrokes")
+            .flat_map(|effect| &effect.params)
+            .find(|param| param.name == "show")
+            .map(|param| param.value.clone());
+        (data.enabled.keys, param)
+    };
+    run(
+        &mut project,
+        &format!(r#"[{{"cmd":"keys.set","clip":"{id}","show":"shortcuts"}}]"#),
+    )
+    .unwrap();
+    assert_eq!(
+        show(&project),
+        (Some(true), Some(EffectValue::Text("shortcuts".into())))
+    );
+    run(
+        &mut project,
+        &format!(r#"[{{"cmd":"keys.set","clip":"{id}","show":"none","size":2}}]"#),
+    )
+    .unwrap();
+    assert_eq!(show(&project).0, Some(false));
+    for (op, param) in [
+        (
+            format!(r#"{{"cmd":"keys.set","clip":"{id}"}}"#),
+            "show or size",
+        ),
+        (
+            format!(r#"{{"cmd":"keys.set","clip":"{id}","show":"typing"}}"#),
+            "show",
+        ),
+    ] {
+        let error = run(&mut project, &format!("[{op}]")).unwrap_err();
+        assert_eq!(error.error.code, "BAD_ARGS", "{op}");
+        assert_eq!(error.error.rule.unwrap().param, param, "{op}");
+    }
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"keys.set","clip":"clp_open","show":"all"}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "WRONG_KIND");
+}
+
 #[test]
 fn tier_b_captions_generate_edit_split_merge_and_follow_cuts() {
     let mut project = sample();

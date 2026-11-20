@@ -107,6 +107,8 @@ pub struct Keys {
     pub scale: f64,
     /// Overlay placement.
     pub position: KeyPosition,
+    /// Only keys pressed with ⌘, ⌃ or ⌥ show (`keys.set {show:"shortcuts"}`).
+    pub shortcuts_only: bool,
 }
 
 /// Preset used to lay out and highlight caption words.
@@ -279,6 +281,7 @@ pub(super) fn keys(scopes: &[&[Effect]]) -> Option<Keys> {
     Some(Keys {
         scale: style.number("size", 1.0).clamp(0.5, 3.0),
         position,
+        shortcuts_only: style.text("show") == Some("shortcuts"),
     })
 }
 

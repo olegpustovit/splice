@@ -12,8 +12,8 @@ pub(crate) struct TakeEvents {
     pub size: [f64; 2],
     pub samples: Vec<Sample>,
     pub images: Vec<CursorImage>,
-    /// (source seconds, typed text).
-    pub keys: Vec<(f64, String)>,
+    /// (source seconds, typed text, modifier flags as recorded).
+    pub keys: Vec<(f64, String, u64)>,
 }
 
 pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, Error> {
@@ -95,7 +95,8 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
                 if let Some(ch) = event.field("ch").and_then(Json::as_str)
                     && !ch.trim().is_empty()
                 {
-                    out.keys.push((t, ch.to_owned()));
+                    let mods = event.field("mods").and_then(Json::as_u64).unwrap_or(0);
+                    out.keys.push((t, ch.to_owned(), mods));
                 }
             }
             _ => {}

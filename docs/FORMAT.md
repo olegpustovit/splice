@@ -233,6 +233,11 @@ Rules:
   {param: value}}}` outside the package format (any path; relative paths land in the package):
   the target's own `window`, `camera`, `cursor`, `color` and `captions` values, keys as
   `{"keys":[…]}`, a window `image` as an absolute file path. `look.apply {file}` reads it.
+- **Keystroke chips off by default (T46.4, A1).** A take inserted from 0.4 on writes
+  `"enabled":{…,"keys":false}`: chips can show typed text, so they render only after
+  `keys.set {show}` (or `component.set`). Files already saved keep their `keys` state as written.
+  The `keystrokes` effect gains `show`: `all` (default, every key) or `shortcuts` (only keys whose
+  `mods` hold ⌘, ⌃ or ⌥; NSEvent bits 20, 18, 19). Files without it read as `all`.
 
 - **Declared pointer marks (T39.4).** A take's `components` may carry
   `"pointer":[{"t":2.0,"x":0.6,"y":0.4,"click":true}]` (source seconds, positions normalized to the

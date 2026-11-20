@@ -292,10 +292,12 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "keys.set", title: "Keystroke Chip Settings", group: "Take components",
         risk: "edit", shortcut: "", tier: Tier::Second,
-        params: &[("clip", "!clp_…"),
-            ("size", "!0.5–3")],
-        ui: &["Inspector Chip size"],
-        example: r#"{"cmd":"keys.set","clip":"clp_take","size":1.4}"#, decoder: decode::keys_set,
+        params: &[("clip", "!clp_… screen take with recorded events"),
+            ("show", "all|shortcuts|none · which keystrokes show as chips: every key (typed text included), only keys pressed with ⌘, ⌃ or ⌥, or none (the keys component off). New takes start with none"),
+            ("size", "0.5–3 · chip scale")],
+        ui: &["Inspector Chip size",
+            "Keys menu ▸ Show All / Shortcuts Only / None"],
+        example: r#"{"cmd":"keys.set","clip":"clp_take","show":"shortcuts","size":1.4}"#, decoder: decode::keys_set,
     },
     Command {
         id: "keys.hide", title: "Hide Keystrokes", group: "Take components",

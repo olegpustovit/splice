@@ -18,6 +18,9 @@ pub const PAD: f64 = 0.25;
 pub const BURST_GAP: f64 = 0.5;
 /// Key presses closer than this (seconds) belong to one typing run.
 pub const TYPING_GAP: f64 = 1.0;
+/// Command, control and option (NSEvent modifier flags in a key event's `mods`): a key pressed
+/// with one is a shortcut, anything else is typing (takes.events categories, `keys.set {show}`).
+pub const SHORTCUT_MODIFIERS: u64 = (1 << 18) | (1 << 19) | (1 << 20);
 /// How long one instantaneous event (a key, a move) counts as busy, in seconds.
 const BLIP: f64 = 0.1;
 

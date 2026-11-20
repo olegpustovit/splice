@@ -105,6 +105,44 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
             _ => {}
         }
     }
+    // A1: chips that show every key put typed text (passwords, private notes) in the export;
+    // renders an agent sees redact them, so only this says so.
+    for &slot in project.clips.order() {
+        let (Some(id), Some(data)) = (project.clips.id(slot), project.clips.data(slot)) else {
+            continue;
+        };
+        if data.enabled.keys != Some(true) {
+            continue;
+        }
+        let scopes = [
+            project.effects.as_slice(),
+            &project.spine.effects,
+            &data.appearance.effects,
+        ];
+        let shortcuts =
+            splice_eval::resolve_effect(&scopes, "keystrokes").is_some_and(|(enabled, params)| {
+                !enabled
+                    || params.iter().any(|param| {
+                        param.name == "show"
+                            && param.value == splice_model::EffectValue::Text("shortcuts".into())
+                    })
+            });
+        if !shortcuts {
+            lints.push(lint(
+                "KEYS_SHOW_TYPING",
+                &format!(
+                    "{id}'s keystroke chips show every key, so typed text appears in the export (agent renders show it as dots)."
+                ),
+                &[id.to_string()],
+                "Show only shortcuts (keys.set {show:\"shortcuts\"}), hide the private keys (keys.hide), or turn the chips off (keys.set {show:\"none\"}).",
+                Some(Json::Array(vec![object(vec![
+                    ("cmd", text("keys.set")),
+                    ("clip", text(&id.to_string())),
+                    ("show", text("shortcuts")),
+                ])])),
+            ));
+        }
+    }
     let pacing = pacing(project, end);
     if portrait
         && let Some(longest) = pacing.field("longestStatic").and_then(Json::as_f64)
@@ -362,5 +400,29 @@ mod tests {
         // Only the cuts at 120 and 540 remain: 14 s of take with nothing changing.
         assert!(has(&bare, "LONG_STATIC"));
         assert!(has(&project, "TEXT_OVER_WINDOW"));
+    }
+
+    /// A1: chips that show every key are flagged with a batch that keeps only shortcuts;
+    /// shortcuts only or chips off are not.
+    #[test]
+    fn lints_flag_keystroke_chips_that_show_typed_text() {
+        let mut project = crate::tests::sample_project();
+        // The 0.3 sample keeps its chips on (nothing migrates silently).
+        let found = codes(&project);
+        let (_, lint) = found
+            .iter()
+            .find(|(code, _)| code == "KEYS_SHOW_TYPING")
+            .expect("typed text flagged");
+        let fix = lint.field("ops").unwrap().clone();
+        edit::apply(&mut project, fix.as_array().unwrap(), Source::Agent, false).unwrap();
+        assert!(!codes(&project).iter().any(|(c, _)| c == "KEYS_SHOW_TYPING"));
+        let ops =
+            splice_json::parse(r#"[{"cmd":"keys.set","clip":"clp_take","show":"all"}]"#).unwrap();
+        edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+        assert!(codes(&project).iter().any(|(c, _)| c == "KEYS_SHOW_TYPING"));
+        let ops =
+            splice_json::parse(r#"[{"cmd":"keys.set","clip":"clp_take","show":"none"}]"#).unwrap();
+        edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+        assert!(!codes(&project).iter().any(|(c, _)| c == "KEYS_SHOW_TYPING"));
     }
 }

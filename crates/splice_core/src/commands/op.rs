@@ -263,6 +263,8 @@ pub enum Op {
         clip: Target,
         /// Keystroke chip scale.
         size: Option<f64>,
+        /// Which keystrokes show as chips: `all`, `shortcuts` or `none` (the keys component off).
+        show: Option<&'static str>,
     },
     /// Hide Keystrokes.
     KeysHide {

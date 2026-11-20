@@ -110,8 +110,9 @@ fix, ops?}`, where `ops` is a batch that fixes it when one exists. Codes: `OUTSI
 `tiktok-2026`: top 8.4 %, bottom 18.75 %, left 8.4 %, right 11.2 % of the canvas),
 `TEXT_OVER_WINDOW` (a title covers over 30 % of itself with the recorded window), `ZOOM_OVERFLOW`
 (a frame-mode zoom past `fitSafeScale`), `LONG_STATIC` (over 8 s without a visual change on a
-vertical short). `pacing` is `{cutsPerMinute, longestStatic, safeZone}`. `record.stop` returns
-the same plus `TAKE_ASPECT` and `MIC_SILENT` (see Recording jobs).
+vertical short), `KEYS_SHOW_TYPING` (a take's keystroke chips show every key, so typed text is in
+the export; `ops` keeps only shortcuts). `pacing` is `{cutsPerMinute, longestStatic, safeZone}`.
+`record.stop` returns the same plus `TAKE_ASPECT` and `MIC_SILENT` (see Recording jobs).
 
 ## Command descriptions
 
@@ -215,6 +216,13 @@ whole takes its items with it (`cause:"cascade"`). `delete` removes the items on
 (on a clip removed whole there is nothing to keep, so `trim` deletes like `delete`).
 A ripple cut also shortens any item that runs into the cut, so the items after it close up
 instead of bumping to new lanes. `cut.range` refuses a negative `from`.
+
+Keystroke chips (A1, A11) can show typed text, so a new take starts with them off (the
+`keys` component is `false`; a 0.3 or earlier 0.4 project keeps what it has, nothing migrates).
+`keys.set {clip, show:"all"|"shortcuts"|"none", size?}` turns them on for every key, on for keys
+pressed with ⌘, ⌃ or ⌥ only (chips read `⌘S`), or off; `keys.hide` still hides single events.
+`view.frames` and `view.check` draw the same chips at the same place and time with every typed
+character as a dot (D19: the text stays human-only), so an agent sees where they land.
 
 `style.set` colors recolor the project's window (or, without one, the windows that exist) and
 never turn a window on. `effect.add` of `camera`, `cursor` or `keystrokes` on a clip needs that

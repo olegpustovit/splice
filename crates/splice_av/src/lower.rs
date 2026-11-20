@@ -116,7 +116,7 @@ pub(super) fn build(
     shared: &Arc<Evaluator>,
     cuts: &[Frame],
     end: Frame,
-    keystrokes: bool,
+    redact_keys: bool,
 ) -> Result<(Composition, Vec<TimedText>, Plan), Error> {
     let evaluator: &Evaluator = shared;
     let mut luts = Vec::new();
@@ -335,9 +335,10 @@ pub(super) fn build(
         state.builder.range(range, &tracks, &audio)?;
         state.plan.intervals.push((range, video.clone()));
     }
-    // Keystroke chips carry typed characters: renders an agent sees leave them out (D19).
-    for (clip, media, style) in chips.into_iter().filter(|_| keystrokes) {
-        state.chips(clip, media, style, project, package, evaluator)?;
+    // Keystroke chips carry typed characters: renders an agent sees draw the same chips at the
+    // same place and time with each character replaced by a dot (D19, A1).
+    for (clip, media, style) in chips {
+        state.chips(clip, media, style, redact_keys, project, package, evaluator)?;
     }
     Ok((state.builder.finish()?, state.text, state.plan))
 }
@@ -432,6 +433,7 @@ impl Lowering {
         clip: ClipId,
         media: MediaId,
         style: Keys,
+        redact: bool,
         project: &Project,
         package: &Path,
         evaluator: &Evaluator,
@@ -461,16 +463,18 @@ impl Lowering {
             .1
             .as_ref()
             .map_or(&[][..], |e| e.keys.as_slice());
-        for (n, (t, text)) in keys.iter().enumerate() {
-            if hidden.contains(&(n as u32)) {
+        for (n, (t, text, mods)) in keys.iter().enumerate() {
+            let shortcut = mods & splice_eval::activity::SHORTCUT_MODIFIERS != 0;
+            if hidden.contains(&(n as u32)) || (style.shortcuts_only && !shortcut) {
                 continue;
             }
+            let chip = chip_text(text, *mods, redact);
             match bursts.last_mut() {
                 Some(last) if t - last.1 < 0.6 && last.2.chars().count() < 24 => {
                     last.1 = *t;
-                    last.2.push_str(text);
+                    last.2.push_str(&chip);
                 }
-                _ => bursts.push((*t, *t, text.clone())),
+                _ => bursts.push((*t, *t, chip)),
             }
         }
         for (start, end, text) in bursts {
@@ -999,4 +1003,43 @@ fn ramp(a: f64, b: f64, [from, to]: [Frame; 2]) -> [f64; 2] {
             a
         },
     ]
+}
+
+/// One keystroke's chip text: a shortcut carries its modifier glyphs (⌃⌥⇧⌘, Apple's order) and
+/// an upper-case key. Redacted (renders an agent sees, D19) every typed character is a dot, so
+/// the chip keeps its place, timing and rough width without the text.
+fn chip_text(text: &str, mods: u64, redact: bool) -> String {
+    let mut chip = String::new();
+    if mods & splice_eval::activity::SHORTCUT_MODIFIERS != 0 {
+        for (bit, glyph) in [(18, '⌃'), (19, '⌥'), (17, '⇧'), (20, '⌘')] {
+            if mods & (1 << bit) != 0 {
+                chip.push(glyph);
+            }
+        }
+    }
+    if redact {
+        chip.extend(text.chars().map(|_| '•'));
+    } else if chip.is_empty() {
+        chip.push_str(text);
+    } else {
+        chip.extend(text.chars().flat_map(char::to_uppercase));
+    }
+    chip
+}
+
+#[cfg(test)]
+mod chip_tests {
+    use super::chip_text;
+
+    #[test]
+    fn chips_show_shortcut_glyphs_and_agent_renders_redact_the_text() {
+        let command = 1 << 20;
+        let shift = 1 << 17;
+        assert_eq!(chip_text("s", command, false), "⌘S");
+        assert_eq!(chip_text("s", command | shift | (1 << 18), false), "⌃⇧⌘S");
+        assert_eq!(chip_text("s", command, true), "⌘•");
+        // Shift alone is typing: the text as typed, or dots for an agent.
+        assert_eq!(chip_text("P", shift, false), "P");
+        assert_eq!(chip_text("pw", 0, true), "••");
+    }
 }

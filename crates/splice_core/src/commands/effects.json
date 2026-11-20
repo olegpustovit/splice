@@ -372,6 +372,15 @@
           "top-left"
         ],
         "label": "Position"
+      },
+      "show": {
+        "type": "enum",
+        "def": "all",
+        "options": [
+          "all",
+          "shortcuts"
+        ],
+        "label": "Show"
       }
     },
     "applies": "take"

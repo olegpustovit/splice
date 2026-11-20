@@ -322,10 +322,12 @@ declare namespace Splice {
     /** Keystroke Chip Settings (edit, 0.2). */
     interface KeysSet extends Base {
       cmd: "keys.set";
-      /** clp_… */
+      /** clp_… screen take with recorded events */
       clip: string;
-      /** 0.5–3 */
-      size: number;
+      /** which keystrokes show as chips: every key (typed text included), only keys pressed with ⌘, ⌃ or ⌥, or none (the keys component off). New takes start with none */
+      show?: "all" | "shortcuts" | "none";
+      /** 0.5–3 · chip scale */
+      size?: number;
     }
     /** Hide Keystrokes (edit, 0.2). */
     interface KeysHide extends Base {
@@ -1178,6 +1180,8 @@ declare namespace Splice {
       size?: number;
       /** Position · @default "bottom-left" */
       position?: "bottom-left" | "bottom-center" | "top-left";
+      /** Show · @default "all" */
+      show?: "all" | "shortcuts";
     };
     /** Transform: spine clips, media overlays, titles, shapes and captions. */
     transform: {

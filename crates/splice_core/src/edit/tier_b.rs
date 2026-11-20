@@ -136,12 +136,7 @@ impl Editor {
                 }
                 self.clip_effect(&clip, "cursor", params, "Cursor")
             }
-            Op::KeysSet { clip, size } => {
-                let size =
-                    size.ok_or_else(|| CommandError::bad("size", "a scale from 0.5 to 3"))?;
-                let params = vec![number("size", size)];
-                self.clip_effect(&clip, "keystrokes", params, "Keystroke chips")
-            }
+            Op::KeysSet { clip, size, show } => self.set_keys(&clip, size, show),
             Op::KeysHide {
                 clip,
                 events,
@@ -588,6 +583,48 @@ impl Editor {
         self.upsert(Owner::Clip(slot), kind, params, None, &mut created)?;
         Ok(Outcome {
             summary: Summary::Text(format!("{label} updated on {id}")),
+            primary: Some(Target::Timeline(TimelineId::Clip(id))),
+            created,
+        })
+    }
+
+    /// keys.set (A1, A11): `show` turns the keys component on or off and picks the category
+    /// (`shortcuts` keeps only chips pressed with ⌘, ⌃ or ⌥); `size` scales the chips.
+    fn set_keys(
+        &mut self,
+        clip: &Target,
+        size: Option<f64>,
+        show: Option<&'static str>,
+    ) -> Result<Outcome, CommandError> {
+        let (id, slot) = self.take_clip(clip)?;
+        let data = self.project.clips.data_mut(slot).expect("live clip");
+        if data.enabled.keys.is_none() {
+            return Err(no_component(id, Component::Keys));
+        }
+        if let Some(show) = show {
+            data.enabled.keys = Some(show != "none");
+        }
+        let mut params = Vec::new();
+        if let Some(size) = size {
+            params.push(number("size", size));
+        }
+        if let Some(show @ ("all" | "shortcuts")) = show {
+            params.push(EffectParam {
+                name: "show".into(),
+                value: EffectValue::Text(show.into()),
+            });
+        }
+        let mut created = Vec::new();
+        if !params.is_empty() {
+            self.upsert(Owner::Clip(slot), "keystrokes", params, None, &mut created)?;
+        }
+        Ok(Outcome {
+            summary: Summary::Text(match show {
+                Some("none") => format!("Keystroke chips off on {id}"),
+                Some("shortcuts") => format!("Keystroke chips on {id}: shortcuts only"),
+                Some(_) => format!("Keystroke chips on {id}: every key, typed text included"),
+                None => format!("Keystroke chips updated on {id}"),
+            }),
             primary: Some(Target::Timeline(TimelineId::Clip(id))),
             created,
         })
@@ -1418,7 +1455,8 @@ impl Editor {
                 mic: take.mic.as_ref().map(|_| true),
                 system: take.system.as_ref().map(|_| true),
                 pointer: take.events.as_ref().map(|_| true),
-                keys: take.events.as_ref().map(|_| true),
+                // Chips can show typed text: off until asked for (A1, D19).
+                keys: take.events.as_ref().map(|_| false),
             });
         self.project.clips.remove(slot);
         self.project.items.remove(item_slot_);

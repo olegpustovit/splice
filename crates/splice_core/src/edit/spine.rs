@@ -254,7 +254,8 @@ impl Editor {
                 mic: take.mic.as_ref().map(|_| true),
                 system: take.system.as_ref().map(|_| true),
                 pointer: take.events.as_ref().map(|_| true),
-                keys: take.events.as_ref().map(|_| true),
+                // Chips can show typed text: off until asked for (A1, D19).
+                keys: take.events.as_ref().map(|_| false),
             });
         let at = at
             .map(|at| self.frame(at))

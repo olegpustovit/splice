@@ -543,7 +543,7 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
                 "key" => {
                     let data = p.clips.data(slot).unwrap();
                     let mods = event.field("mods").and_then(Json::as_u64).unwrap_or(0);
-                    let category = if mods & COMMAND_MODIFIERS != 0 {
+                    let category = if mods & splice_eval::activity::SHORTCUT_MODIFIERS != 0 {
                         "shortcut"
                     } else {
                         "typing"
@@ -758,7 +758,7 @@ pub(super) fn activity(
                 "flags" => Input::Shortcut,
                 "key" => {
                     let mods = event.field("mods").and_then(Json::as_u64).unwrap_or(0);
-                    if mods & COMMAND_MODIFIERS != 0 {
+                    if mods & splice_eval::activity::SHORTCUT_MODIFIERS != 0 {
                         Input::Shortcut
                     } else {
                         Input::Typing
@@ -781,9 +781,6 @@ pub(super) fn activity(
         .collect();
     Ok(splice_eval::activity::activity(&events, &speech, window))
 }
-
-/// Command, control and option (NSEvent modifier flags): a key with one is a shortcut.
-const COMMAND_MODIFIERS: u64 = (1 << 18) | (1 << 19) | (1 << 20);
 
 fn not_a_take() -> StoreError {
     failure(

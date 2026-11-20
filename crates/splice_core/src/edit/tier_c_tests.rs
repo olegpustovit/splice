@@ -639,11 +639,11 @@ fn low_out_of_range_edits_are_refused() {
     )
     .unwrap_err();
     assert_eq!(error.error.code, "MARKER_EXISTS");
-    // keys.set's schema says size is required, as apply does.
+    // keys.set's schema names its categories, as apply takes them (A11).
     let described = commands::describe(Some("keys.set"), None).unwrap();
     let mut text = String::new();
     splice_json::write(&described, &mut text).unwrap();
-    assert!(text.contains("!0.5"), "{text}");
+    assert!(text.contains("all|shortcuts|none"), "{text}");
     // SRT with an absurd hour field is malformed, not an overflow.
     assert_eq!(
         parse_cues("1\n99999999999999999:00:00,000 --> 99999999999999999:00:01,000\nhi\n"),
