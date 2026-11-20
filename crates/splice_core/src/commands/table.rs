@@ -931,7 +931,7 @@ pub const COMMANDS: &[Command] = &[
             ("loudness", "number · filled: integrated LUFS from the catalog"),
             ("title", "string · filled: credit"),
             ("artist", "string · filled: credit"),
-            ("license", "string · filled: credit; unknown is refused without allowUnlicensed")],
+            ("license", "string · filled: credit; a library track with an unknown license is refused without allowUnlicensed (a file passed by path is yours and is not checked)")],
         ui: &["Media ▸ Music Library ▸ Add"],
         example: r#"{"cmd":"music.add","track":"calm/sunrise.wav","path":"assets/music.wav","seconds":10,"loudness":-20,"title":"Sunrise","artist":"Ada","license":"CC0-1.0","fit":"timeline"}"#, decoder: decode::music_add,
     },

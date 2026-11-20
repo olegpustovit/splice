@@ -935,15 +935,51 @@ fn a_second_split_past_the_shortened_clip_names_the_piece_holding_the_frame() {
     );
 }
 
-/// Found by record-app-landscape: clip.crop {id} suggested "fit" (one edit away) instead of
-/// "items", the argument the agent meant.
+/// Found by record-app-landscape: agents pass clip.crop {id} (it takes items); it is items.
+/// Also from the final eval run: $cut.left names a split's left piece, a ref written
+/// without $ is pointed at its $ form, and seconds where frames go say so.
 #[test]
-fn an_id_argument_suggests_items_before_a_near_spelling() {
+fn agent_spellings_of_arguments_and_refs_mean_what_they_say() {
     let mut project = sample();
-    let ops =
-        splice_json::parse(r#"[{"cmd":"clip.crop","id":"clp_take","aspect":"canvas"}]"#).unwrap();
-    let text = apply(&mut project, ops.as_array().unwrap(), Source::Agent, true)
+    let run = |project: &mut Project, ops: &str| {
+        let ops = splice_json::parse(ops).unwrap();
+        apply(project, ops.as_array().unwrap(), Source::Agent, true)
+    };
+    run(
+        &mut project,
+        r#"[{"cmd":"clip.crop","id":"clp_take","aspect":"canvas"}]"#,
+    )
+    .unwrap();
+    run(
+        &mut project,
+        r#"[{"cmd":"item.split","item":"clp_take","at":300,"ref":"cut"},{"cmd":"cursor.set","clip":"$cut.left","hidden":true}]"#,
+    )
+    .unwrap();
+    let bare = run(
+        &mut project,
+        r#"[{"cmd":"item.split","item":"clp_take","at":300,"ref":"cut"},{"cmd":"cursor.set","clip":"cut","hidden":true}]"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(bare.contains("\"$cut\""), "{bare}");
+    let seconds = run(&mut project, r#"[{"cmd":"cut.pauses","min":0.6}]"#)
         .unwrap_err()
         .to_string();
-    assert!(text.contains("Did you mean \"items\""), "{text}");
+    assert!(
+        seconds.contains("not seconds") && seconds.contains("18 frames"),
+        "{seconds}"
+    );
+}
+
+/// From the final eval run: zoom.set {item} and zoom.remove {items:[…]} (they take zoom).
+#[test]
+fn zoom_commands_take_the_names_agents_use() {
+    let mut project = sample();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"zoom.add","at":200,"length":60,"amount":1.5,"ref":"z"},
+            {"cmd":"zoom.set","item":"$z","amount":2},
+            {"cmd":"zoom.remove","items":["$z"]}]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, true).unwrap();
 }

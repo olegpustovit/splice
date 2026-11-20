@@ -126,7 +126,20 @@ fn integer(value: &Json, key: &str) -> Result<Frame, Error> {
     value
         .as_i64()
         .and_then(|n| Frame::try_from(n).ok())
-        .ok_or_else(|| Error::bad(key, "an integer frame in the signed 32-bit range"))
+        .ok_or_else(|| match value.as_f64() {
+            // A fraction is almost always seconds where the API counts frames.
+            Some(n) if n.is_finite() && n.fract() != 0.0 => Error::rule(
+                "BAD_ARGS",
+                key,
+                Some(value.clone()),
+                "an integer frame count",
+                &format!(
+                    "{key} counts frames, not seconds: {n} s is {} frames at 30 fps (project.info gives fps).",
+                    (n * 30.0).round()
+                ),
+            ),
+            _ => Error::bad(key, "an integer frame in the signed 32-bit range"),
+        })
 }
 
 fn shape(value: &Json, key: &str, allowed: &[&str]) -> Result<(), Error> {
@@ -156,12 +169,13 @@ fn shape(value: &Json, key: &str, allowed: &[&str]) -> Result<(), Error> {
 pub(crate) fn reference(id: &str, key: &str) -> Result<Reference, Error> {
     let (name, part) = match id.split_once('.') {
         None => (id, RefPart::Primary),
-        Some((name, "primary")) => (name, RefPart::Primary),
+        // After a split the referenced item keeps the left piece.
+        Some((name, "primary" | "left")) => (name, RefPart::Primary),
         Some((name, "right" | "new")) => (name, RefPart::FirstCreated),
         _ => {
             return Err(Error::bad(
                 key,
-                "a reference like $cut, $cut.right, or $cut.new",
+                "a reference like $cut, $cut.left, $cut.right, or $cut.new",
             ));
         }
     };
@@ -199,6 +213,11 @@ pub(super) fn binding(value: &Json) -> Result<String, Error> {
 }
 
 fn target(value: &Json, key: &str) -> Result<Target, Error> {
+    // A list of one names that one target (agents write items-style lists everywhere).
+    let value = match value.as_array() {
+        Some([one]) => one,
+        _ => value,
+    };
     let id = value
         .as_str()
         .ok_or_else(|| Error::bad(key, "a Splice ID or a $ref"))?;
@@ -219,7 +238,24 @@ fn target(value: &Json, key: &str) -> Result<Target, Error> {
         Some("fx") => id.parse().map(Target::Effect),
         _ => Err(splice_model::InvalidId),
     };
-    result.map_err(|_| Error::bad(key, "a Splice ID or a $ref"))
+    result.map_err(|_| {
+        // A name a batch bound with ref, written without its $.
+        let bare = !id.is_empty()
+            && !id.contains('_')
+            && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.');
+        let fix = if bare {
+            format!("Refs are written with $: did you mean \"${id}\"? Otherwise pass a Splice ID (clp_…, ovl_…).")
+        } else {
+            "Pass a Splice ID (clp_…, ovl_…, lan_…) or a $ref.".to_owned()
+        };
+        Error::rule(
+            "BAD_ARGS",
+            key,
+            Some(value.clone()),
+            "a Splice ID or a $ref",
+            &fix,
+        )
+    })
 }
 
 pub(super) fn list(value: &Json) -> &[Json] {

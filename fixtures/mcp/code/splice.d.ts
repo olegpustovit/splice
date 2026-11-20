@@ -1032,7 +1032,7 @@ declare namespace Splice {
       title?: string;
       /** filled: credit */
       artist?: string;
-      /** filled: credit; unknown is refused without allowUnlicensed */
+      /** filled: credit; a library track with an unknown license is refused without allowUnlicensed (a file passed by path is yours and is not checked) */
       license?: string;
     }
     /** Add Counter (edit, 0.3). */

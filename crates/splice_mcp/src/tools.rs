@@ -797,6 +797,16 @@ fn with_defaults(
             fields.push(("projectId".into(), text(&only)));
         }
     }
+    // history.undo {to: rN} is scope "to" with that revision.
+    if name == "history.undo"
+        && field(&fields, "revision").is_none()
+        && let Some((at, _)) = field(&fields, "to")
+    {
+        fields[at].0 = "revision".into();
+        if field(&fields, "scope").is_none() {
+            fields.push(("scope".into(), text("to")));
+        }
+    }
     let mut started = None;
     if matches!(name, "edit.apply" | "history.undo")
         && field(&fields, "sessionId").is_none()

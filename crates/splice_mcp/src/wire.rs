@@ -151,7 +151,12 @@ impl Args for Json {
                 )
             })?
             .parse()
-            .map_err(|_| bad("sessionId", "a session ID from session.start"))
+            .map_err(|_| {
+                bad(
+                    "sessionId",
+                    "a session ID that session.start or edit.apply returned, or omitted (edits then join the open session or start one)",
+                )
+            })
     }
 }
 

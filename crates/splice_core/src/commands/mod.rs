@@ -118,6 +118,30 @@ impl Command {
         let fields = value
             .as_object()
             .ok_or_else(|| CommandError::bad("op", "an object"))?;
+        // An argument named by its obvious other name (item for items, id for item) is that
+        // argument; only a batch that uses one pays for the renamed copy.
+        let takes = |key: &str| self.params.iter().any(|(k, _)| *k == key);
+        let rename = |name: &str| {
+            SAME_ARGS
+                .iter()
+                .find(|(from, to)| {
+                    *from == name && takes(to) && !fields.iter().any(|(n, _)| n == to)
+                })
+                .map(|(_, to)| *to)
+        };
+        if fields
+            .iter()
+            .any(|(name, _)| !takes(name) && rename(name).is_some())
+        {
+            let renamed = fields
+                .iter()
+                .map(|(name, value)| match takes(name) {
+                    true => (name.clone(), value.clone()),
+                    false => (rename(name).unwrap_or(name).to_owned(), value.clone()),
+                })
+                .collect();
+            return self.decode(&Json::Object(renamed), scratch);
+        }
         // Unknown names first: a typo of a required argument reads as the typo.
         for (name, _) in fields {
             if name != "cmd" && name != "ref" && !self.params.iter().any(|(key, _)| key == name) {
@@ -291,6 +315,18 @@ pub fn closest(name: &str, known: &mut dyn Iterator<Item = &str>) -> Option<Stri
     // A synonym is what the caller meant; a near spelling is only a guess ("id" is not "fit").
     synonym.or(best)
 }
+
+/// Argument names agents use that mean exactly one argument of the command (decoded as it).
+const SAME_ARGS: &[(&str, &str)] = &[
+    ("item", "items"),
+    ("ids", "items"),
+    ("id", "items"),
+    ("id", "item"),
+    ("item", "zoom"),
+    ("id", "zoom"),
+    ("items", "zoom"),
+    ("ids", "zoom"),
+];
 
 /// Argument names that mean the same thing elsewhere in the API, for didYouMean.
 const SYNONYMS: &[(&str, &str)] = &[

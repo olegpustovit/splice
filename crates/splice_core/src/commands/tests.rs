@@ -253,21 +253,24 @@ fn decoders_reject_unknown_and_invalid_arguments() {
         (typo.code, typo.rule.unwrap().did_you_mean.as_deref()),
         ("UNKNOWN_PARAM", Some("at"))
     );
-    // Seen in evals: agents pass item or ids to item.delete, which takes items.
-    for wrong in ["item", "ids"] {
-        let error = decode(
-            &splice_json::parse(&format!(
-                r#"{{"cmd":"item.delete","{wrong}":["clp_take"]}}"#
-            ))
-            .unwrap(),
+    // Seen in evals: agents pass item, id or ids to item.delete, which takes items; each is
+    // that argument (the final eval run had 9 such failures).
+    for other in ["item", "ids", "id"] {
+        let op = decode(
+            &splice_json::parse(&format!(r#"{{"cmd":"item.delete","{other}":"clp_take"}}"#))
+                .unwrap(),
         )
-        .unwrap_err();
-        assert_eq!(
-            error.rule.unwrap().did_you_mean.as_deref(),
-            Some("items"),
-            "{wrong}"
+        .unwrap();
+        assert!(
+            matches!(&op.op, Op::ItemDelete { items, .. } if items.len() == 1),
+            "{other}"
         );
     }
+    // A name that means no argument still gets the nearest real one.
+    let error =
+        decode(&splice_json::parse(r#"{"cmd":"item.delete","itemz":["clp_take"]}"#).unwrap())
+            .unwrap_err();
+    assert_eq!(error.rule.unwrap().did_you_mean.as_deref(), Some("items"));
     let import = splice_json::parse(r#"{"cmd":"clip.insert","path":"/tmp/clip.mov"}"#).unwrap();
     assert!(
         matches!(decode(&import).unwrap().op, Op::ClipInsert { source: InsertSource::Path(path), .. } if path == "/tmp/clip.mov")

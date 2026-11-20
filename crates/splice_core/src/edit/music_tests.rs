@@ -253,3 +253,13 @@ fn a_quiet_track_reaches_the_gain_ceiling_by_default_but_an_asked_target_is_refu
     let error = run(&mut sample(), &quiet(r#","normalize":-14"#)).unwrap_err();
     assert_eq!(error.error.code, "OUT_OF_RANGE");
 }
+
+/// From the final eval run: the user's own music file (path, no catalog track) was refused as
+/// unlicensed 8 times. The license gate is for library tracks.
+#[test]
+fn the_users_own_file_needs_no_license() {
+    let own = r#"[{"cmd":"music.add","path":"/tmp/my-song.wav","seconds":30,"loudness":-20}]"#;
+    let mut project = sample();
+    run(&mut project, own).unwrap();
+    assert_eq!(sounds(&project).len(), 1);
+}

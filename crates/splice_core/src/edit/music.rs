@@ -22,7 +22,10 @@ impl Editor {
         load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
     ) -> Result<Outcome, CommandError> {
         let license = music.license.as_deref().map(str::trim).unwrap_or("");
-        if !music.allow_unlicensed
+        // The license gate guards the library's catalog; a file passed by path is the user's
+        // own (8 eval calls were refused on the user's music.wav).
+        if music.track.is_some()
+            && !music.allow_unlicensed
             && (license.is_empty() || license.eq_ignore_ascii_case("unknown"))
         {
             return Err(CommandError::rule(
