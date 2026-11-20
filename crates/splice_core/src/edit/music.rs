@@ -12,6 +12,9 @@ const DUCK: Duck = Duck {
     release: 15,
 };
 
+/// music.add's loudness target when the call names none (social platforms).
+const DEFAULT_LUFS: f64 = -14.0;
+
 impl Editor {
     pub(super) fn add_music(
         &mut self,
@@ -69,7 +72,11 @@ impl Editor {
         let loudness = media(&self.project, media_id)?.probe.loudness.or(measured);
         let volume = match (music.volume, loudness) {
             (Some(volume), _) => volume,
-            (None, Some(loudness)) => super::tier_b::normalize_gain(music.normalize, loudness)?,
+            (None, Some(loudness)) => match music.normalize {
+                Some(target) => super::tier_b::normalize_gain(target, loudness)?,
+                // The default is best effort: a quiet track gets the ceiling and says so.
+                None => super::tier_b::normalize_gain(DEFAULT_LUFS, loudness).unwrap_or(2.0),
+            },
             (None, None) => {
                 return Err(error(
                     "LOUDNESS_UNKNOWN",
@@ -152,7 +159,16 @@ impl Editor {
         let name = music.title.as_deref().unwrap_or(&music.path);
         let level = match music.volume {
             Some(volume) => format!("volume {volume:.2}"),
-            None => format!("normalized to {} LUFS", music.normalize),
+            None => match (music.normalize, loudness) {
+                (None, Some(loudness))
+                    if volume >= 2.0 && loudness + 20.0 * 2f64.log10() < DEFAULT_LUFS - 0.05 =>
+                {
+                    format!(
+                        "volume 2.00 (the gain ceiling; the track measures {loudness:.1} LUFS, too quiet for {DEFAULT_LUFS} LUFS)"
+                    )
+                }
+                (target, _) => format!("normalized to {} LUFS", target.unwrap_or(DEFAULT_LUFS)),
+            },
         };
         Ok(Outcome {
             summary: Summary::Text(format!(

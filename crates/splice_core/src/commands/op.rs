@@ -1003,8 +1003,9 @@ pub struct MusicAdd {
     pub duck: bool,
     /// Linear gain instead of normalizing.
     pub volume: Option<f64>,
-    /// LUFS target.
-    pub normalize: f64,
+    /// LUFS target the caller asked for (refused when out of reach); `None` means the -14
+    /// LUFS default, reached as far as the 2× gain ceiling allows and reported.
+    pub normalize: Option<f64>,
     /// Fade-out frames where the timeline cuts the music.
     pub fade_out: Option<Frame>,
     /// Audio lane.

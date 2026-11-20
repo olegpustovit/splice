@@ -167,8 +167,8 @@ pub(super) fn music_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         Some("trim") => MusicFit::Trim,
         Some(_) => return Err(Error::bad("fit", "timeline, loop or trim")),
     };
-    let normalize = a.opt_number("normalize")?.unwrap_or(-14.0);
-    if !(-40.0..=-5.0).contains(&normalize) {
+    let normalize = a.opt_number("normalize")?;
+    if normalize.is_some_and(|n| !(-40.0..=-5.0).contains(&n)) {
         return Err(Error::bad("normalize", "a LUFS target from -40 to -5"));
     }
     let fade_out = a.opt_int("fadeOut")?;

@@ -236,3 +236,20 @@ fn sample_audio(path: &str) -> Media {
         take: None,
     }
 }
+
+/// Found by mac-check after T46.3 met T46.4: a quiet track failed plain music.add because the
+/// default -14 LUFS needed more than 2× gain. A default is best effort and reported; a target
+/// the caller names is never weakened.
+#[test]
+fn a_quiet_track_reaches_the_gain_ceiling_by_default_but_an_asked_target_is_refused() {
+    let quiet = |extra: &str| music(30.0, extra).replace(r#""loudness":-20"#, r#""loudness":-70"#);
+    let mut project = sample();
+    let report = run(&mut project, &quiet("")).unwrap();
+    assert_eq!(sounds(&project)[0].2, 2.0);
+    assert!(
+        report.changes[0].summary.contains("gain ceiling"),
+        "{report:?}"
+    );
+    let error = run(&mut sample(), &quiet(r#","normalize":-14"#)).unwrap_err();
+    assert_eq!(error.error.code, "OUT_OF_RANGE");
+}

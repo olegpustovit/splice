@@ -903,7 +903,7 @@ pub const COMMANDS: &[Command] = &[
             ("fit", "timeline|loop|trim = timeline · timeline and loop repeat a short track to the timeline end; every mode cuts at the end with a fade-out; trim never repeats"),
             ("duck", "bool = true · lower under speech (amount 0.25, attack 8, release 15 frames)"),
             ("volume", "0–2 · linear gain instead of normalizing"),
-            ("normalize", "number = -14 · LUFS target (social) from the measured loudness"),
+            ("normalize", "number · LUFS target from the measured loudness; out of 2× gain reach is OUT_OF_RANGE · omitted: -14 (social) as far as 2× gain reaches, said in the summary"),
             ("fadeOut", "frames = 2 s · fade where the timeline end cuts the music"),
             ("lane", "lan_… · audio lane (default: a free audio lane, created if needed)"),
             ("allowUnlicensed", "bool = false · add a track whose license is unknown"),

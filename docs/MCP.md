@@ -399,7 +399,9 @@ instead. The change summary names the track, its license, the pieces and the lev
 refused with `BAD_ARGS` (it has nothing to apply them to; `audio.unlink` makes the component a
 sound item). Gain stays within 0–2: a `normalize` target (in `audio.set` or `music.add`) that
 needs more than 2× gain from the measured loudness is `OUT_OF_RANGE`, with the loudest
-reachable target in the fix, never clamped to a quieter level.
+reachable target in the fix, never clamped to a quieter level. Only a target the call names is
+held to that: `music.add` without `normalize` aims for -14 LUFS as far as 2× gain reaches, and
+its summary says when a quiet track stopped at the ceiling.
 
 `track` is a catalog ID (or an unambiguous title); an unknown one is `NOT_FOUND` with
 `didYouMean`. `edit.apply` fills `path`, `seconds`, `loudness`, `title`, `artist` and `license`

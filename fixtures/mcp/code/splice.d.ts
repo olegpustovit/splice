@@ -975,7 +975,7 @@ declare namespace Splice {
       duck?: boolean;
       /** 0–2 · linear gain instead of normalizing */
       volume?: number;
-      /** number · LUFS target (social) from the measured loudness · @default -14 */
+      /** number · LUFS target from the measured loudness; out of 2× gain reach is OUT_OF_RANGE · omitted: -14 (social) as far as 2× gain reaches, said in the summary */
       normalize?: number;
       /** fade where the timeline end cuts the music · @default 2 s */
       fadeOut?: number;
