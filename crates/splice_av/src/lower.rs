@@ -13,6 +13,11 @@ use splice_model::{ClipId, Frame, ItemId, Media, MediaId, MediaKind, Project, Ti
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Longest side, in pixels, a Lottie or SVG picture movie is drawn at.
+const VECTOR_SIDE: f64 = 1920.0;
+/// Frames of a Lottie loop that are drawn (an animated GIF's cap too, in native).
+const VECTOR_FRAMES: u32 = 2000;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
     Picture(TimelineId),
@@ -713,6 +718,9 @@ impl Lowering {
             media.take.as_ref().and_then(|take| take.screen.as_deref()),
         )?;
         let source = if media.kind == MediaKind::Image {
+            if matches!(media.probe.codec.as_deref(), Some("lottie" | "svg")) {
+                self.vector(&path, project.size)?;
+            }
             Source::Still(path)
         } else {
             Source::Video(path)
@@ -723,6 +731,50 @@ impl Lowering {
             self.plan.orients.push((track, orient));
         }
         Ok(track)
+    }
+
+    /// Draws a Lottie or SVG file (T45.2) into the picture movie its still source plays: every
+    /// frame of a Lottie at its own rate (the movie loops across the item, like an animated
+    /// GIF), one frame for an SVG. Transparent where the file draws nothing.
+    fn vector(&mut self, path: &Path, canvas: [u32; 2]) -> Result<(), Error> {
+        let unreadable = |failure: thorvg_sys::Error| {
+            Error::Input(format!("{} could not be drawn: {failure}", path.display()))
+        };
+        let mut animation = thorvg_sys::open(path).map_err(unreadable)?;
+        let info = animation.info();
+        // ponytail: drawn to fit the canvas, at most 1920 px on its longest side; draw at the
+        // item's on-screen size if zoomed vectors look soft.
+        let [w, h] = [f64::from(info.width), f64::from(info.height)];
+        let fit = (f64::from(canvas[0]) / w)
+            .min(f64::from(canvas[1]) / h)
+            .min(VECTOR_SIDE / w.max(h));
+        // Even and at least 32 px, as still_buffer encodes it.
+        let side = |value: f64| ((value * fit).round().clamp(32.0, VECTOR_SIDE) as u32 + 1) & !1;
+        let size = [side(w), side(h)];
+        let (count, seconds) = if info.frames > 1 {
+            (info.frames.min(VECTOR_FRAMES) as usize, 1.0 / info.fps)
+        } else {
+            (1, 1.0 / 30.0)
+        };
+        let mut failure = None;
+        let made =
+            self.builder.frames(
+                path,
+                size,
+                count,
+                seconds,
+                &mut |index, rgba| match animation.render(index as u32, size, rgba) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        failure = Some(error);
+                        false
+                    }
+                },
+            );
+        match failure {
+            Some(error) => Err(unreadable(error)),
+            None => made.map_err(Error::from),
+        }
     }
 
     /// The camera component's person matte (`media.analyze {kinds:["matte"]}`).

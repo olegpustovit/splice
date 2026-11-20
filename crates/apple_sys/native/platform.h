@@ -163,6 +163,14 @@ _Static_assert(sizeof(SpliceAVFrameSource) == 24, "frame source ABI");
 void *splice_av_create(uint32_t width, uint32_t height, uint32_t fps, int32_t end, char **error);
 void splice_av_release(void *composition);
 int32_t splice_av_source(void *composition, const SpliceAVSource *source, char **error);
+// Draws frame `index` as straight-alpha RGBA8 into `rgba` (`bytes` long); false on failure.
+// Called on the encoder's queue while splice_av_frames waits, never after it returns.
+typedef bool (*SpliceAVFill)(void *context, size_t index, uint8_t *rgba, size_t bytes);
+// Makes the picture movie that still sources naming `path` play: `count` frames of `seconds`
+// each, `width` x `height`, drawn by `fill` (Lottie/SVG, T45.2). Several frames loop like an
+// animated GIF. A path that already has its movie is left alone.
+bool splice_av_frames(void *composition, const char *path, uint32_t width, uint32_t height, size_t count,
+                      double seconds, SpliceAVFill fill, void *context, char **error);
 bool splice_av_append(void *raw, int32_t track, const SpliceAVSource *spec, char **error);
 uint32_t splice_av_orientation(void *raw, int32_t track);
 // One instruction interval: its picture tracks back to front (their decoded frames are pinned

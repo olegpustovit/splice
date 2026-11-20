@@ -711,6 +711,72 @@ mod looks {
         assert!(red(35), "loops at 1.17 s");
     }
 
+    /// T45.2: a Lottie overlay plays its frames through ThorVG at its own rate and loops, and
+    /// where it draws nothing the picture beneath shows through (ProRes 4444 keeps the alpha).
+    pub(super) fn lottie_overlays_play_loop_and_stay_transparent() {
+        let dir = scratch("lottie");
+        fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../thorvg_sys/fixtures/square.json"),
+            dir.0.join("square.json"),
+        )
+        .unwrap();
+        // A 16 px red square moves from (8, 32) to (56, 32) over 30 frames of a 64 x 64 canvas.
+        let mut lottie = still(&dir.0, 2, [0, 0, 0]);
+        lottie.path = "square.json".into();
+        lottie.probe.codec = Some("lottie".into());
+        (lottie.probe.width, lottie.probe.height) = (64, 64);
+        let mut project = project(
+            vec![still(&dir.0, 1, [30, 60, 200]), lottie],
+            vec![(1, 60, vec![])],
+        );
+        project.lanes.push(Lane {
+            id: LaneId::from_serial(31),
+            name: String::new(),
+            kind: LaneKind::Overlay,
+            effects: Vec::new(),
+        });
+        project
+            .items
+            .insert(Item {
+                id: ItemId::from_serial(41),
+                timing: ItemTiming {
+                    anchor: Anchor::Pinned(0),
+                    length: 60,
+                },
+                data: ItemData {
+                    lane: LaneId::from_serial(31),
+                    kind: ItemKind::Media(Overlay {
+                        media: MediaId::from_serial(2),
+                        source: 0,
+                        placement: Placement::Full,
+                        behind_presenter: false,
+                        muted: true,
+                        framing: Framing {
+                            crop: None,
+                            fit: Fit::Fill,
+                        },
+                    }),
+                    appearance: Appearance::default(),
+                },
+            })
+            .unwrap();
+        let composition = Composition::prepare(&project, &dir.0).unwrap();
+        // Filled into 96 x 64, the Lottie is scaled 1.5x: its x lands at 1.5 x on the canvas.
+        let red = |frame, x| {
+            let p = pixel(&composition, frame, [x, 32]);
+            p[0] > 200 && p[2] < 60
+        };
+        let blue = |frame, x| near(pixel(&composition, frame, [x, 32]), [30, 60, 200], 12);
+        assert!(red(1, 12) && blue(1, 74), "starts on the left");
+        assert!(red(25, 74) && blue(25, 12), "moves right by frame 25");
+        assert!(red(31, 12) && blue(31, 74), "loops after 30 frames");
+        for frame in [1, 25, 31] {
+            let p = pixel(&composition, frame, [48, 4]);
+            assert!(near(p, [30, 60, 200], 12), "transparent at {frame}: {p:?}");
+        }
+    }
+
     /// M22: a title animated per character draws every character (120 units is past the old
     /// 64-layer cap, which dropped the rest silently): once the animation ends it covers the
     /// same pixels as the static title.
@@ -1331,6 +1397,10 @@ fn main() {
         (
             "looks_m23_animated_gifs_play_and_loop",
             looks::m23_animated_gifs_play_and_loop,
+        ),
+        (
+            "looks_lottie_overlays_play_loop_and_stay_transparent",
+            looks::lottie_overlays_play_loop_and_stay_transparent,
         ),
         (
             "looks_m22_per_character_titles_draw_every_character",

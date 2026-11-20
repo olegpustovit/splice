@@ -175,6 +175,7 @@ dependencies = [
  "splice_gpu",
  "splice_json",
  "splice_model",
+ "thorvg_sys",
 ]
 
 [[package]]

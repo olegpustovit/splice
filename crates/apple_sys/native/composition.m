@@ -160,22 +160,35 @@ static CVPixelBufferRef still_buffer(CGImageRef image, const uint32_t colors[2])
     return pixel;
 }
 
-// Encodes `count` frames, frame i shown for `durations[i]` seconds, as a ProRes 4444 picture
-// movie (a still is one frame of 1/30 s that placement stretches).
-static bool write_frames(NSURL *url, CVPixelBufferRef *pixels, const double *durations, size_t count,
-                         char **error) {
+// Frame `index` of a picture movie as a +1 pixel buffer (NULL when it cannot be made) and the
+// seconds it stays on screen.
+typedef CVPixelBufferRef (^SpliceFrameAt)(size_t index, double *duration);
+
+// Encodes `count` frames from `frame_at` as a ProRes 4444 picture movie (alpha kept); a still is
+// one frame of 1/30 s that placement stretches. Frames are made one at a time on the encoder's
+// queue while this thread waits, so `frame_at` must be safe to call from another thread.
+// `unmade` is the error when `frame_at` returns NULL.
+static bool write_frames(NSURL *url, size_t count, SpliceFrameAt frame_at, const char *unmade, char **error) {
+    double first_duration = 0;
+    __block CVPixelBufferRef first = count > 0 ? frame_at(0, &first_duration) : NULL;
+    if (first == NULL) {
+        splice_set_error(error, unmade);
+        return false;
+    }
     NSError *failure = nil;
     AVAssetWriter *writer = [[AVAssetWriter alloc] initWithURL:url fileType:AVFileTypeQuickTimeMovie error:&failure];
     if (writer == nil) {
+        CFRelease(first);
         fail(error, failure, "Could not open a temporary picture track.");
         return false;
     }
     AVAssetWriterInput *input = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:@{
         AVVideoCodecKey: AVVideoCodecTypeAppleProRes4444,
-        AVVideoWidthKey: @(CVPixelBufferGetWidth(pixels[0])),
-        AVVideoHeightKey: @(CVPixelBufferGetHeight(pixels[0])),
+        AVVideoWidthKey: @(CVPixelBufferGetWidth(first)),
+        AVVideoHeightKey: @(CVPixelBufferGetHeight(first)),
     }];
     if (![writer canAddInput:input]) {
+        CFRelease(first);
         fail(error, writer.error, "Could not encode a picture track.");
         return false;
     }
@@ -184,25 +197,35 @@ static bool write_frames(NSURL *url, CVPixelBufferRef *pixels, const double *dur
         [AVAssetWriterInputPixelBufferAdaptor assetWriterInputPixelBufferAdaptorWithAssetWriterInput:input
                                                                         sourcePixelBufferAttributes:nil];
     if (![writer startWriting]) {
+        CFRelease(first);
         fail(error, writer.error, "Could not start the picture encoder.");
         return false;
     }
     [writer startSessionAtSourceTime:kCMTimeZero];
     dispatch_semaphore_t complete = dispatch_semaphore_create(0);
+    dispatch_queue_t queue = dispatch_queue_create("splice.still", DISPATCH_QUEUE_SERIAL);
     __block size_t next = 0;
     __block double at = 0;
     __block bool done = false;
-    [input requestMediaDataWhenReadyOnQueue:dispatch_queue_create("splice.still", DISPATCH_QUEUE_SERIAL) usingBlock:^{
+    __block bool missing = false;
+    [input requestMediaDataWhenReadyOnQueue:queue usingBlock:^{
         if (done) return;
         while (input.readyForMoreMediaData && next < count) {
-            if (writer.status != AVAssetWriterStatusWriting ||
-                ![adaptor appendPixelBuffer:pixels[next] withPresentationTime:CMTimeMakeWithSeconds(at, 600)]) {
+            double duration = first_duration;
+            CVPixelBufferRef pixel = first;
+            first = NULL;
+            if (next > 0) pixel = frame_at(next, &duration);
+            bool appended = pixel != NULL && writer.status == AVAssetWriterStatusWriting &&
+                [adaptor appendPixelBuffer:pixel withPresentationTime:CMTimeMakeWithSeconds(at, 600)];
+            if (pixel != NULL) CFRelease(pixel);
+            if (!appended) {
+                missing = pixel == NULL;
                 done = true;
                 [writer cancelWriting];
                 dispatch_semaphore_signal(complete);
                 return;
             }
-            at += durations[next];
+            at += duration;
             next += 1;
         }
         if (next == count) {
@@ -212,10 +235,19 @@ static bool write_frames(NSURL *url, CVPixelBufferRef *pixels, const double *dur
             [writer finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(complete); }];
         }
     }];
-    int64_t wait = (int64_t)(3 + count / 20) * (int64_t)NSEC_PER_SEC;
+    // Frames are made inside the wait, so it allows for decoding or drawing them too.
+    int64_t wait = (int64_t)(3 + count / 10) * (int64_t)NSEC_PER_SEC;
     if (dispatch_semaphore_wait(complete, dispatch_time(DISPATCH_TIME_NOW, wait)) != 0) {
         [writer cancelWriting];
+        // Waits out a frame being made, so `frame_at` (and what it borrows) is never called
+        // after this returns.
+        dispatch_sync(queue, ^{ done = true; });
+        if (first != NULL) CFRelease(first);
         splice_set_error(error, "Timed out encoding a temporary picture track.");
+        return false;
+    }
+    if (missing) {
+        splice_set_error(error, unmade);
         return false;
     }
     if (writer.status != AVAssetWriterStatusCompleted) {
@@ -247,38 +279,22 @@ static NSURL *animated_movie(SpliceAVAssembly *assembly, NSURL *file, NSURL *url
         CFRelease(source);
         return nil;
     }
-    count = MIN(count, (size_t)2000);
-    CVPixelBufferRef *pixels = calloc(count, sizeof(CVPixelBufferRef));
-    double *durations = calloc(count, sizeof(double));
-    bool ok = pixels != NULL && durations != NULL;
-    const uint32_t black[2] = {0, 0};
-    for (size_t i = 0; ok && i < count; i++) {
-        CGImageRef image = CGImageSourceCreateImageAtIndex(source, i, NULL);
-        pixels[i] = image != NULL ? still_buffer(image, black) : NULL;
-        if (image != NULL) CGImageRelease(image);
-        durations[i] = frame_delay(source, i);
-        ok = pixels[i] != NULL;
-    }
+    bool ok = write_frames(url, MIN(count, (size_t)2000), ^CVPixelBufferRef(size_t index, double *duration) {
+        *duration = frame_delay(source, index);
+        CGImageRef image = CGImageSourceCreateImageAtIndex(source, index, NULL);
+        if (image == NULL) return NULL;
+        CVPixelBufferRef pixel = still_buffer(image, NULL);
+        CGImageRelease(image);
+        return pixel;
+    }, "Could not decode the frames of an animated image.", error);
     CFRelease(source);
-    if (ok) {
-        ok = write_frames(url, pixels, durations, count, error);
-    } else {
-        splice_set_error(error, "Could not decode the frames of an animated image.");
-    }
-    for (size_t i = 0; pixels != NULL && i < count; i++) {
-        if (pixels[i] != NULL) CFRelease(pixels[i]);
-    }
-    free(pixels);
-    free(durations);
     if (!ok) return nil;
     [assembly.animated addObject:url];
     return url;
 }
 
-static NSURL *still_movie(SpliceAVAssembly *assembly, NSURL *file, const uint32_t colors[2], char **error) {
-    NSString *key = file != nil ? file.absoluteString : [NSString stringWithFormat:@"rgb:%u:%u", colors[0], colors[1]];
-    NSURL *existing = assembly.stills[key];
-    if (existing != nil) return existing;
+// Where the next picture movie is written, in the assembly's private directory.
+static NSURL *scratch_movie(SpliceAVAssembly *assembly, char **error) {
     if (assembly.scratch == nil) {
         NSString *temp = [NSTemporaryDirectory() stringByAppendingPathComponent:@"splice-av.XXXXXX"];
         const char *representation = temp.fileSystemRepresentation;
@@ -292,7 +308,15 @@ static NSURL *still_movie(SpliceAVAssembly *assembly, NSURL *file, const uint32_
             return nil;
         }
     }
-    NSURL *url = [assembly.scratch URLByAppendingPathComponent:[NSString stringWithFormat:@"%lu.mov", assembly.stills.count]];
+    return [assembly.scratch URLByAppendingPathComponent:[NSString stringWithFormat:@"%lu.mov", assembly.stills.count]];
+}
+
+static NSURL *still_movie(SpliceAVAssembly *assembly, NSURL *file, const uint32_t colors[2], char **error) {
+    NSString *key = file != nil ? file.absoluteString : [NSString stringWithFormat:@"rgb:%u:%u", colors[0], colors[1]];
+    NSURL *existing = assembly.stills[key];
+    if (existing != nil) return existing;
+    NSURL *url = scratch_movie(assembly, error);
+    if (url == nil) return nil;
     if (file != nil) {
         NSURL *movie = animated_movie(assembly, file, url, error);
         if (movie != nil) {
@@ -312,12 +336,63 @@ static NSURL *still_movie(SpliceAVAssembly *assembly, NSURL *file, const uint32_
         splice_set_error(error, "Could not allocate the still image buffer.");
         return nil;
     }
-    const double one = 1.0 / 30.0;
-    bool written = write_frames(url, &pixel, &one, 1, error);
+    bool written = write_frames(url, 1, ^CVPixelBufferRef(size_t index, double *duration) {
+        (void)index;
+        *duration = 1.0 / 30.0;
+        return (CVPixelBufferRef)CFRetain(pixel);
+    }, "Could not allocate the still image buffer.", error);
     CFRelease(pixel);
     if (!written) return nil;
     assembly.stills[key] = url;
     return url;
+}
+
+bool splice_av_frames(void *raw, const char *path, uint32_t width, uint32_t height, size_t count, double seconds,
+                      SpliceAVFill fill, void *context, char **error) {
+    @autoreleasepool {
+        SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
+        if (path == NULL || fill == NULL || width == 0 || height == 0 || width > 16384 || height > 16384 ||
+            count == 0 || !isfinite(seconds) || seconds <= 0) {
+            splice_set_error(error, "A drawn picture track needs a path, a size, frames and a frame duration.");
+            return false;
+        }
+        NSURL *file = [NSURL fileURLWithFileSystemRepresentation:path isDirectory:NO relativeToURL:nil];
+        NSString *key = file.absoluteString;
+        if (assembly.stills[key] != nil) return true;
+        NSURL *url = scratch_movie(assembly, error);
+        if (url == nil) return false;
+        size_t bytes = (size_t)width * height * 4;
+        uint8_t *rgba = malloc(bytes);
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        if (rgba == NULL || space == NULL) {
+            free(rgba);
+            if (space != NULL) CGColorSpaceRelease(space);
+            splice_set_error(error, "Could not allocate a drawn picture frame.");
+            return false;
+        }
+        bool ok = write_frames(url, count, ^CVPixelBufferRef(size_t index, double *duration) {
+            *duration = seconds;
+            if (!fill(context, index, rgba, bytes)) return NULL;
+            // Straight alpha in, premultiplied BGRA out: still_buffer draws it like any image.
+            CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, rgba, bytes, NULL);
+            CGImageRef image = provider != NULL
+                ? CGImageCreate(width, height, 8, 32, (size_t)width * 4, space,
+                                kCGBitmapByteOrderDefault | kCGImageAlphaLast, provider, NULL, false,
+                                kCGRenderingIntentDefault)
+                : NULL;
+            CGDataProviderRelease(provider);
+            if (image == NULL) return NULL;
+            CVPixelBufferRef pixel = still_buffer(image, NULL);
+            CGImageRelease(image);
+            return pixel;
+        }, "Could not draw a frame of a vector picture.", error);
+        CGColorSpaceRelease(space);
+        free(rgba);
+        if (!ok) return false;
+        assembly.stills[key] = url;
+        if (count > 1) [assembly.animated addObject:url];
+        return true;
+    }
 }
 
 static bool insert(AVMutableCompositionTrack *destination, AVAssetTrack *input, CMTimeRange source,

@@ -12,6 +12,7 @@ splice_eval = { path = "../splice_eval" }
 splice_gpu = { path = "../splice_gpu" }
 splice_json = { path = "../splice_json" }
 splice_model = { path = "../splice_model" }
+thorvg_sys = { path = "../thorvg_sys" }
 
 [[test]]
 name = "native"

@@ -280,6 +280,17 @@ unsafe extern "C" {
         error: *mut *mut c_char,
     ) -> *mut c_void;
     fn splice_av_release(composition: *mut c_void);
+    fn splice_av_frames(
+        composition: *mut c_void,
+        path: *const c_char,
+        width: u32,
+        height: u32,
+        count: usize,
+        seconds: f64,
+        fill: extern "C" fn(*mut c_void, usize, *mut u8, usize) -> bool,
+        context: *mut c_void,
+        error: *mut *mut c_char,
+    ) -> bool;
     fn splice_av_source(
         composition: *mut c_void,
         source: *const RawSource,
@@ -416,6 +427,40 @@ impl Builder {
         } else {
             Ok(track)
         }
+    }
+
+    /// Makes the picture movie that later `Source::Still(path)` tracks play: `count` frames of
+    /// `seconds` each at `size`, frame i drawn by `fill(i, rgba)` as straight-alpha RGBA8
+    /// (`size[0] * size[1] * 4` bytes). Several frames loop across the item like an animated
+    /// GIF (T45.2). `fill` runs on the encoder's queue while this call waits, hence `Send`.
+    pub fn frames(
+        &mut self,
+        path: &Path,
+        size: [u32; 2],
+        count: usize,
+        seconds: f64,
+        mut fill: &mut (dyn FnMut(usize, &mut [u8]) -> bool + Send),
+    ) -> Result<(), Error> {
+        let path = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| Error::message("A picture source path contains NUL."))?;
+        let context: *mut &mut (dyn FnMut(usize, &mut [u8]) -> bool + Send) = &mut fill;
+        let mut error = ptr::null_mut();
+        // SAFETY: the builder is uniquely borrowed; the path and `fill` outlive the call, and the
+        // native side never calls `fill_frame` after it returns (it waits out the encoder).
+        let made = unsafe {
+            splice_av_frames(
+                self.0.0.as_ptr(),
+                path.as_ptr(),
+                size[0],
+                size[1],
+                count,
+                seconds,
+                fill_frame,
+                context.cast(),
+                &mut error,
+            )
+        };
+        if made { Ok(()) } else { Err(diagnostic(error)) }
     }
 
     /// Inserts another time range of `source` into an existing track (speed-ramp segments).
@@ -791,6 +836,21 @@ pub fn text_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, Error> {
     // SAFETY: the allocation came from calloc and is not used again.
     unsafe { free(pixels.cast()) };
     Ok(bytes)
+}
+
+/// `Builder::frames`' callback: draws one frame through the borrowed closure.
+extern "C" fn fill_frame(context: *mut c_void, index: usize, rgba: *mut u8, bytes: usize) -> bool {
+    // SAFETY: `context` is the closure `Builder::frames` borrows for the duration of the native
+    // call, which runs this on one thread at a time; `rgba` is a native buffer of `bytes` bytes
+    // that nothing else touches until this returns.
+    let (fill, pixels) = unsafe {
+        (
+            &mut *context.cast::<&mut (dyn FnMut(usize, &mut [u8]) -> bool + Send)>(),
+            std::slice::from_raw_parts_mut(rgba, bytes),
+        )
+    };
+    // A panic must not unwind into Objective-C: it fails the frame instead.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fill(index, pixels))).unwrap_or(false)
 }
 
 fn diagnostic(value: *mut c_char) -> Error {

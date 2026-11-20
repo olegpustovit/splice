@@ -45,3 +45,10 @@ Measured on the Linux box (20 threads, rust 1.99.1, gcc), 2026-11-20:
   `native/shim.cpp`): 7.8 s wall dev, 8.4 s release, 35 s CPU either way. Cargo hands the build
   script `NUM_JOBS`, so the Mac mini's `CARGO_BUILD_JOBS=2` builds it on two threads.
 - `libsplice_thorvg.a`: 3.2 MB.
+- `target/release/splice` (Linux, with splice_mcp probing vector imports): 18,915,848 B before,
+  20,179,616 B after (+1.26 MB); stripped 4,416,952 B → 5,412,488 B (+1.0 MB).
+
+On macOS, crates/splice_av draws every frame of a Lottie (up to 2,000, at most 1920 px on the
+longest side, fitted to the canvas) into a ProRes 4444 picture movie through
+`apple_sys::composition::Builder::frames`, the same writer and looping placement animated GIFs
+use; an SVG becomes a one-frame still.
