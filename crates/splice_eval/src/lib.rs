@@ -11,6 +11,7 @@ pub mod cursor;
 mod eval;
 mod layout;
 mod look;
+mod particles;
 mod style;
 mod text;
 
@@ -30,6 +31,8 @@ pub use style::{
 };
 pub use text::{grapheme_len, text_units};
 
+#[cfg(test)]
+mod graphics_tests;
 #[cfg(test)]
 mod look_tests;
 #[cfg(test)]
@@ -157,8 +160,12 @@ pub enum Layer {
         opacity: f64,
         /// Keyed transform.
         look: Look,
+        /// How much of the shape shows, 0–1 (T45.4): ellipses and rings sweep clockwise from
+        /// 12 o'clock, lines and arrows draw on from their start, the rest fill from the left.
+        sweep: f64,
     },
-    /// Title overlay, with text available from `Evaluator::title`.
+    /// Title overlay, with text available from `Evaluator::title` (or, for a counter,
+    /// `Evaluator::title_at` and `Evaluator::title_runs`).
     Title {
         /// Owning item.
         item: ItemId,
@@ -239,6 +246,15 @@ pub struct Audio {
     pub gain: f64,
     /// Stereo pan −1 (left) … 1 (right).
     pub pan: f64,
+}
+
+/// A counter title's text over a timeline range (T45.4): one raster per run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextRun {
+    /// First timeline frame and the frame after the last.
+    pub range: [Frame; 2],
+    /// What the title shows.
+    pub text: String,
 }
 
 /// Resolved text and timeline range for a caption word.

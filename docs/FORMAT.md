@@ -153,8 +153,8 @@ Rules:
   a template made) and `brand` (project style). `commands/effects.json` is the schema; every
   writer and the validator check params against it.
 - **Shapes.** An item `{"kind":"shape","params":{"shape":"arrow","rect":{"x","y","w","h"}}}` on a
-  graphics lane; `shape` is `solid`, `gradient`, `rect`, `ellipse`, `arrow`, `line` or
-  `callout`. Its fill, stroke and corner radius are a `shape` effect.
+  graphics lane; `shape` is `solid`, `gradient`, `rect`, `ellipse`, `arrow`, `line`,
+  `callout`, `ring` or `heart` (0.4). Its fill, stroke and corner radius are a `shape` effect.
 - **Stills.** Image media (`kind:"image"`) have no duration of their own: `probe.frames` is a
   large sentinel and a clip of an image may have any length (5 s when inserted).
 - **Joins.** A clip made by `clip.join` carries `"joins":[frame, …]`, the offsets of the former
@@ -202,6 +202,16 @@ Rules:
   (overlays, shapes, titles, captions, each by lane stack). A `transform` on a lane, the spine or
   the project is the parent of what it holds (lane items, spine pictures, everything but the
   backdrop): it scales and rotates about its anchor on the canvas, its keys in absolute frames.
+- **Graphics (T45.4).** Shapes add `ring` (the ellipse's band, `shape.strokeWidth` thick; an
+  eighth of the diameter without one) and `heart`. Three effect types drive items per frame,
+  all read from the item itself: `counter` on a title (`value` keyed, `format` with `{n}`,
+  `decimals` 0–4, `group` thousands separator; the title's `text` holds the last value and the
+  renderer shows the formatted value of each frame), `progress` on a shape (`value` 0–1 keyed,
+  `track` color and `trackOpacity`: the track draws the whole shape, the fill only `value` of it,
+  clockwise from 12 o'clock on ellipses and rings and from the left otherwise) and `particles`
+  on a shape (`preset` confetti, sparkle, snow or hearts, `count` 1–120, `seed`, `size`: the
+  shape's rect is the region; same seed, same particles; the shape itself is not drawn).
+  Files without them read as before.
 
 - **Declared pointer marks (T39.4).** A take's `components` may carry
   `"pointer":[{"t":2.0,"x":0.6,"y":0.4,"click":true}]` (source seconds, positions normalized to the

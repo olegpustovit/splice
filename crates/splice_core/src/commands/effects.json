@@ -1192,6 +1192,111 @@
       }
     }
   },
+  "counter": {
+    "title": "Counter",
+    "appliesTo": "titles (counter.add)",
+    "applies": "title",
+    "params": {
+      "value": {
+        "type": "number",
+        "def": 0,
+        "min": -1000000000,
+        "max": 1000000000,
+        "step": 1,
+        "label": "Value",
+        "keys": true
+      },
+      "format": {
+        "type": "text",
+        "def": "{n}",
+        "label": "Format"
+      },
+      "decimals": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 4,
+        "step": 1,
+        "label": "Decimals"
+      },
+      "group": {
+        "type": "bool",
+        "def": true,
+        "label": "Thousands separator"
+      }
+    }
+  },
+  "progress": {
+    "title": "Progress",
+    "appliesTo": "rect and ring shapes (progress.add)",
+    "applies": "shape",
+    "params": {
+      "value": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Progress",
+        "keys": true
+      },
+      "track": {
+        "type": "color",
+        "def": "#ffffff",
+        "label": "Track"
+      },
+      "trackOpacity": {
+        "type": "number",
+        "def": 0.25,
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "label": "Track opacity"
+      }
+    }
+  },
+  "particles": {
+    "title": "Particles",
+    "appliesTo": "shapes (particles.add)",
+    "applies": "shape",
+    "params": {
+      "preset": {
+        "type": "enum",
+        "def": "confetti",
+        "options": [
+          "confetti",
+          "sparkle",
+          "snow",
+          "hearts"
+        ],
+        "label": "Preset"
+      },
+      "count": {
+        "type": "number",
+        "def": 60,
+        "min": 1,
+        "max": 120,
+        "step": 1,
+        "label": "Count"
+      },
+      "seed": {
+        "type": "number",
+        "def": 1,
+        "min": 0,
+        "max": 1000000,
+        "step": 1,
+        "label": "Seed"
+      },
+      "size": {
+        "type": "number",
+        "def": 0.014,
+        "min": 0.002,
+        "max": 0.08,
+        "step": 0.001,
+        "label": "Size"
+      }
+    }
+  },
   "clickZoom": {
     "title": "Click Zoom (0.3, retired)",
     "appliesTo": "screen takes",

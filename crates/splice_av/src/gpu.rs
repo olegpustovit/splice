@@ -346,7 +346,7 @@ impl GpuProgram {
         if self.layers.len() > MAX_LAYERS {
             return Err(Error::Input(format!(
                 "Frame {at} draws {} layers; at most {MAX_LAYERS}. Animate titles by word or \
-                 line instead of by character, or split the text.",
+                 line instead of by character, split the text, or lower particles counts.",
                 self.layers.len()
             )));
         }
@@ -676,11 +676,16 @@ impl GpuProgram {
             corner,
             opacity,
             look,
+            sweep,
             ..
         } = self.frame.layers[index]
         else {
             return;
         };
+        // Particles that are not alive and empty progress draw nothing (T45.4).
+        if opacity * look.opacity <= 0.0 || sweep <= 0.0 {
+            return;
+        }
         let kind = match shape {
             ShapeKind::Solid | ShapeKind::Rect => {
                 if fill == fill2 {
@@ -694,6 +699,8 @@ impl GpuProgram {
             ShapeKind::Line => Layer::LINE,
             ShapeKind::Arrow => Layer::ARROW,
             ShapeKind::Callout => Layer::CALLOUT,
+            ShapeKind::Ring => Layer::ARC,
+            ShapeKind::Heart => Layer::HEART,
         };
         let (dest, pivot) = transform([bounds.x, bounds.y, bounds.w, bounds.h], &look);
         let mut out = Layer::new(kind, dest, target);
@@ -709,6 +716,22 @@ impl GpuProgram {
         out.blend = look.blend.index();
         if shape == ShapeKind::Rect && stroke_width > 0.0 {
             out.kind = Layer::BOX;
+        }
+        // A ring's band is its fill: no stroke edge of another color.
+        if shape == ShapeKind::Ring {
+            out.key0 = out.color0;
+        }
+        // Sweep (T45.4): round shapes clockwise from 12 o'clock, lines draw on from their
+        // start, the rest fill from the left. The pivot stays, so the part rotates with the whole.
+        if sweep < 1.0 {
+            match shape {
+                ShapeKind::Ellipse | ShapeKind::Ring => out.key1[0] = (1.0 - sweep) as f32,
+                ShapeKind::Line | ShapeKind::Arrow => {
+                    out.dest[2] *= sweep as f32;
+                    out.dest[3] *= sweep as f32;
+                }
+                _ => out.dest[2] *= sweep as f32,
+            }
         }
         self.push(out, Bound::default());
     }

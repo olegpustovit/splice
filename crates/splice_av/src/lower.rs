@@ -210,16 +210,28 @@ pub(super) fn build(
                     },
                     Layer::Title { .. },
                 ) => {
-                    if let Some(text) = evaluator.title(item)
-                        && !state.text.iter().any(|known| known.item == Some(item))
-                    {
+                    let geometry = [bounds.x, bounds.y, bounds.w, bounds.h, font];
+                    let runs = evaluator.title_runs(item);
+                    // A title is lowered once, with the first interval it is in.
+                    let known = state.text.iter().any(|known| known.item == Some(item));
+                    if !known && !runs.is_empty() {
+                        // A counter (T45.4): one static raster per distinct value, shown over
+                        // its run of frames; unit animators do not apply to a changing number.
+                        let style = evaluator.text_style(item).map(|style| TextStyle {
+                            animate: Animate::None,
+                            ..style.clone()
+                        });
+                        for run in runs {
+                            state.title(item, &run.text, geometry, wrap, run.range, style.as_ref());
+                        }
+                    } else if !known && let Some(text) = evaluator.title(item) {
                         let end = evaluator
                             .extent(TimelineId::Item(item))
                             .map_or(to, |[_, end]| end);
                         state.title(
                             item,
                             text,
-                            [bounds.x, bounds.y, bounds.w, bounds.h, font],
+                            geometry,
                             wrap,
                             [from, end],
                             evaluator.text_style(item),

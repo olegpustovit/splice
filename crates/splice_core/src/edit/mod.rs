@@ -8,6 +8,7 @@ use splice_model::*;
 use std::fmt::{self, Write};
 
 mod edits;
+mod graphics;
 mod legacy;
 mod mints;
 mod motion;
@@ -26,6 +27,8 @@ pub use time::{resolve_view_frame, span};
 
 #[cfg(test)]
 mod fuzz_tests;
+#[cfg(test)]
+mod graphics_tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]

@@ -1360,7 +1360,7 @@ pub(super) fn generator_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp 
     let shape = ShapeKind::parse(a.string("shape")?).ok_or_else(|| {
         Error::bad(
             "shape",
-            "solid, gradient, rect, ellipse, arrow, line or callout",
+            "solid, gradient, rect, ellipse, arrow, line, callout, ring or heart",
         )
     })?;
     Ok(Op::GeneratorAdd {
@@ -1454,5 +1454,144 @@ pub(super) fn media_consolidate(a: &Json, _scratch: &mut DecodeScratch) -> Decod
             Some(_) => a.targets("media")?,
             None => Vec::new(),
         },
+    })
+}
+
+/// `counter.add` (T45.4): `from`/`to` become `counter.value` keys over the title.
+pub(super) fn counter_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
+    let value = |key: &str, default: Option<f64>| -> Result<f64, Error> {
+        match (a.opt_number(key)?, default) {
+            (Some(n), _) if n.is_finite() && n.abs() <= 1e9 => Ok(n),
+            (None, Some(n)) => Ok(n),
+            _ => Err(Error::rule(
+                "BAD_ARGS",
+                key,
+                a.field(key).cloned(),
+                "a number from -1000000000 to 1000000000",
+                &format!("Pass {key} as the number to show."),
+            )),
+        }
+    };
+    let values = [value("from", Some(0.0))?, value("to", None)?];
+    if let Some(format) = a.field("format") {
+        let ok = format
+            .as_str()
+            .is_some_and(|f| f.contains("{n}") && f.chars().count() <= 64 && !f.contains('\0'));
+        if !ok {
+            return Err(Error::rule(
+                "BAD_ARGS",
+                "format",
+                Some(format.clone()),
+                "text up to 64 characters containing {n}, e.g. \"{n}\", \"{n}%\", \"$ {n}\"",
+                "Put {n} where the number goes.",
+            ));
+        }
+    }
+    let length = a.opt_int("length")?.unwrap_or(90);
+    if length < 3 {
+        return Err(Error::bad("length", "at least 3 frames"));
+    }
+    let look = super::text::title_look(a)?;
+    if let Some(look) = &look
+        && (!look.enter.is_empty() || look.exit.is_some() || look.repeat.is_some())
+    {
+        return Err(Error::rule(
+            "BAD_ARGS",
+            "in",
+            None,
+            "box and style only",
+            "A counter takes box and style; animate it with motion.preset or param.keys on transform.",
+        ));
+    }
+    let mut params = schema_params(a, "counter", &mut scratch.params)?;
+    params.retain(|param| param.name != "value");
+    Ok(Op::CounterAdd {
+        at: a.frame("at")?,
+        length,
+        values,
+        params,
+        ease: match a.field("ease") {
+            None => Ease::Out,
+            Some(_) => ease(a, "ease")?,
+        },
+        lane: a.opt_target("lane")?,
+        look,
+    })
+}
+
+/// `progress.add` (T45.4): a bar or ring whose `progress.value` runs 0 → 1 over its length.
+pub(super) fn progress_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
+    let shape = match a.field("shape").map(Json::as_str) {
+        None | Some(Some("bar")) => ShapeKind::Rect,
+        Some(Some("ring")) => ShapeKind::Ring,
+        _ => return Err(Error::bad("shape", "bar or ring")),
+    };
+    let length = match a.field("length") {
+        None => None,
+        Some(Json::String(name)) if name == "timeline" => None,
+        Some(given) => match given.as_i64().and_then(|n| Frame::try_from(n).ok()) {
+            Some(n) if n >= 3 => Some(n),
+            _ => {
+                return Err(Error::rule(
+                    "BAD_ARGS",
+                    "length",
+                    Some(given.clone()),
+                    "\"timeline\" or at least 3 frames",
+                    "Pass length:\"timeline\" to run to the end, or a frame count.",
+                ));
+            }
+        },
+    };
+    let mut params = schema_params(a, "progress", &mut Vec::new())?;
+    params.retain(|param| param.name != "value");
+    Ok(Op::ProgressAdd {
+        shape,
+        at: a.opt_frame("at")?,
+        length,
+        rect: normalized_rect(a, "rect")?,
+        lane: a.opt_target("lane")?,
+        style: schema_params(a, "shape", &mut scratch.params)?,
+        params,
+    })
+}
+
+/// `particles.add` (T45.4): a seeded emitter over `rect`.
+pub(super) fn particles_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::ParticlesAdd {
+        at: a.frame("at")?,
+        length: a.opt_int("length")?,
+        rect: normalized_rect(a, "rect")?,
+        lane: a.opt_target("lane")?,
+        params: schema_params(a, "particles", &mut scratch.params)?,
+    })
+}
+
+/// `look.apply` (T45.4): a pack from `looks.json`.
+pub(super) fn look_apply(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let packs = super::look_packs();
+    let pack = a.string("pack")?;
+    if packs.field(pack).is_none() {
+        let names: Vec<&str> = packs
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let mut error = Error::unknown_name(
+            "BAD_ARGS",
+            format!("No look pack {pack:?}."),
+            format!("Packs: {}.", names.join(", ")),
+            pack,
+            &mut names.iter().copied(),
+        );
+        if let Some(rule) = &mut error.rule {
+            rule.param = "pack".into();
+            rule.got = a.field("pack").cloned();
+        }
+        return Err(error);
+    }
+    Ok(Op::LookApply {
+        target: a.target("target")?,
+        pack: pack.into(),
     })
 }

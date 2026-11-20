@@ -1,7 +1,7 @@
 use super::look::{self, AudioFx, Look, Mix, Num, Rig, Transition, TransitionKind};
 use super::{
     Audio, Background, CaptionStyle, CaptionWord, FREE_TEXT, FramePlan, Group, Keys, Layer,
-    Picture, Shift, Track, layout, style,
+    Picture, Shift, TextRun, Track, layout, particles, style,
 };
 use splice_model::timing::{self, TimingError};
 use splice_model::*;
@@ -99,6 +99,21 @@ struct PreparedShape {
     stroke_width: f64,
     corner: f64,
     rig: Rig,
+    /// A progress bar or ring (T45.4): value, track color and opacity.
+    progress: Option<(Num, u32, f64)>,
+    /// A particle emitter (T45.4): it draws its particles instead of the shape.
+    particles: Option<particles::Emitter>,
+}
+
+impl PreparedShape {
+    /// Layers it adds to every frame it is on.
+    fn layers(&self) -> usize {
+        match (&self.particles, &self.progress) {
+            (Some(emitter), _) => emitter.len(),
+            (None, Some(_)) => 2,
+            (None, None) => 1,
+        }
+    }
 }
 
 /// An item's timeline interval and linear mapping to its source clock.
@@ -241,6 +256,8 @@ struct PreparedTitle {
     rig: Rig,
     style: Option<style::TextStyle>,
     text_box: Option<style::TextBox>,
+    /// A counter's text per run of frames (T45.4); empty for plain titles.
+    runs: Vec<TextRun>,
 }
 
 struct PreparedCaption {
@@ -635,7 +652,7 @@ impl Evaluator {
                 12 + self.overlays.len() * 2
                     + self.titles.len()
                     + self.captions.len()
-                    + self.shapes.len(),
+                    + self.shapes.iter().map(PreparedShape::layers).sum::<usize>(),
             ),
             audio: Vec::with_capacity(2 * clip_tracks + overlay_tracks),
             ..FramePlan::default()
@@ -755,18 +772,78 @@ impl Evaluator {
             return;
         }
         let canvas = self.size.map(f64::from);
-        let look = shape.rig.look(f64::from(at - shape.interval.start), canvas);
+        let local = f64::from(at - shape.interval.start);
+        let look = shape.rig.look(local, canvas);
+        let fade = shape.interval.alpha(at);
+        let bounds = shape.bounds;
+        if let Some(emitter) = &shape.particles {
+            // Each particle pivots on itself under the emitter's transform (its anchor across
+            // the emitter's bounds), then the lane's and the project's.
+            for index in 0..emitter.len() {
+                let sprite = emitter.sprite(index, local);
+                let [w, h] = sprite.size;
+                let rect =
+                    layout::rect(sprite.center[0] - w / 2.0, sprite.center[1] - h / 2.0, w, h);
+                let own = Look {
+                    rotation: sprite.rotation,
+                    ..Look::default()
+                };
+                let inside = Rect {
+                    x: rect.x - bounds.x,
+                    y: rect.y - bounds.y,
+                    ..rect
+                };
+                let look = look::compose(own, look, inside, [bounds.w, bounds.h]);
+                out.layers.push(Layer::Shape {
+                    item: shape.id,
+                    shape: emitter.kind(),
+                    bounds: rect,
+                    fill: sprite.color,
+                    fill2: sprite.color,
+                    stroke: sprite.color,
+                    stroke_width: 0.0,
+                    corner: 0.0,
+                    opacity: fade * sprite.opacity,
+                    look: self.parented(look, Some(shape.place.lane), at, rect),
+                    sweep: 1.0,
+                });
+            }
+            return;
+        }
+        let look = self.parented(look, Some(shape.place.lane), at, bounds);
+        let mut sweep = 1.0;
+        if let Some((value, track, track_opacity)) = &shape.progress {
+            sweep = value.at(local).clamp(0.0, 1.0);
+            out.layers.push(Layer::Shape {
+                item: shape.id,
+                shape: shape.shape,
+                bounds,
+                fill: *track,
+                fill2: *track,
+                stroke: *track,
+                stroke_width: if shape.shape == ShapeKind::Ring {
+                    shape.stroke_width
+                } else {
+                    0.0
+                },
+                corner: shape.corner,
+                opacity: fade * track_opacity,
+                look,
+                sweep: 1.0,
+            });
+        }
         out.layers.push(Layer::Shape {
             item: shape.id,
             shape: shape.shape,
-            bounds: shape.bounds,
+            bounds,
             fill: shape.fill[0],
             fill2: shape.fill[1],
             stroke: shape.stroke,
             stroke_width: shape.stroke_width,
             corner: shape.corner,
-            opacity: shape.interval.alpha(at),
-            look: self.parented(look, Some(shape.place.lane), at, shape.bounds),
+            opacity: fade,
+            look,
+            sweep,
         });
     }
 
@@ -864,6 +941,26 @@ impl Evaluator {
             .iter()
             .find(|title| title.id == id)
             .map(|title| title.text.as_str())
+    }
+
+    /// What a title shows at timeline frame `at`: a counter's text there, else its text.
+    pub fn title_at(&self, id: ItemId, at: Frame) -> Option<&str> {
+        let title = self.titles.iter().find(|title| title.id == id)?;
+        Some(
+            title
+                .runs
+                .iter()
+                .find(|run| (run.range[0]..run.range[1]).contains(&at))
+                .map_or(title.text.as_str(), |run| run.text.as_str()),
+        )
+    }
+
+    /// A counter title's text runs over its interval (T45.4); empty for a plain title.
+    pub fn title_runs(&self, id: ItemId) -> &[TextRun] {
+        self.titles
+            .iter()
+            .find(|title| title.id == id)
+            .map_or(&[], |title| title.runs.as_slice())
     }
 
     /// Resolved text style of a title or caption, when one is set.
@@ -1214,21 +1311,49 @@ impl Evaluator {
                 rig,
                 style: style::text(&[&p.effects, lane, local]),
                 text_box: style::text_box(&[&p.effects, lane, local]),
+                runs: counter_runs(local, interval.start, interval.end),
             }),
             ItemKind::Shape { shape, rect } => {
                 let style = look::shape_style(local);
                 let [w, h] = size;
+                let bounds = layout::rect(rect.x * w, rect.y * h, rect.w * w, rect.h * h);
+                // A ring without a stroke width is an eighth of its diameter thick.
+                let stroke_width = if style.3 <= 0.0 && *shape == ShapeKind::Ring {
+                    bounds.w.min(bounds.h).abs() / 8.0
+                } else {
+                    style.3 * w.min(h)
+                };
+                let progress = style::Resolution::on(&[local], &[], "progress").map(|fx| {
+                    (
+                        fx.num("value", 0.0),
+                        fx.color("track", 0xffffff),
+                        fx.number("trackOpacity", 0.25).clamp(0.0, 1.0),
+                    )
+                });
+                let particles = style::Resolution::on(&[local], &[], "particles").map(|fx| {
+                    particles::Emitter::new(
+                        particles::Preset::parse(fx.text("preset").unwrap_or("confetti")),
+                        fx.number("count", 60.0).clamp(1.0, 120.0) as usize,
+                        fx.number("seed", 1.0).max(0.0) as u64,
+                        fx.number("size", 0.014) * w.min(h),
+                        bounds,
+                        f64::from(interval.end - interval.start),
+                        f64::from(p.fps),
+                    )
+                });
                 self.shapes.push(PreparedShape {
                     place,
                     id,
                     interval,
                     shape: *shape,
-                    bounds: layout::rect(rect.x * w, rect.y * h, rect.w * w, rect.h * h),
+                    bounds,
                     fill: [style.0, style.1],
                     stroke: style.2,
-                    stroke_width: style.3 * w.min(h),
+                    stroke_width,
                     corner: style.4 * (rect.w * w).min(rect.h * h).abs(),
                     rig,
+                    progress,
+                    particles,
                 });
             }
             ItemKind::Zoom(zoom) => {
@@ -1695,6 +1820,30 @@ pub fn caption_tokens(
         });
     }
     Ok(words)
+}
+
+/// A counter title's text per frame of `[start, end)`, merged into runs of equal text (T45.4).
+/// Keys of `counter.value` are relative to the title's start.
+fn counter_runs(local: &[Effect], start: Frame, end: Frame) -> Vec<TextRun> {
+    let Some(counter) = style::Resolution::on(&[local], &[], "counter") else {
+        return Vec::new();
+    };
+    let value = counter.num("value", 0.0);
+    let format = counter.text("format").unwrap_or("{n}");
+    let decimals = counter.number("decimals", 0.0).clamp(0.0, 4.0) as u32;
+    let group = counter.boolean("group", true);
+    let mut runs: Vec<TextRun> = Vec::new();
+    for at in start..end {
+        let text = counter_text(value.at(f64::from(at - start)), format, decimals, group);
+        match runs.last_mut() {
+            Some(last) if last.text == text => last.range[1] = at + 1,
+            _ => runs.push(TextRun {
+                range: [at, at + 1],
+                text,
+            }),
+        }
+    }
+    runs
 }
 
 /// Smoothstep on [0, 1].

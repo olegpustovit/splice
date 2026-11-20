@@ -800,7 +800,7 @@ declare namespace Splice {
     /** Add Shape (edit, 0.3). */
     interface GeneratorAdd extends Base {
       cmd: "generator.add";
-      shape: "solid" | "gradient" | "rect" | "ellipse" | "arrow" | "line" | "callout";
+      shape: "solid" | "gradient" | "rect" | "ellipse" | "arrow" | "line" | "callout" | "ring" | "heart";
       at: At;
       /** @default 90 */
       length?: number;
@@ -982,6 +982,82 @@ declare namespace Splice {
       artist?: string;
       /** filled: credit; unknown is refused without allowUnlicensed */
       license?: string;
+    }
+    /** Add Counter (edit, 0.3). */
+    interface CounterAdd extends Base {
+      cmd: "counter.add";
+      at: At;
+      /** the count runs over all of it · @default 90 */
+      length?: number;
+      /** number · @default 0 */
+      from?: number;
+      /** number · the value it lands on */
+      to: number;
+      /** text with {n} · e.g. {n}%, $ {n}, {n}k users · @default {n} */
+      format?: string;
+      /** int 0–4 · @default 0 */
+      decimals?: number;
+      /** thousands separator · @default true */
+      group?: boolean;
+      /** ease · inOut, linear, {spring:{duration, bounce}}, … · @default out */
+      ease?: Ease;
+      /** lan_… · graphics lane */
+      lane?: string;
+      /** text box, as title.add */
+      box?: { x?: number; y?: number; w?: number; h?: number; fit?: "shrink" | "fill"; wrap?: boolean };
+      /** text effect parameters, as title.add */
+      style?: { font?: string; weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black"; size?: number; color?: string; stroke?: string; strokeWidth?: number; shadow?: number; box?: "none" | "solid" | "rounded"; boxColor?: string; align?: "left" | "center" | "right"; lineHeight?: number; position?: "top" | "middle" | "bottom" | "lowerThird" };
+    }
+    /** Add Progress (edit, 0.3). */
+    interface ProgressAdd extends Base {
+      cmd: "progress.add";
+      /** @default bar */
+      shape?: "bar" | "ring";
+      /** @default 0 */
+      at?: At;
+      /** "timeline" runs to the end · @default timeline */
+      length?: "timeline" | number;
+      /** {x, y, w, h} · normalized canvas; a thin strip at the bottom, or a centered circle */
+      rect?: Rect;
+      /** #rrggbb · the part done */
+      fill?: string;
+      /** #rrggbb · the part to go */
+      track?: string;
+      /** 0–1 · @default 0.25 */
+      trackOpacity?: number;
+      /** 0–0.5 · bar corners */
+      corner?: number;
+      /** 0–0.05 · ring thickness */
+      strokeWidth?: number;
+      /** lan_… · graphics lane */
+      lane?: string;
+    }
+    /** Add Particles (edit, 0.3). */
+    interface ParticlesAdd extends Base {
+      cmd: "particles.add";
+      at: At;
+      /** @default 90 */
+      length?: number;
+      /** @default confetti */
+      preset?: "confetti" | "sparkle" | "snow" | "hearts";
+      /** {x, y, w, h} · normalized canvas region = the canvas */
+      rect?: Rect;
+      /** int 1–120 · two shapes cannot exceed 256 layers in a frame · @default 60 */
+      count?: number;
+      /** int 0–1000000 · same seed, same particles · @default 1 */
+      seed?: number;
+      /** 0.002–0.08 · of the canvas's shorter side · @default 0.014 */
+      size?: number;
+      /** lan_… · graphics lane */
+      lane?: string;
+    }
+    /** Apply Look (edit, 0.3). */
+    interface LookApply extends Base {
+      cmd: "look.apply";
+      /** clp_… | ovl_… | lan_… | project */
+      target: string;
+      /** ordinary color, window and captions effects; parts that do not apply to the target are skipped and named */
+      pack: "vivid" | "film" | "mono" | "pastel" | "neon";
     }
   }
   /** Effect types and parameters (effects.json, the validator's own schema). */
@@ -1308,6 +1384,37 @@ declare namespace Splice {
       /** Logo position · @default "topRight" */
       logoPosition?: "none" | "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
     };
+    /** Counter: titles (counter.add). */
+    counter: {
+      /** Value · -1000000000–1000000000 · @default 0 */
+      value?: number | { keys: Key[] };
+      /** Format · @default "{n}" */
+      format?: string;
+      /** Decimals · 0–4 · @default 0 */
+      decimals?: number;
+      /** Thousands separator · @default true */
+      group?: boolean;
+    };
+    /** Progress: rect and ring shapes (progress.add). */
+    progress: {
+      /** Progress · 0–1 · @default 0 */
+      value?: number | { keys: Key[] };
+      /** Track · #rrggbb · @default "#ffffff" */
+      track?: string;
+      /** Track opacity · 0–1 · @default 0.25 */
+      trackOpacity?: number;
+    };
+    /** Particles: shapes (particles.add). */
+    particles: {
+      /** Preset · @default "confetti" */
+      preset?: "confetti" | "sparkle" | "snow" | "hearts";
+      /** Count · 1–120 · @default 60 */
+      count?: number;
+      /** Seed · 0–1000000 · @default 1 */
+      seed?: number;
+      /** Size · 2e-3–0.08 · @default 0.014 */
+      size?: number;
+    };
   }
   type EffectType = keyof Effects;
   /** Any registry command, for edit.apply's ops. */
@@ -1397,7 +1504,11 @@ declare namespace Splice {
     | op.ItemOrder
     | op.MotionPreset
     | op.HtmlAdd
-    | op.MusicAdd;
+    | op.MusicAdd
+    | op.CounterAdd
+    | op.ProgressAdd
+    | op.ParticlesAdd
+    | op.LookApply;
 }
 
 declare const splice: {
@@ -1556,6 +1667,18 @@ declare const splice: {
     };
     music: {
       add(args: Omit<Splice.op.MusicAdd, "cmd">): Splice.op.MusicAdd;
+    };
+    counter: {
+      add(args: Omit<Splice.op.CounterAdd, "cmd">): Splice.op.CounterAdd;
+    };
+    progress: {
+      add(args: Omit<Splice.op.ProgressAdd, "cmd">): Splice.op.ProgressAdd;
+    };
+    particles: {
+      add(args: Omit<Splice.op.ParticlesAdd, "cmd">): Splice.op.ParticlesAdd;
+    };
+    look: {
+      apply(args: Omit<Splice.op.LookApply, "cmd">): Splice.op.LookApply;
     };
   };
   project: {

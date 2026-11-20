@@ -153,6 +153,20 @@ after the pass and must match, or the call fails with `HTML_FAILED` (use time, n
 `Math.random`). Load nothing from the network. Inline pages resolve relative URLs in the package,
 `file` pages next to the file. On Linux, html.add without `movie` is `UNSUPPORTED_PLATFORM`.
 
+Graphics (T45.4) are ordinary items and effects, edited and undone like any other.
+`counter.add {at, length, from, to, format, decimals, group, ease, box, style}` adds a title whose
+`counter.value` keys run `from` → `to` (ease `out` by default; re-key it with `param.keys`); every
+frame shows the formatted value (`format` holds `{n}`: `"{n}%"`, `"$ {n}"`). `progress.add
+{shape: bar|ring, at, length: "timeline"|frames, rect, fill, track, trackOpacity}` adds a shape
+pinned to the timeline whose `progress.value` runs 0 → 1 over its length: a bar fills from the
+left, a ring sweeps clockwise from 12 o'clock. `particles.add {at, length, preset, rect, count,
+seed, size}` adds a seeded emitter (confetti, sparkle, snow or hearts); it draws `count` shapes in
+every frame, so keep the emitters in one frame under 256 layers (a frame over the budget is
+refused at render with the fix). `look.apply {target, pack}` writes a named pack's `color`,
+`window` and `captions` parameters (vivid, film, mono, pastel, neon; `commands/looks.json`); a
+pack replaces every grade parameter it names, restyles a window only where the target already has
+one, and its summary names the parts it skipped because they do not apply to the target.
+
 Use `at` for a placement calculated from a frame or anchor. Use `anchor` to retain an explicit
 item, marker, or transcript relation. A frame in a gap between clips keeps its position, anchored
 to the end of the clip before it (or the start of the first clip). Overlapping items can move to a

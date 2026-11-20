@@ -385,7 +385,7 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
                 shape: ShapeKind::parse(params.string("shape")?).ok_or_else(|| {
                     bad(
                         "shape",
-                        "solid, gradient, rect, ellipse, arrow, line or callout",
+                        "solid, gradient, rect, ellipse, arrow, line, callout, ring or heart",
                     )
                 })?,
                 rect: decode_rect(params.required("rect")?)?,

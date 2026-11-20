@@ -2,6 +2,7 @@
 #![deny(missing_docs)]
 
 mod arena;
+mod counter;
 mod ids;
 pub mod keys;
 mod media;
@@ -9,6 +10,7 @@ mod timeline;
 pub mod timing;
 
 pub use arena::{Clips, Items, Slot};
+pub use counter::counter_text;
 pub use ids::*;
 pub use keys::{Ease, Key};
 pub use media::*;

@@ -764,6 +764,60 @@ pub enum Op {
         /// Destination lane.
         lane: Option<Target>,
     },
+    /// Counter (T45.4): a title whose number counts along keys of `counter.value`.
+    CounterAdd {
+        /// Start.
+        at: FrameArg,
+        /// Duration; the count runs over all of it.
+        length: Frame,
+        /// First and last value.
+        values: [f64; 2],
+        /// `counter` parameters besides the value: format, decimals, group.
+        params: Vec<EffectParam>,
+        /// Ease of the count.
+        ease: Ease,
+        /// Graphics lane.
+        lane: Option<Target>,
+        /// Inline `box` and `style`.
+        look: Option<Box<TitleLook>>,
+    },
+    /// Progress bar or ring (T45.4): a shape whose fill follows playback.
+    ProgressAdd {
+        /// `Rect` (bar) or `Ring`.
+        shape: ShapeKind,
+        /// Start.
+        at: Option<FrameArg>,
+        /// Duration, or `None` for the rest of the timeline.
+        length: Option<Frame>,
+        /// Normalized canvas bounds.
+        rect: Option<Rect>,
+        /// Graphics lane.
+        lane: Option<Target>,
+        /// `shape` parameters (fill, corner, strokeWidth).
+        style: Vec<EffectParam>,
+        /// `progress` parameters (track, trackOpacity).
+        params: Vec<EffectParam>,
+    },
+    /// Particles (T45.4): a seeded emitter evaluated per frame into shapes.
+    ParticlesAdd {
+        /// Start.
+        at: FrameArg,
+        /// Duration.
+        length: Option<Frame>,
+        /// Normalized canvas region the particles live in.
+        rect: Option<Rect>,
+        /// Graphics lane.
+        lane: Option<Target>,
+        /// `particles` parameters (preset, count, seed, size).
+        params: Vec<EffectParam>,
+    },
+    /// Look pack (T45.4): ordinary effects from a named pack in `looks.json`.
+    LookApply {
+        /// Clip, overlay, lane or the project.
+        target: Target,
+        /// Pack name.
+        pack: String,
+    },
 }
 
 /// A typed ID or a reference to a preceding operation.

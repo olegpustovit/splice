@@ -1,0 +1,41 @@
+{
+  "vivid": {
+    "about": "punchy color with lifted saturation and contrast",
+    "effects": {
+      "color": {"exposure": 0.05, "contrast": 1.12, "saturation": 1.3, "vibrance": 0.25, "temperature": 0.03, "tint": 0, "highlights": -0.1, "shadows": 0.05},
+      "captions": {"preset": "bold", "active": "#ffd23f"}
+    }
+  },
+  "film": {
+    "about": "warm, soft-contrast film grade with cinematic captions",
+    "effects": {
+      "color": {"exposure": 0, "contrast": 1.06, "saturation": 0.82, "vibrance": -0.05, "temperature": 0.12, "tint": 0.03, "highlights": -0.2, "shadows": 0.12},
+      "window": {"background": "gradient", "color": "#3b3226", "color2": "#14110d"},
+      "captions": {"preset": "cinematic", "active": "#f2c46d"}
+    }
+  },
+  "mono": {
+    "about": "black and white with deeper contrast",
+    "effects": {
+      "color": {"exposure": 0, "contrast": 1.18, "saturation": 0, "vibrance": 0, "temperature": 0, "tint": 0, "highlights": -0.1, "shadows": -0.05},
+      "window": {"background": "gradient", "color": "#3a3a3a", "color2": "#0e0e0e"},
+      "captions": {"preset": "minimal", "active": "#ffffff"}
+    }
+  },
+  "pastel": {
+    "about": "bright, airy, low-contrast pastel",
+    "effects": {
+      "color": {"exposure": 0.15, "contrast": 0.88, "saturation": 0.78, "vibrance": 0.1, "temperature": 0.02, "tint": 0.06, "highlights": -0.15, "shadows": 0.2},
+      "window": {"background": "gradient", "color": "#f6d5e5", "color2": "#c9e4f6"},
+      "captions": {"preset": "bubble", "active": "#ff8fc8"}
+    }
+  },
+  "neon": {
+    "about": "cool, saturated night look with glowing captions",
+    "effects": {
+      "color": {"exposure": -0.05, "contrast": 1.2, "saturation": 1.35, "vibrance": 0.3, "temperature": -0.18, "tint": 0.12, "highlights": -0.05, "shadows": -0.1},
+      "window": {"background": "gradient", "color": "#2b0f4c", "color2": "#05010d"},
+      "captions": {"preset": "neon", "active": "#39ff14"}
+    }
+  }
+}

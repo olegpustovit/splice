@@ -468,11 +468,15 @@ pub enum ShapeKind {
     Line,
     /// Rounded box with a pointer, for annotations.
     Callout,
+    /// Annulus inscribed in the bounds, `strokeWidth` thick; progress rings sweep it (T45.4).
+    Ring,
+    /// Heart inscribed in the bounds (particles, T45.4).
+    Heart,
 }
 
 impl ShapeKind {
     /// Every kind with its wire name.
-    pub const ALL: [(Self, &'static str); 7] = [
+    pub const ALL: [(Self, &'static str); 9] = [
         (Self::Solid, "solid"),
         (Self::Gradient, "gradient"),
         (Self::Rect, "rect"),
@@ -480,6 +484,8 @@ impl ShapeKind {
         (Self::Arrow, "arrow"),
         (Self::Line, "line"),
         (Self::Callout, "callout"),
+        (Self::Ring, "ring"),
+        (Self::Heart, "heart"),
     ];
 
     /// Wire name.

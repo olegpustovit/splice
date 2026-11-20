@@ -314,7 +314,16 @@ fn m20_every_keyable_parameter_renders_its_keys() {
         let evaluator = Evaluator::prepare(&applied(ops)).unwrap();
         let mut plan = evaluator.buffer();
         evaluator.frame(180, &mut plan);
-        format!("{:?} {:?}", plan.layers, plan.audio)
+        // A counter's number is the text it shows.
+        let titles: Vec<_> = plan
+            .layers
+            .iter()
+            .filter_map(|layer| match layer {
+                Layer::Title { item, .. } => evaluator.title_at(*item, 180),
+                _ => None,
+            })
+            .collect();
+        format!("{:?} {:?} {titles:?}", plan.layers, plan.audio)
     };
     let mut checked = 0;
     for (kind, schema) in effect_schemas().as_object().unwrap() {
@@ -330,19 +339,29 @@ fn m20_every_keyable_parameter_renders_its_keys() {
                 ("speed", "rate") => (1.0, 1.1),
                 _ => (min + 0.25 * (max - min), min + 0.75 * (max - min)),
             };
-            // A crop pans inside the slack its size leaves.
-            let context = match (kind.as_str(), name.as_str()) {
-                ("crop", "x" | "y") => {
+            // A crop pans inside the slack its size leaves; counters and progress live on
+            // their own title and shape (T45.4).
+            let (context, target) = match (kind.as_str(), name.as_str()) {
+                ("crop", "x" | "y") => (
                     r#"{"cmd":"param.set","target":"clp_take","path":"crop.w","value":0.5},
-                       {"cmd":"param.set","target":"clp_take","path":"crop.h","value":0.5},"#
-                }
-                _ => "",
+                       {"cmd":"param.set","target":"clp_take","path":"crop.h","value":0.5},"#,
+                    "clp_take",
+                ),
+                ("counter", _) => (
+                    r#"{"cmd":"counter.add","at":150,"length":60,"to":10,"ref":"own"},"#,
+                    "$own",
+                ),
+                ("progress", _) => (
+                    r#"{"cmd":"progress.add","at":150,"length":60,"ref":"own"},"#,
+                    "$own",
+                ),
+                _ => ("", "clp_take"),
             };
             let held = render(&format!(
-                r#"[{context}{{"cmd":"param.set","target":"clp_take","path":"{kind}.{name}","value":{a}}}]"#
+                r#"[{context}{{"cmd":"param.set","target":"{target}","path":"{kind}.{name}","value":{a}}}]"#
             ));
             let keyed = render(&format!(
-                r#"[{context}{{"cmd":"param.keys","target":"clp_take","path":"{kind}.{name}","keys":[{{"at":0,"value":{a}}},{{"at":120,"value":{b}}}]}}]"#
+                r#"[{context}{{"cmd":"param.keys","target":"{target}","path":"{kind}.{name}","keys":[{{"at":0,"value":{a}}},{{"at":120,"value":{b}}}]}}]"#
             ));
             assert_ne!(
                 held, keyed,
@@ -351,7 +370,7 @@ fn m20_every_keyable_parameter_renders_its_keys() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 33, "keyable parameters");
+    assert_eq!(checked, 35, "keyable parameters");
 }
 
 /// T40.4: whip, zoomPunch and swipe move content only: the outgoing side's backdrop is never

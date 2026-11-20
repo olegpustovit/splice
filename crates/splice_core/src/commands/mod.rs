@@ -54,6 +54,10 @@ pub const EXTENSIONS: &[&str] = &[
     "motion.preset",
     "html.add",
     "music.add",
+    "counter.add",
+    "progress.add",
+    "particles.add",
+    "look.apply",
 ];
 
 #[cfg(test)]
@@ -383,6 +387,12 @@ pub fn effect_schemas() -> &'static Json {
         ),
         other => other.clone(),
     })
+}
+
+/// Look packs for `look.apply` (T45.4): `{name: {about, effects: {type: {param: value}}}}`.
+pub fn look_packs() -> &'static Json {
+    static PACKS: std::sync::OnceLock<Json> = std::sync::OnceLock::new();
+    PACKS.get_or_init(|| splice_json::parse(include_str!("looks.json")).expect("checked packs"))
 }
 
 /// Every effect type, including `legacy` ones that 0.3 journals and files still hold (inert:

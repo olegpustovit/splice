@@ -348,6 +348,10 @@ impl Editor {
                 Ok(done(format!("Consolidated {count} file(s) into media/")))
             }
             op @ (Op::ItemOrder { .. } | Op::MotionPreset { .. }) => self.run_motion(op),
+            op @ (Op::CounterAdd { .. }
+            | Op::ProgressAdd { .. }
+            | Op::ParticlesAdd { .. }
+            | Op::LookApply { .. }) => self.run_graphics(op),
             _ => unreachable!("tier C dispatch"),
         }
     }

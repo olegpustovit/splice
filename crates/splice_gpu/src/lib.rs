@@ -92,7 +92,7 @@ pub struct Layer {
     pub lut: [f32; 4],
     /// Key RGB and tolerance; for shapes, the stroke RGB.
     pub key0: [f32; 4],
-    /// Key softness and spill.
+    /// Key softness and spill; for ellipse and arc shapes, `1 - sweep` in the first slot.
     pub key1: [f32; 4],
     /// Visible region in target pixels when `CLIP` is set.
     pub clip: [f32; 4],
@@ -127,6 +127,10 @@ impl Layer {
     pub const CALLOUT: u32 = 7;
     /// Rounded box with an outline (a stroked rectangle shape).
     pub const BOX: u32 = 8;
+    /// The ellipse's band `ring` pixels thick (a ring shape).
+    pub const ARC: u32 = 9;
+    /// Heart inscribed in `dest`.
+    pub const HEART: u32 = 10;
     /// The source texture holds BGRA bytes.
     pub const BGRA: u32 = 1;
     /// Write BGRA (for an encoder buffer).

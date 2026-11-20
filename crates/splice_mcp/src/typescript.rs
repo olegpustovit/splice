@@ -330,6 +330,12 @@ fn param_type(kind: &str, doc: &str) -> String {
     if kind.starts_with("effect type") {
         return "EffectType".into();
     }
+    if kind.starts_with("ease") {
+        return "Ease".into();
+    }
+    if kind.starts_with("\"timeline\" | frames") {
+        return "\"timeline\" | number".into();
+    }
     // A title's inline look (T42.2): effect parameters without keys, and motion presets.
     for (fields, effect) in [
         ("{x, y, w, h, fit, wrap}", "layout"),

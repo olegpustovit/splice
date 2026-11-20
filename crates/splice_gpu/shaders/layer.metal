@@ -21,7 +21,7 @@ struct Layer {
     float corner;    // radius in pixels
     float shadow;    // 0..1
     float ring;      // ring width in pixels (kind 3); stroke width for shapes
-    uint kind;       // 0 texture, 1 solid, 2 gradient, 3 ring, 4 ellipse, 5 line, 6 arrow, 7 callout, 8 box
+    uint kind;       // 0 texture, 1 solid, 2 gradient, 3 ring, 4 ellipse, 5 line, 6 arrow, 7 callout, 8 box, 9 arc, 10 heart
     uint flags;      // 1 BGRA source, 2 BGRA output, 4 grade, 8 LUT, 16 key, 32 cutout, 64 cutout blur, 128 clip
     float2 pivot;    // rotation pivot in target pixels
     float rotation;  // radians, clockwise
@@ -30,7 +30,7 @@ struct Layer {
     float4 grade1;   // temperature, tint, highlights, shadows
     float4 lut;      // amount, cube size, cutout amount, unused
     float4 key0;     // key rgb, tolerance (shapes: stroke rgb, unused)
-    float4 key1;     // softness, spill, unused, unused
+    float4 key1;     // softness, spill, unused, unused (ellipse and arc shapes: 1 - sweep)
     float4 clip;     // visible region x, y, w, h in target pixels
     Mask masks[4];
     uint blend;      // 0 normal, 1 multiply, 2 screen, 3 overlay, 4 add, 5 darken, 6 lighten
@@ -188,8 +188,30 @@ static inline float4 layer_body(Out in, constant Layer &l, texture2d<float> sour
         // Shapes: fill (color0/color1 gradient) with an optional stroke (key0.rgb, ring px).
         float d;
         float2 a = l.dest.xy, b = l.dest.xy + l.dest.zw;
-        if (l.kind == 4) {
+        if (l.kind == 4 || l.kind == 9) {
             d = ellipse(in.px, c, h);
+            // A ring is the ellipse's band `ring` px thick.
+            if (l.kind == 9) d = max(d, -(d + max(l.ring, 1.0)));
+            // Progress (T45.4): only the first `sweep` of a turn, clockwise from 12 o'clock.
+            float sweep = 1.0 - l.key1.x;
+            if (sweep < 1.0) {
+                float2 v = in.px - c;
+                float a = atan2(v.x, -v.y);
+                if (a < 0.0) a += 6.2831853;
+                d = max(d, (a - sweep * 6.2831853) * length(v));
+            }
+        } else if (l.kind == 10) {
+            // Heart (Inigo Quilez's distance), point down, fitted to the bounds.
+            float2 p = float2(abs(in.px.x - c.x) / l.dest.z * 1.208,
+                              (l.dest.y + l.dest.w - in.px.y) / l.dest.w * 1.104);
+            float units = min(l.dest.z / 1.208, l.dest.w / 1.104);
+            if (p.x + p.y > 1.0) {
+                d = length(p - float2(0.25, 0.75)) - 0.35355339;
+            } else {
+                float2 q = p - 0.5 * max(p.x + p.y, 0.0);
+                d = sqrt(min(dot(p - float2(0.0, 1.0), p - float2(0.0, 1.0)), dot(q, q))) * sign(p.x - p.y);
+            }
+            d *= units;
         } else if (l.kind == 5 || l.kind == 6) {
             d = segment(in.px, a, b) - max(l.ring, 1.0) * 0.5;
             if (l.kind == 6) {
