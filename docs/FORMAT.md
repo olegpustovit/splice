@@ -246,7 +246,15 @@ One JSON object per line:
 Audio entries are track names or `{name, channels}` when the probe has a channel count. Take
 descriptors can include a `components` object with paths relative to the take directory.
 
-On macOS, `clip.insert {path}` accepts an absolute path or one relative to the project package.
+Vector media (0.4, T45.2) is `kind:"image"` with `codec:"lottie"` (a `.json`/`.lot` Lottie
+file) or `codec:"svg"`; no new kind or field, so 0.3 readers and files are unaffected. Like
+every still, its probe has the project `fps`, `frames` 1000000000 (it spans any length) and the
+file's own `width`/`height` in pixels. A Lottie's loop length and frame rate are not stored:
+rendering reads them from the file (ThorVG, crates/thorvg_sys) and loops the animation across
+the item. Vector files are probed on every platform, so Linux clients can import them.
+
+On macOS (and for Lottie or SVG files everywhere), `clip.insert {path}` accepts an absolute path
+or one relative to the project package.
 Set `insert:false` with `path` to add only the media descriptor. A recorded take's primary
 file is `takes/<med>/screen.mov`. The project saves the descriptor and optional clip in a single
 journal batch. The take files remain available after undo for history restores.

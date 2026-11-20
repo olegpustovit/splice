@@ -267,6 +267,17 @@ fps, size and audio tracks follow the file, and a file of a different length or 
 `MEDIA_MISMATCH` and the broken rule (`param:"path"`, or `param:"frames"` when the `frames` you
 passed disagrees with the probe) unless `force:true`. A missing file is `MEDIA_OFFLINE` (macOS).
 
+Vector media (T45.2): `clip.insert {path}` and `media.relink {path}` with a Lottie (`.json`,
+`.lot`) or SVG (`.svg`) file probe it through ThorVG on every platform, Linux included. It
+becomes image media with codec `lottie` or `svg` and the file's own size: like a still it lasts
+5 s on the spine and spans any length, and a Lottie animation loops at its own frame rate for
+as long as the item lasts (an SVG holds still). For an overlay, register it first:
+`{"cmd":"clip.insert","path":"art/badge.json","insert":false,"ref":"badge"}`, then
+`{"cmd":"overlay.add","kind":"media","media":"$badge",…}`. A file ThorVG cannot read (JSON that
+is not Lottie, an SVG without a size) is `BAD_MEDIA` with the rule `{param:"path", got,
+expected}`; transparent areas stay transparent. Raster images embedded in the file and text
+drawn from fonts (not glyph outlines) are not drawn.
+
 On Linux, rendering, export and capture return `UNSUPPORTED_PLATFORM`. A job ID with no retained
 job returns `NOT_FOUND`. Headless `ui.show` returns `{"applied":false,"reason":"headless"}`.
 In the 0.1 viewer, `ui.show` moves the playhead using a frame or an item, marker, or word anchor.

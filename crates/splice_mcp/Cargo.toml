@@ -10,6 +10,7 @@ splice_eval = { path = "../splice_eval" }
 splice_model = { path = "../splice_model" }
 splice_json = { path = "../splice_json" }
 quickjs_sys = { path = "../quickjs_sys" }
+thorvg_sys = { path = "../thorvg_sys" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple_sys = { path = "../apple_sys" }

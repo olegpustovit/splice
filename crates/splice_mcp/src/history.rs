@@ -49,26 +49,29 @@ pub(super) fn apply(store: &mut Store, args: &Json) -> Result<Json, StoreError> 
 
 /// Applies a client edit; MCP, `splice apply` and the viewer all come through here. It fills
 /// the inputs the core cannot read (M10), copies consolidated media only for a batch that will
-/// commit (M13), and probes local media paths on macOS.
+/// commit (M13), and probes local media paths: Lottie and SVG everywhere (T45.2), audio, video
+/// and images on macOS.
 pub fn apply_batch(
     store: &mut Store,
     ops: &[Json],
     options: &WriteOptions,
 ) -> Result<EditResult, StoreError> {
-    #[cfg(target_os = "macos")]
     let (package, fps) = (store.path().to_path_buf(), store.project().fps);
-    #[cfg(target_os = "macos")]
     let mut load = |path: &str| {
-        splice_media::probe(&package, std::path::Path::new(path), fps).map_err(|failure| {
+        if let Some(codec) = super::vector::codec(path) {
+            return super::vector::probe(&package, path, codec, fps);
+        }
+        #[cfg(target_os = "macos")]
+        return splice_media::probe(&package, std::path::Path::new(path), fps).map_err(|failure| {
             splice_core::commands::CommandError::new(
                 failure.code,
                 failure.message,
                 failure.fix.into(),
             )
-        })
+        });
+        #[cfg(not(target_os = "macos"))]
+        edit::missing_media(path)
     };
-    #[cfg(not(target_os = "macos"))]
-    let mut load = edit::missing_media;
     let filled = super::enrich::ops(store, ops, &mut load)?;
     let ops = filled.as_deref().unwrap_or(ops);
     if !options.dry_run

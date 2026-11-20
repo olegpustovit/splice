@@ -49,6 +49,7 @@ mod sheet;
 mod timeline;
 mod tools;
 mod typescript;
+mod vector;
 mod wire;
 
 #[cfg(target_os = "macos")]

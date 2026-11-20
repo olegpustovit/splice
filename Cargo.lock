@@ -256,6 +256,7 @@ dependencies = [
  "splice_media",
  "splice_model",
  "splice_testkit",
+ "thorvg_sys",
 ]
 
 [[package]]
