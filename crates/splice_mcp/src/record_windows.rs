@@ -37,6 +37,10 @@ pub(super) struct Plan {
     pub has_window: bool,
     /// Whether the look is on (a spine look turned off stays off, on every layer).
     pub windowed: bool,
+    /// Each layer's window `corner` (a fraction of its shorter side): every captured window
+    /// has the same native corner radius in pixels, so a smaller window needs a larger
+    /// fraction to round its native corners away (they record black).
+    pub corners: Vec<f64>,
 }
 
 /// Each layer's box in arrangement space (points) and the space's extent. Windows that overlap
@@ -136,6 +140,20 @@ pub(super) fn plan(
     window: Option<&(bool, Vec<splice_model::EffectParam>)>,
 ) -> Plan {
     let has_window = window.is_some();
+    let number = |name: &str| {
+        window
+            .and_then(|(_, params)| params.iter().find(|param| param.name == name))
+            .and_then(|param| match param.value {
+                splice_model::EffectValue::Number(value) if value.is_finite() => Some(value),
+                _ => None,
+            })
+    };
+    let shorter = |layer: &Layer| f64::from(layer.size[0].min(layer.size[1]).max(1));
+    let corner = number("corner").unwrap_or(0.03).clamp(0.0, 0.12);
+    let corners = layers
+        .iter()
+        .map(|layer| (corner * shorter(&layers[0]) / shorter(layer)).clamp(0.0, 0.12))
+        .collect();
     let windowed = window.is_none_or(|(enabled, _)| *enabled);
     // The look a take gets without one pads by the effect's default.
     let padding = match window {
@@ -197,6 +215,7 @@ pub(super) fn plan(
         padding,
         has_window,
         windowed,
+        corners,
     }
 }
 
@@ -262,6 +281,7 @@ pub(super) fn ops(layers: &[Layer], plan: &Plan) -> Vec<Json> {
                     object(vec![
                         ("background", text("none")),
                         ("padding", Json::Float(plan.padding)),
+                        ("corner", Json::Float(plan.corners[n])),
                     ]),
                 ),
             ]));
@@ -442,6 +462,23 @@ mod tests {
                 "drawn {a:?}, planned {b:?}"
             );
         }
+    }
+
+    /// Found live: the small window's native rounded corners recorded black and showed past
+    /// the look's rounding, since `corner` is a fraction of each layer's shorter side. Every
+    /// layer now rounds to the same radius in capture pixels as the spine window.
+    #[test]
+    fn every_window_layer_rounds_to_the_same_native_radius() {
+        let layers = [
+            layer(0, [387.0, 251.0, 656.0, 422.0], 60),
+            layer(1, [200.0, 728.0, 300.0, 152.0], 60),
+        ];
+        let plan = plan(&layers, [1440.0, 1080.0], None);
+        assert_eq!(plan.arrangement, "captured");
+        let radius =
+            |n: usize| plan.corners[n] * f64::from(layers[n].size[0].min(layers[n].size[1]));
+        assert!((radius(0) - radius(1)).abs() < 1e-9, "{:?}", plan.corners);
+        assert!(plan.corners[1] > plan.corners[0] && plan.corners[1] <= 0.12);
     }
 
     #[test]
