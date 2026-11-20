@@ -1790,3 +1790,123 @@ fn inspect_shows_the_implicit_look_of_a_fresh_take() {
     assert_eq!(chips.field("show").and_then(Json::as_str), Some("all"));
     assert_eq!(field("camera", "component"), Some(Json::Bool(true)));
 }
+
+/// A9: what docs/MCP.md and the splice skill name exists in the code, so drift fails the
+/// build: every `group.name` in backticks is a tool, a registry command or an effect
+/// parameter; the export preset list is exactly the presets; preset names in examples exist;
+/// no legacy `w12` word IDs; every lint code is documented.
+#[test]
+fn docs_name_only_tools_commands_presets_and_lints_that_exist() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let docs = ["docs/MCP.md", ".agents/skills/splice/SKILL.md"]
+        .map(|path| (path, fs::read_to_string(root.join(path)).unwrap()));
+    let schemas = splice_core::commands::effect_schemas();
+    // Backticked spans, and the leading identifier of each (`edit.apply {…}` names edit.apply).
+    let spans = |text: &str| -> Vec<String> {
+        text.split('`')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_owned)
+            .collect()
+    };
+    let names = |span: &str| -> Option<String> {
+        let head: String = span
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '.')
+            .collect();
+        let parts: Vec<&str> = head.split('.').collect();
+        (parts.len() == 2
+            && parts.iter().all(|p| !p.is_empty())
+            && parts[0].chars().all(|c| c.is_ascii_lowercase())
+            && parts[1]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase()))
+        .then_some(head)
+    };
+    // Files, an alias and result fields the docs name in the same shape.
+    const FILES: [&str; 8] = ["json", "jsonl", "md", "mov", "sock", "ts", "srt", "txt"];
+    const OTHER: [&str; 4] = [
+        "audio.summary",
+        "range.from",
+        "settings.credits",
+        "performance.now",
+    ];
+    let mut unknown = Vec::new();
+    for (path, text) in &docs {
+        for span in spans(text) {
+            let Some(name) = names(&span) else { continue };
+            // JavaScript in code mode: `splice.…` and calls such as `window.seek(seconds)`.
+            if name.starts_with("splice.") || span[name.len()..].starts_with('(') {
+                continue;
+            }
+            let (group, last) = name.split_once('.').unwrap();
+            let effect_param = schemas
+                .field(group)
+                .and_then(|schema| schema.field("params"))
+                .and_then(|params| params.field(last))
+                .is_some();
+            if !(tools::known(&name, false)
+                || tools::known(&name, true)
+                || splice_core::commands::lookup(&name).is_some()
+                || effect_param
+                || FILES.contains(&last)
+                || OTHER.contains(&name.as_str()))
+            {
+                unknown.push(format!("{path}: `{span}`"));
+            }
+        }
+        // Words are `w:<media>:<n>` since 0.3.
+        for span in spans(text) {
+            let legacy = span.starts_with('w')
+                && span.len() > 1
+                && span[1..].chars().all(|c| c.is_ascii_digit());
+            assert!(!legacy, "{path}: legacy word ID `{span}`");
+        }
+        // Preset names in examples (`preset:"…"`, `"preset":"…"`).
+        for piece in text.split("preset").skip(1) {
+            if let Some(name) = piece
+                .strip_prefix("\":\"")
+                .or_else(|| piece.strip_prefix(":\""))
+            {
+                let name: String = name.chars().take_while(|c| *c != '"').collect();
+                assert!(
+                    super::presets::PRESETS.iter().any(|p| p.name == name),
+                    "{path}: unknown preset {name:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        unknown.is_empty(),
+        "names the code does not have:\n{}",
+        unknown.join("\n")
+    );
+    // The export preset list says exactly what the code has.
+    let mcp = &docs[0].1;
+    let list = mcp
+        .split_once("`preset` is one of ")
+        .and_then(|(_, rest)| rest.split_once("(a PNG still)"))
+        .expect("the preset sentence")
+        .0;
+    let mut listed: Vec<String> = spans(list);
+    let mut presets: Vec<String> = super::presets::PRESETS
+        .iter()
+        .map(|p| p.name.to_owned())
+        .collect();
+    listed.sort();
+    presets.sort();
+    assert_eq!(listed, presets, "docs/MCP.md preset list");
+    // Every lint code the server emits is documented.
+    let lints = include_str!("lints.rs");
+    for code in lints.split("lint(\n").skip(1).filter_map(|call| {
+        let start = call.find('"')? + 1;
+        let end = start + call[start..].find('"')?;
+        Some(&call[start..end])
+    }) {
+        assert!(
+            mcp.contains(&format!("`{code}`")),
+            "lint {code} is not in docs/MCP.md"
+        );
+    }
+}

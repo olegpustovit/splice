@@ -74,7 +74,7 @@ and the argument.
 ## Time, IDs, anchors
 
 - Time is integer frames at the project `fps` (`project.info`). `at`, `from`, `to`, `length` are frames.
-- IDs are stable and prefixed: `clp_` clips, `ovl_` overlays, `lan_` lanes, `mrk_` markers, `med_` media, `w12` words.
+- IDs are stable and prefixed: `clp_` clips, `ovl_` overlays, `lan_` lanes, `mrk_` markers, `med_` media, `w:screen:12` words (`w:<media>:<n>`, from `transcript.get`).
 - Anchor overlays to *what is said* (`{word, transcriptHash}`) or to items (`{item, edge, offset}`)
   rather than to absolute frames, so they follow later edits.
 
