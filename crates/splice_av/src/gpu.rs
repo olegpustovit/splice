@@ -38,8 +38,9 @@ pub struct GpuProgram {
     group_textures: Vec<Bound>,
     /// The pooled transparent canvas groups flatten into, by size.
     group_target: Option<(Texture, PreparedRenderTarget, [u32; 2])>,
-    /// Rasterized titles, captions and chips (export and grabs; the viewer draws text in PXUI).
-    texts: Vec<(Texture, TimedText)>,
+    /// Rasterized titles, captions and chips, each with the part of its box the texture covers
+    /// (`[x, y, w, h]` in box pixels): the whole box, or an animator unit's own ink (T45.4).
+    texts: Vec<(Texture, TimedText, [f64; 4])>,
     /// LUT atlases by `Grade::lut` index, with their cube size.
     luts: Vec<(Texture, f32)>,
     /// The evaluated frame (reused: allocation-free per frame).
@@ -103,7 +104,18 @@ impl GpuProgram {
             let [_, _, w, h] = cue.layer.bounds;
             let size = [w.ceil().max(1.0) as u32, h.ceil().max(1.0) as u32];
             let pixels = apple_sys::composition::text_rgba(&cue.layer, size)?;
-            texts.push((upload(&pixels, size, "Splice text")?, cue.clone()));
+            // An animator unit keeps only its own glyphs' pixels: a 120-character animation
+            // uploads and composites 120 glyph-sized quads, not 120 full boxes. A unit with no
+            // ink draws nothing.
+            if cue.layer.visible.is_some() {
+                if let Some((rect, ink)) = splice_eval::ink_crop(&pixels, size) {
+                    let texture = upload(&ink, [rect[2], rect[3]], "Splice glyphs")?;
+                    texts.push((texture, cue.clone(), rect.map(f64::from)));
+                }
+                continue;
+            }
+            let whole = [0.0, 0.0, f64::from(size[0]), f64::from(size[1])];
+            texts.push((upload(&pixels, size, "Splice text")?, cue.clone(), whole));
         }
         let mut luts = Vec::with_capacity(plan.luts.len());
         for path in &plan.luts {
@@ -741,7 +753,7 @@ impl GpuProgram {
     fn text(&mut self, at: Frame, [cw, ch]: [f64; 2], only: Option<ItemId>) {
         let target = [cw as f32, ch as f32];
         for index in 0..self.texts.len() {
-            let (texture, cue) = &self.texts[index];
+            let (texture, cue, part) = &self.texts[index];
             if at < cue.range[0] || at >= cue.range[1] || cue.item != only {
                 continue;
             }
@@ -805,10 +817,20 @@ impl GpuProgram {
                     Animate::None => {}
                 }
             }
-            let (dest, pivot) = transform(bounds, &look);
+            let (whole, pivot) = transform(bounds, &look);
+            // The texture covers `part` of the box: place it where it sits in the placed box
+            // (the pivot stays the box's, so a cropped unit moves exactly as its full box did).
+            let [px, py, pw, ph] = part.map(|v| v as f32);
+            let [tw, th] = [w.ceil().max(1.0) as f32, h.ceil().max(1.0) as f32];
+            let dest = [
+                whole[0] + px / tw * whole[2],
+                whole[1] + py / th * whole[3],
+                pw / tw * whole[2],
+                ph / th * whole[3],
+            ];
             let mut layer = Layer::new(Layer::TEXTURE, dest, target);
-            layer.opacity = (alpha * look.opacity) as f32;
             layer.pivot = pivot;
+            layer.opacity = (alpha * look.opacity) as f32;
             layer.rotation = look.rotation.to_radians() as f32;
             layer.blend = look.blend.index();
             let texture = texture.clone();

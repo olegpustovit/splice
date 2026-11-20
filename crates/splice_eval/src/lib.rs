@@ -29,7 +29,7 @@ pub use style::{
     Animate, Background, CaptionPreset, CaptionStyle, Cursor, KeyPosition, Keys, TextStyle, Window,
     resolve_effect,
 };
-pub use text::{grapheme_len, text_units};
+pub use text::{grapheme_len, ink_crop, text_units};
 
 #[cfg(test)]
 mod graphics_tests;

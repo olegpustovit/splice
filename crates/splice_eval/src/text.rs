@@ -179,9 +179,57 @@ const PICTOGRAPHIC: &[(u32, u32)] = &[
     (0x1fc00, 0x1fffd),
 ];
 
+/// A unit's raster cut to its ink (T45.4): `rgba` is a `size` RGBA8 image of the whole text box
+/// with one unit drawn; returns the `[x, y, w, h]` box of the pixels with any alpha (shadow and
+/// stroke included) and those pixels, or `None` when nothing is drawn. A per-character animator
+/// then uploads and composites each glyph's own bounds instead of a full box per character.
+pub fn ink_crop(rgba: &[u8], [width, height]: [u32; 2]) -> Option<([u32; 4], Vec<u8>)> {
+    let (w, h) = (width as usize, height as usize);
+    if rgba.len() != w * h * 4 {
+        return None;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+    for (y, row) in rgba.chunks_exact(w * 4).enumerate() {
+        let alpha = || row.iter().skip(3).step_by(4);
+        let Some(first) = alpha().position(|&a| a != 0) else {
+            continue;
+        };
+        let last = alpha().rposition(|&a| a != 0)?;
+        x0 = x0.min(first);
+        x1 = x1.max(last + 1);
+        y0 = y0.min(y);
+        y1 = y + 1;
+    }
+    if x1 <= x0 {
+        return None;
+    }
+    let mut pixels = Vec::with_capacity((x1 - x0) * (y1 - y0) * 4);
+    for row in rgba.chunks_exact(w * 4).take(y1).skip(y0) {
+        pixels.extend_from_slice(&row[x0 * 4..x1 * 4]);
+    }
+    let rect = [x0, y0, x1 - x0, y1 - y0].map(|v| v as u32);
+    Some((rect, pixels))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ink_crop_keeps_only_the_drawn_pixels() {
+        let (w, h) = (6, 4);
+        let mut image = vec![0u8; w * h * 4];
+        assert_eq!(ink_crop(&image, [6, 4]), None);
+        for (x, y, alpha) in [(2, 1, 255u8), (4, 2, 7)] {
+            image[(y * w + x) * 4..][..4].copy_from_slice(&[9, 8, 7, alpha]);
+        }
+        let (rect, pixels) = ink_crop(&image, [6, 4]).unwrap();
+        assert_eq!(rect, [2, 1, 3, 2]);
+        assert_eq!(pixels.len(), 3 * 2 * 4);
+        assert_eq!(&pixels[..4], &[9, 8, 7, 255]);
+        assert_eq!(&pixels[pixels.len() - 4..], &[9, 8, 7, 7]);
+        assert_eq!(ink_crop(&image[4..], [6, 4]), None, "wrong size");
+    }
 
     /// T42.3: ZWJ families, flags, skin tones, keycaps, tags and combining marks stay whole;
     /// unit ranges are UTF-16 (what the native text renderer takes).
