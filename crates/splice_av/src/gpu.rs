@@ -573,7 +573,15 @@ impl GpuProgram {
             }
         }
         for (mask_slot, mask) in layer.masks.iter_mut().zip(look.masks.iter().flatten()) {
-            mask_slot.rect = mask.rect.map(|v| v as f32);
+            // Masks are in picture space (A5): when the camera zooms the content inside a fixed
+            // card, the mask follows the content it covers instead of staying on the card.
+            let [x, y, w, h] = mask.rect;
+            mask_slot.rect = if content {
+                [(x - vx) / vw, (y - vy) / vh, w / vw, h / vh]
+            } else {
+                mask.rect
+            }
+            .map(|v| v as f32);
             mask_slot.params = [
                 match mask.shape {
                     MaskShape::Rect => 0.0,

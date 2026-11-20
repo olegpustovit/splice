@@ -167,8 +167,8 @@ declare namespace Splice {
       muted?: boolean;
       /** first media frame */
       source?: number;
-      /** normalized source crop rectangle */
-      crop?: Rect;
+      /** {x,y,w,h} · source space: 0–1 of the media's full frame */
+      crop?: Rect | null;
       fit?: "fit" | "fill";
     }
     /** Add Title (edit, 0.1). */
@@ -220,7 +220,7 @@ declare namespace Splice {
       length?: number;
       /** 1–5 · magnification · @default 1.5 */
       amount?: number;
-      /** {x,y} content point (0–1) to frame; the viewport never leaves the content */
+      /** {x,y} · crop space: 0–1 of the spine clip's crop (the whole source when uncropped) to center; the viewport never leaves the picture */
       focus?: { x: number; y: number };
       /** content zooms inside a fixed window frame (portrait default), frame zooms the whole card */
       mode?: "auto" | "content" | "frame";
@@ -236,8 +236,8 @@ declare namespace Splice {
       zoom: string;
       /** 1–5 */
       amount?: number;
-      /** {x,y} content point (0–1), or null to keep the current framing */
-      focus?: { x: number; y: number } | null;
+      /** {x,y} · crop space: 0–1 of the spine clip's crop (the whole source when uncropped), or null to keep the current framing */
+      focus?: { x: number; y: number };
       mode?: "auto" | "content" | "frame";
       spring?: "focused" | "smooth" | "snappy" | "instant";
     }
@@ -545,7 +545,7 @@ declare namespace Splice {
       item: string;
       shape?: "rect" | "roundRect" | "ellipse";
       mode?: "blur" | "pixelate" | "cover" | "spotlight";
-      /** number · 0…1 of the picture */
+      /** number · picture space: 0–1 of the item's visible picture (after crop and fit); a camera zoom moves the mask with the content */
       x?: number;
       /** number */
       y?: number;
@@ -697,7 +697,7 @@ declare namespace Splice {
       cmd: "intent.autoZoom";
       /** clp_… · screen take */
       item: string;
-      /** [{at, x, y}] · source frames; splice mcp reads them from the take when omitted */
+      /** [{at, x, y}] · at in source frames; x, y in source space (0–1 of the captured frame, as takes.events reports them), converted to crop space; a click outside the crop moves no zoom; splice mcp reads them from the take when omitted */
       clicks?: { at: number; x: number; y: number }[];
       /** [{from, to}] · source frames; typing extends a zoom and never moves it (read from the take when omitted) */
       typing?: { from: number; to: number }[];
@@ -1746,8 +1746,8 @@ declare const splice: {
     inspect(args?: { projectId?: string; ids?: string[]; items?: string[]; }): { revision: Splice.Revision; items: unknown[]; };
   };
   takes: {
-    /** Read the take's cursor, clicks and keys in timeline frames, with keystrokes redacted by project policy. */
-    events(args: { projectId?: string; clip: string; from?: number; to?: number; }): { revision: Splice.Revision; clip: string; cursor?: unknown[]; clicks: unknown[]; keys: unknown[]; };
+    /** Read the take's cursor, clicks, keys and text caret in timeline frames (x, y: 0–1 of the captured, uncropped source), with keystrokes redacted by project policy; each key says its category (shortcut or typing) and whether the export draws it as a chip. kinds picks the lists; cursor samples are thinned to one per stride frames (default half a second; stride:1 returns every sample); counts gives every event in the window. */
+    events(args: { projectId?: string; clip: string; from?: number; to?: number; kinds?: ("cursor" | "clicks" | "keys" | "caret")[]; stride?: number; }): { revision: Splice.Revision; clip: string; cursor?: unknown[]; clicks: unknown[]; keys: unknown[]; caret?: unknown[]; counts?: Record<string, unknown>; stride?: number; space?: string; };
   };
   transcript: {
     /** Page through words by ID or get caption cues as JSON, SRT or WebVTT. Use the returned hash with word anchors. With transcribe:true (and sessionId), first recognizes the clip's speech on device and saves the words. */

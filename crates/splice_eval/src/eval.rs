@@ -138,6 +138,8 @@ struct PreparedClip {
     camera: Option<Camera>,
     keys: Option<Keys>,
     hidden_keys: Vec<u32>,
+    /// The static crop (the whole source when uncropped): the space of zoom focus points.
+    crop: Rect,
     rig: Rig,
     mix: Option<Mix>,
     transition: Option<Transition>,
@@ -1292,6 +1294,33 @@ impl Evaluator {
         1.0 - (1.0 - duck.amount) * depth
     }
 
+    /// A zoom focus (a point of the spine clip's crop, 0–1; the whole source when uncropped, A5)
+    /// as a point of the picture the camera frames at `at`: the same point unless `fill`
+    /// trims the crop to the frame's shape. An animated crop (crop.keys) is the picture itself.
+    // ponytail: an animated crop whose shape differs from its card is trimmed by the renderer
+    // and the focus is not corrected for it; crop.keys writes card-shaped crops.
+    fn picture_point(&self, point: [f64; 2], at: Frame) -> [f64; 2] {
+        let Some((crop, source)) = self
+            .clips
+            .iter()
+            .find(|clip| clip.interval.contains(at) && !clip.rig.crops())
+            .and_then(|clip| Some((clip.crop, clip.visual.as_ref()?.picture.source)))
+        else {
+            return point;
+        };
+        [
+            (crop.x + point[0] * crop.w - source.x) / source.w,
+            (crop.y + point[1] * crop.h - source.y) / source.h,
+        ]
+        .map(|v| {
+            if v.is_finite() {
+                v.clamp(0.0, 1.0)
+            } else {
+                0.5
+            }
+        })
+    }
+
     fn prepare_item(
         &mut self,
         p: &Project,
@@ -1382,11 +1411,12 @@ impl Evaluator {
                 {
                     return Err(EvalError::Range);
                 }
+                let focus = zoom.focus.map(|p| self.picture_point(p, interval.start));
                 self.zooms.push(crate::camera::Segment {
                     start: interval.start,
                     end: interval.end,
                     amount: zoom.amount,
-                    center: zoom.focus.map(|p| crate::View::center_on(p, zoom.amount)),
+                    center: focus.map(|p| crate::View::center_on(p, zoom.amount)),
                     mode: zoom.mode,
                     spring: zoom.spring,
                 });
@@ -1495,6 +1525,10 @@ fn prepare_clip(
         camera: None,
         keys: None,
         hidden_keys: data.hidden_keys.clone(),
+        crop: data
+            .framing
+            .crop
+            .unwrap_or(layout::rect(0.0, 0.0, 1.0, 1.0)),
         rig: Rig::new(&inherited, &shifts, local, &mut evaluator.luts),
         mix: Mix::new(&audio_scopes, &shifts),
         transition: look::transition(local),

@@ -58,7 +58,7 @@ result, is logged to the friction log, and the server keeps serving.
 | 2 | `timeline.snapshot` | read | Whole timeline with resolved frames and labels |
 | 3 | `items.inspect` | read | Full properties of IDs (`ids`, or `items`), including effects and their resolved values; an `fx_` ID returns that effect with its `owner` |
 | 4 | `timeline.find` | read | Query by kind, text, lane, range, word |
-| 5 | `takes.events` | read | Cursor, clicks and keys of a take, in timeline frames (keys redacted by policy) |
+| 5 | `takes.events` | read | Cursor, clicks, keys and caret of a take, in timeline frames, x/y in source space (keys redacted by policy); `kinds`, `stride` (cursor thinning) and `counts` |
 | 6 | `transcript.get` | read | Words with IDs and timing; `captions: json\|srt\|vtt` |
 | 7 | `media.analyze` | read | Per clip or media, by `kinds`: loudness, pauses, activity, peaks, beats, sounds, shots, text, faces, people, matte. Cached by file stamp; long media runs as a job. `audio.summary` stays an alias |
 | 8 | `view.frames` | read | PNG frames at frames N from the export composition (what the agent sees = what export makes); `sheet:true` returns one contact sheet; `strip:true` adds a heatmap of what changed between consecutive frames |
@@ -244,10 +244,24 @@ Agents cannot restore a revision that would change the project's access level.
 
 ## Headless media reads
 
-`takes.events` reports timeline frame numbers and source frame numbers. Key events expose their
-indexes, visibility and categories. Captured characters and raw key codes stay in the take.
-`caret` lists the text caret samples (`{frame, sourceFrame, x, y, w, h}`, from Accessibility when
-the recorder had that permission; empty otherwise).
+`takes.events {clip, from?, to?, kinds?, stride?}` reports timeline frame numbers and source
+frame numbers. Key events expose their indexes, visibility, categories (`shortcut` with ⌘, ⌃ or
+⌥, else `typing`) and `chip` (whether the export draws the key). Captured characters and raw key
+codes stay in the take. `caret` lists the text caret samples (`{frame, sourceFrame, x, y, w, h}`,
+from Accessibility when the recorder had that permission; empty otherwise). `kinds` picks lists
+from `cursor`, `clicks`, `keys`, `caret` (default all). Cursor samples are thinned to one per
+`stride` timeline frames (default half a second, `fps/2`; `stride:1` returns every sample), so a
+long take does not return thousands of moves; `counts` gives every event in the window per kind,
+before `kinds` and `stride`.
+
+Coordinate spaces (A5): each parameter states its space in `commands.describe`. **Source**
+(0–1 of the captured, uncropped frame): `takes.events` and `clicks` x/y, `take.pointer` marks,
+`clip.crop` `rect` and `focus`, `crop.keys`, overlay `crop`. **Crop** (0–1 of a spine clip's
+crop, the whole source when uncropped): zoom `focus` (`zoom.add`, `zoom.set`); `intent.autoZoom`
+converts source clicks into it, and a click outside the crop moves no zoom (the summary counts
+them). **Picture** (0–1 of an item's visible picture after crop and fit): `mask.add`/`mask.set`
+`x, y, w, h`; a camera zoom moves masks with the content. **Canvas** (0–1 of the output frame):
+title `box`, shape and particle `rect`, a motion overlay's `focus`.
 `media.analyze {clip|media, kinds}` returns track settings and transcript-derived pauses, plus the
 requested native kinds: `loudness`, `peaks`, `beats` (onsets and tempo), `sounds` (SoundAnalysis
 labels as runs), `shots`, `text` (Vision OCR with boxes), `faces`, `people` and `matte` (a person

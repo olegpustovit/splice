@@ -816,7 +816,7 @@ fn captions_stay_on_their_words_on_a_ramped_clip() {
 #[test]
 fn auto_zoom_rerun_reports_the_zooms_it_replaces() {
     let mut project = sample();
-    let run = r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.7,"y":0.3},{"at":250,"x":0.2,"y":0.6}],"amount":1.5}]"#;
+    let run = r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.7,"y":0.3},{"at":250,"x":0.45,"y":0.6}],"amount":1.5}]"#;
     let ops = splice_json::parse(run).unwrap();
     let first = apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
     let made = first.changes[0].created.len();

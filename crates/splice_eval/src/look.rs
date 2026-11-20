@@ -357,6 +357,11 @@ impl Rig {
         rig
     }
 
+    /// Whether an animated crop (crop.keys) replaces the static crop.
+    pub(crate) fn crops(&self) -> bool {
+        self.crop.is_some()
+    }
+
     /// Whether the layer needs the person matte.
     pub(crate) fn cutout(&self) -> bool {
         self.cutout.is_some()

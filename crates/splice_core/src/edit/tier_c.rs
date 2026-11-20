@@ -1561,6 +1561,41 @@ impl Editor {
             .map_err(|_| CommandError::bad("clicks", "source frames inside the take"))?;
             Ok(at - timing.start)
         };
+        // Clicks are points of the captured source; zoom focus is a point of the clip's crop at
+        // that moment (A5): the animated crop (crop.keys) where there is one, else the static
+        // crop. A click outside the crop is not on screen: it moves no zoom.
+        let data = self.project.clips.data(slot).expect("live clip");
+        let still = data.framing.crop.unwrap_or(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        });
+        let keyed = data
+            .appearance
+            .effects
+            .iter()
+            .find(|effect| effect.kind == "crop" && effect.enabled != Some(false));
+        let crop_at = |at: Frame| -> [f64; 4] {
+            let Some(effect) = keyed else {
+                return [still.x, still.y, still.w, still.h];
+            };
+            ["x", "y", "w", "h"].map(|name| {
+                let fallback = if matches!(name, "w" | "h") { 1.0 } else { 0.0 };
+                match effect.params.iter().find(|param| param.name == name) {
+                    Some(EffectParam {
+                        value: EffectValue::Number(value),
+                        ..
+                    }) => *value,
+                    Some(EffectParam {
+                        value: EffectValue::Keys(keys),
+                        ..
+                    }) => splice_model::keys::sample(keys, f64::from(at)),
+                    _ => fallback,
+                }
+            })
+        };
+        let mut outside = 0;
         // Clusters: first and last click frame, coordinate sums and count.
         let mut clusters: Vec<(Frame, Frame, [f64; 2], f64)> = Vec::new();
         for &(source, x, y) in clicks {
@@ -1568,7 +1603,12 @@ impl Editor {
             if at < 0 || at >= timing.length {
                 continue;
             }
-            let p = [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)];
+            let [cx, cy, cw, ch] = crop_at(at);
+            let p = [(x - cx) / cw, (y - cy) / ch];
+            if !p.iter().all(|v| (0.0..=1.0).contains(v)) {
+                outside += 1;
+                continue;
+            }
             let joins = clusters.last().is_some_and(|&(_, last, sum, n)| {
                 let c = [sum[0] / n, sum[1] / n];
                 at - last <= merge && ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)).sqrt() < 0.25
@@ -1583,7 +1623,14 @@ impl Editor {
             }
         }
         if clusters.is_empty() {
-            return Err(CommandError::bad("clicks", "clicks inside the clip"));
+            return Err(CommandError::bad(
+                "clicks",
+                if outside > 0 {
+                    "clicks inside the clip's crop (every click here is cropped away)"
+                } else {
+                    "clicks inside the clip"
+                },
+            ));
         }
         let typing: Vec<(Frame, Frame)> = typing
             .iter()
@@ -1682,9 +1729,13 @@ impl Editor {
         }
         let count = created.len();
         Ok(Outcome {
-            summary: Summary::Text(format!(
-                "Added {count} camera zoom(s) on {id} from its clicks"
-            )),
+            summary: Summary::Text(if outside > 0 {
+                format!(
+                    "Added {count} camera zoom(s) on {id} from its clicks; {outside} click(s) outside the crop moved none"
+                )
+            } else {
+                format!("Added {count} camera zoom(s) on {id} from its clicks")
+            }),
             primary: created.first().cloned(),
             created,
         })

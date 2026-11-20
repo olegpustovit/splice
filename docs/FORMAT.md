@@ -173,8 +173,11 @@ Rules:
 
 - **Camera lane and zoom items (D12, D13).** Lane kind `camera` (0.3 `motion` loads as `camera`)
   holds items `{"kind":"zoom","params":{"amount":1.5,"focus":{"x":0.7,"y":0.3},"mode":"auto",
-  "spring":"focused"}}`. `amount` is 1–5; `focus` is a content point (0–1) the viewport centers
-  on, clamped so the viewport never leaves the content (omit to keep the current framing);
+  "spring":"focused"}}`. `amount` is 1–5; `focus` is a point of the spine clip's crop (0–1 of the
+  crop rectangle, or of the animated `crop.keys` crop at the zoom's start; the whole source when
+  uncropped; T46.4 A5) the viewport centers on. With `fit:"fill"` the renderer converts it to the
+  trimmed picture, so the same source point stays centered. It is clamped so the viewport never
+  leaves the content (omit to keep the current framing);
   `mode` is `auto` (content on portrait canvases, else frame), `content` (zoom inside a fixed
   frame) or `frame` (the card scales); `spring` is `focused`, `smooth`, `snappy` or `instant`.
   One camera per timeline: the evaluator solves an analytic spring per channel from these

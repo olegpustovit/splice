@@ -493,6 +493,56 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
         .ok_or_else(not_a_take)?;
     let clock = ClipClock::new(p, slot)?;
     let (from, to) = timeline::window(args, clock.timing.end().unwrap())?;
+    // A8: which lists to return, and one cursor sample per `stride` frames (a 5-minute take
+    // records ~18k moves; two per second shows the path).
+    const KINDS: [&str; 4] = ["cursor", "clicks", "keys", "caret"];
+    let mut wanted = [true; 4];
+    if let Some(value) = args.field("kinds") {
+        let list = value
+            .as_array()
+            .filter(|list| !list.is_empty())
+            .ok_or_else(|| bad("kinds", "a non-empty array of cursor, clicks, keys, caret"))?;
+        wanted = [false; 4];
+        for kind in list {
+            let index = kind
+                .as_str()
+                .and_then(|kind| KINDS.iter().position(|known| *known == kind))
+                .ok_or_else(|| bad("kinds", "names from cursor, clicks, keys, caret"))?;
+            wanted[index] = true;
+        }
+    }
+    let stride = match args.field("stride") {
+        None => Frame::try_from(p.fps / 2).unwrap_or(1).max(1),
+        Some(value) => value
+            .as_i64()
+            .and_then(|n| Frame::try_from(n).ok())
+            .filter(|n| *n >= 1)
+            .ok_or_else(|| {
+                bad(
+                    "stride",
+                    "an integer of at least 1 frame (1 returns every sample)",
+                )
+            })?,
+    };
+    // Some(shortcuts only) when the clip draws keystroke chips (A1), None when they are off.
+    let chips = {
+        let data = p.clips.data(slot).unwrap();
+        let scopes = [
+            p.effects.as_slice(),
+            &p.spine.effects,
+            &data.appearance.effects,
+        ];
+        match splice_eval::resolve_effect(&scopes, "keystrokes") {
+            _ if data.enabled.keys != Some(true) => None,
+            Some((false, _)) => None,
+            Some((true, params)) => Some(params.iter().any(|param| {
+                param.name == "show" && param.value == EffectValue::Text("shortcuts".into())
+            })),
+            None => Some(false),
+        }
+    };
+    let mut counts = [0u64; 4];
+    let mut last_cursor: Option<Frame> = None;
     let mut cursor = Vec::new();
     let mut clicks = Vec::new();
     let mut keys = Vec::new();
@@ -519,9 +569,27 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
             if !shown {
                 return Ok(());
             }
+            let bucket = match kind {
+                "move" | "drag" | "up" | "scroll" | "cursor" => 0,
+                "down" => 1,
+                "key" => 2,
+                "caret" => 3,
+                _ => return Ok(()),
+            };
+            counts[bucket] += 1;
+            if !wanted[bucket] {
+                return Ok(());
+            }
+            let at_frame = clock.start(source);
+            if bucket == 0 {
+                if stride > 1 && last_cursor.is_some_and(|last| at_frame - last < stride) {
+                    return Ok(());
+                }
+                last_cursor = Some(at_frame);
+            }
             let mut fields = vec![
                 ("kind", text(kind)),
-                ("frame", frame(clock.start(source))),
+                ("frame", frame(at_frame)),
                 ("sourceFrame", Json::Signed(source.round() as i64)),
             ];
             match kind {
@@ -548,13 +616,20 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
                     } else {
                         "typing"
                     };
+                    let hidden = data.hidden_keys.contains(&(index as u32));
+                    let typed = event
+                        .field("ch")
+                        .and_then(Json::as_str)
+                        .is_some_and(|ch| !ch.trim().is_empty());
+                    // Whether the export draws this key as a chip (agent renders: as dots).
+                    let chip = typed
+                        && !hidden
+                        && chips.is_some_and(|shortcuts| !shortcuts || category == "shortcut");
                     fields.extend([
                         ("index", count(index)),
                         ("category", text(category)),
-                        (
-                            "hidden",
-                            Json::Bool(data.hidden_keys.contains(&(index as u32))),
-                        ),
+                        ("chip", Json::Bool(chip)),
+                        ("hidden", Json::Bool(hidden)),
                         ("redacted", Json::Bool(true)),
                         ("text", Json::Null),
                     ]);
@@ -584,6 +659,22 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
         ("clicks", Json::Array(clicks)),
         ("keys", Json::Array(keys)),
         ("caret", Json::Array(caret)),
+        // Every event in the window, before kinds and stride: what a narrower read would miss.
+        (
+            "counts",
+            object(
+                KINDS
+                    .iter()
+                    .zip(counts)
+                    .map(|(kind, n)| (*kind, Json::Unsigned(n)))
+                    .collect(),
+            ),
+        ),
+        ("stride", frame(stride)),
+        (
+            "space",
+            text("x, y: 0–1 of the captured source (uncropped); frame: timeline"),
+        ),
     ]))
 }
 

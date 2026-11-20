@@ -151,13 +151,18 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "takes.events",
-        description: "Read the take's cursor, clicks and keys in timeline frames, with keystrokes redacted by project policy.",
+        description: "Read the take's cursor, clicks, keys and text caret in timeline frames (x, y: 0–1 of the captured, uncropped source), with keystrokes redacted by project policy; each key says its category (shortcut or typing) and whether the export draws it as a chip. kinds picks the lists; cursor samples are thinned to one per stride frames (default half a second; stride:1 returns every sample); counts gives every event in the window.",
         read_only: true,
         input: &[
             ("projectId", "string"),
             ("clip", "string"),
             ("from", FRAME),
             ("to", FRAME),
+            (
+                "kinds",
+                r#"{"type":"array","items":{"enum":["cursor","clicks","keys","caret"]},"minItems":1}"#,
+            ),
+            ("stride", LIMIT),
         ],
         required: &["projectId", "clip"],
         output: &[
@@ -166,6 +171,10 @@ pub(super) const TOOLS: &[Tool] = &[
             ("cursor", "array"),
             ("clicks", "array"),
             ("keys", "array"),
+            ("caret", "array"),
+            ("counts", "object"),
+            ("stride", "integer"),
+            ("space", "string"),
         ],
         success: &[&["revision", "clip", "clicks", "keys"]],
     },

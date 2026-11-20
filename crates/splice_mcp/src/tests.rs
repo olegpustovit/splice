@@ -1051,7 +1051,8 @@ fn m10_enrich_resolves_refs_and_refuses_overlays() {
     fs::create_dir_all(&take).unwrap();
     fs::write(
         take.join("events.json"),
-        r#"{"events":[{"t":0.4,"k":"down","b":0,"x":0.9,"y":0.1},{"t":4.0,"k":"move","x":0.1,"y":0.9},{"t":5.0,"k":"key","ch":"a","keyCode":4}]}"#,
+        // Inside the sample's crop (x 0.36–0.82, y 0.1–0.9): clicks off it move no zoom (A5).
+        r#"{"events":[{"t":0.4,"k":"down","b":0,"x":0.7,"y":0.2},{"t":4.0,"k":"move","x":0.4,"y":0.8},{"t":5.0,"k":"key","ch":"a","keyCode":4}]}"#,
     )
     .unwrap();
     let mut store = splice_core::history::Store::open(&sample).unwrap();
@@ -1301,14 +1302,40 @@ fn takes_events_stream_logs_past_the_old_16_mib_cap() {
     fs::write(take.join("events.json"), &log).unwrap();
     drop(log);
     let store = splice_core::history::Store::open(&sample).unwrap();
-    let events = super::media::events(
-        store.path(),
-        store.project(),
-        &splice_json::parse(r#"{"clip":"clp_take","from":120,"to":240}"#).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(events.field("clicks").unwrap().as_array().unwrap().len(), 1);
-    assert!(events.field("cursor").unwrap().as_array().unwrap().len() > 300);
+    let read = |args: &str| {
+        super::media::events(
+            store.path(),
+            store.project(),
+            &splice_json::parse(args).unwrap(),
+        )
+        .unwrap()
+    };
+    let len = |events: &Json, kind: &str| events.field(kind).unwrap().as_array().unwrap().len();
+    let events = read(r#"{"clip":"clp_take","from":120,"to":240,"stride":1}"#);
+    assert_eq!(len(&events, "clicks"), 1);
+    assert!(len(&events, "cursor") > 300);
+    // A8: by default the path is thinned to one sample per half second (15 frames at 30 fps),
+    // and counts say how many there were.
+    let events = read(r#"{"clip":"clp_take","from":120,"to":240}"#);
+    assert_eq!(len(&events, "cursor"), 8);
+    assert_eq!(len(&events, "clicks"), 1);
+    let counts = events.field("counts").unwrap();
+    assert!(counts.field("cursor").and_then(Json::as_u64).unwrap() > 300);
+    assert_eq!(counts.field("clicks").and_then(Json::as_u64), Some(1));
+    let events = read(r#"{"clip":"clp_take","from":120,"to":240,"kinds":["clicks"]}"#);
+    assert_eq!((len(&events, "cursor"), len(&events, "clicks")), (0, 1));
+    for args in [
+        r#"{"clip":"clp_take","kinds":["moves"]}"#,
+        r#"{"clip":"clp_take","stride":0}"#,
+    ] {
+        let error = super::media::events(
+            store.path(),
+            store.project(),
+            &splice_json::parse(args).unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "BAD_ARGS", "{args}");
+    }
 }
 
 #[test]
@@ -1657,4 +1684,67 @@ fn record_start_joins_a_session_without_if_revision() {
         .unwrap_err();
     assert_eq!(error.code, "NO_SESSION");
     assert!(error.fix.contains("session"), "{}", error.fix);
+}
+
+/// A5: on a cropped take, intent.autoZoom (clicks in captured-source coordinates, as
+/// takes.events reports them) centers the camera on the clicked point of the source, with fit
+/// and with fill; a click in the cropped-away part moves no zoom and the summary says so.
+#[test]
+fn auto_zoom_on_a_cropped_clip_lands_on_the_clicked_source_point() {
+    let apply = |project: &mut splice_model::Project, ops: &str| {
+        let ops = splice_json::parse(ops).unwrap();
+        splice_core::edit::apply(
+            project,
+            ops.as_array().unwrap(),
+            splice_core::package::journal::Source::Agent,
+            false,
+        )
+        .unwrap()
+    };
+    // The visible source point at the middle of the camera's viewport on clp_take.
+    let center = |project: &splice_model::Project, at: splice_model::Frame| {
+        let evaluator = splice_eval::Evaluator::prepare(project).unwrap();
+        let mut plan = evaluator.buffer();
+        evaluator.frame(at, &mut plan);
+        let picture = plan
+            .layers
+            .iter()
+            .find_map(|layer| match layer {
+                splice_eval::Layer::Picture(p) if p.item.to_string() == "clp_take" => Some(*p),
+                _ => None,
+            })
+            .expect("the take's picture");
+        let [vx, vy, vw, vh] = picture.view.viewport();
+        let s = picture.source;
+        [s.x + (vx + vw / 2.0) * s.w, s.y + (vy + vh / 2.0) * s.h]
+    };
+    let click = [0.55, 0.42];
+    for fit in ["fit", "fill"] {
+        let mut project = sample_project();
+        // The sample's take is cropped to {x 0.36, y 0.1, w 0.46, h 0.8}; drop its own zoom.
+        apply(
+            &mut project,
+            &format!(
+                r#"[{{"cmd":"zoom.remove","zoom":"ovl_detail"}},
+                    {{"cmd":"clip.crop","items":["clp_take"],"fit":"{fit}"}}]"#
+            ),
+        );
+        let report = apply(
+            &mut project,
+            &format!(
+                r#"[{{"cmd":"intent.autoZoom","item":"clp_take","amount":2,
+                     "clicks":[{{"at":300,"x":{},"y":{}}},{{"at":200,"x":0.1,"y":0.5}}]}}]"#,
+                click[0], click[1]
+            ),
+        );
+        let summary = format!("{:?}", report.changes[0].summary);
+        assert!(summary.contains("1 click(s) outside the crop"), "{summary}");
+        // clp_take starts at 120; the zoom opens 9 frames before the click at source 300.
+        let at = 120 + 300 + 45;
+        let got = center(&project, at);
+        assert!(
+            (got[0] - click[0]).abs() < 0.01 && (got[1] - click[1]).abs() < 0.01,
+            "{fit}: camera centered on {got:?}, clicked {click:?}"
+        );
+    }
 }
