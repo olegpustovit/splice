@@ -777,7 +777,9 @@ fn with_defaults(
             .position(|(k, _)| k == key)
             .map(|at| (at, fields[at].1.as_str().map(str::to_owned)))
     };
-    if takes("projectId") {
+    // Job calls name their work by jobId and use the job's own project and session.
+    let by_job = matches!(name, "jobs.status" | "jobs.cancel" | "record.stop");
+    if takes("projectId") && !by_job {
         match field(&fields, "projectId") {
             // JavaScript's undefined and null arrive as text from code that built the ID.
             Some((at, Some(id))) if id == "undefined" || id == "null" || id.is_empty() => {

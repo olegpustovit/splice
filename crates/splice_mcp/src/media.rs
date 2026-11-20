@@ -811,7 +811,10 @@ fn for_each_event(
         )
     };
     let path = fs::canonicalize(dir.join(name)).map_err(|_| offline())?;
-    if !path.starts_with(dir) || !path.is_file() {
+    // Compare canonical with canonical: on macOS /tmp and /var/folders are symlinks into
+    // /private, so a raw `dir` never contains the resolved file.
+    let dir = fs::canonicalize(dir).map_err(|_| offline())?;
+    if !path.starts_with(&dir) || !path.is_file() {
         return Err(events_format());
     }
     let mut reader =

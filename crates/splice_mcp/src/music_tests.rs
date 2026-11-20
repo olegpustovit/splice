@@ -175,9 +175,21 @@ fn music_catalog_reads_sidecars_tags_and_wav_lengths() {
     assert_eq!(mystery.license, "unknown");
     // The nearer sidecar's folder defaults win; entries still override them.
     let (drive, sprint) = (&tracks[3], &tracks[4]);
+    // macOS measures loudness, and a measurement beats a declared value.
+    let declared = |value: f64, measured: Option<f64>| {
+        if cfg!(target_os = "macos") {
+            measured.filter(|m| (-70.0..0.0).contains(m))
+        } else {
+            Some(value)
+        }
+    };
     assert_eq!(
         (drive.license.as_str(), drive.moods.clone(), drive.loudness),
-        ("CC0-1.0", vec!["upbeat".to_string()], Some(-12.0))
+        (
+            "CC0-1.0",
+            vec!["upbeat".to_string()],
+            declared(-12.0, drive.loudness)
+        )
     );
     assert_eq!(sprint.moods, ["upbeat", "energetic"]);
     if !cfg!(target_os = "macos") {
@@ -359,10 +371,16 @@ fn music_add_resolves_credits_and_replays_without_the_library() {
         sunrise.field("license").and_then(Json::as_str),
         Some("CC0-1.0")
     );
-    assert_eq!(
-        sunrise.field("loudness").and_then(Json::as_f64),
-        Some(-20.0)
-    );
+    // macOS fills the measured loudness, which beats the sidecar's -20.
+    let loudness = sunrise.field("loudness").and_then(Json::as_f64);
+    if cfg!(target_os = "macos") {
+        assert!(
+            loudness.is_some_and(|l| (-70.0..0.0).contains(&l)),
+            "{loudness:?}"
+        );
+    } else {
+        assert_eq!(loudness, Some(-20.0));
+    }
     let result = add(&mut store, &sunrise).unwrap();
     assert_eq!(
         result.report.changes[0].created.len(),

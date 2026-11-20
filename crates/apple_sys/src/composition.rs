@@ -36,6 +36,19 @@ impl Codec {
     pub fn alpha(self) -> bool {
         matches!(self, Codec::ProRes4444 | Codec::HevcAlpha)
     }
+
+    /// The name export settings report (stable: not the Rust variant's spelling).
+    pub fn name(self) -> &'static str {
+        match self {
+            Codec::H264 => "H264",
+            Codec::Hevc => "HEVC",
+            Codec::ProRes422 => "ProRes422",
+            Codec::ProRes4444 => "ProRes4444",
+            Codec::HevcAlpha => "HEVCAlpha",
+            Codec::Aac => "AAC",
+            Codec::Wav => "WAV",
+        }
+    }
 }
 
 /// How an export encodes.

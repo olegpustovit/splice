@@ -99,10 +99,9 @@ ifneq ($(strip $(MAC_CRATES)),)
 	cargo t $(foreach crate,$(MAC_CRATES),-p $(crate))
 endif
 ifneq ($(filter splice_app,$(MAC_CRATES)),)
-	cargo t -p splice_cli native_viewer_
-	cargo t -p splice_cli native_capture_agent_
-	cargo t -p splice_mcp capture_agent_
-	cargo t -p splice_mcp capability_sweep
+	# The whole MCP and CLI suites: their macOS paths (export, frames, capture, music
+	# measurement) only run here, and filtered runs let failures rot unnoticed.
+	cargo t -p splice_mcp -p splice_cli
 endif
 	SPLICE_TIMESTAMP=--timestamp=none $(MAKE) bundle PROFILE=debug
 	tools/check-macos-bundle.sh '$(BUNDLE_DIR)/Splice.app'

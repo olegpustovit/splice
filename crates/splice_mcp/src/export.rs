@@ -261,7 +261,7 @@ impl Job {
             ("width", Json::Unsigned(u64::from(project.size[0]))),
             ("height", Json::Unsigned(u64::from(project.size[1]))),
             ("fps", Json::Unsigned(u64::from(project.fps))),
-            ("codec", text(&format!("{codec:?}"))),
+            ("codec", text(codec.name())),
             ("container", text(&request.extension.to_uppercase())),
             ("encoder", text("AVFoundation")),
             ("path", Json::String(path.to_string_lossy().into_owned())),
@@ -403,13 +403,47 @@ impl Drop for Job {
     }
 }
 
+/// What an export writes; at the package root any other name could be the project's own
+/// file (project.json, journal.ops, media.json, lock).
+const EXPORT_EXTENSIONS: &[&str] = &[
+    "mp4", "mov", "m4v", "m4a", "wav", "gif", "png", "jpg", "fcpxml", "srt", "vtt", "txt",
+];
+
 fn destination(
     store: &Store,
     path: Option<&str>,
     request: &Request,
 ) -> Result<PathBuf, StoreError> {
     if let Some(path) = path {
-        return Ok(store.path().join(path));
+        let file = store.path().join(path);
+        // Inside the package only exports/ takes output: anything else would overwrite the
+        // project's own files (project.json, the journal, media).
+        let package = store
+            .path()
+            .canonicalize()
+            .map_err(|error| path_error(store.path(), &error))?;
+        let parent = file
+            .parent()
+            .and_then(|parent| parent.canonicalize().ok())
+            .unwrap_or_default();
+        let export_kind = file
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| EXPORT_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()));
+        let unsafe_spot = parent.starts_with(&package)
+            && !parent.starts_with(package.join("exports"))
+            && (parent != package || !export_kind);
+        if unsafe_spot {
+            return Err(failure(
+                "BAD_ARGS",
+                &format!(
+                    "{} would write into the project package's own files.",
+                    file.display()
+                ),
+                "Export into the package's exports/ folder (omit output), next to the package, or anywhere outside it.",
+            ));
+        }
+        return Ok(file);
     }
     let dir = store.path().join("exports");
     match fs::create_dir(&dir) {

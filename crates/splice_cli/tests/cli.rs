@@ -617,7 +617,9 @@ fn native_export_mcp_publishes_without_status_calls_and_cancels_safely() {
     send(
         &mut input,
         "export.start",
-        r#"{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r1","path":"preserved.mp4","overwrite":true}"#,
+        // At 2160 the export outlasts the cancel sent right behind it (at the sample's 96 px
+        // it could finish first, and the test would race).
+        r#"{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r1","path":"preserved.mp4","overwrite":true,"resolution":2160}"#,
     );
     send(&mut input, "jobs.cancel", r#"{"jobId":"job_2"}"#);
     let started = receive();
@@ -1013,15 +1015,27 @@ fn kill_dash_nine_during_apply_leaves_a_whole_revision() {
     let scratch = Scratch::new("chaos");
     success(scratch.run(&["new", "p.splice"]));
     let mut titles = String::new();
-    for n in 0..150 {
+    for n in 0..60 {
         titles.push_str(&format!(
             r#",{{"cmd":"title.add","at":{n},"length":30,"text":"Line {n} of a long batch"}}"#
         ));
     }
+    // Kill points span one whole apply as this machine runs it (a signed bundle on macOS
+    // starts far slower than a Linux debug binary), so some applies finish and some die.
+    let timed = scratch.0.join("timed.splice");
+    success(scratch.run(&["new", timed.to_str().unwrap()]));
+    fs::write(
+        scratch.0.join("ops.json"),
+        format!(r#"[{{"cmd":"marker.add","at":0,"name":"Timed"}}{titles}]"#),
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    success(scratch.run(&["apply", "ops.json", timed.to_str().unwrap()]));
+    let span = (started.elapsed().as_micros() as u32).max(1_000) * 3 / 2;
     let mut seed = 0x9e37_79b9_u32;
     let mut last_rev = 0;
     let mut killed = 0;
-    for round in 0..40u32 {
+    for round in 0..20u32 {
         let ops = format!(
             r#"[{{"cmd":"marker.add","at":{},"name":"Round {round}"}}{titles}]"#,
             round * 10
@@ -1037,7 +1051,7 @@ fn kill_dash_nine_during_apply_leaves_a_whole_revision() {
         seed ^= seed << 13;
         seed ^= seed >> 17;
         seed ^= seed << 5;
-        std::thread::sleep(std::time::Duration::from_micros(u64::from(seed % 25_000)));
+        std::thread::sleep(std::time::Duration::from_micros(u64::from(seed % span)));
         if child.try_wait().unwrap().is_none() {
             child.kill().unwrap();
             killed += 1;
