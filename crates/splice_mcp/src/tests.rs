@@ -791,6 +791,33 @@ fn code_run_adopts_an_open_session_and_the_revision_it_read() {
     assert_eq!(edits[1].2, Some(text("r2")));
 }
 
+/// Found by the evals: agents call project.open and job.status inside code.run.
+#[test]
+fn code_run_suggests_the_tool_an_unknown_name_meant() {
+    for (code, near) in [
+        (r#"splice.call("project.open", {})"#, "project.info"),
+        (r#"splice.call("job.status", {})"#, "jobs.status"),
+        (
+            r#"splice.call("timeline.snapshots", {})"#,
+            "timeline.snapshot",
+        ),
+    ] {
+        let args = object(vec![("code", text(code))]);
+        let reply = code::run(&args, &mut |_, _| unreachable!("not dispatched")).unwrap();
+        let message = reply
+            .field("error")
+            .and_then(|e| e.field("message"))
+            .unwrap();
+        assert!(
+            message
+                .as_str()
+                .unwrap()
+                .contains(&format!("Did you mean {near:?}")),
+            "{reply:?}"
+        );
+    }
+}
+
 /// The sample project, loaded through the package reader.
 pub(crate) fn sample_project() -> splice_model::Project {
     let root = TestDirectory::new("sample-project");

@@ -248,6 +248,19 @@ fn host(
     }
 }
 
+/// Tool names agents try that Splice spells differently.
+pub(super) const ALIASES: &[(&str, &str)] = &[
+    ("project.open", "project.info"),
+    ("project.load", "project.info"),
+    ("project.create", "project.info"),
+    ("job.status", "jobs.status"),
+    ("record.status", "jobs.status"),
+    ("timeline.inspect", "items.inspect"),
+    ("item.inspect", "items.inspect"),
+    ("edit.batch", "edit.apply"),
+    ("history.revert", "history.undo"),
+];
+
 /// One tool call: its structured result, or its error payload.
 fn dispatch(
     name: &str,
@@ -258,13 +271,32 @@ fn dispatch(
 ) -> Result<Json, Json> {
     if !callable(name) {
         let valid = tools::TOOLS.iter().filter(|tool| callable(tool.name));
+        // Names agents reach for first, then the nearest spelling.
+        let near = ALIASES
+            .iter()
+            .find(|(alias, _)| *alias == name)
+            .map(|(_, tool)| (*tool).to_owned())
+            .or_else(|| {
+                splice_core::commands::closest(
+                    name,
+                    &mut tools::TOOLS
+                        .iter()
+                        .filter(|tool| callable(tool.name))
+                        .map(|tool| tool.name),
+                )
+            });
+        let message = match &near {
+            Some(near) => format!("Code cannot call {name:?}. Did you mean {near:?}?"),
+            None => format!("Code cannot call {name:?}."),
+        };
+        let fix = match &near {
+            Some(near) => format!("Call {near}, or one of the tools in `valid`."),
+            None => "Call one of the tools in `valid`.".to_owned(),
+        };
         return Err(object(vec![
             ("code", text("UNKNOWN_TOOL")),
-            (
-                "message",
-                Json::String(format!("Code cannot call {name:?}.")),
-            ),
-            ("fix", text("Call one of the tools in `valid`.")),
+            ("message", Json::String(message)),
+            ("fix", Json::String(fix)),
             (
                 "valid",
                 Json::Array(valid.map(|tool| text(tool.name)).collect()),

@@ -272,7 +272,7 @@ impl CommandError {
 }
 
 /// The candidate within a small edit distance of `name` (case-insensitive), if any.
-pub(crate) fn closest(name: &str, known: &mut dyn Iterator<Item = &str>) -> Option<String> {
+pub fn closest(name: &str, known: &mut dyn Iterator<Item = &str>) -> Option<String> {
     let name = name.to_ascii_lowercase();
     let limit = (name.len() / 3).max(2);
     let mut synonym = None;
