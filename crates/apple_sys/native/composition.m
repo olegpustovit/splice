@@ -1429,6 +1429,9 @@ void *splice_av_writer(void *reader_raw, const char *file, const SpliceExportSet
             if (format != NULL) CFRelease(format);
             chapters.languageCode = @"eng";
             chapters.extendedLanguageTag = @"en";
+            // Chapter samples are all written before the frames; interleaved with the video, the
+            // text input stopped taking them after the first few and the export hung.
+            chapters.mediaDataLocation = AVAssetWriterInputMediaDataLocationBeforeMainMediaDataNotInterleaved;
             if (marks.count > 0 && [writer canAddInput:chapters]) {
                 [writer addInput:chapters];
                 [video addTrackAssociationWithTrackOfInput:chapters type:AVTrackAssociationTypeChapterList];
@@ -1450,7 +1453,16 @@ void *splice_av_writer(void *reader_raw, const char *file, const SpliceExportSet
                 if (next <= at) continue;
                 CMSampleBufferRef sample = text_sample(format, marks[i][1], CMTimeMake(at, assembly.fps),
                                                        CMTimeMake(next - at, assembly.fps));
-                while (!chapters.readyForMoreMediaData) usleep(1000);
+                for (int waited = 0; !chapters.readyForMoreMediaData; waited++) {
+                    if (writer.status != AVAssetWriterStatusWriting || waited > 5000) {
+                        if (sample != NULL) CFRelease(sample);
+                        if (format != NULL) CFRelease(format);
+                        [writer cancelWriting];
+                        fail(error, writer.error, "The export's chapter track did not take its chapters.");
+                        return NULL;
+                    }
+                    usleep(1000);
+                }
                 if (sample != NULL) {
                     [chapters appendSampleBuffer:sample];
                     CFRelease(sample);

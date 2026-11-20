@@ -102,6 +102,9 @@ ifneq ($(filter splice_app,$(MAC_CRATES)),)
 	# The whole MCP and CLI suites: their macOS paths (export, frames, capture, music
 	# measurement) only run here, and filtered runs let failures rot unnoticed.
 	cargo t -p splice_mcp -p splice_cli
+	# CLI export end to end (chapters, H.264/HEVC, frame comparison, cancel): it hung for
+	# weeks unnoticed while it ran outside the gate.
+	sh tools/check-macos-export.sh
 endif
 	SPLICE_TIMESTAMP=--timestamp=none $(MAKE) bundle PROFILE=debug
 	tools/check-macos-bundle.sh '$(BUNDLE_DIR)/Splice.app'
