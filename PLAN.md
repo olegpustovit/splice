@@ -494,25 +494,25 @@ existing core (commands, effects, D12 camera segments, splice_eval cursor, lanes
 MCP/CLI, and nothing an agent does can silently differ from what it asked for or what export makes.
 Source: the Recorder gap audit (Recorder docs/SPEC.md vs Splice 0.4), ranked by impact on "an AI
 records and edits a screen video correctly".
-- [ ] T46.1 [L] Capture: `record.start {mic:deviceId, camera:deviceId}` (dryRun lists IDs),
+- [x] T46.1 [L] (b116ee7; plus duration/then:"pause"/wait so agents never time takes by sleeping) Capture: `record.start {mic:deviceId, camera:deviceId}` (dryRun lists IDs),
   `systemAudio:{apps:[…]}`, `exclude:["desktop"]`, `window size:[w,h]` resize before capture;
   `record.start` echoes every resolved setting; `countdown` typed as seconds (A2); `record.stop`
   returns a take summary `{frames, size, fps, tracks, clicks, keys, micPeak, droppedFrames}` plus
   lints and a fit warning (A6); a project created by recording takes its canvas from the source (A7).
-- [ ] T46.2 [L] Camera and cursor motion: `zoom.add/set {focus:"cursor"}` follows the smoothed cursor
+- [x] T46.2 [L] (29069c2; camera motion blur lives on zoom segments, D12) Camera and cursor motion: `zoom.add/set {focus:"cursor"}` follows the smoothed cursor
   with a dead zone; `intent.autoZoom {lead, tail, from, to}`; motion blur for camera moves and the
   cursor; cursor `alwaysArrow`, `loop` (return to start position), click sound; documented mapping of
   smoothing presets to 0–1.
-- [ ] T46.3 [L] Compositing: `window.background` image (file) / blur / gradient angle; camera bubble
+- [x] T46.3 [L] (96ca99a) Compositing: `window.background` image (file) / blur / gradient angle; camera bubble
   `mirror`, `aspect`, free `position`, size to 1.0, `shrinkWhenZoomed`, and keyed `layout:
   bubble|full|hidden` segments that ease like zooms; `mask.add {from, to}`; `look.save`/`look.apply
   {file}` for custom looks.
-- [ ] T46.4 [L] Agent clarity: keystroke chips off by default with `keys.set {show:all|shortcuts|none}`
+- [x] T46.4 [L] (abc0283…759f23b; autoZoom aimed off target on cropped takes, fixed; GIF limits refused) Agent clarity: keystroke chips off by default with `keys.set {show:all|shortcuts|none}`
   (A1, A11); `audio.set` refuses arguments it would ignore (A3); GIF limits refused or reported (A4);
   one coordinate space per parameter, documented in `commands.describe`, with `intent.autoZoom`
   correct on cropped clips (A5); `takes.events {kinds, stride}` (A8); `items.inspect` shows resolved
   default effects (A10); `project.set {fps, aspect:auto|16:10}` and export fps (G1); doc drift (A9).
-- [ ] T46.5 [L] Evals: record-app-landscape, record-pause-marker, keys-private, crop-autozoom,
+- [~] T46.5 [L] (8 tasks live, all pass in both arms; full 21-task 3/3 run in progress) Evals: record-app-landscape, record-pause-marker, keys-private, crop-autozoom,
   cursor-range-hide, camera-layout, gif-teaser, retake-replace; all 3/3 in both arms with the
   existing 13.
 
