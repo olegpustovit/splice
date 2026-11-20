@@ -2344,7 +2344,7 @@ fn tools_default_the_only_project_and_its_session() {
 
 /// docs/RECORDER-PARITY.md stays true: every row has four cells and a known status, a
 /// verified row names its evidence, and every test (`crate::module::test` as `cargo t` prints
-/// it) and eval (`eval:<id>`) it names exists.
+/// it), eval (`eval:<id>`) and measuring script (`tool: tools/…`) it names exists.
 #[test]
 fn recorder_parity_evidence_exists() {
     use std::{fs, path::Path};
@@ -2421,12 +2421,15 @@ fn recorder_parity_evidence_exists() {
             problems.push(format!("verified without evidence: {capability}"));
         }
         for span in spans {
-            let found = match span.strip_prefix("eval:") {
-                Some(id) => root
-                    .join("evals/tasks")
+            let found = if let Some(id) = span.strip_prefix("eval:") {
+                root.join("evals/tasks")
                     .join(format!("{id}.json"))
-                    .is_file(),
-                None => span.contains("::") && test_exists(span),
+                    .is_file()
+            } else if let Some(path) = span.strip_prefix("tool: ") {
+                // A measuring script run by hand on the Mac (`tool: tools/…`).
+                path.starts_with("tools/") && root.join(path).is_file()
+            } else {
+                span.contains("::") && test_exists(span)
             };
             if !found {
                 problems.push(format!("{capability}: no {span}"));
