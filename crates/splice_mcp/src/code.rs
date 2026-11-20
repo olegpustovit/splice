@@ -26,6 +26,8 @@ const PRELUDE: &str = r#"(() => {
   }
   const call = (name, args) => {
     const a = Object.assign({}, args), t = ctx.tools[name];
+    // A project named explicitly is the program's project too, so later defaults follow it.
+    if (!ctx.projectId && typeof a.projectId === "string") ctx.projectId = a.projectId;
     if (t && t[0] && a.projectId === undefined && a.path === undefined && ctx.projectId) a.projectId = ctx.projectId;
     if (t && t[1] && a.sessionId === undefined && !ctx.sessionId && ctx.projectId && name !== "project.info") {
       // A session opened outside this program (record.start starts one) is the default too.

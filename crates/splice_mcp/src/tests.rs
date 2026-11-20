@@ -791,6 +791,34 @@ fn code_run_adopts_an_open_session_and_the_revision_it_read() {
     assert_eq!(edits[1].2, Some(text("r2")));
 }
 
+/// Found by record-app-landscape (code mode): the program passed projectId on every call,
+/// so no default followed and edit.apply failed with NO_SESSION; the agent filed friction.
+#[test]
+fn code_run_adopts_a_project_named_on_a_call() {
+    let args = object(vec![(
+        "code",
+        text(
+            r#"splice.call("edit.apply", {projectId: "prj_1", ops: []}); return splice.projectId;"#,
+        ),
+    )]);
+    let mut seen = Vec::new();
+    code::run(&args, &mut |name, args| {
+        seen.push((name.to_owned(), args.field("sessionId").cloned()));
+        let body = match name {
+            "project.info" => object(vec![
+                ("projectId", text("prj_1")),
+                ("revision", text("r1")),
+                ("openSession", text("ses_4")),
+            ]),
+            _ => object(vec![("revision", text("r2"))]),
+        };
+        Ok(object(vec![("structuredContent", body)]))
+    })
+    .unwrap();
+    let edit = seen.iter().find(|(name, _)| name == "edit.apply").unwrap();
+    assert_eq!(edit.1, Some(text("ses_4")), "{seen:?}");
+}
+
 /// Found by the evals: agents call project.open and job.status inside code.run.
 #[test]
 fn code_run_suggests_the_tool_an_unknown_name_meant() {
@@ -1345,8 +1373,18 @@ fn code_run_reports_revisions_for_every_project_it_touched() {
     )
     .unwrap();
     let mut revision = 3;
-    let reply = code::run(&args, &mut |_, args| {
+    let reply = code::run(&args, &mut |name, args| {
         let project = args.field("projectId").and_then(Json::as_str).unwrap_or("");
+        // The session lookup code mode makes reads; only edits move the revision.
+        if name == "project.info" {
+            return Ok(object(vec![(
+                "structuredContent",
+                object(vec![
+                    ("projectId", text(project)),
+                    ("revision", text(&format!("r{revision}"))),
+                ]),
+            )]));
+        }
         revision += 1;
         let next = if project == "prj_2" { 8 } else { revision };
         Ok(object(vec![(
