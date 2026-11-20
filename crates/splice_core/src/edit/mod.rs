@@ -11,6 +11,7 @@ mod edits;
 mod legacy;
 mod mints;
 mod motion;
+mod music;
 mod properties;
 mod settle;
 mod silent;
@@ -27,6 +28,8 @@ pub use time::{resolve_view_frame, span};
 mod fuzz_tests;
 #[cfg(test)]
 mod motion_tests;
+#[cfg(test)]
+mod music_tests;
 #[cfg(test)]
 mod silent_tests;
 #[cfg(test)]

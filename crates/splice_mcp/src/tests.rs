@@ -1222,6 +1222,12 @@ fn capability_sweep_applies_every_row_and_restores_the_start() {
     for name in ["broll.mov", "broll-v2.mov"] {
         fs::copy(&real, sample.join("assets").join(name)).unwrap();
     }
+    // music.add's example imports assets/music.wav (probed on macOS).
+    fs::copy(
+        mcp_fixtures().join("../media/stereo.wav"),
+        sample.join("assets/music.wav"),
+    )
+    .unwrap();
     let setup = |id: &str| -> &'static str {
         match id {
             "media.relink" => {

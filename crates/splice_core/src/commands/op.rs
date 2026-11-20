@@ -100,6 +100,8 @@ pub enum Op {
         /// Audio lane for a sound item.
         lane: Option<Target>,
     },
+    /// Add Music (T45.3): a library track on an audio lane, fitted, ducked and leveled.
+    MusicAdd(Box<MusicAdd>),
     /// Lift to Overlay.
     ClipLift {
         /// Selected clips.
@@ -886,6 +888,53 @@ pub enum InsertSource {
     Media(Target),
     /// File to import through the native backend.
     Path(String),
+}
+
+/// How `music.add` fits a track to the timeline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MusicFit {
+    /// Loop a short track, cut a long one at the timeline end.
+    Timeline,
+    /// Repeat the track to the timeline end.
+    Loop,
+    /// Play it once, cut at the timeline end.
+    Trim,
+}
+
+/// `music.add` arguments. `splice mcp` fills `path`, `seconds`, `loudness` and the credit fields
+/// from the music library's catalog entry for `track`, so the journal replays without the library.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MusicAdd {
+    /// Catalog ID the agent picked (kept for the journal and credits).
+    pub track: Option<String>,
+    /// The file to import.
+    pub path: String,
+    /// Track length, used when no media backend probes the file.
+    pub seconds: Option<f64>,
+    /// Integrated loudness (LUFS) from the catalog, when the probe has none.
+    pub loudness: Option<f64>,
+    /// Credited title.
+    pub title: Option<String>,
+    /// Credited artist.
+    pub artist: Option<String>,
+    /// License; unknown is refused unless `allow_unlicensed`.
+    pub license: Option<String>,
+    /// Add a track whose license is unknown.
+    pub allow_unlicensed: bool,
+    /// Start frame.
+    pub at: Option<FrameArg>,
+    /// How it fits the timeline.
+    pub fit: MusicFit,
+    /// Duck under speech.
+    pub duck: bool,
+    /// Linear gain instead of normalizing.
+    pub volume: Option<f64>,
+    /// LUFS target.
+    pub normalize: f64,
+    /// Fade-out frames where the timeline cuts the music.
+    pub fade_out: Option<Frame>,
+    /// Audio lane.
+    pub lane: Option<Target>,
 }
 
 /// Parameters specific to the content of a new overlay.

@@ -949,6 +949,40 @@ declare namespace Splice {
       /** the rendered movie · splice mcp fills it: the page runs on a virtual clock (Date.now, performance.now, requestAnimationFrame, CSS and Web Animations follow the frame; window.seek(seconds) if defined) and must draw the same frame twice */
       movie?: string;
     }
+    /** Add Music (edit, 0.3). */
+    interface MusicAdd extends Base {
+      cmd: "music.add";
+      /** catalog ID from commands.describe {music:{query}}; edit.apply fills path, seconds, loudness, title, artist and license from the music library */
+      track?: string;
+      /** where the music starts · @default 0 */
+      at?: At;
+      /** timeline and loop repeat a short track to the timeline end; every mode cuts at the end with a fade-out; trim never repeats · @default timeline */
+      fit?: "timeline" | "loop" | "trim";
+      /** lower under speech (amount 0.25, attack 8, release 15 frames) · @default true */
+      duck?: boolean;
+      /** 0–2 · linear gain instead of normalizing */
+      volume?: number;
+      /** number · LUFS target (social) from the measured loudness · @default -14 */
+      normalize?: number;
+      /** fade where the timeline end cuts the music · @default 2 s */
+      fadeOut?: number;
+      /** lan_… · audio lane (default: a free audio lane, created if needed) */
+      lane?: string;
+      /** add a track whose license is unknown · @default false */
+      allowUnlicensed?: boolean;
+      /** filled from the library (or pass a file instead of track) */
+      path?: string;
+      /** number · filled: length, used where no media backend probes the file */
+      seconds?: number;
+      /** number · filled: integrated LUFS from the catalog */
+      loudness?: number;
+      /** filled: credit */
+      title?: string;
+      /** filled: credit */
+      artist?: string;
+      /** filled: credit; unknown is refused without allowUnlicensed */
+      license?: string;
+    }
   }
   /** Effect types and parameters (effects.json, the validator's own schema). */
   interface Effects {
@@ -1362,7 +1396,8 @@ declare namespace Splice {
     | op.CaptionAdd
     | op.ItemOrder
     | op.MotionPreset
-    | op.HtmlAdd;
+    | op.HtmlAdd
+    | op.MusicAdd;
 }
 
 declare const splice: {
@@ -1518,6 +1553,9 @@ declare const splice: {
     };
     html: {
       add(args: Omit<Splice.op.HtmlAdd, "cmd">): Splice.op.HtmlAdd;
+    };
+    music: {
+      add(args: Omit<Splice.op.MusicAdd, "cmd">): Splice.op.MusicAdd;
     };
   };
   project: {

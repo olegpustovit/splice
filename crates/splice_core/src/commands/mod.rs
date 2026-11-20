@@ -53,6 +53,7 @@ pub const EXTENSIONS: &[&str] = &[
     "item.order",
     "motion.preset",
     "html.add",
+    "music.add",
 ];
 
 #[cfg(test)]

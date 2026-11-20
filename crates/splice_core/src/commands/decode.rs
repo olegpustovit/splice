@@ -130,6 +130,68 @@ pub(super) fn clip_insert(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     })
 }
 
+pub(super) fn music_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let track = a.opt_string("track")?;
+    let Some(path) = a.opt_string("path")? else {
+        return Err(match track {
+            Some(_) => Error::new(
+                "BAD_ARGS",
+                "music.add needs its path filled from the music library.".into(),
+                "Send music.add through edit.apply (splice mcp or splice apply), which reads the library.".into(),
+            ),
+            None => Error::bad("track", "a track ID from commands.describe {music:{}}"),
+        });
+    };
+    if path.is_empty() || path.contains('\0') {
+        return Err(Error::bad("path", "a nonempty file path"));
+    }
+    let seconds = a.opt_number("seconds")?;
+    if seconds.is_some_and(|s| !(s > 0.0 && s < 86_400.0)) {
+        return Err(Error::bad(
+            "seconds",
+            "a track length from 0 to 86400 seconds",
+        ));
+    }
+    let loudness = a.opt_number("loudness")?;
+    if loudness.is_some_and(|l| !(-70.0..=0.0).contains(&l)) {
+        return Err(Error::bad(
+            "loudness",
+            "a measured loudness from -70 to 0 LUFS",
+        ));
+    }
+    let fit = match a.opt_string("fit")?.as_deref() {
+        None | Some("timeline") => MusicFit::Timeline,
+        Some("loop") => MusicFit::Loop,
+        Some("trim") => MusicFit::Trim,
+        Some(_) => return Err(Error::bad("fit", "timeline, loop or trim")),
+    };
+    let normalize = a.opt_number("normalize")?.unwrap_or(-14.0);
+    if !(-40.0..=-5.0).contains(&normalize) {
+        return Err(Error::bad("normalize", "a LUFS target from -40 to -5"));
+    }
+    let fade_out = a.opt_int("fadeOut")?;
+    if fade_out.is_some_and(|f| f < 0) {
+        return Err(Error::bad("fadeOut", "a nonnegative frame count"));
+    }
+    Ok(Op::MusicAdd(Box::new(MusicAdd {
+        track,
+        path,
+        seconds,
+        loudness,
+        title: a.opt_string("title")?,
+        artist: a.opt_string("artist")?,
+        license: a.opt_string("license")?,
+        allow_unlicensed: a.flag("allowUnlicensed", false)?,
+        at: a.opt_frame("at")?,
+        fit,
+        duck: a.flag("duck", true)?,
+        volume: a.opt_within("volume", 0.0, 2.0)?,
+        normalize,
+        fade_out,
+        lane: a.opt_target("lane")?,
+    })))
+}
+
 pub(super) fn clip_lift(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::ClipLift {
         items: a.targets("items")?,

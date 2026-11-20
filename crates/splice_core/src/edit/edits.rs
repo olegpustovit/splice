@@ -126,6 +126,7 @@ impl Editor {
                 insert,
                 lane,
             } => self.insert_clip(source, at.as_ref(), ripple, insert, lane.as_ref(), load),
+            Op::MusicAdd(music) => self.add_music(*music, load),
             Op::LaneDelete { lane } => self.delete_lane(&lane),
             Op::LaneRename { lane, name } => self.rename_lane(&lane, name),
             Op::ItemLane { items, destination } => self.move_to_lane(&items, &destination),
