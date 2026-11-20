@@ -487,6 +487,35 @@ eight places; the board below already carries the changes.
 - [x] T45.3 [M] Music library around user-supplied tracks (`SPLICE_MUSIC`, setting, or ~/Music/Splice): catalog, search as `commands.describe {music}` (D3 keeps 20 tools), `music.add` with fit/duck/loudness, UNLICENSED refusal, export credits (6df250a, 2868b4f).
 - [x] T45.4 [L] `counter.add`, `progress.add` (bar, ring), `particles.add`, `look.apply`, glyph-cropped animator units, caret samples via AX steering typing zooms (25169ac, 782a207, d1b1782). ponytail: units still rasterize a full box on the CPU at prepare; CoreText run bounds when long animated titles show up in profiles.
 
+
+### T46 · Headless Recorder parity, agent-proof (user goal 2026-11-20) [XL]
+0.4 is headless: no UI work. Every Recorder recording and compositing capability is a layer on the
+existing core (commands, effects, D12 camera segments, splice_eval cursor, lanes), reachable over
+MCP/CLI, and nothing an agent does can silently differ from what it asked for or what export makes.
+Source: the Recorder gap audit (Recorder docs/SPEC.md vs Splice 0.4), ranked by impact on "an AI
+records and edits a screen video correctly".
+- [ ] T46.1 [L] Capture: `record.start {mic:deviceId, camera:deviceId}` (dryRun lists IDs),
+  `systemAudio:{apps:[…]}`, `exclude:["desktop"]`, `window size:[w,h]` resize before capture;
+  `record.start` echoes every resolved setting; `countdown` typed as seconds (A2); `record.stop`
+  returns a take summary `{frames, size, fps, tracks, clicks, keys, micPeak, droppedFrames}` plus
+  lints and a fit warning (A6); a project created by recording takes its canvas from the source (A7).
+- [ ] T46.2 [L] Camera and cursor motion: `zoom.add/set {focus:"cursor"}` follows the smoothed cursor
+  with a dead zone; `intent.autoZoom {lead, tail, from, to}`; motion blur for camera moves and the
+  cursor; cursor `alwaysArrow`, `loop` (return to start position), click sound; documented mapping of
+  smoothing presets to 0–1.
+- [ ] T46.3 [L] Compositing: `window.background` image (file) / blur / gradient angle; camera bubble
+  `mirror`, `aspect`, free `position`, size to 1.0, `shrinkWhenZoomed`, and keyed `layout:
+  bubble|full|hidden` segments that ease like zooms; `mask.add {from, to}`; `look.save`/`look.apply
+  {file}` for custom looks.
+- [ ] T46.4 [L] Agent clarity: keystroke chips off by default with `keys.set {show:all|shortcuts|none}`
+  (A1, A11); `audio.set` refuses arguments it would ignore (A3); GIF limits refused or reported (A4);
+  one coordinate space per parameter, documented in `commands.describe`, with `intent.autoZoom`
+  correct on cropped clips (A5); `takes.events {kinds, stride}` (A8); `items.inspect` shows resolved
+  default effects (A10); `project.set {fps, aspect:auto|16:10}` and export fps (G1); doc drift (A9).
+- [ ] T46.5 [L] Evals: record-app-landscape, record-pause-marker, keys-private, crop-autozoom,
+  cursor-range-hide, camera-layout, gif-teaser, retake-replace; all 3/3 in both arms with the
+  existing 13.
+
 ## Log
 
 Append one line per loop iteration: date, task, result, commit, wall time of the checks.
