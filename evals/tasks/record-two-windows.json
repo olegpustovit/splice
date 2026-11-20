@@ -1,0 +1,11 @@
+{
+  "id": "record-two-windows",
+  "platform": "macos",
+  "seed": {"new": true, "open": {"app": "TextEdit", "windows": 2}},
+  "prompt": "Two TextEdit windows are open, titled \"{window}\" and \"{window2}\". Record both of them together in one take for 4 seconds into the Splice project {project}, so the video shows the two windows side by side as they sit on screen. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "one take with a second window layer", "expr": "len(takes) == 1 and len(take_clips()) == 1 and any(i['kind'] == 'media' for i in items)"},
+    {"name": "about 4 s", "expr": "3 <= seconds(sum(c['length'] for c in clips)) <= 5.5"},
+    {"name": "both windows on screen together", "expr": "all(i['length'] >= 0.8 * take_clips()[0]['length'] for i in items if i['kind'] == 'media')"}
+  ]
+}

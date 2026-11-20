@@ -66,24 +66,27 @@ def png(path, w, h):
 
 
 def open_window(work, spec):
-    """Opens a text in an app (TextEdit) and returns its window title, unique per run."""
-    name = f"notes-{os.path.basename(work)}.txt"
-    text = os.path.join(work, name)
-    with open(text, "w") as f:
-        f.write(spec.get("text", "Splice eval\n\nThings to try:\n- crop\n- zoom\n- music\n"))
+    """Opens spec["windows"] texts (default 1) in an app (TextEdit) and returns their window
+    titles, unique per run."""
     app = spec.get("app", "TextEdit")
     # Start from a known state: earlier runs can leave windows or a hung app behind.
     sh(["killall", app])
     time.sleep(1)
-    sh(["open", "-a", app, text])
-    time.sleep(2)
-    return name
+    names = []
+    for n in range(spec.get("windows", 1)):
+        name = f"notes-{os.path.basename(work)}{'-' + str(n + 1) if n else ''}.txt"
+        with open(os.path.join(work, name), "w") as f:
+            f.write(spec.get("text", "Splice eval\n\nThings to try:\n- crop\n- zoom\n- music\n"))
+        sh(["open", "-a", app, os.path.join(work, name)])
+        time.sleep(2)
+        names.append(name)
+    return names
 
 
 def record_seed(project, spec):
     """Records a real window on macOS (spec["takes"] times) and scripts its input events."""
     app = spec.get("app", "TextEdit")
-    name = open_window(os.path.dirname(project), spec)
+    name = open_window(os.path.dirname(project), spec)[0]
     for _ in range(spec.get("takes", 1)):
         splice("record", project, "--window", app, "--title", name, "--duration", str(spec.get("duration", 6)),
                *(["--mic"] if spec.get("mic") else []))
@@ -352,7 +355,8 @@ def run_task(task, agent, dry, code=False):
     work = tempfile.mkdtemp(prefix=f"splice-eval-{task['id']}-")
     project, assets, window = seed(task, work)
     seed_hash = splice("check", project).get("stateHash") if os.path.isdir(project) else None
-    prompt = task["prompt"].format(project=project, window=window, assets=json.dumps(assets), **assets_by_stem(assets))
+    windows = {f"window{n + 1 if n else ''}": name for n, name in enumerate(window or [])}
+    prompt = task["prompt"].format(project=project, assets=json.dumps(assets), **windows, **assets_by_stem(assets))
     stats = {"calls": 0, "errors": 0, "recoveries": 0, "tokens": 0, "wall": 0, "exit": 0} if dry else run_agent(agent, prompt, work, code)
     if window:
         sh(["killall", task["seed"]["open"].get("app", "TextEdit")])
