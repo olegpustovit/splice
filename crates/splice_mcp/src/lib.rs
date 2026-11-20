@@ -29,6 +29,7 @@ mod lints;
 /// The private command channel between a project viewer and same-user clients.
 pub mod live;
 mod media;
+mod music;
 #[cfg(target_os = "macos")]
 mod native;
 /// Locations shared by the CLI, the viewer and the MCP server.

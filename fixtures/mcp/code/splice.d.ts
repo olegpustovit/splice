@@ -1591,8 +1591,8 @@ declare const splice: {
     check(args?: { projectId?: string; from?: number; to?: number; checks?: ("camera" | "offCanvas" | "black" | "frozen" | "bleed")[]; }): { revision: Splice.Revision; issues: unknown[]; pixels: boolean; sheet?: string; };
   };
   commands: {
-    /** Search the command registry. Pass an exact ID to see parameters, release tier and an example. */
-    describe(args?: { projectId?: string; id?: string; query?: string; format?: "json" | "ts"; }): { commands: unknown[]; id?: string; title?: string; group?: string; risk?: string; cut?: string; available?: boolean; planned?: boolean; params?: Record<string, unknown>; shortcut?: string | null; ui?: unknown[]; example?: Record<string, unknown>; captionModel?: string; presets?: string[]; effectTypes?: Record<string, unknown>; resolution?: string; format?: "ts"; text?: string; };
+    /** Search the command registry. Pass an exact ID to see parameters, release tier and an example. music:{query, mood, bpm, minLength, maxLength, limit} searches the music library instead (tracks for music.add, with license, length in seconds, BPM, loudness). */
+    describe(args?: { projectId?: string; id?: string; query?: string; format?: "json" | "ts"; music?: { query?: string; mood?: string; bpm?: number; minLength?: number; maxLength?: number; limit?: number }; }): { commands: unknown[]; id?: string; title?: string; group?: string; risk?: string; cut?: string; available?: boolean; planned?: boolean; params?: Record<string, unknown>; shortcut?: string | null; ui?: unknown[]; example?: Record<string, unknown>; captionModel?: string; presets?: string[]; effectTypes?: Record<string, unknown>; resolution?: string; format?: "ts"; text?: string; library?: string; tracks?: unknown[]; total?: number; moods?: string[]; note?: string; };
   };
   session: {
     /** Start an agent editing session and get its checkpoint revision and session ID. */

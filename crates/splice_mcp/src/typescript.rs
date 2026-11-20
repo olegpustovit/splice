@@ -505,6 +505,16 @@ fn json_type(schema: &Json) -> String {
             .collect::<Vec<_>>()
             .join(" | ");
     }
+    if let Some(fields) = schema.field("properties").and_then(Json::as_object)
+        && schema.field("required").is_none()
+    {
+        // An options object (commands.describe {music}): every field optional.
+        let fields: Vec<String> = fields
+            .iter()
+            .map(|(name, field)| format!("{name}?: {}", json_type(field)))
+            .collect();
+        return format!("{{ {} }}", fields.join("; "));
+    }
     match schema.field("type") {
         Some(Json::String(kind)) if kind == "array" => match schema.field("items") {
             // A union element type needs parentheses: ("a" | "b")[].

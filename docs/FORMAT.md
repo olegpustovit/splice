@@ -265,6 +265,49 @@ inside the package are stored relative to it. A successful checkpoint writes des
 A missing file is `MEDIA_OFFLINE` with the last known path; `project.info` lists offline media, and
 relinking is a command (`media.relink`, 0.3). The core never touches media bytes; it only reads descriptors.
 
+## Music library (T45.3)
+
+The music library is a user folder of audio files the user holds the rights to, outside any
+project. `splice mcp` finds it at `SPLICE_MUSIC` (an absolute path or one under `~/`), else at
+`"library"` in `music.json` in Splice's config folder (`~/Library/Application Support/Splice/`
+on macOS, `$XDG_CONFIG_HOME/splice/` or `~/.config/splice/` elsewhere), else at `~/Music/Splice`.
+
+```json
+{"library": "~/Music/CC0"}
+```
+
+Every `.wav .wave .aif .aiff .aifc .caf .m4a .mp3 .aac .flac` file in the folder and its
+subfolders (8 levels; names starting with `.` are skipped) is a track. Its ID is its path inside
+the library with `/` separators (`calm/sunrise.wav`). Metadata comes from `tracks.json` sidecars:
+a sidecar covers its folder and the folders below it, and the nearest one wins.
+
+```json
+{"license": "CC0-1.0", "artist": "Folder default",
+ "tracks": {
+   "sunrise.wav": {"title": "Sunrise", "artist": "Ada", "mood": ["calm", "warm"], "tags": ["piano"],
+                   "bpm": 72, "key": "C major", "license": "CC0-1.0", "length": 30, "loudness": -20}}}
+```
+
+Keys under `tracks` are paths relative to the sidecar's folder. Each field is taken from the
+track's entry, then the file's own tags (WAV `LIST INFO` INAM/IART/IGNR; ID3v2.3/2.4 TIT2, TPE1,
+TBPM, TKEY, TCON), then the sidecars' top-level defaults; the title falls back to the file name and
+the license to `"unknown"`. `mood` (or `moods`) and `tags` are a string or a list. The license comes
+only from a sidecar: `music.add` refuses an `unknown` license unless `allowUnlicensed:true`.
+
+On macOS the index measures each file's length, integrated loudness (BS.1770, the import's
+measure) and tempo (onsets of the `media.analyze` envelope) and caches them by size and mtime in
+`<library>/.splice-catalog.json` (`{"format":"splice-music/1","tracks":[{id,size,mtime,length,loudness,bpm}]}`,
+disposable). Measured length and loudness beat the sidecar's; a declared `bpm` beats the estimate.
+Elsewhere nothing is measured: lengths come from WAV headers or `length`, loudness and tempo only
+from the sidecar, and search results say so in `note`.
+
+A `music.add` batch is journaled with the library's fields filled in (`path`, `seconds`,
+`loudness`, `title`, `artist`, `license`) and its import descriptor, so it replays without the
+library. The project refers to the file where it lies; `media.consolidate` copies it into the
+package. Exports write `<movie>.credits.txt` beside the movie: one line per music track that
+sounds in the exported range (`"Title" by Artist · License: … · <track ID>`), read from those
+journal fields.
+
 ## Transcripts
 
 `transcripts/<med>.json`: `{"hash","language","words":[{"id":"w:screen:12","text":"so","from":131,"to":139,"conf":0.93}]}`

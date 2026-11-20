@@ -240,6 +240,15 @@ impl Job {
                 overwrite,
             )?;
         }
+        // Music credits (T45.3): the library tracks this range plays, next to the movie.
+        let credits = match super::music::credits(store, request.range) {
+            Some(body) => {
+                let file = path.with_extension("credits.txt");
+                super::export_file::write_sidecar(&file, &body, overwrite)?;
+                Json::String(file.to_string_lossy().into_owned())
+            }
+            None => Json::Null,
+        };
         let settings = object(vec![
             ("preset", text(request.preset)),
             ("width", Json::Unsigned(u64::from(project.size[0]))),
@@ -252,6 +261,7 @@ impl Job {
             ("from", frame(request.range[0])),
             ("durationFrames", frame(frames)),
             ("chapters", Json::Unsigned(request.chapters.len() as u64)),
+            ("credits", credits),
         ]);
         let composition = Composition::prepare(project, store.path())
             .map_err(|error| super::frames::prepare_error(&error, export_failure))?;

@@ -14,6 +14,7 @@ const FILMSTRIP: &str = r#"{"type":"integer","minimum":1,"maximum":16}"#;
 const KINDS: &str = r#"{"type":"array","items":{"enum":["loudness","pauses","activity","peaks","beats","sounds","shots","text","faces","people","matte"]},"minItems":1}"#;
 const LIMIT: &str = r#"{"type":"integer","minimum":1}"#;
 const RANGE: &str = r#"{"type":"object","properties":{"from":{"type":"integer","minimum":0},"to":{"type":"integer","minimum":0}},"required":["from","to"]}"#;
+const MUSIC: &str = r#"{"type":"object","properties":{"query":{"type":"string"},"mood":{"type":"string"},"bpm":{"type":"number"},"minLength":{"type":"number"},"maxLength":{"type":"number"},"limit":{"type":"integer","minimum":1}}}"#;
 const ERROR_SCHEMA: &str = r#"{"type":"object","properties":{"code":{"type":"string"},"message":{"type":"string"},"fix":{"type":"string"},"valid":{"type":"array"},"current":{},"changedSince":{"type":"array"},"op":{"type":"integer","minimum":0}},"required":["code","message","fix"]}"#;
 
 pub(super) struct Tool {
@@ -275,13 +276,14 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "commands.describe",
-        description: "Search the command registry. Pass an exact ID to see parameters, release tier and an example.",
+        description: "Search the command registry. Pass an exact ID to see parameters, release tier and an example. music:{query, mood, bpm, minLength, maxLength, limit} searches the music library instead (tracks for music.add, with license, length in seconds, BPM, loudness).",
         read_only: true,
         input: &[
             ("projectId", "string"),
             ("id", "string"),
             ("query", "string"),
             ("format", r#"{"enum":["json","ts"]}"#),
+            ("music", MUSIC),
         ],
         required: &[],
         output: &[
@@ -303,11 +305,17 @@ pub(super) const TOOLS: &[Tool] = &[
             ("resolution", "string"),
             ("format", r#"{"enum":["ts"]}"#),
             ("text", "string"),
+            ("library", "string"),
+            ("tracks", "array"),
+            ("total", "integer"),
+            ("moods", IDS),
+            ("note", "string"),
         ],
         success: &[
             &["commands"],
             &["id", "params", "example"],
             &["format", "text"],
+            &["library", "tracks", "total"],
         ],
     },
     Tool {
@@ -742,6 +750,13 @@ fn execute(
     args.optional_string("friction")?;
     known_params(name, args)?;
     match name {
+        "commands.describe" if args.field("music").is_some() => {
+            args.optional_string("projectId")?;
+            super::music::search(
+                &super::music::library()?,
+                args.field("music").unwrap_or(&Json::Null),
+            )
+        }
         "commands.describe" => {
             args.optional_string("projectId")?;
             let (id, query) = (args.optional_string("id")?, args.optional_string("query")?);

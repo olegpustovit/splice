@@ -60,7 +60,7 @@ result, is logged to the friction log, and the server keeps serving.
 | 7 | `media.analyze` | read | Per clip or media, by `kinds`: loudness, pauses, activity, peaks, beats, sounds, shots, text, faces, people, matte. Cached by file stamp; long media runs as a job. `audio.summary` stays an alias |
 | 8 | `view.frames` | read | PNG frames at frames N from the export composition (what the agent sees = what export makes); `sheet:true` returns one contact sheet; `strip:true` adds a heatmap of what changed between consecutive frames |
 | 9 | `view.check` | read | Problems a few frames miss, with spans and fixes: camera jumps and off-canvas pictures (every platform), black or frozen spans and backdrop bleed in transitions (macOS, rendered at 5/s, with a contact sheet) |
-| 10 | `commands.describe` | read | The command registry: params, examples, status (built or planned) |
+| 10 | `commands.describe` | read | The command registry: params, examples, status (built or planned). `music:{…}` searches the music library instead |
 | 11 | `session.start` | edit | A session id and a checkpoint revision |
 | 12 | `edit.apply` | edit | One atomic batch of registry commands; `dryRun`, `ifRevision`, `idempotencyKey` |
 | 13 | `history.list` | read | Revisions with labels, sources, sessions, and what each changed |
@@ -255,7 +255,8 @@ camera lane), `intent.steps` (`activity`: the take's busy source ranges), `inten
 (`typing`: its typing runs), the smart cuts `cut.pauses`, `intent.pace` and `intent.fitDuration`
 (`activity: [{media, from, to}]` for every take on the spine, when `basis` is `activity`, or
 `auto` on a timeline without transcript words; activity as in `media.analyze`, never characters), `crop.keys {follow:"cursor"|"face",
-aspect}` (keys every half second), `media.consolidate` (copies files into `media/` only when
+aspect}` (keys every half second), `music.add {track}` (the library file, its length and loudness,
+and its title, artist and license; see Music library), `media.consolidate` (copies files into `media/` only when
 the batch commits, never on a dry run or a stale or failing batch; an existing copy is reused only
 when its bytes match the source), `mask.track` (Vision object tracking), `audio.sync` (envelope
 cross-correlation offset) and `captions.translate` without `texts` (on-device Translation).
@@ -284,6 +285,40 @@ In the 0.1 viewer, `ui.show` moves the playhead using a frame or an item, marker
 `range.from` seeks to the start of a range. The view tool reports the live playhead and leaves the
 project revision unchanged.
 
+## Music library (T45.3)
+
+The music library is a folder of audio files the user holds the rights to (CC0 tracks, a
+purchased pack), configured with `SPLICE_MUSIC` or `music.json` (docs/FORMAT.md, Music library).
+To stay within 20 tools it is searched through `commands.describe`:
+
+`commands.describe {music:{query?, mood?, bpm?, minLength?, maxLength?, limit?}}` returns
+`{library, tracks, total, moods, note?}`. Each track is `{track, title, artist, length, bpm, key,
+moods, tags, loudness, license, path}` (seconds, BPM, LUFS; `null` when unknown). Every `query`
+word must match the title (ranked highest), artist, a mood or tag, the key or the path. `mood` keeps
+tracks with that mood or tag; `bpm` keeps known tempos within 10 % (closest first);
+`minLength`/`maxLength` (seconds) keep known lengths in range. A track with an unknown tempo or
+length passes those filters but ranks below known matches. `limit` defaults to 10 (at most 50);
+`total` counts every match and `moods` lists the library's moods. A missing library is `NOT_FOUND`
+with the setup in its fix; a broken `tracks.json` is `BAD_MEDIA` naming the file. On Linux,
+`note` says length, loudness and BPM come from `tracks.json` (and WAV headers) only.
+
+`music.add {track, at?, fit?, duck?, volume?, normalize?, fadeOut?, lane?, allowUnlicensed?}`
+(an `edit.apply` command) imports the track and lays it on an audio lane from `at` (default 0) to
+the timeline end. `fit:"timeline"` (default) and `"loop"` repeat a shorter track back to back;
+`"trim"` plays it once. Where the timeline end cuts the music, its last piece fades out over
+`fadeOut` frames (default 2 s); a track that ends on its own keeps its ending. Without `lane` it
+takes the last audio lane free over that span, or a new `Music` lane. Each piece is ducked under
+speech (`duck:true`: amount 0.25, attack 8, release 15 frames, as `audio.set`) and normalized to
+`normalize` LUFS (default -14, social) from the measured loudness, or set to `volume` (0–2)
+instead. The change summary names the track, its license, the pieces and the level.
+
+`track` is a catalog ID (or an unambiguous title); an unknown one is `NOT_FOUND` with
+`didYouMean`. `edit.apply` fills `path`, `seconds`, `loudness`, `title`, `artist` and `license`
+from the catalog (replacing any the op carried), so the journal replays without the library.
+A license that is missing or `unknown` is refused with `UNLICENSED` (`param:"license"`) unless
+`allowUnlicensed:true`. A track with no measured or declared loudness is `LOUDNESS_UNKNOWN`
+unless `volume` is given. On Linux the import trusts the catalog's `seconds` (no probe).
+
 ## Export jobs
 
 `export.start` encodes the revision identified by `ifRevision`. Omit `preset` for `social-hevc`
@@ -301,7 +336,9 @@ reframed copies, one job each; variants that would write the same file (same siz
 are refused, and if one variant cannot start, the ones already started are cancelled. Markers
 become a chapter track; `captions:"srt"|"vtt"` writes a sidecar with the cues inside the exported
 range, timed from its start, and replaces an existing sidecar only with `overwrite:true`; burned-in
-captions stay as they are. Without a `sessionId` the export opens its own session, and closes it
+captions stay as they are. When library music (`music.add`) sounds in the exported range, the
+export writes `<movie>.credits.txt` beside it (title, artist, license and track ID per line) under
+the same overwrite rule, and `settings.credits` names it (`null` without music). Without a `sessionId` the export opens its own session, and closes it
 again when the export fails to start. `format:"fcpxml"` writes FCPXML 1.10 for Final
 Cut Pro instead of encoding. Two exports encode at once and later ones queue (`queued` in
 `jobs.status`, with `fps` and `eta` while running). A full disk fails early with `DISK_FULL`, and
@@ -409,6 +446,7 @@ return {revision: e.revision, clips: t.spine.length};
 `CAPTURE_FAILED`, `CAPTURE_SOURCE`, `CAPTURE_CANCELLED` (CLI), `DISK_FULL`,
 0.4: `NO_DEVICE` (recording a mic or camera this Mac does not have; refused before capture starts), `UNKNOWN_PARAM` (with `didYouMean`), `NOT_KEYABLE` (keys on a parameter the evaluator does not
 animate; the fix lists the keyable ones, also marked `keys:true` in `Splice.Effects`),
+`UNLICENSED` (`music.add` of a track whose license is unknown, without `allowUnlicensed:true`),
 `NO_ACTIVITY` (an activity basis or `intent.steps` with no recorded input on the timeline or
 inside the clip), `NO_TYPING` (`intent.speedTyping` found no run of at least `minRun`), `HTML_FAILED` (`html.add`'s page
 did not load, could not be written, or drew a frame differently the second time).

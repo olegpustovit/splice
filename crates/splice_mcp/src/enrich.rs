@@ -1,7 +1,8 @@
 //! Fills the inputs of 0.3 commands that the core can't read itself (PLAN.md T20, T21): take
 //! clicks for intent.autoZoom, take activity for intent.steps, intent.speedTyping and the
 //! activity basis of the smart cuts (T41), cursor crops, and (macOS) tracking, sync offsets and
-//! on-device translation, html.add's rendered movie; and copies the files behind media.consolidate once a batch will commit. Every
+//! on-device translation, html.add's rendered movie; the music library's file and credit for
+//! music.add (T45.3); and copies the files behind media.consolidate once a batch will commit. Every
 //! edit path (MCP, `splice apply`, the viewer) runs it through `history::apply_batch`. Batches
 //! that need none of this pass through untouched.
 use super::{Json, object, wire::*};
@@ -32,6 +33,7 @@ fn needs(op: &Json) -> bool {
         "audio.sync" => missing("offset"),
         "captions.translate" => missing("texts"),
         "html.add" => missing("movie"),
+        "music.add" => missing("path") && !missing("track"),
         _ => false,
     }
 }
@@ -52,6 +54,14 @@ pub(super) fn ops(
     let mut filled = ops.to_vec();
     for index in 0..filled.len() {
         if !needs(&filled[index]) {
+            continue;
+        }
+        if cmd(&filled[index]) == "music.add" {
+            let extra = super::music::fill(&super::music::library()?, &filled[index])?;
+            if let Json::Object(fields) = &mut filled[index] {
+                fields.retain(|(key, _)| !extra.iter().any(|(added, _)| added == key));
+                fields.extend(extra);
+            }
             continue;
         }
         let Json::Object(fields) = &filled[index] else {

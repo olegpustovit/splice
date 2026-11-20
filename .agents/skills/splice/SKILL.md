@@ -98,6 +98,11 @@ The capability sweep runs these exact ops, so they stay correct.
   `html.add {html, at, length}` with a self-contained page: transparent body, motion from CSS
   animations, `requestAnimationFrame` time or `window.seek(seconds)`, no network, no
   `Math.random`. It becomes a full-canvas overlay; check it with `view.frames`.
+- **Music bed:** `commands.describe {music:{query:"calm", maxLength:120}}` lists the user's library
+  (license, length, BPM, loudness); `music.add {track}` lays the pick under the whole timeline,
+  looped or cut with a fade-out, ducked under speech and leveled to -14 LUFS. A track with
+  `license:"unknown"` is refused: ask the human, then `allowUnlicensed:true`. The export writes a
+  `.credits.txt` beside the movie; pass it on with the video.
 - **Hand-off:** `export.start {format:"fcpxml"}` for Final Cut Pro, `{preset:"prores-422"}` for a
   master, `{captions:"srt"}` for a sidecar.
 
