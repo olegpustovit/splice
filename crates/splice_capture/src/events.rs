@@ -23,7 +23,14 @@ pub struct EventLog {
     /// The last caret written, normalized, and when the next sample is due (take ns).
     last_caret: Option<[f64; 4]>,
     caret_due: u64,
+    /// When the cursor's shape is next read (take ns): every 50 ms, not every 12 ms poll.
+    cursor_due: u64,
 }
+
+/// The cursor's shape is read at 20 Hz: reading it converts the system cursor's image, and
+/// at the 83 Hz poll that alone was a visible share of the capture agent's CPU. Pointer
+/// positions still drain every poll.
+const CURSOR_PERIOD_NS: u64 = 50_000_000;
 
 /// Caret samples come at most this often (10 Hz), and only when the caret moved.
 const CARET_PERIOD_NS: u64 = 100_000_000;
@@ -66,6 +73,7 @@ impl EventLog {
             bounds: [rect.x, rect.y, rect.width, rect.height],
             last_caret: None,
             caret_due: 0,
+            cursor_due: 0,
         };
         fs::create_dir(directory.join("cursors"))?;
         write!(
@@ -109,10 +117,14 @@ impl EventLog {
         }
         if let Some(state) = recording.input_state()
             && state.active
-            && let Some(cursor) =
-                image::system_cursor(self.last_cursor.as_ref()).map_err(io::Error::other)?
+            && state.elapsed_ns >= self.cursor_due
         {
-            self.cursor(state.elapsed_ns, &cursor)?;
+            self.cursor_due = state.elapsed_ns + CURSOR_PERIOD_NS;
+            if let Some(cursor) =
+                image::system_cursor(self.last_cursor.as_ref()).map_err(io::Error::other)?
+            {
+                self.cursor(state.elapsed_ns, &cursor)?;
+            }
         }
         if let Some(state) = recording.input_state()
             && state.active

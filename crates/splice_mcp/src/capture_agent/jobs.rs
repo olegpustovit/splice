@@ -65,7 +65,13 @@ struct Job {
     paused: bool,
     /// Markers dropped during the take: take seconds and names.
     markers: Vec<(f64, String)>,
+    /// The stage's size on disk and when it was measured: status requests come every 40 ms
+    /// and each measurement lists the stage directories.
+    bytes: std::cell::Cell<(u64, Option<Instant>)>,
 }
+
+/// How long a measured stage size answers status requests.
+const BYTES_FRESH: Duration = Duration::from_millis(500);
 
 enum State {
     Pending(Instant),
@@ -126,6 +132,7 @@ impl Jobs {
             peer: None,
             paused: false,
             markers: Vec::new(),
+            bytes: Default::default(),
         };
         job.tick(Instant::now());
         let receipt = job.status()?;
@@ -382,7 +389,14 @@ impl Job {
                 (self.stats.elapsed_seconds / limit).clamp(0.0, 1.0)
             })
         };
-        let bytes = self.stage.as_ref().map_or(Ok(0), Stage::bytes)?;
+        let bytes = match self.bytes.get() {
+            (bytes, Some(at)) if at.elapsed() < BYTES_FRESH && state == "recording" => bytes,
+            _ => {
+                let bytes = self.stage.as_ref().map_or(Ok(0), Stage::bytes)?;
+                self.bytes.set((bytes, Some(Instant::now())));
+                bytes
+            }
+        };
         let mut fields = vec![
             ("jobId", display(&self.id)),
             ("kind", text("record")),
