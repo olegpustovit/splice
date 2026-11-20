@@ -1,0 +1,14 @@
+{
+  "id": "cursor-range-hide",
+  "platform": "macos",
+  "seed": {"record": {"app": "TextEdit", "duration": 8,
+           "events": [{"t": 0.5, "do": "move", "x": 0.2, "y": 0.2}, {"t": 1.5, "do": "click", "x": 0.3, "y": 0.4},
+                      {"t": 3.5, "do": "move", "x": 0.5, "y": 0.5}, {"t": 4.5, "do": "move", "x": 0.6, "y": 0.6},
+                      {"t": 6.0, "do": "click", "x": 0.7, "y": 0.3}, {"t": 7.5, "do": "move", "x": 0.8, "y": 0.8}]}},
+  "prompt": "In the Splice project {project}, hide the mouse cursor from second 3 to second 5 of the recording only. Everywhere else the cursor stays visible and twice its normal size. Do not change the video's length. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "length unchanged", "expr": "7 <= seconds(sum(c['length'] for c in clips)) <= 9"},
+    {"name": "hidden from 3 to 5 s", "expr": "all(any(c['start'] <= s * project['fps'] < c['start'] + c['length'] and param_at(look('cursor', c['id']), 'hidden', s * project['fps'] - c['start']) is True for c in clips) for s in [3.2, 4.0, 4.8])"},
+    {"name": "visible and 2x elsewhere", "expr": "all(any(c['start'] <= s * project['fps'] < c['start'] + c['length'] and not param_at(look('cursor', c['id']), 'hidden', s * project['fps'] - c['start']) and abs((param_at(look('cursor', c['id']), 'size', s * project['fps'] - c['start']) or 1) - 2) < 0.15 for c in clips) for s in [1.0, 2.5, 5.5, 7.0])"}
+  ]
+}

@@ -6,15 +6,18 @@ against `splice mcp`, checks the end state, and appends a row to evals/results.t
 
 A task file:
     {"id": "...", "platform": "any"|"macos",
-     "seed": {"copy": "fixtures/projects/sample.splice"} | {"new": true} | {"record": {..., "events": [...]}},
+     "seed": {"copy": "fixtures/projects/sample.splice"} | {"new": true, "open": {"app": "TextEdit"}?}
+           | {"record": {..., "events": [...], "takes": N}},
+     # "open" leaves a window titled {window} for the agent to record itself.
      "ops": [...],  # optional edit.apply ops run on the seed
      "assets": {"music.wav": {"tone": 12}, "photo.png": {"png": [1600, 1200]}},  # generated inputs
      "prompt": "... {project} ... {assets} ...",
      "checks": [{"name": "...", "expr": "python expression over the helpers below"}]}
 
-Check helpers: project (`splice snapshot`, journal included), clips, items, lanes, media_kind(id), effect(kind, owner=None),
-take_clips(), frame(at) -> Frame with .bands(), exports(ext=".mp4"), words_on_timeline(), seed_hash, state_hash,
-batches (journal batches).
+Check helpers: project (`splice snapshot`, journal included), clips, items, lanes, markers, media_kind(id),
+effect(kind, owner=None), look(kind, clip), param_at(params, name, frame), take_clips(), takes (take media in import order),
+seconds(frames), frame(at) -> Frame with .bands(), exports(ext=".mp4"), words_on_timeline(), seed_hash,
+state_hash, batches (journal batches).
 Task files are trusted repository content.
 """
 import json, math, os, shutil, struct, subprocess, sys, tempfile, time, wave, zlib
@@ -62,11 +65,10 @@ def png(path, w, h):
                 + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b""))
 
 
-def record_seed(project, spec):
-    """Records a real window on macOS: opens a text in TextEdit and captures it."""
-    # A unique name per run makes the title selector match exactly one window.
-    name = f"notes-{os.path.basename(os.path.dirname(project))}.txt"
-    text = os.path.join(os.path.dirname(project), name)
+def open_window(work, spec):
+    """Opens a text in an app (TextEdit) and returns its window title, unique per run."""
+    name = f"notes-{os.path.basename(work)}.txt"
+    text = os.path.join(work, name)
     with open(text, "w") as f:
         f.write(spec.get("text", "Splice eval\n\nThings to try:\n- crop\n- zoom\n- music\n"))
     app = spec.get("app", "TextEdit")
@@ -75,8 +77,16 @@ def record_seed(project, spec):
     time.sleep(1)
     sh(["open", "-a", app, text])
     time.sleep(2)
-    splice("record", project, "--window", app, "--title", name, "--duration", str(spec.get("duration", 6)),
-           *(["--mic"] if spec.get("mic") else []))
+    return name
+
+
+def record_seed(project, spec):
+    """Records a real window on macOS (spec["takes"] times) and scripts its input events."""
+    app = spec.get("app", "TextEdit")
+    name = open_window(os.path.dirname(project), spec)
+    for _ in range(spec.get("takes", 1)):
+        splice("record", project, "--window", app, "--title", name, "--duration", str(spec.get("duration", 6)),
+               *(["--mic"] if spec.get("mic") else []))
     sh(["killall", app])
     if "events" in spec:
         script_events(project, spec["events"])
@@ -87,7 +97,7 @@ def script_events(project, actions):
     sees no hand): [{"t": seconds, "do": "click"|"type"|"move", "x", "y", "for": seconds}].
     Typing writes key events without characters, so evals never depend on key text."""
     takes = os.path.join(project, "takes")
-    for take in sorted(os.listdir(takes)):
+    for take in sorted(os.listdir(takes)):  # every take gets the same script
         path = os.path.join(takes, take, "events.json")
         if not os.path.isfile(path):
             continue
@@ -115,6 +125,7 @@ def seed(task, work):
         record_seed(project, s["record"])
     else:
         splice("new", project)
+    window = open_window(work, s["open"]) if "open" in s else None
     if task.get("ops"):
         ops = os.path.join(work, "seed-ops.json")
         json.dump(task["ops"], open(ops, "w"))
@@ -127,7 +138,7 @@ def seed(task, work):
         else:
             tone(path, spec.get("tone", 10))
         assets[name] = path
-    return project, assets
+    return project, assets, window
 
 
 # ── agent ──
@@ -261,6 +272,24 @@ def helpers(project_path, work, seed_hash):
         splice("frame", "--at", str(at), out, project_path)
         return Frame(out)
 
+    def look(kind, clip):
+        """A clip's effective params of one effect kind: project, then spine, then the clip's own."""
+        merged = None
+        for owner in ["project", "lan_spine", clip]:
+            for e in owner_effects(owner):
+                if e["type"] == kind and e.get("enabled") is not False:
+                    merged = dict(merged or {}, **e.get("params", {}))
+        return merged
+
+    def param_at(params, name, at):
+        """A param's value at a frame: plain, or keyed ({keys:[{at, value}]}, held between keys)."""
+        value = (params or {}).get(name)
+        if isinstance(value, dict) and "keys" in value:
+            keys = sorted(value["keys"], key=lambda k: k["at"])
+            before = [k for k in keys if k["at"] <= at]
+            return (before[-1] if before else keys[0])["value"]
+        return value
+
     def words_on_timeline():
         """Transcript word texts whose start is inside a clip of their media."""
         out = []
@@ -277,6 +306,9 @@ def helpers(project_path, work, seed_hash):
     return {
         "project": project, "clips": clips, "items": items, "lanes": lanes, "media": media,
         "media_kind": lambda mid: media.get(mid, {}).get("kind"),
+        "markers": project.get("markers", []), "param_at": param_at, "look": look,
+        "takes": [m["id"] for m in project.get("media", []) if m.get("kind") == "take"],
+        "seconds": lambda frames: frames / project["fps"],
         "take_clips": lambda: [c for c in clips if media.get(c.get("media"), {}).get("kind") == "take"],
         "effect": effect, "frame": frame, "words_on_timeline": words_on_timeline,
         "exports": lambda ext=".mp4": sorted(f for f in os.listdir(os.path.join(project_path, "exports"))
@@ -287,10 +319,12 @@ def helpers(project_path, work, seed_hash):
 
 def run_task(task, agent, dry, code=False):
     work = tempfile.mkdtemp(prefix=f"splice-eval-{task['id']}-")
-    project, assets = seed(task, work)
-    seed_hash = splice("check", project).get("stateHash")
-    prompt = task["prompt"].format(project=project, assets=json.dumps(assets), **assets_by_stem(assets))
+    project, assets, window = seed(task, work)
+    seed_hash = splice("check", project).get("stateHash") if os.path.isdir(project) else None
+    prompt = task["prompt"].format(project=project, window=window, assets=json.dumps(assets), **assets_by_stem(assets))
     stats = {"calls": 0, "errors": 0, "recoveries": 0, "tokens": 0, "wall": 0, "exit": 0} if dry else run_agent(agent, prompt, work, code)
+    if window:
+        sh(["killall", task["seed"]["open"].get("app", "TextEdit")])
     env = helpers(project, work, seed_hash)
     results = []
     for check in task["checks"]:

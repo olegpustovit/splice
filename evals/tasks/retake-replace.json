@@ -1,0 +1,12 @@
+{
+  "id": "retake-replace",
+  "platform": "macos",
+  "seed": {"record": {"app": "TextEdit", "duration": 5, "takes": 2,
+           "events": [{"t": 1.0, "do": "click", "x": 0.4, "y": 0.4}, {"t": 1.5, "do": "type", "for": 2}]}},
+  "prompt": "The Splice project {project} has two takes of the same TextEdit demo. The second attempt is the good one: keep only the second take on the timeline, and put a title reading \"Take 2\" over its first two seconds. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "only the second take", "expr": "len(takes) == 2 and len(take_clips()) >= 1 and all(c['media'] == takes[1] for c in take_clips())"},
+    {"name": "whole second take kept", "expr": "seconds(sum(c['length'] for c in take_clips())) >= 4"},
+    {"name": "title Take 2 at the start", "expr": "any(i['kind'] == 'title' and 'Take 2' in i['params'].get('text', '') for i in items)"}
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "record-app-landscape",
+  "platform": "macos",
+  "seed": {"new": true, "open": {"app": "TextEdit"}},
+  "prompt": "Record the TextEdit window titled \"{window}\" for 6 seconds with system audio and no microphone into the Splice project {project}. It is for a 16:9 YouTube demo, so the video must be landscape with no black bands. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "one take", "expr": "len(takes) == 1 and len(take_clips()) == 1"},
+    {"name": "system audio, no mic", "expr": "'system' in str(media[takes[0]]['probe']['audio']) and 'mic' not in str(media[takes[0]]['probe']['audio'])"},
+    {"name": "about 6 s", "expr": "5 <= seconds(sum(c['length'] for c in clips)) <= 7.5"},
+    {"name": "16:9", "expr": "project['aspect'] == '16:9'"},
+    {"name": "no black bands", "expr": "not frame(60).bands()"}
+  ]
+}

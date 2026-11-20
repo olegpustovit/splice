@@ -1,0 +1,11 @@
+{
+  "id": "record-pause-marker",
+  "platform": "macos",
+  "seed": {"new": true},
+  "prompt": "Into the Splice project {project}, record the main display for about 3 seconds, pause the recording, then resume it with a marker named \"Step 2\", record about 3 more seconds and stop. It must stay one take. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "one take, one clip", "expr": "len(takes) == 1 and len(take_clips()) == 1"},
+    {"name": "pause excluded (5-8 s)", "expr": "5 <= seconds(sum(c['length'] for c in clips)) <= 8"},
+    {"name": "marker Step 2 at the resume", "expr": "any(m['name'] == 'Step 2' and 2 <= seconds(m['at']) <= 4.5 for m in markers)"}
+  ]
+}
