@@ -448,3 +448,15 @@ date	commit	agent	task	result	checks	calls	errors	recoveries	wall_s	tokens
 2026-11-20	36a6e76ad	claude+code	voiceover	fail	1/4	8	2	2	24.9	312110
 2026-11-20	36a6e76ad	claude+code	voiceover	fail	1/4	5	2	2	17.6	203033
 2026-11-20	36a6e76ad	claude+code	voiceover	fail	1/4	5	2	2	16.7	197473
+2026-11-20	f03f0bb1a	claude	record-app-landscape	pass	5/5	9	2	2	39.9	305785
+2026-11-20	f03f0bb1a	claude	record-app-landscape	pass	5/5	12	2	2	41.6	377945
+2026-11-20	f03f0bb1a	claude	record-app-landscape	pass	5/5	14	2	2	54.0	541811
+2026-11-20	f03f0bb1a	claude	record-two-windows	pass	3/3	6	0	0	24.6	200939
+2026-11-20	f03f0bb1a	claude	record-two-windows	pass	3/3	4	0	0	21.5	167650
+2026-11-20	f03f0bb1a	claude	record-two-windows	pass	3/3	4	0	0	22.1	165562
+2026-11-20	f03f0bb1a	claude+code	record-app-landscape	pass	5/5	8	3	2	42.0	293549
+2026-11-20	f03f0bb1a	claude+code	record-app-landscape	pass	5/5	10	4	3	53.3	388697
+2026-11-20	f03f0bb1a	claude+code	record-app-landscape	pass	5/5	9	2	1	48.3	337733
+2026-11-20	f03f0bb1a	claude+code	record-two-windows	pass	3/3	3	0	0	22.3	134771
+2026-11-20	f03f0bb1a	claude+code	record-two-windows	pass	3/3	2	0	0	20.7	106154
+2026-11-20	f03f0bb1a	claude+code	record-two-windows	pass	3/3	2	0	0	21.9	106254
