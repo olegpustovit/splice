@@ -13,6 +13,86 @@ pub(super) struct Publication {
     pub clip: Option<ClipId>,
 }
 
+/// A microphone quieter than this (loudest 10 ms RMS window, dBFS) recorded silence.
+const SILENT_DB: f64 = -60.0;
+
+/// What a published take holds (record.stop `take`, T46.1) with the lints an edit returns plus
+/// `TAKE_ASPECT` and `MIC_SILENT`: frames at the project rate, seconds, pixel size, the capture
+/// rate, components, clicks, keys and the microphone's peak. `frames` are the capture agent's
+/// written and dropped screen frames; `mic_peak` is the loudest 10 ms RMS window as linear
+/// amplitude, when the take has a microphone track that could be read.
+pub(super) fn summary(
+    store: &Store,
+    publication: &Publication,
+    frames: [u64; 2],
+    mic_peak: Option<f32>,
+) -> (Json, Vec<Json>, Json) {
+    let project = store.project();
+    let (mut lints, pacing) = crate::lints::check(project);
+    let Some(media) = project.media.iter().find(|m| m.id == publication.media) else {
+        return (Json::Null, lints, pacing);
+    };
+    let probe = &media.probe;
+    let mut fields = vec![
+        ("frames", Json::Signed(i64::from(probe.frames))),
+        ("fps", Json::Unsigned(u64::from(project.fps))),
+        (
+            "seconds",
+            Json::Float(
+                (f64::from(probe.frames) / f64::from(project.fps.max(1)) * 1000.0).round() / 1000.0,
+            ),
+        ),
+        (
+            "size",
+            Json::Array(vec![
+                Json::Unsigned(u64::from(probe.width)),
+                Json::Unsigned(u64::from(probe.height)),
+            ]),
+        ),
+    ];
+    if let Some(take) = &media.take {
+        fields.push(("captureFps", Json::Unsigned(60)));
+        fields.push(("videoFrames", Json::Unsigned(frames[0])));
+        fields.push(("droppedFrames", Json::Unsigned(frames[1])));
+        let tracks = [
+            ("screen", &take.screen),
+            ("mic", &take.mic),
+            ("system", &take.system),
+            ("camera", &take.camera),
+            ("events", &take.events),
+        ];
+        fields.push((
+            "tracks",
+            Json::Array(
+                tracks
+                    .iter()
+                    .filter(|(_, file)| file.is_some())
+                    .map(|(name, _)| text(name))
+                    .collect(),
+            ),
+        ));
+        if let Some(events) = &take.events {
+            let dir = store.path().join("takes").join(media.id.to_string());
+            if let Ok((clicks, keys)) = crate::media::input_counts(&dir, events) {
+                fields.push(("clicks", Json::Unsigned(clicks)));
+                fields.push(("keys", Json::Unsigned(keys)));
+            }
+        }
+        if take.mic.is_some()
+            && let Some(peak) = mic_peak
+        {
+            let db = (20.0 * f64::from(peak).max(1e-6).log10() * 10.0).round() / 10.0;
+            fields.push(("micPeakDb", Json::Float(db)));
+            if db < SILENT_DB {
+                fields.push(("silent", Json::Bool(true)));
+                lints.push(crate::lints::mic_silent(db, media.id));
+            }
+        }
+    }
+    lints.extend(crate::lints::take_fit(project, media, publication.clip));
+    (object(fields), lints, pacing)
+}
+
 pub(super) fn stage_path(package: &Path, id: JobId) -> PathBuf {
     package.join("takes").join(format!(".{id}"))
 }
@@ -305,5 +385,98 @@ mod tests {
         assert_eq!(reopened.project().rev, 3);
         assert_eq!(reopened.project().media[0].id, second.media);
         assert!(reopened.project().clips.order().is_empty());
+    }
+
+    #[test]
+    fn recording_summary_counts_input_and_flags_fit_and_silence() {
+        let temp = TestDirectory::new("record-summary");
+        let mut store = Store::create(&temp.0.join("p.splice"), &Project::default()).unwrap();
+        let session = store.start_session("recorder fixture", 1).unwrap().id;
+        let write = WriteOptions {
+            source: Source::Agent,
+            session: Some(session),
+            if_revision: Some(0),
+            ..Default::default()
+        };
+        let id = JobId::from_serial(7);
+        let staged = stage_path(store.path(), id);
+        fs::create_dir_all(&staged).unwrap();
+        fs::write(staged.join("screen.mov"), b"stand-in").unwrap();
+        fs::write(staged.join("mic.m4a"), b"stand-in").unwrap();
+        fs::write(
+            staged.join("events.json"),
+            br#"{"events":[{"k":"move","t":0.1,"x":0.5,"y":0.5},{"k":"down","t":0.2,"x":0.5,"y":0.5,"b":0},{"k":"up","t":0.3,"x":0.5,"y":0.5},{"k":"key","t":0.4,"mods":0},{"k":"key","t":0.5,"mods":1048576}]}"#,
+        )
+        .unwrap();
+        let descriptor = Media {
+            id: MediaId::from_serial(0),
+            kind: MediaKind::Take,
+            path: String::new(),
+            bookmark: None,
+            size: 8,
+            mtime: 0,
+            probe: Probe {
+                fps: 30.0,
+                frames: 90,
+                width: 2880,
+                height: 1800,
+                audio: Vec::new(),
+                codec: Some("hevc".into()),
+                loudness: None,
+            },
+            take: Some(TakeComponents {
+                screen: Some("screen.mov".into()),
+                mic: Some("mic.m4a".into()),
+                events: Some("events.json".into()),
+                ..Default::default()
+            }),
+        };
+        let published =
+            publish(&mut store, id, true, descriptor, &write, Default::default()).unwrap();
+        // A quiet microphone: 0.0001 linear is -80 dBFS.
+        let (take, lints, _) = summary(&store, &published, [178, 2], Some(0.0001));
+        let mut text = String::new();
+        splice_json::write(&take, &mut text).unwrap();
+        assert_eq!(
+            text,
+            r#"{"frames":90,"fps":30,"seconds":3,"size":[2880,1800],"captureFps":60,"videoFrames":178,"droppedFrames":2,"tracks":["screen","mic","events"],"clicks":1,"keys":2,"micPeakDb":-80,"silent":true}"#
+        );
+        let codes: Vec<&str> = lints
+            .iter()
+            .filter_map(|l| l.field("code")?.as_str())
+            .collect();
+        assert!(
+            codes.contains(&"MIC_SILENT") && codes.contains(&"TAKE_ASPECT"),
+            "{codes:?}"
+        );
+        let fit = lints
+            .iter()
+            .find(|l| l.field("code").and_then(Json::as_str) == Some("TAKE_ASPECT"))
+            .unwrap();
+        let op = &fit.field("ops").unwrap().as_array().unwrap()[0];
+        assert_eq!(op.field("aspect").and_then(Json::as_str), Some("16:9"));
+        // The canvas a recording picks (record.start create:true) silences the fit warning.
+        let mut options = write.clone();
+        options.if_revision = Some(store.project().rev);
+        store
+            .apply(
+                &[splice_json::parse(r#"{"cmd":"project.set","aspect":"16:9"}"#).unwrap()],
+                &options,
+            )
+            .unwrap();
+        assert_eq!(store.project().size, [1920, 1080]);
+        let (_, lints, _) = summary(&store, &published, [178, 2], Some(0.5));
+        assert!(
+            lints
+                .iter()
+                .all(|l| l.field("code").and_then(Json::as_str) != Some("MIC_SILENT")),
+        );
+        // 16:10 against 16:9 still does not fill: the fix crops to the canvas.
+        let fit = lints
+            .iter()
+            .find(|l| l.field("code").and_then(Json::as_str) == Some("TAKE_ASPECT"))
+            .unwrap();
+        let op = &fit.field("ops").unwrap().as_array().unwrap()[0];
+        assert_eq!(op.field("cmd").and_then(Json::as_str), Some("clip.crop"));
     }
 }

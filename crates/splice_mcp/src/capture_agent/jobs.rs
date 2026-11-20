@@ -1,12 +1,12 @@
-use super::{capture_source_error, permissions, sources};
+use super::{capture_source_error, permissions};
 use crate::{
     Json, object,
-    record_options::Options,
+    record_options::{self, DeviceInfo, Options, SystemAudio},
     text,
     wire::{Args, bad, display, failure},
 };
 use apple_sys::{
-    capture::{Recording, RecordingStats},
+    capture::{Geometry, Recording, RecordingStats, Target},
     screenshot,
 };
 use splice_capture::EventLog;
@@ -25,6 +25,21 @@ use std::{
 
 pub(super) const POLL: Duration = Duration::from_millis(12);
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
+/// The most screen frames per second a take records (ScreenCaptureKit delivers on change).
+pub(super) const CAPTURE_FPS: u32 = 60;
+
+/// What `take.begin` resolved before the countdown: the exact source and devices the take
+/// records, echoed back so an agent sees what it will get.
+pub(super) struct Plan {
+    pub target: Target,
+    pub mic: Option<DeviceInfo>,
+    pub camera: Option<DeviceInfo>,
+    /// Apps whose sound `systemAudio:{apps}` records: bundle ID and name.
+    pub audio_apps: Vec<(String, String)>,
+    pub geometry: Option<Geometry>,
+    /// `size` asked for and the window size Accessibility then reported, in points.
+    pub resized: Option<([f64; 2], [f64; 2])>,
+}
 
 #[derive(Default)]
 pub(super) struct Jobs {
@@ -35,6 +50,10 @@ pub(super) struct Jobs {
 struct Job {
     id: JobId,
     options: Options,
+    plan: Plan,
+    /// Recorded seconds at which the take stops, or pauses with `then_pause`.
+    limit: Option<f64>,
+    then_pause: bool,
     state: State,
     stage: Option<Stage>,
     stats: RecordingStats,
@@ -71,7 +90,12 @@ impl Jobs {
         })
     }
 
-    pub(super) fn begin(&mut self, package: &Path, options: Options) -> Result<Json, StoreError> {
+    pub(super) fn begin(
+        &mut self,
+        package: &Path,
+        options: Options,
+        plan: Plan,
+    ) -> Result<Json, StoreError> {
         if self.active() {
             return Err(failure(
                 "BUSY",
@@ -89,7 +113,10 @@ impl Jobs {
         let id = JobId::from_serial(self.last_id);
         let mut job = Job {
             id,
+            limit: options.duration,
+            then_pause: options.then_pause,
             options,
+            plan,
             state: State::Pending(ready),
             stage: Some(Stage::create(package, id)?),
             stats: RecordingStats::default(),
@@ -172,6 +199,17 @@ impl Jobs {
                 };
                 job.paused = method == "take.pause";
                 recording.set_paused(job.paused);
+                // record.start {resume, duration}: exactly this many more recorded seconds.
+                if !job.paused
+                    && let Some(more) = args.field("duration")
+                {
+                    let more = more
+                        .as_f64()
+                        .filter(|seconds| *seconds > 0.0 && seconds.is_finite())
+                        .ok_or_else(|| bad("duration", "positive seconds of recorded time"))?;
+                    job.limit = Some(job.stats.elapsed_seconds + more);
+                    job.then_pause = record_options::then(args, true)?;
+                }
             }
             "take.mark" => {
                 if !matches!(job.state, State::Running { .. }) {
@@ -211,7 +249,7 @@ impl Job {
 
     fn start(&mut self) -> Result<(), StoreError> {
         permissions::require_options(&self.options, &permissions::snapshot())?;
-        let target = sources::target(&self.options.source)?;
+        let target = self.plan.target;
         let stage = self.stage.as_ref().expect("pending job has a stage");
         if self.options.still {
             let png = screenshot::png(target).map_err(capture_source_error)?;
@@ -226,13 +264,20 @@ impl Job {
             stage.sync()?;
             self.state = State::Ready;
         } else {
-            apple_sys::capture::exclude(&self.options.exclude);
+            apple_sys::capture::exclude(&self.options.exclude, self.options.hide_desktop);
+            let apps: Vec<String> = self
+                .plan
+                .audio_apps
+                .iter()
+                .map(|(bundle, _)| bundle.clone())
+                .collect();
             let recording = Recording::start(
                 &stage.0,
                 target,
-                self.options.mic.then_some(""),
-                self.options.system_audio,
-                self.options.camera,
+                self.plan.mic.as_ref().map(|device| device.id.as_str()),
+                self.options.system_audio.on(),
+                &apps,
+                self.plan.camera.as_ref().map(|device| device.id.as_str()),
                 self.options.events,
             )
             .map_err(native)?;
@@ -262,12 +307,23 @@ impl Job {
             let stage = self.stage.as_ref().expect("running job has a stage");
             poll_events(stage, recording, log)?;
         }
-        if self
-            .options
-            .duration
-            .is_some_and(|duration| self.stats.elapsed_seconds >= duration)
-        {
-            self.finish();
+        // Within one poll (12 ms) of the limit: under a frame at 60 fps.
+        match record_options::at_limit(
+            self.stats.elapsed_seconds,
+            self.limit,
+            self.paused,
+            self.then_pause,
+        ) {
+            Some(true) => {
+                self.limit = None;
+                recording.set_paused(true);
+                self.paused = true;
+            }
+            Some(false) => {
+                self.limit = None;
+                self.finish();
+            }
+            None => {}
         }
         Ok(())
     }
@@ -317,8 +373,8 @@ impl Job {
         let progress = if state == "ready" {
             1.0
         } else {
-            self.options.duration.map_or(0.0, |duration| {
-                (self.stats.elapsed_seconds / duration).clamp(0.0, 1.0)
+            self.limit.map_or(0.0, |limit| {
+                (self.stats.elapsed_seconds / limit).clamp(0.0, 1.0)
             })
         };
         let bytes = self.stage.as_ref().map_or(Ok(0), Stage::bytes)?;
@@ -329,18 +385,14 @@ impl Job {
             ("progress", Json::Float(progress)),
             ("elapsed", Json::Float(self.stats.elapsed_seconds)),
             ("bytes", Json::Unsigned(bytes)),
+            ("videoFrames", Json::Unsigned(self.stats.video_frames)),
             ("droppedFrames", Json::Unsigned(self.stats.dropped_frames)),
-            (
-                "settings",
-                object(vec![
-                    ("mic", Json::Bool(self.options.mic)),
-                    ("systemAudio", Json::Bool(self.options.system_audio)),
-                    ("camera", Json::Bool(self.options.camera)),
-                    ("events", Json::Bool(self.options.events)),
-                    ("still", Json::Bool(self.options.still)),
-                ]),
-            ),
+            ("settings", settings(&self.options, &self.plan)),
         ];
+        if let Some(limit) = self.limit {
+            fields.push(("stopsAt", Json::Float(limit)));
+            fields.push(("then", text(if self.then_pause { "pause" } else { "stop" })));
+        }
         if !self.markers.is_empty() {
             fields.push((
                 "markers",
@@ -442,6 +494,95 @@ fn bytes_in(path: &Path, include_cursors: bool) -> Result<u64, StoreError> {
     Ok(bytes)
 }
 
+/// Every setting the take records with, as resolved (T46.1): source bounds and pixel size,
+/// frame rate, devices, app audio, countdown and timing.
+pub(super) fn settings(options: &Options, plan: &Plan) -> Json {
+    let pair = |[a, b]: [f64; 2]| Json::Array(vec![Json::Float(a), Json::Float(b)]);
+    let (kind, id) = match plan.target {
+        Target::Display(0) => ("display", text("main")),
+        Target::Display(id) => ("display", display(&id)),
+        Target::Window(id) => ("window", text(&format!("win_{id}"))),
+        Target::Area { display: 0, .. } => ("area", text("main")),
+        Target::Area { display: id, .. } => ("area", display(&id)),
+    };
+    let mut source = vec![("kind", text(kind)), ("id", id)];
+    if let Some(geometry) = plan.geometry {
+        let rect = geometry.rect;
+        source.extend([
+            (
+                "rect",
+                object(vec![
+                    ("x", Json::Float(rect.x)),
+                    ("y", Json::Float(rect.y)),
+                    ("width", Json::Float(rect.width)),
+                    ("height", Json::Float(rect.height)),
+                ]),
+            ),
+            ("scale", Json::Float(geometry.scale)),
+            (
+                "size",
+                Json::Array(vec![
+                    Json::Unsigned(u64::from(geometry.width)),
+                    Json::Unsigned(u64::from(geometry.height)),
+                ]),
+            ),
+        ]);
+    }
+    if let Some((requested, actual)) = plan.resized {
+        source.push((
+            "resized",
+            object(vec![
+                ("requested", pair(requested)),
+                ("points", pair(actual)),
+            ]),
+        ));
+    }
+    let device = |device: &Option<DeviceInfo>| {
+        device.as_ref().map_or(Json::Bool(false), |device| {
+            object(vec![
+                ("id", text(&device.id)),
+                ("name", text(&device.name)),
+                ("default", Json::Bool(device.default)),
+            ])
+        })
+    };
+    let system_audio = match &options.system_audio {
+        SystemAudio::Off => Json::Bool(false),
+        SystemAudio::All => text("all"),
+        SystemAudio::Apps(_) => object(vec![(
+            "apps",
+            Json::Array(
+                plan.audio_apps
+                    .iter()
+                    .map(|(bundle, name)| {
+                        object(vec![("bundleId", text(bundle)), ("name", text(name))])
+                    })
+                    .collect(),
+            ),
+        )]),
+    };
+    let mut exclude: Vec<Json> = options.exclude.iter().map(|app| text(app)).collect();
+    if options.hide_desktop {
+        exclude.push(text("desktop"));
+    }
+    object(vec![
+        ("source", object(source)),
+        ("fps", Json::Unsigned(u64::from(CAPTURE_FPS))),
+        ("mic", device(&plan.mic)),
+        ("camera", device(&plan.camera)),
+        ("systemAudio", system_audio),
+        ("events", Json::Bool(options.events)),
+        ("still", Json::Bool(options.still)),
+        ("countdown", Json::Float(options.countdown.as_secs_f64())),
+        ("duration", options.duration.map_or(Json::Null, Json::Float)),
+        (
+            "then",
+            text(if options.then_pause { "pause" } else { "stop" }),
+        ),
+        ("exclude", Json::Array(exclude)),
+    ])
+}
+
 fn poll_events(
     stage: &Stage,
     recording: &mut Recording,
@@ -485,6 +626,63 @@ fn storage(error: io::Error) -> StoreError {
 mod tests {
     use super::*;
 
+    fn display_plan() -> Plan {
+        Plan {
+            target: Target::Display(0),
+            mic: None,
+            camera: None,
+            audio_apps: Vec::new(),
+            geometry: None,
+            resized: None,
+        }
+    }
+
+    #[test]
+    fn capture_agent_echoes_resolved_settings() {
+        let args = splice_json::parse(
+            r#"{"source":{"window":"win_7"},"size":[1280,720],"countdown":1.5,"duration":3,"then":"pause","mic":"usb","systemAudio":{"apps":["Music"]}}"#,
+        )
+        .unwrap();
+        let options = Options::parse(&args).unwrap();
+        let plan = Plan {
+            target: Target::Window(7),
+            mic: Some(DeviceInfo {
+                kind: "mic".into(),
+                id: "usb".into(),
+                name: "Podcast Mic".into(),
+                default: false,
+            }),
+            camera: None,
+            audio_apps: vec![("com.apple.Music".into(), "Music".into())],
+            geometry: Some(Geometry {
+                rect: apple_sys::capture::Rect {
+                    x: 10.0,
+                    y: 20.0,
+                    width: 1280.0,
+                    height: 720.0,
+                },
+                scale: 2.0,
+                width: 2560,
+                height: 1440,
+            }),
+            resized: Some(([1280.0, 720.0], [1280.0, 720.0])),
+        };
+        let mut echo = String::new();
+        splice_json::write(&settings(&options, &plan), &mut echo).unwrap();
+        for part in [
+            r#""source":{"kind":"window","id":"win_7","rect":{"x":10,"y":20,"width":1280,"height":720},"scale":2,"size":[2560,1440],"resized":{"requested":[1280,720],"points":[1280,720]}}"#,
+            r#""fps":60"#,
+            r#""mic":{"id":"usb","name":"Podcast Mic","default":false}"#,
+            r#""camera":false"#,
+            r#""systemAudio":{"apps":[{"bundleId":"com.apple.Music","name":"Music"}]}"#,
+            r#""countdown":1.5"#,
+            r#""duration":3"#,
+            r#""then":"pause""#,
+        ] {
+            assert!(echo.contains(part), "{part} in {echo}");
+        }
+    }
+
     #[test]
     fn capture_agent_pending_job_cancels_without_opening_hardware() {
         let temp = crate::tests::TestDirectory::new("capture-jobs");
@@ -496,20 +694,26 @@ mod tests {
             ("events", Json::Bool(false)),
         ]);
         let first = jobs
-            .begin(&package, Options::parse(&args).unwrap())
+            .begin(&package, Options::parse(&args).unwrap(), display_plan())
             .unwrap();
         let id = first.string("jobId").unwrap();
         let staged = package.join("takes").join(format!(".{id}"));
         assert!(jobs.active() && staged.is_dir());
         assert_eq!(first.string("state").unwrap(), "pending");
         assert_eq!(
-            jobs.begin(&package, Options::parse(&args).unwrap())
+            jobs.begin(&package, Options::parse(&args).unwrap(), display_plan())
                 .unwrap_err()
                 .code,
             "BUSY"
         );
         let query = object(vec![("jobId", text(id))]);
         assert_eq!(jobs.command("take.stop", &query).unwrap_err().code, "BUSY");
+        // record.start {resume, duration} needs a running take.
+        let resume = object(vec![("jobId", text(id)), ("duration", Json::Unsigned(3))]);
+        assert_eq!(
+            jobs.command("take.resume", &resume).unwrap_err().code,
+            "NOT_RECORDING"
+        );
         assert_eq!(
             jobs.command("take.cancel", &query)
                 .unwrap()
@@ -526,7 +730,7 @@ mod tests {
             "cancelled"
         );
         let second = jobs
-            .begin(&package, Options::parse(&args).unwrap())
+            .begin(&package, Options::parse(&args).unwrap(), display_plan())
             .unwrap();
         assert_ne!(second.string("jobId").unwrap(), id);
         drop(jobs);
@@ -541,7 +745,7 @@ mod tests {
         let mut jobs = Jobs::default();
         let args = object(vec![("countdown", Json::Unsigned(60))]);
         let started = jobs
-            .begin(&package, Options::parse(&args).unwrap())
+            .begin(&package, Options::parse(&args).unwrap(), display_plan())
             .unwrap();
         let (writer, agent) = UnixStream::pair().unwrap();
         agent.set_nonblocking(true).unwrap();

@@ -30,12 +30,19 @@ has the project open in the viewer, they see your edits as you make them.
 
 ## Recording the screen
 
-- `record.start {path:"…/New.splice", create:true, dryRun:true}` first: it lists displays, windows
-  and apps, and says which permissions are granted. Then record with a `source`
-  (`{display:"main"}`, `{window:{app:"com.apple.Safari"}}` or `{area:{display, rect}}`), plus
-  `mic`, `systemAudio`, `camera` and `events:true`. Set `duration` for unattended runs.
+- `record.start {path:"…/New.splice", create:true, dryRun:true}` first: it lists displays, windows,
+  apps, microphones and cameras (stable `id`s), and says which permissions are granted. Then record
+  with a `source` (`{display:"main"}`, `{window:{app:"com.apple.Safari"}}` or `{area:{display,
+  rect}}`), plus `mic` / `camera` (`true` or a device `id`), `systemAudio` (`true`, `false` or
+  `{apps:["Music"]}`) and `events:true`. `size:[w,h]` resizes a window first; `exclude:["desktop"]`
+  hides desktop icons. Read the receipt's `settings`: it is what will be recorded.
+- Never sleep to time a take. `duration` (seconds of recorded time) ends it; `then:"pause"` pauses
+  there; `record.start {resume:jobId, duration:3}` records exactly 3 s more. Then
+  `record.stop {jobId, wait:30}` returns once it ends. `countdown` is seconds too.
+- A new project (`create:true`) gets the canvas nearest the source's shape; pass `aspect` to pick.
 - `record.stop {jobId}`: the take lands on the spine as one undoable batch, with its cursor, clicks
-  and keys as components you can query (`takes.events`) and edit.
+  and keys as components you can query (`takes.events`) and edit. Check its `take` summary
+  (`seconds`, `size`, `clicks`, `micPeakDb`/`silent`) and `lints` (`TAKE_ASPECT`, `MIC_SILENT`).
 - Pause with `record.stop {jobId, pause:true}`, resume with `record.start {resume:jobId}`, and
   drop a marker with `record.start {resume:jobId, marker:"Name"}`. `voiceover:true, at` records
   the mic onto an audio lane; `retakeOf` places a retake after the earlier take.

@@ -587,6 +587,22 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
     ]))
 }
 
+/// Clicks (button downs) and key presses in a take's event log (record.stop's take summary).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(super) fn input_counts(dir: &Path, name: &str) -> Result<(u64, u64), StoreError> {
+    let (mut clicks, mut keys) = (0, 0);
+    for_each_event(dir, name, &mut |event| {
+        match event.field("k").and_then(Json::as_str) {
+            Some("down") => clicks += 1,
+            Some("key") => keys += 1,
+            Some(_) => {}
+            None => return Err(events_format()),
+        }
+        Ok(())
+    })?;
+    Ok((clicks, keys))
+}
+
 fn events_format() -> StoreError {
     failure(
         "BAD_PACKAGE",

@@ -24,6 +24,7 @@ typedef enum {
     SPLICE_PERMISSION_MICROPHONE,
     SPLICE_PERMISSION_CAMERA,
     SPLICE_PERMISSION_INPUT,
+    SPLICE_PERMISSION_ACCESSIBILITY,
 } SplicePermission;
 
 typedef enum {
@@ -88,6 +89,22 @@ _Static_assert(sizeof(SpliceCaptureTarget) == 40, "capture target ABI");
 
 bool splice_capture_sources(bool include_windows, SpliceCaptureSources *out, bool *denied, char **error);
 void splice_capture_sources_dispose(SpliceCaptureSources *sources);
+typedef struct {
+    SpliceCaptureRect rect;
+    double scale;
+    uint32_t width, height;
+} SpliceCaptureFrame;
+
+_Static_assert(sizeof(SpliceCaptureFrame) == 48, "capture frame ABI");
+
+// The bounds (global points), scale and encoded pixel size a capture of target would have now.
+bool splice_capture_geometry(const SpliceCaptureTarget *target, SpliceCaptureFrame *out, bool *denied, char **error);
+// Resizes the window of process pid whose frame (global points, top-left origin) is frame to
+// width x height points with Accessibility, keeping its top-left; out is the frame it then has.
+// Returns 0 when resized, 1 without the Accessibility permission, 2 when no window matches,
+// 3 when the app refused the size.
+uint32_t splice_window_resize(uint32_t pid, SpliceCaptureRect frame, double width, double height,
+                              SpliceCaptureRect *out);
 void *splice_capture_screenshot(const SpliceCaptureTarget *target, const uint8_t **data,
                                 size_t *size, bool *denied, char **error);
 
@@ -98,8 +115,11 @@ typedef struct {
 
 _Static_assert(sizeof(SpliceRecordingStats) == 24, "recording stats ABI");
 
+// microphone and camera: NULL to omit, "" for the system default, or a device unique ID.
+// audio_apps: NULL for every app's sound, or newline-separated bundle IDs or names (with system_audio).
 void *splice_recording_start(const SpliceCaptureTarget *target, const char *directory, const char *microphone,
-                             bool system_audio, bool camera, bool events, bool *denied, char **error);
+                             bool system_audio, const char *audio_apps, const char *camera, bool events,
+                             bool *denied, char **error);
 bool splice_recording_status(void *recording, SpliceRecordingStats *out, bool *denied, char **error);
 void splice_recording_pause(void *recording, bool pause);
 bool splice_recording_finish(void *recording, SpliceRecordingStats *out, bool *denied, char **error);
@@ -313,7 +333,7 @@ bool splice_free_space(const char *path, uint64_t *bytes);
 uint8_t *splice_media_first_frame(const char *path, uint32_t *width, uint32_t *height, char **error);
 char *splice_media_chapters(const char *path, char **error);
 
-void splice_capture_exclude(const char *names);
+void splice_capture_exclude(const char *names, bool desktop);
 char *splice_capture_devices(void);
 
 #endif

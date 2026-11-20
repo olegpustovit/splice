@@ -12,6 +12,8 @@ typedef struct {
 
 SCContentFilter *splice_capture_prepare(const SpliceCaptureTarget *target, SCStreamConfiguration *configuration,
                                         SpliceCaptureGeometry *geometry, bool *denied, char **error);
+// A display filter whose audio is only these apps' (bundle IDs or names), for a second stream.
+SCContentFilter *splice_capture_audio_filter(NSArray<NSString *> *apps, bool *denied, char **error);
 void splice_capture_error(NSError *reason, const char *fallback, bool *denied, char **error);
 
 #endif

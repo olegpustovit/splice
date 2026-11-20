@@ -7,9 +7,11 @@
 @interface SpliceRecording : NSObject <SCStreamOutput, SCStreamDelegate, AVCaptureVideoDataOutputSampleBufferDelegate>
 @property(nonatomic, readonly) dispatch_queue_t queue;
 @property(nonatomic, strong) SCStream *stream;
+// Only the requested apps' sound (record.start {systemAudio:{apps}}); nil otherwise.
+@property(nonatomic, strong) SCStream *audioStream;
 - (instancetype)initWithDirectory:(NSURL *)directory width:(NSInteger)width height:(NSInteger)height
                         microphone:(BOOL)microphone audio:(BOOL)audio camera:(BOOL)camera error:(NSError **)error;
-- (BOOL)prepareCamera:(NSError **)error;
+- (BOOL)prepareCamera:(NSString *)identifier error:(NSError **)error;
 - (void)activateCamera;
 - (void)append:(CMSampleBufferRef)sample type:(SCStreamOutputType)type;
 - (void)appendCamera:(CMSampleBufferRef)sample atHostTime:(CMTime)hostPTS;

@@ -21,6 +21,7 @@ fn main() {
             "native/permissions.m",
             "native/recording.m",
             "native/recording_fixture.m",
+            "native/window.m",
         ])
         .flag("-fobjc-arc")
         .flag("-fblocks")

@@ -17,8 +17,9 @@ Launch Services when needed. The accessory process runs without a window and exi
 of inactivity.
 
 `splice permissions`, `splice record --dry-run` and `record.start {dryRun:true}` report authorization
-for `screen`, `microphone`, `camera` and `inputMonitoring` with the signed agent's path, team and
-designated requirement match. Only `splice permissions --request [all|screen|microphone|camera|inputMonitoring]`
+for `screen`, `microphone`, `camera`, `inputMonitoring` and `accessibility` (window resize, text caret)
+with the signed agent's path, team and designated requirement match. Only
+`splice permissions --request [all|screen|microphone|camera|inputMonitoring|accessibility]`
 opens System Settings and starts permission requests. Use `all` to request every missing grant
 and open the first missing privacy pane. The JSON reply lists the requested permissions and their
 panes. Omit the selector to request just the first missing grant. macOS asks you to approve each
@@ -27,7 +28,9 @@ A capture blocked by a missing grant returns `TCC_DENIED` with `needsHuman:true`
 privacy pane. Preflight lists active displays in points, with `main` as the default display ID.
 With screen recording permission, it also lists shareable windows and applications, excluding
 Splice. Window IDs use `win_<id>`. Window titles can carry private text (D19), so a dry run lists
-them only when you pass `titles:true`; `source:{window:{app}}` needs no title or ID.
+them only when you pass `titles:true`; `source:{window:{app}}` needs no title or ID. `devices`
+lists microphones and cameras as `{kind:"mic"|"camera", id, name, default}`: `id` is AVFoundation's
+unique ID, the same for a device across launches and reboots, so an agent can keep it.
 
 ## Stdio lifecycle
 
@@ -107,7 +110,8 @@ fix, ops?}`, where `ops` is a batch that fixes it when one exists. Codes: `OUTSI
 `tiktok-2026`: top 8.4 %, bottom 18.75 %, left 8.4 %, right 11.2 % of the canvas),
 `TEXT_OVER_WINDOW` (a title covers over 30 % of itself with the recorded window), `ZOOM_OVERFLOW`
 (a frame-mode zoom past `fitSafeScale`), `LONG_STATIC` (over 8 s without a visual change on a
-vertical short). `pacing` is `{cutsPerMinute, longestStatic, safeZone}`.
+vertical short). `pacing` is `{cutsPerMinute, longestStatic, safeZone}`. `record.stop` returns
+the same plus `TAKE_ASPECT` and `MIC_SILENT` (see Recording jobs).
 
 ## Command descriptions
 
@@ -372,23 +376,57 @@ that started them. A clean end to MCP input lets active exports finish.
 
 ## Recording jobs
 
-Use `record.start` with an open `projectId`, `sessionId` and `ifRevision`, or pass a `path` ending
-in `.splice`. With `path`, use `create:true` for a new project. The server opens a session if you
-omit `sessionId` and `ifRevision` with `path`. The start receipt identifies the project, session,
+Use `record.start` with an open `projectId` or a `path` ending in `.splice` (`create:true` makes a
+new project). Pass `sessionId` to record in an open session; `ifRevision` is optional because the
+start writes nothing (the take publishes at `record.stop` against the revision current then).
+Without `sessionId` the server opens a session. The start receipt identifies the project, session,
 and job. Include the session in later edits or undo calls.
 
 Pass one `source` containing `display`, `window`, or `area`. A display is `"main"` or a display ID.
 A window is `{app:"Safari"}` (an app name or bundle ID; add `title` when the app has several
 windows) or a `win_<id>` from preflight. Selector errors name this form. An area has a display
 and a `rect` with `x`, `y`, `width` and `height` in display-local points. The default is the main
-display. Enable `mic`, `systemAudio` and `camera` to add those tracks. Set `events:false` to omit
-cursor and input events. `countdown` and optional `duration` are in seconds.
+display. `size:[w,h]` (window sources only, points, 100–16384) resizes the window with
+Accessibility before capture, keeping its top-left; without the Accessibility grant it returns
+`TCC_DENIED` naming the pane, and the receipt reports the size the app actually allowed.
+
+Tracks: `mic` and `camera` take `true` (the system default device) or a device `id` (or exact
+name) from the dry run; an unknown one returns `NO_DEVICE` with the valid IDs in `fix` and
+`expected`. `systemAudio` is `true` (every app's sound; the default for window sources), `false`
+(the default for display and area), or `{apps:["com.apple.Music","Safari"]}`: only those running
+apps' sound (bundle IDs or names; one not running returns `CAPTURE_SOURCE` listing running apps).
+It rides a second, audio-only stream, so the picture is unchanged. `exclude:["Slack","desktop"]`
+hides apps from a display or area capture; `"desktop"` hides the Finder's desktop icons (the
+wallpaper stays). Both are refused with a window source, which already shows only that window.
+Set `events:false` to omit cursor and input events.
+
+Time: every recording time parameter is seconds of recorded time except `at` (a timeline frame):
+`countdown` (0–3600, fractions allowed), `duration`, `wait`, and the `elapsed`/`stopsAt` replies.
+Never sleep between calls to time a take; model latency makes it seconds off. `duration` ends the
+take by itself; `then:"pause"` pauses it there instead (within one 12 ms poll), and
+`record.start {resume:jobId, duration}` records exactly that many more seconds, then stops or
+pauses per its own `then`. `jobs.status {jobId, wait}` and `record.stop {jobId, wait}` (seconds,
+up to 120) block until the take leaves `recording`; `record.stop` then publishes it.
+
+The start receipt's `settings` echo what will be recorded: `source {kind, id, rect (global
+points), scale, size [w,h] pixels, resized?}`, `fps` (60, the capture rate; frames arrive on
+change), `mic`/`camera` (`false` or `{id, name, default}`), `systemAudio` (`false`, `"all"` or
+`{apps:[{bundleId, name}]}`), `events`, `countdown`, `duration`, `then`, `exclude`, and `canvas`:
+`{decision:"auto"|"explicit"|"kept", aspect, size?}`. A project created by this recording
+(`create:true`, still empty) takes the canvas shape nearest the recorded picture (`aspect:"auto"`,
+from 9:16, 4:5, 1:1, 4:3 and 16:9, decided from the take's pixels at stop and applied in the same
+undo step) unless `aspect` is given; `aspect` on an existing project is refused (use
+`project.set`). A screen at 16:10 gets 16:9 and a `TAKE_ASPECT` lint until 16:10 exists.
 
 `jobs.status {jobId}` reports elapsed seconds, bytes, dropped frames, and whether the capture is
-pending, recording, ready, done, or cancelled. A timed capture stops automatically and becomes
-ready. Call `record.stop {jobId}` to stop a manual capture or publish a ready capture. It returns
-the new revision and `mediaId` and, when inserted, a `clipId`. The media entry and clip form one
-undoable edit. Set `insert:false` at start or stop to save the media without a clip. `jobs.cancel`
+pending, recording, paused, ready, done, or cancelled. A timed capture stops automatically and
+becomes ready. Call `record.stop {jobId}` to stop a manual capture or publish a ready capture. It
+returns the new revision and `mediaId` and, when inserted, a `clipId`, plus `take {frames, fps,
+seconds, size, captureFps, videoFrames, droppedFrames, tracks, clicks, keys, micPeakDb, silent?}`
+(`frames` at the project's `fps`; `micPeakDb` is the loudest 10 ms RMS window in dBFS, `silent:true`
+below −60) and the `lints` and `pacing` an edit returns, with two record lints: `TAKE_ASPECT` (the
+picture's shape is not the canvas's; `ops` sets the nearest canvas or crops to it) and `MIC_SILENT`.
+The media entry and clip form one undoable edit. Set `insert:false` at start or stop to save the media without a clip. `jobs.cancel`
 discards a take before publication. If publishing fails after the capture stopped (a full disk,
 a stale revision), the take stays staged and the job remembers the stop: fix the cause and call
 `record.stop` again to publish it. `still:true` captures a PNG that inserts as a 5-second
@@ -398,8 +436,7 @@ still. A successful still stop also returns its package-relative `output` path.
 the same take, and `marker:"Name"` with `resume` drops a marker (markers land on the timeline at
 publish). `voiceover:true, at` records only the microphone onto a new audio lane at frame `at`.
 `camera:true, screen:false` is a camera-only take. `retakeOf:"clp_…"` places the take right after
-an earlier one, named after it. `exclude:["com.app.id"]` hides apps (Splice's own windows are
-always excluded). Takes write fragmented movies every 2 s; after a crash, `record.start
+an earlier one, named after it. Splice's own windows are always excluded. Takes write fragmented movies every 2 s; after a crash, `record.start
 {recover:true}` publishes what was staged. It skips a take the capture agent is still recording or
 holding for another session (or when the agent cannot say).
 
@@ -461,7 +498,9 @@ return {revision: e.revision, clips: t.spine.length};
 `LANE_NOT_EMPTY`, `OVERLAP`, `REPLAY_MINTS`, `REPLAY_MEDIA`, `BUSY`, `PERMISSION_DENIED` (project access `off`/`read`, set by the human), `NO_SESSION`, `LOCKED`,
 `MEDIA_OFFLINE`, `BAD_MEDIA`, `FORMAT_TOO_NEW`, `FORMAT_UNKNOWN_KEY`, `JOURNAL_CORRUPT`, `EXISTS`, `EXPORT_FAILED`, `FRAME_FAILED`,
 `CAPTURE_FAILED`, `CAPTURE_SOURCE`, `CAPTURE_CANCELLED` (CLI), `DISK_FULL`,
-0.4: `NO_DEVICE` (recording a mic or camera this Mac does not have; refused before capture starts), `UNKNOWN_PARAM` (with `didYouMean`), `NOT_KEYABLE` (keys on a parameter the evaluator does not
+0.4: `NO_DEVICE` (recording a mic or camera this Mac does not have, or an unknown device ID; refused
+before capture starts, with the valid IDs), `NOT_RECORDING` (pausing, resuming or marking a take
+that is not running), `UNKNOWN_PARAM` (with `didYouMean`), `NOT_KEYABLE` (keys on a parameter the evaluator does not
 animate; the fix lists the keyable ones, also marked `keys:true` in `Splice.Effects`),
 `UNLICENSED` (`music.add` of a track whose license is unknown, without `allowUnlicensed:true`),
 `NO_ACTIVITY` (an activity basis or `intent.steps` with no recorded input on the timeline or

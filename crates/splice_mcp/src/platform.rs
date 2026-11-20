@@ -253,24 +253,17 @@ fn export_in_session(
 pub(super) fn job(projects: &mut Projects, name: &str, args: &Json) -> Result<Json, StoreError> {
     // `wait` (seconds, at most 120) holds jobs.status until the job stops running, encoding
     // exports meanwhile (they advance on this thread), so one call or one code.run sees it done.
-    let wait = match args.field("wait") {
-        None => None,
-        Some(value) => Some(
-            value
-                .as_f64()
-                .filter(|seconds| (0.0..=120.0).contains(seconds))
-                .ok_or_else(|| bad("wait", "seconds from 0 to 120"))?,
-        ),
-    };
+    let wait = wait_seconds(args)?;
     let Some(wait) = wait.filter(|_| name == "jobs.status") else {
         return job_once(projects, name, args);
     };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(wait);
     loop {
         let status = job_once(projects, name, args)?;
+        // A paused take waits on the agent (record.start {resume}), so it ends the wait too.
         let running = matches!(
             status.field("state").and_then(Json::as_str),
-            Some("queued" | "pending" | "running" | "recording" | "paused" | "cancelling")
+            Some("queued" | "pending" | "running" | "recording" | "cancelling")
         );
         if !running || std::time::Instant::now() >= deadline {
             return Ok(status);
@@ -283,6 +276,18 @@ pub(super) fn job(projects: &mut Projects, name: &str, args: &Json) -> Result<Js
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
+}
+
+/// `wait`: seconds a call may block for a job to stop running.
+fn wait_seconds(args: &Json) -> Result<Option<f64>, StoreError> {
+    args.field("wait")
+        .map(|value| {
+            value
+                .as_f64()
+                .filter(|seconds| (0.0..=120.0).contains(seconds))
+                .ok_or_else(|| bad("wait", "seconds from 0 to 120"))
+        })
+        .transpose()
 }
 
 fn job_once(projects: &mut Projects, name: &str, args: &Json) -> Result<Json, StoreError> {
@@ -438,8 +443,8 @@ pub(super) fn record_start(projects: &mut Projects, args: &Json) -> Result<Json,
             ));
         }
         let store = projects.lookup(args)?;
-        if !dry {
-            store.check_write(&write_options(args)?)?;
+        if !dry && let Some(options) = record_write_options(store, args)? {
+            store.check_write(&options)?;
         }
     } else if let Some(path) = path {
         package_path(path)?;
@@ -465,16 +470,53 @@ pub(super) fn record_start(projects: &mut Projects, args: &Json) -> Result<Json,
     }
 }
 
+/// The session record.start runs in, when the caller names one. record.start writes nothing until
+/// record.stop, so `ifRevision` is optional: the take publishes against the revision current
+/// at stop. Without `sessionId` (and `ifRevision`) the recording opens its own session.
+pub(super) fn record_write_options(
+    store: &splice_core::history::Store,
+    args: &Json,
+) -> Result<Option<splice_core::history::WriteOptions>, StoreError> {
+    if args.field("sessionId").is_none() && args.field("ifRevision").is_none() {
+        return Ok(None);
+    }
+    Ok(Some(splice_core::history::WriteOptions {
+        source: splice_core::history::Source::Agent,
+        session: Some(args.session()?),
+        if_revision: Some(if args.field("ifRevision").is_some() {
+            args.revision("ifRevision")?
+        } else {
+            store.project().rev
+        }),
+        time: super::wire::now(),
+        ..Default::default()
+    }))
+}
+
 pub(super) fn record_stop(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
     let id = job_id(args)?;
     args.flag("insert")?;
-    let method = if args.flag("pause")? {
-        "take.pause"
-    } else {
-        "take.stop"
-    };
+    let pause = args.flag("pause")?;
+    let method = if pause { "take.pause" } else { "take.stop" };
+    // wait: let a timed take (duration) finish by itself first, so one call returns its summary.
+    let wait = wait_seconds(args)?;
+    if wait.is_some() && pause {
+        return Err(bad("wait", "omitted with pause:true"));
+    }
     #[cfg(target_os = "macos")]
     {
+        if let Some(wait) = wait {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(wait);
+            while matches!(
+                super::record::command(projects, id, "take.status", args)?
+                    .field("state")
+                    .and_then(Json::as_str),
+                Some("pending" | "recording")
+            ) && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
         super::record::command(projects, id, method, args)
     }
     #[cfg(not(target_os = "macos"))]

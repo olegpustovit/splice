@@ -1626,3 +1626,35 @@ fn zoom_items_report_their_fit_safe_scale() {
     .unwrap();
     assert_eq!(safe(&project), 5.0);
 }
+
+/// Eval record-pause-marker: record.start in an open session needs no ifRevision (it writes
+/// nothing until record.stop, which publishes against the revision current then).
+#[test]
+fn record_start_joins_a_session_without_if_revision() {
+    let temp = TestDirectory::new("record-session");
+    let mut store = splice_core::history::Store::create(
+        &temp.0.join("p.splice"),
+        &splice_model::Project::default(),
+    )
+    .unwrap();
+    let session = store.start_session("agent", 1).unwrap().id;
+    let parse = |text: &str| splice_json::parse(text).unwrap();
+    assert!(
+        super::platform::record_write_options(&store, &parse("{}"))
+            .unwrap()
+            .is_none()
+    );
+    let joined = super::platform::record_write_options(
+        &store,
+        &parse(&format!(r#"{{"sessionId":"{session}"}}"#)),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(joined.session, Some(session));
+    assert_eq!(joined.if_revision, Some(store.project().rev));
+    store.check_write(&joined).unwrap();
+    let error = super::platform::record_write_options(&store, &parse(r#"{"ifRevision":"r0"}"#))
+        .unwrap_err();
+    assert_eq!(error.code, "NO_SESSION");
+    assert!(error.fix.contains("session"), "{}", error.fix);
+}

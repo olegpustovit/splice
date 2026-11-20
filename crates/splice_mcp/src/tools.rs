@@ -471,7 +471,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "jobs.status",
-        description: "Check the progress and result of an export, transcription or recording job. wait (seconds, up to 120) returns once the job stops running, so one call (or one code.run: waiting is not counted against its 2 s) sees it done; without wait, each call advances a running export by up to 50 ms.",
+        description: "Check the progress and result of an export, transcription or recording job. wait (seconds, up to 120) returns once the job stops running (a recording also when it pauses), so one call (or one code.run: waiting is not counted against its 2 s) sees it done; without wait, each call advances a running export by up to 50 ms.",
         read_only: true,
         input: &[
             ("projectId", "string"),
@@ -490,6 +490,9 @@ pub(super) const TOOLS: &[Tool] = &[
             ("elapsed", "number"),
             ("bytes", "integer"),
             ("droppedFrames", "integer"),
+            ("videoFrames", "integer"),
+            ("stopsAt", "number"),
+            ("then", "string"),
             ("fps", "number"),
             ("eta", "number"),
             ("revision", REVISION),
@@ -512,7 +515,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "record.start",
-        description: "Start headless capture of a display, window or area. To record an app, pass source:{window:{app:\"Safari\"}} (app name or bundle ID; add title when it has several windows). dryRun lists sources, microphones, cameras and permissions; window titles only with titles:true. voiceover:true records the mic onto a new audio lane at frame at; camera:true with screen:false is a camera-only take; retakeOf places the take after an earlier one; exclude hides apps. resume:jobId resumes a take paused with record.stop {pause:true}; resume with marker drops a marker. recover:true publishes takes a crash left staged.",
+        description: "Start headless capture of a display, window or area. To record an app, pass source:{window:{app:\"Safari\"}} (app name or bundle ID; add title when it has several windows); size:[w,h] resizes that window (points) first. dryRun lists sources, microphones and cameras (stable device IDs) and permissions; window titles only with titles:true. mic and camera take true (default device) or a device ID. systemAudio: true, false or {apps:[…]} (only those apps' sound). Never sleep to time a take: duration (seconds of recorded time) ends it by itself, then:\"pause\" pauses there instead, and resume:jobId with duration records exactly that much more; record.stop {wait} or jobs.status {wait} returns once it ends. countdown is seconds. The receipt's settings echo what will be recorded (source size, fps, devices, canvas). create:true sizes the new canvas to the source (aspect:auto) unless aspect is given. sessionId alone joins an open session (ifRevision optional). voiceover:true records the mic onto a new audio lane at frame at; camera:true with screen:false is a camera-only take; retakeOf places the take after an earlier one; exclude hides apps, \"desktop\" hides desktop icons. resume with marker drops a marker. recover:true publishes takes a crash left staged.",
         read_only: false,
         input: &[
             ("projectId", "string"),
@@ -524,15 +527,27 @@ pub(super) const TOOLS: &[Tool] = &[
             ("display", r#"{"type":["string","integer"]}"#),
             ("window", r#"{"type":["string","integer","object"]}"#),
             ("area", "object"),
-            ("mic", "boolean"),
-            ("systemAudio", "boolean"),
-            ("camera", "boolean"),
+            ("mic", r#"{"type":["boolean","string"]}"#),
+            ("systemAudio", r#"{"type":["boolean","object"]}"#),
+            ("camera", r#"{"type":["boolean","string"]}"#),
             ("events", "boolean"),
             ("insert", "boolean"),
             ("still", "boolean"),
-            ("countdown", FRAME),
+            (
+                "countdown",
+                r#"{"type":"number","minimum":0,"maximum":3600}"#,
+            ),
             ("dryRun", "boolean"),
             ("duration", r#"{"type":"number","exclusiveMinimum":0}"#),
+            ("then", r#"{"enum":["stop","pause"]}"#),
+            (
+                "size",
+                r#"{"type":"array","items":{"type":"number","minimum":100,"maximum":16384},"minItems":2,"maxItems":2}"#,
+            ),
+            (
+                "aspect",
+                r#"{"enum":["auto","9:16","4:5","1:1","4:3","16:9"]}"#,
+            ),
             ("voiceover", "boolean"),
             ("at", FRAME),
             ("screen", "boolean"),
@@ -565,7 +580,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "record.stop",
-        description: "Finish a recording (started with record.start, e.g. source:{window:{app}}) and insert the take as one undoable edit. Use insert:false to keep it in media only; pause:true pauses instead (resume with record.start {resume}).",
+        description: "Finish a recording (started with record.start, e.g. source:{window:{app}}) and insert the take as one undoable edit. Returns a take summary (frames, seconds, size, fps, tracks, clicks, keys, micPeakDb or silent, droppedFrames) and the lints an edit returns, including TAKE_ASPECT when the take does not fill the canvas. wait (seconds, up to 120) first lets a timed take (duration) end by itself. Use insert:false to keep it in media only; pause:true pauses instead (resume with record.start {resume}).",
         read_only: false,
         input: &[
             ("projectId", "string"),
@@ -574,6 +589,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ("ifRevision", REVISION),
             ("insert", "boolean"),
             ("pause", "boolean"),
+            ("wait", "number"),
         ],
         required: &["jobId"],
         output: &[
@@ -584,6 +600,11 @@ pub(super) const TOOLS: &[Tool] = &[
             ("mediaId", "string"),
             ("clipId", r#"{"type":["string","null"]}"#),
             ("output", "string"),
+            ("take", "object"),
+            ("lints", "array"),
+            ("pacing", "object"),
+            ("settings", "object"),
+            ("warning", "string"),
         ],
         success: &[&["state", "jobId"], &["state", "id"]],
     },

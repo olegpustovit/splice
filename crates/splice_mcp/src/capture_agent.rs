@@ -1,3 +1,4 @@
+use crate::record_options::{self, DeviceInfo, Options, SystemAudio};
 use crate::{
     Json,
     ipc::{receive, send, socket_path},
@@ -5,7 +6,8 @@ use crate::{
     wire::{Args, bad, error_payload},
 };
 use apple_sys::{
-    app, capture,
+    app,
+    capture::{self, Target},
     ipc::{user, verify_peer},
 };
 use splice_core::history::StoreError;
@@ -221,6 +223,8 @@ fn exchange(stream: &mut UnixStream, method: &str, args: &Json) -> Result<Json, 
     if let Some(error) = reply.field("error") {
         let code = match error.string("code")? {
             "BAD_ARGS" => "BAD_ARGS",
+            "NO_DEVICE" => "NO_DEVICE",
+            "NOT_RECORDING" => "NOT_RECORDING",
             "TCC_DENIED" => "TCC_DENIED",
             "CAPTURE_SOURCE" => "CAPTURE_SOURCE",
             "CAPTURE_FAILED" => "CAPTURE_FAILED",
@@ -229,11 +233,22 @@ fn exchange(stream: &mut UnixStream, method: &str, args: &Json) -> Result<Json, 
             "IO" => "IO",
             _ => return Err(transport(&"The capture agent returned an unknown error.")),
         };
-        return Err(StoreError::new(
-            code,
-            error.string("message")?,
-            error.string("fix")?,
-        ));
+        let mut failure = StoreError::new(code, error.string("message")?, error.string("fix")?);
+        // Keep the broken rule (param, got, expected) the agent computed.
+        if let (Some(param), Some(expected)) = (
+            error.field("param").and_then(Json::as_str),
+            error.field("expected").and_then(Json::as_str),
+        ) {
+            let rule = splice_core::commands::CommandError::rule(
+                code,
+                param,
+                error.field("got").cloned(),
+                expected,
+                &failure.fix,
+            );
+            failure.rule = StoreError::from(rule).rule;
+        }
+        return Err(failure);
     }
     reply
         .field("result")
@@ -379,11 +394,12 @@ fn dispatch(
             result.push(("sources", sources::payload(&sources)));
             let devices: Vec<Json> = apple_sys::capture::devices()
                 .into_iter()
-                .map(|(kind, id, name)| {
+                .map(|device| {
                     object(vec![
-                        ("kind", crate::text(&kind)),
-                        ("id", crate::text(&id)),
-                        ("name", crate::text(&name)),
+                        ("kind", text(&device.kind)),
+                        ("id", text(&device.id)),
+                        ("name", text(&device.name)),
+                        ("default", Json::Bool(device.default)),
                     ])
                 })
                 .collect();
@@ -395,31 +411,109 @@ fn dispatch(
             Ok(object(Vec::new()))
         }
         "take.begin" => {
-            let options = crate::record_options::Options::parse(args)?;
+            let options = Options::parse(args)?;
             permissions::require_options(&options, &permissions::snapshot())?;
-            // A track with no device would start and fail seconds later with no samples.
-            let devices = apple_sys::capture::devices();
-            for (wanted, kind, name) in [
-                (options.mic, "mic", "microphone"),
-                (options.camera, "camera", "camera"),
-            ] {
-                if wanted && !devices.iter().any(|(k, ..)| k == kind) {
-                    return Err(StoreError::new(
-                        "NO_DEVICE",
-                        &format!("This Mac has no {name} to record from."),
-                        &format!(
-                            "Connect a {name}, or record without it (record.start {}:false); \
-                             record.start {{dryRun:true}} lists devices.",
-                            if kind == "mic" { "mic" } else { "camera" }
-                        ),
-                    ));
-                }
-            }
-            jobs.begin(Path::new(args.string("package")?), options)
+            let plan = plan(&options)?;
+            jobs.begin(Path::new(args.string("package")?), options, plan)
         }
         method @ ("take.status" | "take.stop" | "take.cancel" | "take.pause" | "take.resume"
         | "take.mark") => jobs.command(method, args),
         _ => Err(bad("method", "a capture agent command")),
+    }
+}
+
+/// Resolves devices, app audio, the window (resized when asked) and the capture geometry
+/// before the countdown, so the start receipt states what the take records. A track with no
+/// device would otherwise start and fail seconds later with no samples.
+fn plan(options: &Options) -> Result<jobs::Plan, StoreError> {
+    let devices: Vec<DeviceInfo> = capture::devices()
+        .into_iter()
+        .map(|device| DeviceInfo {
+            kind: device.kind,
+            id: device.id,
+            name: device.name,
+            default: device.default,
+        })
+        .collect();
+    let mic = record_options::resolve_device("mic", &options.mic, &devices)?;
+    let camera = record_options::resolve_device("camera", &options.camera, &devices)?;
+    let listed = capture::sources(true).map_err(capture_source_error)?;
+    let audio_apps = match &options.system_audio {
+        SystemAudio::Apps(names) => {
+            let running: Vec<(String, String)> = listed
+                .iter()
+                .filter_map(|source| match source {
+                    capture::Source::Application { bundle, name, .. } => {
+                        Some((bundle.clone(), name.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            record_options::resolve_apps(names, &running)?
+        }
+        _ => Vec::new(),
+    };
+    let target = sources::target(&options.source)?;
+    let resized = match (options.size, target) {
+        (Some(size), Target::Window(id)) => Some((size, resize(&listed, id, size)?)),
+        _ => None,
+    };
+    let mut geometry = capture::geometry(target).map_err(capture_source_error)?;
+    // The window server can lag the Accessibility resize by a frame or two.
+    if let Some((_, points)) = resized {
+        for _ in 0..20 {
+            if (geometry.rect.width - points[0]).abs() < 2.0
+                && (geometry.rect.height - points[1]).abs() < 2.0
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+            geometry = capture::geometry(target).map_err(capture_source_error)?;
+        }
+    }
+    Ok(jobs::Plan {
+        target,
+        mic,
+        camera,
+        audio_apps,
+        geometry: Some(geometry),
+        resized,
+    })
+}
+
+/// Resizes window `id` to `size` points; the size the window then has (apps clamp it).
+fn resize(listed: &[capture::Source], id: u32, size: [f64; 2]) -> Result<[f64; 2], StoreError> {
+    let (pid, rect) = listed
+        .iter()
+        .find_map(|source| match source {
+            capture::Source::Window {
+                id: window,
+                pid,
+                rect,
+                ..
+            } if *window == id => Some((*pid, *rect)),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            StoreError::new(
+                "CAPTURE_SOURCE",
+                "The window to resize is no longer shareable.",
+                "Bring the window on screen and retry, or pick another with record.start {dryRun:true, titles:true}.",
+            )
+        })?;
+    match capture::resize_window(pid, rect, size) {
+        Ok(frame) => Ok([frame.width, frame.height]),
+        Err(capture::ResizeError::Untrusted) => Err(permissions::accessibility_denied()),
+        Err(capture::ResizeError::NotFound) => Err(StoreError::new(
+            "CAPTURE_SOURCE",
+            "Accessibility does not list the window to resize.",
+            "Retry once the window is on screen, or record without size and resize it yourself.",
+        )),
+        Err(capture::ResizeError::Refused) => Err(StoreError::new(
+            "CAPTURE_SOURCE",
+            "The app refused to resize its window.",
+            "Record without size (this app's windows cannot be resized), or pick another window.",
+        )),
     }
 }
 

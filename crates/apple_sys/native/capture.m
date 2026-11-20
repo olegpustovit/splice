@@ -17,37 +17,49 @@ void splice_capture_error(NSError *reason, const char *fallback, bool *denied, c
     splice_set_error(error, reason.localizedDescription.UTF8String ?: fallback);
 }
 
-// Apps a display capture leaves out besides Splice (record.start {exclude}); the capture agent
-// records one take at a time.
+// Apps a display capture leaves out besides Splice (record.start {exclude}), and whether the
+// Finder's desktop icons go too; the capture agent records one take at a time.
 static NSArray<NSString *> *excluded_apps;
+static bool excluded_desktop;
 
-void splice_capture_exclude(const char *names) {
+void splice_capture_exclude(const char *names, bool desktop) {
     NSString *list = names == NULL ? @"" : [NSString stringWithUTF8String:names];
     NSMutableArray *out = [NSMutableArray array];
     for (NSString *name in [list componentsSeparatedByString:@"\n"]) {
         if (name.length > 0) [out addObject:name];
     }
     excluded_apps = out;
+    excluded_desktop = desktop;
 }
 
-// Microphones and cameras as "kind\tuniqueID\tname" lines (record.start dryRun).
+// Microphones and cameras as "kind\tuniqueID\tdefault\tname" lines (record.start dryRun). The
+// unique ID is stable for a device across launches; default is 1 for the system default.
 char *splice_capture_devices(void) {
     @autoreleasepool {
         NSMutableString *out = [NSMutableString string];
+        NSString *mic = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio].uniqueID;
+        NSString *camera = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo].uniqueID;
         AVCaptureDeviceDiscoverySession *mics = [AVCaptureDeviceDiscoverySession
             discoverySessionWithDeviceTypes:@[AVCaptureDeviceTypeMicrophone, AVCaptureDeviceTypeExternal]
                                   mediaType:AVMediaTypeAudio position:AVCaptureDevicePositionUnspecified];
-        for (AVCaptureDevice *device in mics.devices) [out appendFormat:@"mic\t%@\t%@\n", device.uniqueID, device.localizedName];
+        for (AVCaptureDevice *device in mics.devices) {
+            [out appendFormat:@"mic\t%@\t%d\t%@\n", device.uniqueID, (int)[device.uniqueID isEqualToString:mic],
+                              device.localizedName];
+        }
         AVCaptureDeviceDiscoverySession *cameras = [AVCaptureDeviceDiscoverySession
             discoverySessionWithDeviceTypes:@[AVCaptureDeviceTypeBuiltInWideAngleCamera, AVCaptureDeviceTypeExternal,
                                               AVCaptureDeviceTypeContinuityCamera]
                                   mediaType:AVMediaTypeVideo position:AVCaptureDevicePositionUnspecified];
-        for (AVCaptureDevice *device in cameras.devices) [out appendFormat:@"camera\t%@\t%@\n", device.uniqueID, device.localizedName];
+        for (AVCaptureDevice *device in cameras.devices) {
+            [out appendFormat:@"camera\t%@\t%d\t%@\n", device.uniqueID, (int)[device.uniqueID isEqualToString:camera],
+                              device.localizedName];
+        }
         return strdup(out.UTF8String);
     }
 }
 
-static SCShareableContent *shareable_content(bool *denied, char **error) {
+// Desktop windows (the Finder's icons, the wallpaper) are listed only when a filter must name them.
+static SCShareableContent *shareable_content(bool desktop, bool *denied, char **error) {
     if (!CGPreflightScreenCaptureAccess()) {
         *denied = true;
         splice_set_error(error, "Screen & System Audio Recording permission is unavailable.");
@@ -56,7 +68,7 @@ static SCShareableContent *shareable_content(bool *denied, char **error) {
     dispatch_semaphore_t ready = dispatch_semaphore_create(0);
     __block SCShareableContent *content;
     __block NSError *failure;
-    [SCShareableContent getShareableContentExcludingDesktopWindows:YES
+    [SCShareableContent getShareableContentExcludingDesktopWindows:!desktop
                                              onScreenWindowsOnly:YES
                                               completionHandler:^(SCShareableContent *value, NSError *reason) {
         content = value;
@@ -118,7 +130,7 @@ static bool display_sources(SpliceCaptureSources *out, char **error) {
 bool splice_capture_sources(bool include_windows, SpliceCaptureSources *out, bool *denied, char **error) {
     @autoreleasepool {
         if (!include_windows) return display_sources(out, error);
-        SCShareableContent *content = shareable_content(denied, error);
+        SCShareableContent *content = shareable_content(false, denied, error);
         if (content == nil) return false;
         size_t capacity = content.displays.count + content.windows.count + content.applications.count;
         if (capacity == 0) return true;
@@ -183,15 +195,32 @@ static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShar
     } else {
         const uint32_t id = target->id == 0 ? CGMainDisplayID() : target->id;
         NSMutableArray<SCRunningApplication *> *excluded = [NSMutableArray array];
+        // Hiding desktop icons excludes the Finder and keeps its other windows as exceptions: the
+        // icons are the Finder's one window at the desktop-icon level (Recorder SPEC §9 q3).
+        // ponytail: Finder windows opened after capture starts stay hidden; upgrade to
+        // SCStream updateContentFilter if a take needs them.
+        NSMutableArray<SCWindow *> *kept = [NSMutableArray array];
+        const NSInteger icons = CGWindowLevelForKey(kCGDesktopIconWindowLevelKey);
+        bool finder_excluded = [excluded_apps containsObject:@"com.apple.finder"] ||
+                               [excluded_apps containsObject:@"Finder"];
         for (SCRunningApplication *app in content.applications) {
-            if (is_splice(app) || [excluded_apps containsObject:app.applicationName] ||
+            bool finder = excluded_desktop && [app.bundleIdentifier isEqualToString:@"com.apple.finder"];
+            if (is_splice(app) || finder || [excluded_apps containsObject:app.applicationName] ||
                 [excluded_apps containsObject:app.bundleIdentifier]) {
                 [excluded addObject:app];
             }
         }
+        if (excluded_desktop && !finder_excluded) {
+            for (SCWindow *window in content.windows) {
+                if ([window.owningApplication.bundleIdentifier isEqualToString:@"com.apple.finder"] &&
+                    window.windowLayer != icons) {
+                    [kept addObject:window];
+                }
+            }
+        }
         for (SCDisplay *display in content.displays) {
             if (display.displayID == id) {
-                filter = [[SCContentFilter alloc] initWithDisplay:display excludingApplications:excluded exceptingWindows:@[]];
+                filter = [[SCContentFilter alloc] initWithDisplay:display excludingApplications:excluded exceptingWindows:kept];
                 frame = display.frame;
                 break;
             }
@@ -233,8 +262,41 @@ static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShar
 
 SCContentFilter *splice_capture_prepare(const SpliceCaptureTarget *target, SCStreamConfiguration *configuration,
                                         SpliceCaptureGeometry *geometry, bool *denied, char **error) {
-    SCShareableContent *content = shareable_content(denied, error);
+    bool desktop = excluded_desktop && target->kind != SPLICE_CAPTURE_WINDOW;
+    SCShareableContent *content = shareable_content(desktop, denied, error);
     return content == nil ? nil : capture_filter(target, content, configuration, geometry, error);
+}
+
+bool splice_capture_geometry(const SpliceCaptureTarget *target, SpliceCaptureFrame *out, bool *denied, char **error) {
+    @autoreleasepool {
+        SCStreamConfiguration *configuration = [SCStreamConfiguration new];
+        SpliceCaptureGeometry geometry;
+        if (splice_capture_prepare(target, configuration, &geometry, denied, error) == nil) return false;
+        // The recorder rounds down to even dimensions for the encoder.
+        *out = (SpliceCaptureFrame){
+            .rect = geometry.rect, .scale = geometry.scale,
+            .width = (uint32_t)(configuration.width & ~(size_t)1),
+            .height = (uint32_t)(configuration.height & ~(size_t)1),
+        };
+        return true;
+    }
+}
+
+SCContentFilter *splice_capture_audio_filter(NSArray<NSString *> *apps, bool *denied, char **error) {
+    SCShareableContent *content = shareable_content(false, denied, error);
+    if (content == nil) return nil;
+    NSMutableArray<SCRunningApplication *> *included = [NSMutableArray array];
+    for (SCRunningApplication *app in content.applications) {
+        if (!is_splice(app) && ([apps containsObject:app.bundleIdentifier] || [apps containsObject:app.applicationName])) {
+            [included addObject:app];
+        }
+    }
+    SCDisplay *display = content.displays.firstObject;
+    if (included.count == 0 || display == nil) {
+        splice_set_error(error, "None of the apps whose sound was requested is running.");
+        return nil;
+    }
+    return [[SCContentFilter alloc] initWithDisplay:display includingApplications:included exceptingWindows:@[]];
 }
 
 void *splice_capture_screenshot(const SpliceCaptureTarget *target, const uint8_t **data, size_t *size,

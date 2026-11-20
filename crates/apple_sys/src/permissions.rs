@@ -15,6 +15,8 @@ pub enum Permission {
     Camera,
     /// Listen-only input monitoring.
     InputMonitoring,
+    /// Accessibility: resizing another app's window, reading the text caret.
+    Accessibility,
 }
 
 /// The authorization state reported by the system.

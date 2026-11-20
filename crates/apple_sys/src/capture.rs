@@ -236,20 +236,96 @@ impl RawSource {
 }
 
 unsafe extern "C" {
-    fn splice_capture_exclude(names: *const c_char);
+    fn splice_capture_exclude(names: *const c_char, desktop: bool);
     fn splice_capture_devices() -> *mut c_char;
+    fn splice_capture_geometry(
+        target: *const RawTarget,
+        out: *mut Geometry,
+        denied: *mut bool,
+        error: *mut *mut c_char,
+    ) -> bool;
+    fn splice_window_resize(pid: u32, frame: Rect, width: f64, height: f64, out: *mut Rect) -> u32;
     fn free(pointer: *mut std::ffi::c_void);
 }
 
-/// Apps (names or bundle IDs) the next display capture leaves out, besides Splice.
-pub fn exclude(apps: &[String]) {
+/// Apps (names or bundle IDs) the next display or area capture leaves out besides Splice, and
+/// whether the Finder's desktop icons go too.
+pub fn exclude(apps: &[String], desktop: bool) {
     let list = CString::new(apps.join("\n").replace('\0', "")).expect("NUL removed");
     // SAFETY: the string lives for the call; native copies it.
-    unsafe { splice_capture_exclude(list.as_ptr()) };
+    unsafe { splice_capture_exclude(list.as_ptr(), desktop) };
 }
 
-/// A microphone or camera: kind ("mic" or "camera"), unique ID and name.
-pub type Device = (String, String, String);
+/// What a capture of a target covers right now.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct Geometry {
+    /// Captured bounds in global points.
+    pub rect: Rect,
+    /// Pixels per point.
+    pub scale: f64,
+    /// Encoded width in pixels (even).
+    pub width: u32,
+    /// Encoded height in pixels (even).
+    pub height: u32,
+}
+
+const _: () = assert!(size_of::<Geometry>() == 48);
+
+/// The bounds, scale and pixel size a capture of `target` would have now (needs Screen
+/// Recording permission).
+pub fn geometry(target: Target) -> Result<Geometry, CaptureError> {
+    let raw = target.native()?;
+    let mut out = Geometry::default();
+    let mut denied = false;
+    let mut diagnostic = ptr::null_mut();
+    // SAFETY: inputs and outputs are live for this synchronous call.
+    if unsafe { splice_capture_geometry(&raw, &mut out, &mut denied, &mut diagnostic) } {
+        Ok(out)
+    } else {
+        // SAFETY: the failing call transferred its optional diagnostic.
+        Err(unsafe {
+            CaptureError::from_native(diagnostic, denied, "Could not measure the capture source.")
+        })
+    }
+}
+
+/// Why a window resize did not happen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizeError {
+    /// Splice lacks the Accessibility permission.
+    Untrusted,
+    /// No Accessibility window of that process has the given frame.
+    NotFound,
+    /// The app refused the new size.
+    Refused,
+}
+
+/// Resizes window `frame` (global points) of process `pid` to `size` points with Accessibility,
+/// keeping its top-left corner; returns the frame the window then has (apps clamp sizes).
+pub fn resize_window(pid: u32, frame: Rect, size: [f64; 2]) -> Result<Rect, ResizeError> {
+    let mut out = Rect::default();
+    // SAFETY: by-value inputs and one writable output for this synchronous call.
+    match unsafe { splice_window_resize(pid, frame, size[0], size[1], &mut out) } {
+        0 => Ok(out),
+        1 => Err(ResizeError::Untrusted),
+        2 => Err(ResizeError::NotFound),
+        _ => Err(ResizeError::Refused),
+    }
+}
+
+/// A microphone or camera present on this Mac.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Device {
+    /// `mic` or `camera`.
+    pub kind: String,
+    /// AVFoundation unique ID, stable for the device across launches.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// The system default for its kind.
+    pub default: bool,
+}
 
 /// Microphones and cameras present now.
 pub fn devices() -> Vec<Device> {
@@ -266,8 +342,13 @@ pub fn devices() -> Vec<Device> {
     lines
         .lines()
         .filter_map(|line| {
-            let mut f = line.splitn(3, '\t');
-            Some((f.next()?.into(), f.next()?.into(), f.next()?.into()))
+            let mut f = line.splitn(4, '\t');
+            Some(Device {
+                kind: f.next()?.into(),
+                id: f.next()?.into(),
+                default: f.next()? == "1",
+                name: f.next()?.into(),
+            })
         })
         .collect()
 }

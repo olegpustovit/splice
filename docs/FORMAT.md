@@ -18,7 +18,8 @@ Name.splice/
   transcripts/<med>.json  words for a media item, with its hash
   takes/<med>/          a recorded take, in Recorder's layout (recordings live in the package; imports stay where they are):
     screen.mov          HEVC, cursor-less, variable frame rate
-    mic.m4a  system.m4a camera.mov   optional, one file per source, AAC 48 kHz / HEVC
+    mic.m4a  system.m4a camera.mov   optional, one file per source, AAC 48 kHz / HEVC; system.m4a
+                        holds only the chosen apps' sound when recorded with systemAudio:{apps}
     events.json         {"t0","source":{kind,rect,scale},"events":[{t,k:move|down|up|drag|scroll|key|flags|cursor|caret,…}],"dropped"?:count}
     cursors/<hash>.png  + <hash>.json {hotX, hotY, scale}
   media/                consolidated copies (media.consolidate, med_<id>.<ext>) and html.add's

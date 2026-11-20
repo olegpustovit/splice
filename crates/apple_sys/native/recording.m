@@ -208,10 +208,12 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
     });
 }
 
-- (BOOL)prepareCamera:(NSError **)error {
-    AVCaptureDevice *device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+- (BOOL)prepareCamera:(NSString *)identifier error:(NSError **)error {
+    AVCaptureDevice *device = identifier.length > 0 ? [AVCaptureDevice deviceWithUniqueID:identifier]
+                                                    : [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
     if (device == nil) {
-        *error = recording_error(@"No default camera is available.");
+        *error = recording_error(identifier.length > 0 ? @"The requested camera is not connected."
+                                                       : @"No default camera is available.");
         return NO;
     }
     AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:device error:error];
@@ -429,6 +431,10 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
 }
 
 - (void)detach {
+    if (_audioStream != nil) {
+        [_audioStream removeStreamOutput:self type:SCStreamOutputTypeAudio error:NULL];
+        _audioStream = nil;
+    }
     if (_stream == nil) return;
     [_stream removeStreamOutput:self type:SCStreamOutputTypeScreen error:NULL];
     if (_microphone != nil) [_stream removeStreamOutput:self type:SCStreamOutputTypeMicrophone error:NULL];
@@ -456,6 +462,16 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
         failure = recording_error(@"The input monitor did not stop.");
     }
     if (![self stopCamera] && failure == nil) failure = recording_error(@"The camera did not stop.");
+    if (_audioStream != nil) {
+        dispatch_semaphore_t stopped = dispatch_semaphore_create(0);
+        [_audioStream stopCaptureWithCompletionHandler:^(NSError *reason) {
+            (void)reason;
+            dispatch_semaphore_signal(stopped);
+        }];
+        if (dispatch_semaphore_wait(stopped, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0 && failure == nil) {
+            failure = recording_error(@"ScreenCaptureKit did not stop the app audio stream.");
+        }
+    }
     if (_stream != nil) {
         dispatch_semaphore_t stopped = dispatch_semaphore_create(0);
         __block NSError *stopFailure;
@@ -499,6 +515,7 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
         self->_stopping = YES;
         [self publishInputClock];
         [self->_stream stopCaptureWithCompletionHandler:nil];
+        [self->_audioStream stopCaptureWithCompletionHandler:nil];
         [self detach];
         [self->_screen cancel];
         [self->_microphone cancel];
@@ -511,8 +528,21 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
 @end
 
 void *splice_recording_start(const SpliceCaptureTarget *target, const char *directory, const char *microphone,
-                             bool system_audio, bool camera, bool events, bool *denied, char **error) {
+                             bool system_audio, const char *audio_apps, const char *camera_id, bool events,
+                             bool *denied, char **error) {
     @autoreleasepool {
+        const bool camera = camera_id != NULL;
+        // Only these apps' sound: a second, audio-only stream keeps the app filter off the video
+        // (Recorder's design), so the screen shows everything the source selects.
+        SCContentFilter *audio_filter = nil;
+        if (system_audio && audio_apps != NULL) {
+            NSMutableArray<NSString *> *apps = [NSMutableArray array];
+            for (NSString *name in [[NSString stringWithUTF8String:audio_apps] componentsSeparatedByString:@"\n"]) {
+                if (name.length > 0) [apps addObject:name];
+            }
+            audio_filter = splice_capture_audio_filter(apps, denied, error);
+            if (audio_filter == nil) return NULL;
+        }
         NSURL *root = [NSURL fileURLWithFileSystemRepresentation:directory isDirectory:YES relativeToURL:nil];
         SCStreamConfiguration *configuration = [SCStreamConfiguration new];
         SpliceCaptureGeometry geometry;
@@ -525,7 +555,7 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const char *dire
         configuration.pixelFormat = target->kind == SPLICE_CAPTURE_WINDOW ?
             kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
         configuration.ignoreShadowsSingleWindow = YES;
-        configuration.capturesAudio = system_audio;
+        configuration.capturesAudio = system_audio && audio_filter == nil;
         configuration.excludesCurrentProcessAudio = YES;
         configuration.captureMicrophone = microphone != NULL;
         if (microphone != NULL && *microphone != '\0') {
@@ -546,7 +576,7 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const char *dire
                 splice_set_error(error, "Camera permission is unavailable.");
                 return NULL;
             }
-            if (![recording prepareCamera:&failure]) {
+            if (![recording prepareCamera:[NSString stringWithUTF8String:camera_id] error:&failure]) {
                 splice_capture_error(failure, "Could not configure the camera.", denied, error);
                 return NULL;
             }
@@ -557,8 +587,25 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const char *dire
         }
         SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:configuration delegate:recording];
         recording.stream = stream;
+        if (audio_filter != nil) {
+            SCStreamConfiguration *sound = [SCStreamConfiguration new];
+            sound.width = 2;
+            sound.height = 2;
+            sound.minimumFrameInterval = CMTimeMake(1, 1);
+            sound.capturesAudio = YES;
+            sound.excludesCurrentProcessAudio = YES;
+            sound.sampleRate = 48000;
+            sound.channelCount = 2;
+            recording.audioStream = [[SCStream alloc] initWithFilter:audio_filter configuration:sound delegate:recording];
+            if (![recording.audioStream addStreamOutput:recording type:SCStreamOutputTypeAudio
+                                     sampleHandlerQueue:recording.queue error:&failure]) {
+                [recording cancel];
+                splice_capture_error(failure, "Could not configure the app audio stream.", denied, error);
+                return NULL;
+            }
+        }
         if (![stream addStreamOutput:recording type:SCStreamOutputTypeScreen sampleHandlerQueue:recording.queue error:&failure] ||
-            (system_audio && ![stream addStreamOutput:recording type:SCStreamOutputTypeAudio
+            (system_audio && audio_filter == nil && ![stream addStreamOutput:recording type:SCStreamOutputTypeAudio
                                                    sampleHandlerQueue:recording.queue error:&failure]) ||
             (microphone != NULL && ![stream addStreamOutput:recording type:SCStreamOutputTypeMicrophone
                                                           sampleHandlerQueue:recording.queue error:&failure])) {
@@ -576,6 +623,18 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const char *dire
             [recording cancel];
             splice_set_error(error, "ScreenCaptureKit did not start the stream.");
             return NULL;
+        }
+        if (startFailure == nil && recording.audioStream != nil) {
+            dispatch_semaphore_t sound = dispatch_semaphore_create(0);
+            [recording.audioStream startCaptureWithCompletionHandler:^(NSError *reason) {
+                startFailure = reason;
+                dispatch_semaphore_signal(sound);
+            }];
+            if (dispatch_semaphore_wait(sound, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0) {
+                [recording cancel];
+                splice_set_error(error, "ScreenCaptureKit did not start the app audio stream.");
+                return NULL;
+            }
         }
         if (startFailure != nil) {
             [recording cancel];

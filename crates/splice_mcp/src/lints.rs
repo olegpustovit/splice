@@ -4,7 +4,7 @@
 //! with a fix and, where one exists, a suggested op batch. Warnings never block the edit.
 use super::{Json, object, text};
 use splice_eval::{Evaluator, FramePlan, Layer};
-use splice_model::{Frame, ItemKind, Project, TimelineId};
+use splice_model::{ClipId, Frame, ItemKind, Media, MediaId, Project, TimelineId};
 
 /// The safe zone of a 9:16 short as fractions of the canvas (top, bottom, left, right): the most
 /// conservative union of published 1080×1920 figures (research T43.2), versioned so a later
@@ -119,6 +119,86 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
         ));
     }
     (lints, pacing)
+}
+
+/// Canvas shapes, as `project.set` names them, and width / height.
+/// ponytail: 16:10 joins when project.set gains it (T46.4); add it here then.
+pub(crate) const ASPECTS: [(&str, f64); 5] = [
+    ("9:16", 9.0 / 16.0),
+    ("4:5", 4.0 / 5.0),
+    ("1:1", 1.0),
+    ("4:3", 4.0 / 3.0),
+    ("16:9", 16.0 / 9.0),
+];
+
+/// The canvas shape nearest a `width` × `height` picture, by ratio on a log scale (2:1 and 1:2
+/// are equally far from square).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn nearest_aspect(width: u32, height: u32) -> &'static str {
+    let ratio = (f64::from(width.max(1)) / f64::from(height.max(1))).ln();
+    ASPECTS
+        .iter()
+        .min_by(|a, b| {
+            (a.1.ln() - ratio)
+                .abs()
+                .total_cmp(&(b.1.ln() - ratio).abs())
+        })
+        .map_or("16:9", |aspect| aspect.0)
+}
+
+/// `TAKE_ASPECT` (A6): a recorded picture whose shape is not the canvas's does not fill it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn take_fit(project: &Project, media: &Media, clip: Option<ClipId>) -> Option<Json> {
+    let [width, height] = [media.probe.width, media.probe.height];
+    let [cw, ch] = project.size;
+    let ratio = |w: u32, h: u32| f64::from(w.max(1)) / f64::from(h.max(1));
+    if (ratio(width, height) / ratio(cw, ch)).ln().abs() <= 0.02_f64.ln_1p() {
+        return None;
+    }
+    let nearest = nearest_aspect(width, height);
+    let canvas = nearest_aspect(cw, ch);
+    let items: Vec<String> = clip.iter().map(ToString::to_string).collect();
+    let mut fix = format!(
+        "Match the canvas to the take with project.set {{aspect:\"{nearest}\"}}, or fill the canvas with clip.crop {{aspect:\"canvas\"}} (cuts the take's edges)."
+    );
+    let ops = if nearest != canvas {
+        Some(Json::Array(vec![object(vec![
+            ("cmd", text("project.set")),
+            ("aspect", text(nearest)),
+        ])]))
+    } else if let Some(clip) = clip {
+        fix = format!(
+            "The nearest canvas shape is already {canvas}: fill it with clip.crop {{aspect:\"canvas\"}} (cuts the take's edges), or keep the margins."
+        );
+        Some(Json::Array(vec![object(vec![
+            ("cmd", text("clip.crop")),
+            ("items", Json::Array(vec![text(&clip.to_string())])),
+            ("aspect", text("canvas")),
+        ])]))
+    } else {
+        None
+    };
+    Some(lint(
+        "TAKE_ASPECT",
+        &format!(
+            "The take is {width}×{height} (nearest {nearest}) but the canvas is {cw}×{ch} ({canvas}): it will not fill the canvas."
+        ),
+        &items,
+        &fix,
+        ops,
+    ))
+}
+
+/// `MIC_SILENT`: a take whose microphone recorded nothing audible.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn mic_silent(peak_db: f64, media: MediaId) -> Json {
+    lint(
+        "MIC_SILENT",
+        &format!("The microphone track of {media} peaks at {peak_db:.0} dBFS: it is silent."),
+        &[],
+        "Check the microphone (record.start {dryRun:true} lists devices; pass mic:\"<id>\") and record again, or remove the mic component.",
+        None,
+    )
 }
 
 fn lint(code: &str, message: &str, items: &[String], fix: &str, ops: Option<Json>) -> Json {

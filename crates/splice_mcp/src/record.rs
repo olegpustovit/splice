@@ -1,7 +1,8 @@
 use crate::{
     Json, capture_agent, object,
+    platform::record_write_options,
     project::Projects,
-    record_publish::{publish, recoverable, retry_stop, stage_path, storage},
+    record_publish::{publish, recoverable, retry_stop, stage_path, storage, summary},
     text,
     wire::{Args, bad, display, extend, failure, now, rev, write_options},
 };
@@ -40,6 +41,9 @@ struct Placement {
     retake_of: Option<splice_model::ClipId>,
     /// Camera-only: the screen component starts off.
     no_screen: bool,
+    /// A project this recording created: its canvas shape (`auto` picks the nearest to the
+    /// recorded picture at publish).
+    canvas: Option<String>,
 }
 
 impl Placement {
@@ -64,6 +68,7 @@ impl Placement {
             voiceover,
             retake_of,
             no_screen,
+            canvas: None,
         })
     }
 
@@ -72,8 +77,19 @@ impl Placement {
         &self,
         project: &splice_model::Project,
         markers: &[(f64, String)],
+        [width, height]: [u32; 2],
     ) -> (Vec<Json>, Vec<(&'static str, Json)>, Vec<Json>) {
         let mut before = Vec::new();
+        if let Some(canvas) = &self.canvas {
+            let aspect = match canvas.as_str() {
+                "auto" => crate::lints::nearest_aspect(width, height),
+                aspect => aspect,
+            };
+            before.push(object(vec![
+                ("cmd", text("project.set")),
+                ("aspect", text(aspect)),
+            ]));
+        }
         let mut insert = vec![("ref", text("take"))];
         let mut after = Vec::new();
         let spine_end = project
@@ -138,15 +154,34 @@ impl Job {
 pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreError> {
     let insert = args.flag("insert")? || args.field("insert").is_none();
     let still = args.flag("still")?;
-    let placement = Placement::parse(args)?;
-    let explicit = (args.field("projectId").is_some()
-        || args.field("sessionId").is_some()
-        || args.field("ifRevision").is_some())
-    .then(|| write_options(args))
-    .transpose()?;
+    let mut placement = Placement::parse(args)?;
+    let aspect = args.optional_string("aspect")?;
+    if let Some(aspect) = aspect
+        && aspect != "auto"
+        && !crate::lints::ASPECTS
+            .iter()
+            .any(|(name, _)| *name == aspect)
+    {
+        return Err(bad("aspect", "auto, 9:16, 4:5, 1:1, 4:3 or 16:9"));
+    }
     capture_agent::request("take.check", args)?;
     let project = projects.info(args)?.string("projectId")?.to_owned();
     let store = projects.lookup_id(&project)?;
+    // record.start writes nothing until record.stop: a session is enough, ifRevision optional.
+    let explicit = record_write_options(store, args)?;
+    // A project this recording creates takes its canvas from the source (A7).
+    let fresh = args.flag("create")?
+        && store.project().clips.order().is_empty()
+        && store.project().media.is_empty()
+        && placement.voiceover.is_none();
+    if aspect.is_some() && !fresh {
+        return Err(bad(
+            "aspect",
+            "omitted unless create:true makes a new, empty project; change an existing canvas with edit.apply project.set {aspect}",
+        ));
+    }
+    placement.canvas = fresh.then(|| aspect.unwrap_or("auto").to_owned());
+    let kept = store.project().size;
     // A retake of a clip that is gone would silently append at the end: refuse before capture.
     if let Some(clip) = placement.retake_of
         && store.project().clips.find(clip).is_none()
@@ -182,7 +217,7 @@ pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreE
         .parse()
         .map_err(|_| bad("jobId", "a capture agent job ID"))?;
     let reply = extend(
-        public_status(reply),
+        with_canvas(public_status(reply), placement.canvas.as_deref(), kept),
         vec![
             ("projectId", text(&project)),
             ("sessionId", display(&session)),
@@ -292,8 +327,13 @@ pub(super) fn command(
         return Ok(reply);
     }
     let mut request = object(vec![("jobId", display(&id))]);
-    if let (Json::Object(fields), Some(marker)) = (&mut request, args.optional_string("marker")?) {
-        fields.push(("marker".into(), text(marker)));
+    if let Json::Object(fields) = &mut request {
+        // marker for take.mark; duration and then for take.resume (record.start {resume}).
+        for key in ["marker", "duration", "then"] {
+            if let Some(value) = args.field(key) {
+                fields.push((key.into(), value.clone()));
+            }
+        }
     }
     if matches!(
         method,
@@ -346,6 +386,9 @@ pub(super) fn command(
             .take
             .as_ref()
             .is_some_and(|take| take.mic.is_none() && take.system.is_none());
+        let picture = [descriptor.probe.width, descriptor.probe.height];
+        let frames = ["videoFrames", "droppedFrames"]
+            .map(|key| reply.field(key).and_then(Json::as_u64).unwrap_or(0));
         let markers: Vec<(f64, String)> = reply
             .field("markers")
             .and_then(Json::as_array)
@@ -358,8 +401,27 @@ pub(super) fn command(
                 ))
             })
             .collect();
-        let ops = placement.ops(store.project(), &markers);
+        let ops = placement.ops(store.project(), &markers, picture);
         let sealed = publish(store, id, insert, descriptor, &options, ops).map_err(retry_stop)?;
+        let mic_peak = store
+            .project()
+            .media
+            .iter()
+            .find(|media| media.id == sealed.media)
+            .and_then(|media| media.take.as_ref()?.mic.as_ref())
+            .and_then(|mic| {
+                let path = store
+                    .path()
+                    .join("takes")
+                    .join(sealed.media.to_string())
+                    .join(mic);
+                // Loudest 10 ms RMS window.
+                apple_sys::audio::envelope(&path, 0, 100.0)
+                    .ok()?
+                    .into_iter()
+                    .reduce(f32::max)
+            });
+        let (take, lints, pacing) = summary(store, &sealed, frames, mic_peak);
         let Json::Object(mut fields) = reply else {
             unreachable!("job status object")
         };
@@ -375,6 +437,9 @@ pub(super) fn command(
                     "clipId",
                     sealed.clip.map_or(Json::Null, |clip| display(&clip)),
                 ),
+                ("take", take),
+                ("lints", Json::Array(lints)),
+                ("pacing", pacing),
             ],
         );
         if silent && !still {
@@ -401,6 +466,58 @@ pub(super) fn command(
     projects.recordings[index].terminal = Some(reply.clone());
     projects.recordings[index].peer = None;
     Ok(reply)
+}
+
+/// Adds the canvas decision to the start receipt's settings: `auto` (the shape nearest the
+/// source, decided from the recorded pixels at stop; `aspect` here is the estimate),
+/// `explicit`, or `kept` for a project that already had content or was not created here.
+fn with_canvas(mut reply: Json, canvas: Option<&str>, kept: [u32; 2]) -> Json {
+    let size = |[w, h]: [u32; 2]| {
+        Json::Array(vec![
+            Json::Unsigned(u64::from(w)),
+            Json::Unsigned(u64::from(h)),
+        ])
+    };
+    let estimate = reply
+        .field("settings")
+        .and_then(|settings| settings.field("source")?.field("size")?.as_array())
+        .and_then(|size| match size {
+            [w, h] => Some([
+                u32::try_from(w.as_u64()?).ok()?,
+                u32::try_from(h.as_u64()?).ok()?,
+            ]),
+            _ => None,
+        });
+    let decision = match canvas {
+        None => object(vec![
+            ("decision", text("kept")),
+            (
+                "aspect",
+                text(crate::lints::nearest_aspect(kept[0], kept[1])),
+            ),
+            ("size", size(kept)),
+        ]),
+        Some("auto") => object(vec![
+            ("decision", text("auto")),
+            (
+                "aspect",
+                estimate.map_or(Json::Null, |[w, h]| {
+                    text(crate::lints::nearest_aspect(w, h))
+                }),
+            ),
+        ]),
+        Some(aspect) => object(vec![
+            ("decision", text("explicit")),
+            ("aspect", text(aspect)),
+        ]),
+    };
+    if let Json::Object(fields) = &mut reply
+        && let Some((_, Json::Object(settings))) =
+            fields.iter_mut().find(|(key, _)| key == "settings")
+    {
+        settings.push(("canvas".into(), decision));
+    }
+    reply
 }
 
 fn public_status(mut status: Json) -> Json {

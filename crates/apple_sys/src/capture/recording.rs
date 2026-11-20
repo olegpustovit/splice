@@ -75,7 +75,8 @@ unsafe extern "C" {
         directory: *const c_char,
         microphone: *const c_char,
         system_audio: bool,
-        camera: bool,
+        audio_apps: *const c_char,
+        camera: *const c_char,
         events: bool,
         denied: *mut bool,
         error: *mut *mut c_char,
@@ -101,22 +102,29 @@ unsafe extern "C" {
 
 impl Recording {
     /// Starts an authorized recording in an existing staging directory.
-    /// Pass an empty microphone ID for the system default, or `None` to omit it.
-    /// When camera is enabled, records the default video device into `camera.mov`.
+    /// Microphone and camera take a device unique ID, an empty ID for the system default, or
+    /// `None` to omit them; the camera records into `camera.mov`. System audio is every app's
+    /// sound, or only `audio_apps` (bundle IDs or names) when that is not empty.
     /// Input defaults to the caller's explicit selection and requires Input Monitoring permission.
     pub fn start(
         directory: &Path,
         target: Target,
         microphone: Option<&str>,
         system_audio: bool,
-        camera: bool,
+        audio_apps: &[String],
+        camera: Option<&str>,
         events: bool,
     ) -> Result<Self, CaptureError> {
         let raw = target.native()?;
         let directory = c_string(directory.as_os_str().as_bytes())?;
-        let microphone = microphone
-            .map(|device| c_string(device.as_bytes()))
+        let optional =
+            |value: Option<&str>| value.map(|value| c_string(value.as_bytes())).transpose();
+        let microphone = optional(microphone)?;
+        let camera = optional(camera)?;
+        let apps = (!audio_apps.is_empty())
+            .then(|| c_string(audio_apps.join("\n").as_bytes()))
             .transpose()?;
+        let pointer = |value: &Option<CString>| value.as_ref().map_or(ptr::null(), |v| v.as_ptr());
         let mut denied = false;
         let mut diagnostic = ptr::null_mut();
         // SAFETY: the native bridge copies target and strings before returning and only
@@ -125,11 +133,10 @@ impl Recording {
             splice_recording_start(
                 &raw,
                 directory.as_ptr(),
-                microphone
-                    .as_ref()
-                    .map_or(ptr::null(), |device| device.as_ptr()),
+                pointer(&microphone),
                 system_audio,
-                camera,
+                pointer(&apps),
+                pointer(&camera),
                 events,
                 &mut denied,
                 &mut diagnostic,

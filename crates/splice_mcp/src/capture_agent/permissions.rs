@@ -12,7 +12,7 @@ struct Grant {
     pane: &'static str,
 }
 
-const GRANTS: [Grant; 4] = [
+const GRANTS: [Grant; 5] = [
     Grant {
         permission: Permission::Screen,
         key: "screen",
@@ -33,10 +33,15 @@ const GRANTS: [Grant; 4] = [
         key: "inputMonitoring",
         pane: "Input Monitoring",
     },
+    Grant {
+        permission: Permission::Accessibility,
+        key: "accessibility",
+        pane: "Accessibility",
+    },
 ];
 
 impl Grant {
-    fn status(&self, snapshot: &[Status; 4]) -> Status {
+    fn status(&self, snapshot: &[Status; 5]) -> Status {
         snapshot[self.permission as usize]
     }
 }
@@ -56,17 +61,17 @@ fn validate_target(target: Option<&str>) -> Result<(), StoreError> {
     {
         return Err(bad(
             "permission",
-            "all, screen, microphone, camera or inputMonitoring",
+            "all, screen, microphone, camera, inputMonitoring or accessibility",
         ));
     }
     Ok(())
 }
 
-pub(super) fn snapshot() -> [Status; 4] {
+pub(super) fn snapshot() -> [Status; 5] {
     GRANTS.map(|grant| native::status(grant.permission))
 }
 
-pub(super) fn screen_granted(snapshot: &[Status; 4]) -> bool {
+pub(super) fn screen_granted(snapshot: &[Status; 5]) -> bool {
     GRANTS[Permission::Screen as usize].status(snapshot) == Status::Granted
 }
 
@@ -74,7 +79,11 @@ pub(super) fn screen_denied() -> StoreError {
     denied(&GRANTS[Permission::Screen as usize])
 }
 
-pub(super) fn report(identity: &Identity, snapshot: &[Status; 4]) -> Vec<(&'static str, Json)> {
+pub(super) fn accessibility_denied() -> StoreError {
+    denied(&GRANTS[Permission::Accessibility as usize])
+}
+
+pub(super) fn report(identity: &Identity, snapshot: &[Status; 5]) -> Vec<(&'static str, Json)> {
     let permissions = GRANTS
         .iter()
         .map(|grant| {
@@ -108,7 +117,7 @@ pub(super) fn command(args: &Json, identity: &Identity) -> Result<Json, StoreErr
 fn permission_reply(
     args: &Json,
     identity: &Identity,
-    snapshot: &[Status; 4],
+    snapshot: &[Status; 5],
     request_permission: &mut dyn FnMut(Permission, bool) -> bool,
 ) -> Result<Json, StoreError> {
     let request = args.flag("request")?;
@@ -147,18 +156,21 @@ fn permission_reply(
     Ok(object(result))
 }
 
-pub(super) fn required(args: &Json, snapshot: &[Status; 4]) -> Result<(), StoreError> {
+pub(super) fn required(args: &Json, snapshot: &[Status; 5]) -> Result<(), StoreError> {
     require_options(&crate::record_options::Options::parse(args)?, snapshot)
 }
 
 pub(super) fn require_options(
     options: &crate::record_options::Options,
-    snapshot: &[Status; 4],
+    snapshot: &[Status; 5],
 ) -> Result<(), StoreError> {
-    for (grant, required) in GRANTS
-        .iter()
-        .zip([true, options.mic, options.camera, options.events])
-    {
+    for (grant, required) in GRANTS.iter().zip([
+        true,
+        options.mic.on(),
+        options.camera.on(),
+        options.events,
+        options.size.is_some(),
+    ]) {
         if required && grant.status(snapshot) != Status::Granted {
             return Err(denied(grant));
         }
@@ -192,6 +204,7 @@ mod tests {
             Status::NotDetermined,
             Status::Granted,
             Status::NotGranted,
+            Status::Granted,
         ];
         let all = object(vec![
             ("request", Json::Bool(true)),
@@ -219,7 +232,7 @@ mod tests {
                 .len(),
             3
         );
-        let granted = permission_reply(&all, &identity, &[Status::Granted; 4], &mut |_, _| {
+        let granted = permission_reply(&all, &identity, &[Status::Granted; 5], &mut |_, _| {
             panic!("already granted")
         })
         .unwrap();
@@ -250,6 +263,7 @@ mod tests {
             Status::Denied,
             Status::NotDetermined,
             Status::NotGranted,
+            Status::NotGranted,
         ];
         assert!(required(&object(vec![("events", Json::Bool(false))]), &snapshot).is_ok());
         assert!(required(&object(vec![("still", Json::Bool(true))]), &snapshot).is_ok());
@@ -257,13 +271,20 @@ mod tests {
             (object(vec![("mic", Json::Bool(true))]), "Microphone"),
             (object(vec![("camera", Json::Bool(true))]), "Camera"),
             (object(Vec::new()), "Input Monitoring"),
+            (
+                splice_json::parse(
+                    r#"{"events":false,"source":{"window":{"app":"TextEdit"}},"size":[1280,720]}"#,
+                )
+                .unwrap(),
+                "Accessibility",
+            ),
         ] {
             let error = required(&args, &snapshot).unwrap_err();
             assert_eq!(error.code, "TCC_DENIED");
             assert!(error.fix.contains(pane));
             assert!(error.fix.contains("splice permissions --request"));
         }
-        let error = required(&object(Vec::new()), &[Status::NotGranted; 4]).unwrap_err();
+        let error = required(&object(Vec::new()), &[Status::NotGranted; 5]).unwrap_err();
         assert_eq!(error.code, "TCC_DENIED");
         assert!(error.fix.contains("Screen & System Audio Recording"));
     }
