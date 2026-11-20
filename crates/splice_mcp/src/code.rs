@@ -250,7 +250,17 @@ fn host(
     }
 }
 
-/// Tool names agents try that Splice spells differently.
+/// Tool names agents try that mean one tool with the same arguments: called as that tool.
+const SAME: &[(&str, &str)] = &[
+    ("project.open", "project.info"),
+    ("project.load", "project.info"),
+    ("job.status", "jobs.status"),
+    ("job.cancel", "jobs.cancel"),
+    ("record.status", "jobs.status"),
+    ("edit.batch", "edit.apply"),
+];
+
+/// Tool names agents try that Splice spells differently (suggested, not called).
 pub(super) const ALIASES: &[(&str, &str)] = &[
     ("project.open", "project.info"),
     ("project.load", "project.info"),
@@ -271,6 +281,11 @@ fn dispatch(
     revisions: &mut Revisions,
     images: &mut Vec<Json>,
 ) -> Result<Json, Json> {
+    // Names that mean exactly one tool with the same arguments are that tool.
+    let name = SAME
+        .iter()
+        .find(|(alias, _)| *alias == name)
+        .map_or(name, |(_, tool)| tool);
     if !callable(name) {
         let valid = tools::TOOLS.iter().filter(|tool| callable(tool.name));
         // Names agents reach for first, then the nearest spelling.

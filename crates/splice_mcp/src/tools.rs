@@ -706,13 +706,20 @@ pub(super) fn call(
     args: &Json,
 ) -> Result<Json, splice_json::NonFiniteNumber> {
     let mut content = Vec::new();
-    let result = execute(projects, name, args, &mut content).map_err(|mut error| {
-        // The handler knows the rule; the arguments know what was passed (D18).
-        if let Some(rule) = &mut error.rule {
-            rule.fill_got(args);
-        }
-        error
-    });
+    let (args, started) = match with_defaults(projects, name, args) {
+        Ok(defaulted) => defaulted,
+        Err(error) => return reply(Err(error), content),
+    };
+    let args = &args;
+    let result = execute(projects, name, args, &mut content)
+        .map(|payload| with_session_note(payload, started.as_deref()))
+        .map_err(|mut error| {
+            // The handler knows the rule; the arguments know what was passed (D18).
+            if let Some(rule) = &mut error.rule {
+                rule.fill_got(args);
+            }
+            error
+        });
     reply(result, content)
 }
 
@@ -742,6 +749,79 @@ pub(super) fn reply(
         ("structuredContent", payload),
         ("isError", Json::Bool(is_error)),
     ]))
+}
+
+/// The project and session an agent meant but did not say (found by the evals: 26 calls
+/// failed on a missing, "undefined" or path-valued projectId, 6 on a missing or invented
+/// sessionId). With one open project, an omitted projectId is that project; a package path
+/// passed as projectId is the open project at that path; edit.apply and history.undo without
+/// sessionId join the project's open session, or start one, and say so in the result.
+fn with_defaults(
+    projects: &mut Projects,
+    name: &str,
+    args: &Json,
+) -> Result<(Json, Option<String>), StoreError> {
+    let Some(tool) = TOOLS.iter().find(|tool| tool.name == name) else {
+        return Ok((args.clone(), None));
+    };
+    let takes = |key: &str| tool.input.iter().any(|(k, _)| *k == key);
+    let mut fields = match args {
+        Json::Object(fields) => fields.clone(),
+        _ => return Ok((args.clone(), None)),
+    };
+    let field = |fields: &[(String, Json)], key: &str| {
+        fields
+            .iter()
+            .position(|(k, _)| k == key)
+            .map(|at| (at, fields[at].1.as_str().map(str::to_owned)))
+    };
+    if takes("projectId") {
+        match field(&fields, "projectId") {
+            // JavaScript's undefined and null arrive as text from code that built the ID.
+            Some((at, Some(id))) if id == "undefined" || id == "null" || id.is_empty() => {
+                fields.remove(at);
+            }
+            Some((at, Some(id))) if id.ends_with(".splice") || id.contains('/') => {
+                if let Some(open) = projects.id_for_path(&id) {
+                    fields[at].1 = text(&open);
+                } else if takes("path") && field(&fields, "path").is_none() {
+                    fields[at].0 = "path".into();
+                }
+            }
+            _ => {}
+        }
+        if field(&fields, "projectId").is_none()
+            && field(&fields, "path").is_none()
+            && let Some(only) = projects.only_open()
+        {
+            fields.push(("projectId".into(), text(&only)));
+        }
+    }
+    let mut started = None;
+    if matches!(name, "edit.apply" | "history.undo")
+        && field(&fields, "sessionId").is_none()
+        && let Some((_, Some(project))) = field(&fields, "projectId")
+        && projects.lookup_id(&project).is_ok()
+    {
+        let (session, new) = projects.session_for(&project)?;
+        fields.push(("sessionId".into(), text(&session)));
+        started = Some(format!(
+            "{} session {session}: edits without sessionId belong to it.",
+            if new { "Started" } else { "Joined the open" }
+        ));
+    }
+    Ok((Json::Object(fields), started))
+}
+
+/// Tells the caller which session a defaulted call used.
+fn with_session_note(payload: Json, note: Option<&str>) -> Json {
+    match (payload, note) {
+        (Json::Object(mut fields), Some(note)) => {
+            fields.push(("session".into(), text(note)));
+            Json::Object(fields)
+        }
+        (payload, _) => payload,
+    }
 }
 
 /// Refuses an argument the tool does not take, naming the closest one it does (T37.8).
@@ -790,6 +870,21 @@ fn execute(
         "commands.describe" => {
             args.optional_string("projectId")?;
             let (id, query) = (args.optional_string("id")?, args.optional_string("query")?);
+            // Agents ask for tools by ID too (record.start, edit.apply): describe the tool.
+            if let Some(tool) =
+                id.and_then(|id| TOOLS.iter().chain([&CODE_RUN]).find(|tool| tool.name == id))
+            {
+                return Ok(object(vec![
+                    ("tool", tool.description()),
+                    (
+                        "note",
+                        text(&format!(
+                            "{} is an MCP tool: call it directly (in code.run, splice.{}(args)). edit.apply ops are commands; commands.describe {{query}} finds them.",
+                            tool.name, tool.name
+                        )),
+                    ),
+                ]));
+            }
             match args.optional_string("format")? {
                 None | Some("json") => Ok(commands::describe(id, query)?),
                 Some("ts") => Ok(object(vec![

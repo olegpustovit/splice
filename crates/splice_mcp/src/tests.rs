@@ -822,9 +822,25 @@ fn code_run_adopts_a_project_named_on_a_call() {
 /// Found by the evals: agents call project.open and job.status inside code.run.
 #[test]
 fn code_run_suggests_the_tool_an_unknown_name_meant() {
+    // Names that mean one tool with the same arguments are that tool.
+    for (alias, tool) in [
+        ("project.open", "project.info"),
+        ("job.status", "jobs.status"),
+    ] {
+        let args = object(vec![(
+            "code",
+            text(&format!(r#"splice.call("{alias}", {{}})"#)),
+        )]);
+        let mut called = Vec::new();
+        code::run(&args, &mut |name, _| {
+            called.push(name.to_owned());
+            Ok(object(vec![("structuredContent", object(Vec::new()))]))
+        })
+        .unwrap();
+        assert_eq!(called, [tool]);
+    }
     for (code, near) in [
-        (r#"splice.call("project.open", {})"#, "project.info"),
-        (r#"splice.call("job.status", {})"#, "jobs.status"),
+        (r#"splice.call("timeline.inspect", {})"#, "items.inspect"),
         (
             r#"splice.call("timeline.snapshots", {})"#,
             "timeline.snapshot",
@@ -1981,4 +1997,82 @@ fn a_path_passed_as_project_id_is_pointed_at_path() {
         .map(|_| ())
         .unwrap_err();
     assert!(error.fix.contains("project.info {path:"), "{}", error.fix);
+}
+
+/// commands.describe {id} with a tool's name (record.start, edit.apply) describes the tool.
+#[test]
+fn describe_by_a_tool_id_describes_the_tool() {
+    let mut projects = super::project::Projects::default();
+    let reply = super::tools::call(
+        &mut projects,
+        "commands.describe",
+        &object(vec![("id", text("record.start"))]),
+    )
+    .unwrap();
+    let content = reply.field("structuredContent").unwrap();
+    assert_eq!(
+        content.field("tool").and_then(|t| t.field("name")),
+        Some(&text("record.start")),
+        "{reply:?}"
+    );
+}
+
+/// From the final eval run: 26 calls failed on a missing, "undefined" or path-valued projectId
+/// and 6 on a missing or invented sessionId. With one open project those mean it; edit.apply
+/// without sessionId joins the open session or starts one, and says which.
+#[test]
+fn tools_default_the_only_project_and_its_session() {
+    let root = TestDirectory::new("defaults");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    let mut projects = super::project::Projects::default();
+    let call = |projects: &mut super::project::Projects, name: &str, args: Json| {
+        let reply = super::tools::call(projects, name, &args).unwrap();
+        let ok = reply.field("isError") == Some(&Json::Bool(false));
+        (ok, reply.field("structuredContent").cloned().unwrap())
+    };
+    let path = sample.to_str().unwrap();
+    let (ok, info) = call(
+        &mut projects,
+        "project.info",
+        object(vec![("path", text(path))]),
+    );
+    assert!(ok, "{info:?}");
+    for args in [
+        object(vec![]),
+        object(vec![("projectId", text("undefined"))]),
+        object(vec![("projectId", text(path))]),
+    ] {
+        let (ok, reply) = call(&mut projects, "timeline.snapshot", args);
+        assert!(ok, "{reply:?}");
+    }
+    let edit = || {
+        object(vec![
+            ("ifRevision", info.field("revision").unwrap().clone()),
+            (
+                "ops",
+                splice_json::parse(r#"[{"cmd":"marker.add","at":30,"name":"Intro"}]"#).unwrap(),
+            ),
+        ])
+    };
+    let (ok, reply) = call(&mut projects, "edit.apply", edit());
+    assert!(ok, "{reply:?}");
+    let note = reply.field("session").and_then(Json::as_str).unwrap();
+    assert!(note.starts_with("Started session ses_"), "{note}");
+    // The next edit joins that session instead of starting another.
+    let mut next = edit();
+    if let Json::Object(fields) = &mut next {
+        fields[0].1 = reply.field("revision").unwrap().clone();
+        fields[1].1 = splice_json::parse(r#"[{"cmd":"marker.add","at":60,"name":"Two"}]"#).unwrap();
+    }
+    let (ok, reply) = call(&mut projects, "edit.apply", next);
+    assert!(ok, "{reply:?}");
+    assert!(
+        reply
+            .field("session")
+            .and_then(Json::as_str)
+            .unwrap()
+            .starts_with("Joined"),
+        "{reply:?}"
+    );
 }

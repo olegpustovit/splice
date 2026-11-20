@@ -66,6 +66,33 @@ impl OpenProject {
 }
 
 impl Projects {
+    /// The ID of the only open project, when exactly one is open: calls that omit projectId
+    /// mean it (agents forget the ID far more often than they juggle projects).
+    pub(super) fn only_open(&self) -> Option<String> {
+        (self.open.len() == 1).then(|| project_id(0))
+    }
+
+    /// The ID of an open project by its package path (agents pass the path as projectId).
+    pub(super) fn id_for_path(&self, path: &str) -> Option<String> {
+        let wanted = Path::new(path).canonicalize().ok()?;
+        self.open
+            .iter()
+            .position(|entry| entry.path().canonicalize().ok().as_deref() == Some(&*wanted))
+            .map(project_id)
+    }
+
+    /// The open session of a local project, starting one for an agent that named none: every
+    /// agent batch belongs to a session (undo by session), so a missing sessionId joins the
+    /// open one or opens one instead of failing. Returns the ID and whether it was started.
+    pub(super) fn session_for(&mut self, id: &str) -> Result<(String, bool), StoreError> {
+        let store = self.lookup_id(id)?;
+        if let Some(open) = store.sessions().iter().rev().find(|session| session.open) {
+            return Ok((open.id.to_string(), false));
+        }
+        let started = store.start_session("agent", super::wire::now())?;
+        Ok((started.id.to_string(), true))
+    }
+
     /// The next export job ID (running and instant exports share one sequence).
     pub(super) fn next_export_id(&mut self) -> JobId {
         self.export_serial += 1;
