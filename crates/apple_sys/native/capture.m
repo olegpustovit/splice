@@ -203,9 +203,11 @@ static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShar
         const NSInteger icons = CGWindowLevelForKey(kCGDesktopIconWindowLevelKey);
         bool finder_excluded = [excluded_apps containsObject:@"com.apple.finder"] ||
                                [excluded_apps containsObject:@"Finder"];
+        // "*": a take without a picture (voice-over, screen:false) captures no app at all.
+        const bool nothing = [excluded_apps containsObject:@"*"];
         for (SCRunningApplication *app in content.applications) {
             bool finder = excluded_desktop && [app.bundleIdentifier isEqualToString:@"com.apple.finder"];
-            if (is_splice(app) || finder || [excluded_apps containsObject:app.applicationName] ||
+            if (nothing || is_splice(app) || finder || [excluded_apps containsObject:app.applicationName] ||
                 [excluded_apps containsObject:app.bundleIdentifier]) {
                 [excluded addObject:app];
             }

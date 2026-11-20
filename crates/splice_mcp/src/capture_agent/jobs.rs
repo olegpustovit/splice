@@ -587,7 +587,12 @@ pub(super) fn settings(options: &Options, plan: &Plan) -> Json {
             ),
         )]),
     };
-    let mut exclude: Vec<Json> = options.exclude.iter().map(|app| text(app)).collect();
+    let mut exclude: Vec<Json> = options
+        .exclude
+        .iter()
+        .filter(|app| *app != "*")
+        .map(|app| text(app))
+        .collect();
     if options.hide_desktop {
         exclude.push(text("desktop"));
     }

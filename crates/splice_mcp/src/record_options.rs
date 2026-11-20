@@ -166,8 +166,20 @@ impl Options {
                 .collect::<Result<_, _>>()?,
         };
         let listed = exclude.len();
-        exclude.retain(|name| name != "desktop");
+        exclude.retain(|name| name != "desktop" && name != "*");
         let hide_desktop = exclude.len() != listed;
+        // A take without a picture (voiceover, screen:false) still records a clock track, but
+        // of nothing: every app is excluded, so no screen content is captured or stored (found
+        // live: a voice-over kept a full recording of the screen in its take).
+        if voiceover || args.field("screen") == Some(&Json::Bool(false)) {
+            if window {
+                return Err(bad(
+                    "source",
+                    "a display or area (the default) with voiceover or screen:false: no picture is recorded",
+                ));
+            }
+            exclude.push("*".into());
+        }
         if window && listed > 0 {
             return Err(bad(
                 "exclude",
@@ -654,6 +666,25 @@ mod tests {
         assert!(Options::parse(&paused).unwrap().then_pause);
         let voiceover = splice_json::parse(r#"{"voiceover":true}"#).unwrap();
         assert_eq!(Options::parse(&voiceover).unwrap().mic, Device::Default);
+        // Found live: a take without a picture captured the screen anyway. Now no app is
+        // captured ("*"), and a window source is refused for it.
+        assert!(
+            Options::parse(&voiceover)
+                .unwrap()
+                .exclude
+                .contains(&"*".to_owned())
+        );
+        let blank = splice_json::parse(r#"{"screen":false,"camera":true}"#).unwrap();
+        assert!(
+            Options::parse(&blank)
+                .unwrap()
+                .exclude
+                .contains(&"*".to_owned())
+        );
+        let window_voice =
+            splice_json::parse(r#"{"voiceover":true,"source":{"window":{"app":"TextEdit"}}}"#)
+                .unwrap();
+        assert!(Options::parse(&window_voice).is_err());
     }
 
     #[test]
