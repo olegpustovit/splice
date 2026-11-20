@@ -18,9 +18,11 @@ Name.splice/
   transcripts/<med>.json  words for a media item, with its hash
   takes/<med>/          a recorded take, in Recorder's layout (recordings live in the package; imports stay where they are):
     screen.mov          HEVC, cursor-less, variable frame rate
+    window-1.mov …      a multi-window take's other windows (0.4, T46.6): window-<n>.mov is
+                        source.windows[n], same codec and clock as screen.mov (which is window 0)
     mic.m4a  system.m4a camera.mov   optional, one file per source, AAC 48 kHz / HEVC; system.m4a
                         holds only the chosen apps' sound when recorded with systemAudio:{apps}
-    events.json         {"t0","source":{kind,rect,scale},"events":[{t,k:move|down|up|drag|scroll|key|flags|cursor|caret,…}],"dropped"?:count}
+    events.json         {"t0","source":{kind,rect,scale,windows?},"events":[{t,k:move|down|up|drag|scroll|key|flags|cursor|caret,…}],"dropped"?:count}
     cursors/<hash>.png  + <hash>.json {hotX, hotY, scale}
   media/                consolidated copies (media.consolidate, med_<id>.<ext>) and html.add's
                         rendered pages (html-<hash>.mov, ProRes 4444 with alpha)
@@ -39,6 +41,19 @@ PNG pixels, and `scale` is pixels per point. A caret event (0.4, T45.4)
 from Accessibility, normalized like positions (it may fall outside 0…1). The recorder samples it
 at most 10 times a second and writes it only when it moves; without the Accessibility permission
 a take has no caret events and readers use the pointer. Readers skip event kinds they do not know.
+
+**Multi-window takes (0.4, T46.6).** `record.start {source:{windows:[…]}}` records 2–4 windows
+into one take: one clock, one set of mic/system/camera tracks, one `events.json`. Window 0 is
+`screen.mov` (the take's media entry, the spine clip); window n is `window-<n>.mov`, published as
+its own `kind:"video"` media entry whose `path` is `takes/<med>/window-<n>.mov` inside the take's
+directory, shown by a media overlay anchored to the take clip (no new kind or field: 0.3 readers
+and files are unaffected). Events stay in one space, window 0's: `source.rect` is window 0, and
+positions are normalized to it as for a single window, so a pointer over another window reads
+outside 0…1. `source.windows` lists every window's bounds at the start of the take in global
+points, in file order (`[0]` equals `rect`); window n's point is
+`(x·rect.width + rect.x − windows[n].x) / windows[n].width` (and likewise for y). The drawn
+cursor, click rings, click zooms and `intent.autoZoom` use window 0's space, so they show only
+over window 0 and never land on the wrong window.
 
 ## Durability
 
@@ -301,7 +316,8 @@ the item. Vector files are probed on every platform, so Linux clients can import
 On macOS (and for Lottie or SVG files everywhere), `clip.insert {path}` accepts an absolute path
 or one relative to the project package.
 Set `insert:false` with `path` to add only the media descriptor. A recorded take's primary
-file is `takes/<med>/screen.mov`. The project saves the descriptor and optional clip in a single
+file is `takes/<med>/screen.mov`; a multi-window take's other windows are video media entries at
+`takes/<med>/window-<n>.mov`. The project saves the descriptor and optional clip in a single
 journal batch. The take files remain available after undo for history restores.
 New audio and video descriptors include a base64-encoded Foundation file bookmark. Paths
 inside the package are stored relative to it. A successful checkpoint writes descriptors to

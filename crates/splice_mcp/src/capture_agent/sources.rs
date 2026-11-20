@@ -2,25 +2,88 @@ use crate::{Json, object, text};
 use apple_sys::capture::{self, Rect, Source, Target};
 use splice_core::history::StoreError;
 
-pub(super) fn target(source: &crate::record_options::Source) -> Result<Target, StoreError> {
-    use crate::record_options::Source as Selector;
-    Ok(match source {
-        Selector::Display(id) => Target::Display(*id),
-        Selector::Window(id) => Target::Window(*id),
-        Selector::Area(display, [x, y, width, height]) => Target::Area {
-            display: *display,
-            rect: Rect {
-                x: *x,
-                y: *y,
-                width: *width,
-                height: *height,
+use crate::record_options::Source as Selector;
+
+/// What `source` captures: one target, or every window of a multi-window take (T46.6) in
+/// order. Named windows resolve against the shareable windows now.
+pub(super) fn targets(source: &Selector) -> Result<Vec<Target>, StoreError> {
+    let listed = matches!(
+        source,
+        Selector::Window(_) | Selector::NamedWindow { .. } | Selector::Windows(_)
+    );
+    let sources = if listed {
+        capture::sources(true).map_err(super::capture_source_error)?
+    } else {
+        Vec::new()
+    };
+    resolve(source, &sources)
+}
+
+/// `targets` against the shareable `sources`: each window must match exactly one window and
+/// a multi-window take lists each window once; `CAPTURE_SOURCE` names the open windows.
+pub(super) fn resolve(source: &Selector, sources: &[Source]) -> Result<Vec<Target>, StoreError> {
+    let one = |selector: &Selector| -> Result<Target, StoreError> {
+        Ok(match selector {
+            Selector::Display(id) => Target::Display(*id),
+            Selector::Window(id) => {
+                if !sources.iter().any(
+                    |source| matches!(source, Source::Window { id: listed, .. } if listed == id),
+                ) {
+                    let mut error: StoreError = splice_core::commands::CommandError::rule(
+                        "CAPTURE_SOURCE",
+                        "window",
+                        Some(text(&format!("win_{id}"))),
+                        "a shareable window's win_ ID",
+                        &format!(
+                            "Pick an open window by app (source:{{window:{{app}}}}) or by ID. Open windows: {}.",
+                            open_windows(sources)
+                        ),
+                    )
+                    .into();
+                    error.message = format!("No shareable window has the ID win_{id}.");
+                    return Err(error);
+                }
+                Target::Window(*id)
+            }
+            Selector::Area(display, [x, y, width, height]) => Target::Area {
+                display: *display,
+                rect: Rect {
+                    x: *x,
+                    y: *y,
+                    width: *width,
+                    height: *height,
+                },
             },
-        },
-        Selector::NamedWindow { app, title } => {
-            let sources = capture::sources(true).map_err(super::capture_source_error)?;
-            Target::Window(window(&sources, app, title.as_deref())?)
-        }
-    })
+            Selector::NamedWindow { app, title } => {
+                Target::Window(window(sources, app, title.as_deref())?)
+            }
+            Selector::Windows(_) => unreachable!("windows hold window selectors"),
+        })
+    };
+    let Selector::Windows(windows) = source else {
+        return one(source).map(|target| vec![target]);
+    };
+    let targets = windows.iter().map(one).collect::<Result<Vec<_>, _>>()?;
+    if let Some(twice) = targets
+        .iter()
+        .enumerate()
+        .find_map(|(n, target)| targets[..n].contains(target).then_some(target))
+    {
+        let Target::Window(id) = twice else {
+            unreachable!("window targets")
+        };
+        let mut error: StoreError = splice_core::commands::CommandError::rule(
+            "CAPTURE_SOURCE",
+            "source.windows",
+            Some(text(&format!("win_{id}"))),
+            "different windows",
+            "List each window once: add title (or use win_ IDs from record.start {dryRun:true, titles:true}) to tell an app's windows apart.",
+        )
+        .into();
+        error.message = format!("Window win_{id} is listed twice.");
+        return Err(error);
+    }
+    Ok(targets)
 }
 
 fn window(sources: &[Source], app: &str, title: Option<&str>) -> Result<u32, StoreError> {
@@ -33,15 +96,53 @@ fn window(sources: &[Source], app: &str, title: Option<&str>) -> Result<u32, Sto
     });
     match (matches.next(), matches.next()) {
         (Some(id), None) => Ok(id),
-        (first, _) => Err(StoreError::new(
-            "CAPTURE_SOURCE",
-            if first.is_none() {
-                "No shareable window matches this selector."
+        (first, _) => {
+            let mut error: StoreError = splice_core::commands::CommandError::rule(
+                "CAPTURE_SOURCE",
+                "window.app",
+                Some(text(app)),
+                "an app with one open window (or add title)",
+                &format!(
+                    "Use source:{{window:{{app, title}}}} with the window's title, or a win_ ID from record.start {{dryRun:true, titles:true}}. Open windows: {}.",
+                    open_windows(sources)
+                ),
+            )
+            .into();
+            error.message = if first.is_none() {
+                format!("No shareable window of \"{app}\" matches this selector.")
             } else {
-                "Multiple shareable windows match this selector."
-            },
-            "Use source:{window:{app, title}} with the window's title, or a win_ ID from record.start {dryRun:true, titles:true}.",
-        )),
+                format!("Several shareable windows of \"{app}\" match this selector.")
+            };
+            Err(error)
+        }
+    }
+}
+
+/// The shareable windows as `win_<id> (App)`, at most 16; titles stay private (D19).
+fn open_windows(sources: &[Source]) -> String {
+    let name = |pid: &u32, bundle: &str| {
+        sources
+            .iter()
+            .find_map(|source| match source {
+                Source::Application {
+                    pid: owner, name, ..
+                } if owner == pid => Some(name.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| bundle.to_owned())
+    };
+    let windows: Vec<String> = sources
+        .iter()
+        .filter_map(|source| match source {
+            Source::Window { id, pid, app, .. } => Some(format!("win_{id} ({})", name(pid, app))),
+            _ => None,
+        })
+        .take(16)
+        .collect();
+    if windows.is_empty() {
+        "none (open the app's window, or grant Screen Recording)".into()
+    } else {
+        windows.join(", ")
     }
 }
 
@@ -185,11 +286,79 @@ mod tests {
                 .code,
             "CAPTURE_SOURCE"
         );
-        assert_eq!(
-            window(&sources, "Fixture App", Some("Other window"))
-                .unwrap_err()
-                .code,
-            "CAPTURE_SOURCE"
+        let missing = window(&sources, "Fixture App", Some("Other window")).unwrap_err();
+        assert_eq!(missing.code, "CAPTURE_SOURCE");
+        // The fix names the open windows by ID and app, never by title (D19).
+        assert!(
+            missing
+                .fix
+                .contains("win_37 (Fixture App), win_38 (Fixture App)"),
+            "{}",
+            missing.fix
         );
+        assert!(!missing.fix.contains("Test window"));
+    }
+
+    #[test]
+    fn capture_agent_resolves_every_window_of_a_multi_window_take() {
+        let window = |id: u32, pid: u32, app: &str| Source::Window {
+            id,
+            pid,
+            rect: Rect::default(),
+            app: app.into(),
+            title: format!("Window {id}"),
+        };
+        let sources = [
+            window(10, 1, "com.apple.Safari"),
+            window(11, 2, "com.apple.Notes"),
+            Source::Application {
+                pid: 1,
+                bundle: "com.apple.Safari".into(),
+                name: "Safari".into(),
+            },
+            Source::Application {
+                pid: 2,
+                bundle: "com.apple.Notes".into(),
+                name: "Notes".into(),
+            },
+        ];
+        let named = |app: &str| Selector::NamedWindow {
+            app: app.into(),
+            title: None,
+        };
+        assert_eq!(
+            resolve(
+                &Selector::Windows(vec![named("Notes"), Selector::Window(10)]),
+                &sources
+            )
+            .unwrap(),
+            [Target::Window(11), Target::Window(10)]
+        );
+        let closed = resolve(
+            &Selector::Windows(vec![named("Notes"), Selector::Window(99)]),
+            &sources,
+        )
+        .unwrap_err();
+        assert_eq!(closed.code, "CAPTURE_SOURCE");
+        assert!(closed.fix.contains("win_10 (Safari)"), "{}", closed.fix);
+        let unknown = resolve(
+            &Selector::Windows(vec![named("Safari"), named("Xcode")]),
+            &sources,
+        )
+        .unwrap_err();
+        assert_eq!(unknown.code, "CAPTURE_SOURCE");
+        assert!(unknown.message.contains("\"Xcode\""), "{}", unknown.message);
+        assert!(
+            unknown.fix.contains("win_10 (Safari), win_11 (Notes)"),
+            "{}",
+            unknown.fix
+        );
+        let twice = resolve(
+            &Selector::Windows(vec![named("com.apple.Safari"), Selector::Window(10)]),
+            &sources,
+        )
+        .unwrap_err();
+        assert_eq!(twice.code, "CAPTURE_SOURCE");
+        assert_eq!(twice.rule.unwrap().param, "source.windows");
     }
 }

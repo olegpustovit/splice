@@ -160,8 +160,23 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
 }
 @end
 
+// A complete screen or window frame with an image (idle and blank frames carry none).
+static BOOL complete_frame(CMSampleBufferRef sample) {
+    NSArray *attachments = (__bridge NSArray *)CMSampleBufferGetSampleAttachmentsArray(sample, false);
+    NSNumber *status = [attachments.firstObject objectForKey:SCStreamFrameInfoStatus];
+    return status != nil && status.integerValue == SCFrameStatusComplete && CMSampleBufferGetImageBuffer(sample) != NULL;
+}
+
+// The most extra windows one take records (T46.6: 2-4 windows in all).
+#define SPLICE_EXTRA_WINDOWS 3
+
 @implementation SpliceRecording {
     SpliceRecordingTrack *_screen, *_microphone, *_audio, *_camera;
+    // Multi-window takes (T46.6): each other window's stream and writer, and the newest frame
+    // a window delivered before the take's first screen frame (written at zero once it starts).
+    NSMutableArray<SCStream *> *_windowStreams;
+    NSMutableArray<SpliceRecordingTrack *> *_windows;
+    CMSampleBufferRef _windowPending[SPLICE_EXTRA_WINDOWS];
     NSURL *_cameraURL;
     AVCaptureSession *_cameraSession;
     AVCaptureVideoDataOutput *_cameraOutput;
@@ -199,7 +214,57 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
         if (_audio == nil) return nil;
     }
     if (camera) _cameraURL = [directory URLByAppendingPathComponent:@"camera.mov"];
+    _windowStreams = [NSMutableArray array];
+    _windows = [NSMutableArray array];
     return self;
+}
+
+- (BOOL)addWindow:(SCStream *)stream url:(NSURL *)url width:(NSInteger)width height:(NSInteger)height
+            error:(NSError **)error {
+    if (_windows.count >= SPLICE_EXTRA_WINDOWS) {
+        *error = recording_error(@"A take records at most four windows.");
+        return NO;
+    }
+    SpliceRecordingTrack *track = [[SpliceRecordingTrack alloc] initWithURL:url video:YES
+                                                                    settings:video_settings(width, height, @60) error:error];
+    if (track == nil) return NO;
+    [_windowStreams addObject:stream];
+    [_windows addObject:track];
+    return YES;
+}
+
+// Writes window index's held frame at zero when its movie has none yet: a window that never
+// changes after the take starts still has its picture from the first frame on.
+- (void)flushWindow:(NSUInteger)index {
+    CMSampleBufferRef pending = _windowPending[index];
+    if (pending == NULL) return;
+    _windowPending[index] = NULL;
+    SpliceRecordingTrack *track = _windows[index];
+    if (track.count == 0 && ![track append:pending offset:CMSampleBufferGetPresentationTimeStamp(pending)] &&
+        track.writer.status == AVAssetWriterStatusFailed && _failure == nil) {
+        _failure = track.writer.error ?: recording_error(@"A window encoder failed.");
+    }
+    CFRelease(pending);
+}
+
+- (void)appendWindow:(CMSampleBufferRef)sample index:(NSUInteger)index {
+    CMTime pts = CMSampleBufferGetPresentationTimeStamp(sample);
+    if (_stopping || _failure != nil || !CMTIME_IS_NUMERIC(pts) || !CMSampleBufferDataIsReady(sample) ||
+        !complete_frame(sample)) return;
+    if (!CMTIME_IS_NUMERIC(_first)) {
+        CFRetain(sample);
+        if (_windowPending[index] != NULL) CFRelease(_windowPending[index]);
+        _windowPending[index] = sample;
+        return;
+    }
+    if (![self acceptsSample:sample at:pts]) return;
+    [self flushWindow:index];
+    SpliceRecordingTrack *track = _windows[index];
+    // A window's first frame after the take starts opens its movie at zero.
+    CMTime offset = track.count == 0 ? pts : CMTimeAdd(_first, _pausedSoFar);
+    if (![track append:sample offset:offset] && track.writer.status == AVAssetWriterStatusFailed) {
+        _failure = track.writer.error ?: recording_error(@"A window encoder failed.");
+    }
 }
 
 - (void)cameraFailed:(NSError *)error {
@@ -323,7 +388,11 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
 }
 
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type {
-    (void)stream;
+    if (stream != _stream && type == SCStreamOutputTypeScreen) {
+        NSUInteger index = [_windowStreams indexOfObjectIdenticalTo:stream];
+        if (index != NSNotFound) [self appendWindow:sample index:index];
+        return;
+    }
     [self append:sample type:type];
 }
 
@@ -344,12 +413,7 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
     CMTime pts = CMSampleBufferGetPresentationTimeStamp(sample);
     if (![self acceptsSample:sample at:pts]) return;
     BOOL screen = type == SCStreamOutputTypeScreen;
-    if (screen) {
-        NSArray *attachments = (__bridge NSArray *)CMSampleBufferGetSampleAttachmentsArray(sample, false);
-        NSNumber *status = [attachments.firstObject objectForKey:SCStreamFrameInfoStatus];
-        if (status == nil || status.integerValue != SCFrameStatusComplete ||
-            CMSampleBufferGetImageBuffer(sample) == NULL) return;
-    }
+    if (screen && !complete_frame(sample)) return;
     if (!CMTIME_IS_NUMERIC(_first)) {
         if (!screen) return;
         _first = pts;
@@ -431,6 +495,10 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
 }
 
 - (void)detach {
+    for (SCStream *window in _windowStreams) {
+        [window removeStreamOutput:self type:SCStreamOutputTypeScreen error:NULL];
+    }
+    [_windowStreams removeAllObjects];
     if (_audioStream != nil) {
         [_audioStream removeStreamOutput:self type:SCStreamOutputTypeAudio error:NULL];
         _audioStream = nil;
@@ -462,6 +530,16 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
         failure = recording_error(@"The input monitor did not stop.");
     }
     if (![self stopCamera] && failure == nil) failure = recording_error(@"The camera did not stop.");
+    for (SCStream *window in _windowStreams) {
+        dispatch_semaphore_t stopped = dispatch_semaphore_create(0);
+        [window stopCaptureWithCompletionHandler:^(NSError *reason) {
+            (void)reason;
+            dispatch_semaphore_signal(stopped);
+        }];
+        if (dispatch_semaphore_wait(stopped, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0 && failure == nil) {
+            failure = recording_error(@"ScreenCaptureKit did not stop a window stream.");
+        }
+    }
     if (_audioStream != nil) {
         dispatch_semaphore_t stopped = dispatch_semaphore_create(0);
         [_audioStream stopCaptureWithCompletionHandler:^(NSError *reason) {
@@ -490,6 +568,14 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
             failure = recording_error(@"The recording had no complete screen frames.");
             return;
         }
+        for (NSUInteger index = 0; index < self->_windows.count; ++index) {
+            [self flushWindow:index];
+            if (self->_windows[index].count == 0 && failure == nil) {
+                failure = recording_error(@"A recorded window delivered no complete frames.");
+            }
+            [tracks addObject:self->_windows[index]];
+        }
+        if (failure != nil) return;
         for (SpliceRecordingTrack *track in tracks) {
             NSError *reason = [track sealAt:self->_finalTime group:finishing];
             if (reason != nil && failure == nil) failure = reason;
@@ -510,12 +596,20 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
     return failure;
 }
 
+- (void)dealloc {
+    for (NSUInteger index = 0; index < SPLICE_EXTRA_WINDOWS; ++index) {
+        if (_windowPending[index] != NULL) CFRelease(_windowPending[index]);
+    }
+}
+
 - (void)cancel {
     dispatch_sync(_queue, ^{
         self->_stopping = YES;
         [self publishInputClock];
         [self->_stream stopCaptureWithCompletionHandler:nil];
         [self->_audioStream stopCaptureWithCompletionHandler:nil];
+        for (SCStream *window in self->_windowStreams) [window stopCaptureWithCompletionHandler:nil];
+        for (SpliceRecordingTrack *window in self->_windows) [window cancel];
         [self detach];
         [self->_screen cancel];
         [self->_microphone cancel];
@@ -527,7 +621,8 @@ static CMSampleBufferRef retime(CMSampleBufferRef sample, CMTime offset) {
 }
 @end
 
-void *splice_recording_start(const SpliceCaptureTarget *target, const char *directory, const char *microphone,
+void *splice_recording_start(const SpliceCaptureTarget *target, const SpliceCaptureTarget *windows,
+                             size_t window_count, const char *directory, const char *microphone,
                              bool system_audio, const char *audio_apps, const char *camera_id, bool events,
                              bool *denied, char **error) {
     @autoreleasepool {
@@ -581,6 +676,34 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const char *dire
                 return NULL;
             }
         }
+        if (window_count > SPLICE_EXTRA_WINDOWS) {
+            splice_set_error(error, "A take records at most four windows.");
+            return NULL;
+        }
+        // Every other window: its own stream and movie on the take's clock (T46.6).
+        NSMutableArray<SCStream *> *extra = [NSMutableArray array];
+        for (size_t index = 0; index < window_count; ++index) {
+            SCStreamConfiguration *picture = [SCStreamConfiguration new];
+            SCContentFilter *window = splice_capture_prepare(&windows[index], picture, NULL, denied, error);
+            if (window == nil) return NULL;
+            picture.width = picture.width & ~(size_t)1;
+            picture.height = picture.height & ~(size_t)1;
+            picture.minimumFrameInterval = CMTimeMake(1, 60);
+            picture.queueDepth = 6;
+            picture.pixelFormat = kCVPixelFormatType_32BGRA;
+            picture.ignoreShadowsSingleWindow = YES;
+            picture.capturesAudio = NO;
+            SCStream *stream = [[SCStream alloc] initWithFilter:window configuration:picture delegate:recording];
+            NSURL *url = [root URLByAppendingPathComponent:[NSString stringWithFormat:@"window-%zu.mov", index + 1]];
+            if (![recording addWindow:stream url:url width:picture.width height:picture.height error:&failure] ||
+                ![stream addStreamOutput:recording type:SCStreamOutputTypeScreen sampleHandlerQueue:recording.queue
+                                   error:&failure]) {
+                [recording cancel];
+                splice_capture_error(failure, "Could not configure a window stream.", denied, error);
+                return NULL;
+            }
+            [extra addObject:stream];
+        }
         if (events && ![recording prepareInput:geometry denied:denied error:error]) {
             [recording cancel];
             return NULL;
@@ -633,6 +756,19 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const char *dire
             if (dispatch_semaphore_wait(sound, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0) {
                 [recording cancel];
                 splice_set_error(error, "ScreenCaptureKit did not start the app audio stream.");
+                return NULL;
+            }
+        }
+        for (SCStream *window in extra) {
+            if (startFailure != nil) break;
+            dispatch_semaphore_t started = dispatch_semaphore_create(0);
+            [window startCaptureWithCompletionHandler:^(NSError *reason) {
+                startFailure = reason;
+                dispatch_semaphore_signal(started);
+            }];
+            if (dispatch_semaphore_wait(started, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0) {
+                [recording cancel];
+                splice_set_error(error, "ScreenCaptureKit did not start a window stream.");
                 return NULL;
             }
         }

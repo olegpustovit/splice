@@ -3,6 +3,7 @@ use crate::{
     platform::record_write_options,
     project::Projects,
     record_publish::{publish, recoverable, retry_stop, stage_path, storage, summary},
+    record_windows::{self, Layer},
     text,
     wire::{Args, bad, display, extend, failure, now, rev, write_options},
 };
@@ -284,7 +285,21 @@ pub(super) fn recover(projects: &mut Projects, args: &Json) -> Result<Json, Stor
             })
             .unwrap_or(0);
         let descriptor = describe(&stage, store.project().fps, false, size)?;
-        let sealed = publish(store, id, true, descriptor, &options, Default::default())?;
+        // A multi-window take keeps its layers; the bounds come from its events, when recorded.
+        let bounds = fs::read_to_string(stage.join("events.json"))
+            .ok()
+            .and_then(|events| splice_json::parse(&events).ok());
+        let source = bounds
+            .as_ref()
+            .and_then(|events| events.field("source")?.field("windows"));
+        let (layers, windows) = windows(&stage, store.project().fps, &descriptor, source)?;
+        let mut ops: (Vec<Json>, Vec<(&'static str, Json)>, Vec<Json>) = Default::default();
+        if !layers.is_empty() {
+            let (plan, _) = arrange(store.project(), &layers, None);
+            ops.1.push(("ref", text("take")));
+            ops.2 = record_windows::ops(&layers, &plan);
+        }
+        let sealed = publish(store, id, true, descriptor, windows, &options, ops)?;
         recovered.push(object(vec![
             ("mediaId", display(&sealed.media)),
             (
@@ -380,18 +395,22 @@ pub(super) fn command(
             .field("bytes")
             .and_then(Json::as_u64)
             .ok_or_else(|| bad("bytes", "capture output size"))?;
-        let descriptor = describe(
-            &stage_path(store.path(), id),
-            store.project().fps,
-            still,
-            size,
-        )
-        .map_err(retry_stop)?;
+        let stage = stage_path(store.path(), id);
+        let descriptor = describe(&stage, store.project().fps, still, size).map_err(retry_stop)?;
+        let source = reply
+            .field("settings")
+            .and_then(|settings| settings.field("source")?.field("windows"));
+        let (layers, windows) =
+            windows(&stage, store.project().fps, &descriptor, source).map_err(retry_stop)?;
         let silent = descriptor
             .take
             .as_ref()
             .is_some_and(|take| take.mic.is_none() && take.system.is_none());
-        let picture = [descriptor.probe.width, descriptor.probe.height];
+        let picture = if layers.is_empty() {
+            [descriptor.probe.width, descriptor.probe.height]
+        } else {
+            record_windows::picture(&layers)
+        };
         let frames = ["videoFrames", "droppedFrames"]
             .map(|key| reply.field(key).and_then(Json::as_u64).unwrap_or(0));
         let markers: Vec<(f64, String)> = reply
@@ -406,8 +425,19 @@ pub(super) fn command(
                 ))
             })
             .collect();
-        let ops = placement.ops(store.project(), &markers, picture);
-        let sealed = publish(store, id, insert, descriptor, &options, ops).map_err(retry_stop)?;
+        let mut ops = placement.ops(store.project(), &markers, picture);
+        let arranged = (!layers.is_empty()).then(|| {
+            let aspect = placement.canvas.as_deref().map(|canvas| match canvas {
+                "auto" => crate::lints::nearest_aspect(picture[0], picture[1]),
+                aspect => aspect,
+            });
+            arrange(store.project(), &layers, aspect)
+        });
+        if let Some((plan, _)) = &arranged {
+            ops.2.extend(record_windows::ops(&layers, plan));
+        }
+        let sealed =
+            publish(store, id, insert, descriptor, windows, &options, ops).map_err(retry_stop)?;
         let mic_peak = store
             .project()
             .media
@@ -426,7 +456,15 @@ pub(super) fn command(
                     .into_iter()
                     .reduce(f32::max)
             });
-        let (take, lints, pacing) = summary(store, &sealed, frames, mic_peak);
+        let (take, lints, pacing) = summary(
+            store,
+            &sealed,
+            frames,
+            mic_peak,
+            arranged
+                .as_ref()
+                .map(|(plan, canvas)| (layers.as_slice(), plan, *canvas)),
+        );
         let Json::Object(mut fields) = reply else {
             unreachable!("job status object")
         };
@@ -553,17 +591,7 @@ fn describe(stage: &Path, fps: u32, still: bool, size: u64) -> Result<Media, Sto
             None,
         )
     } else {
-        let asset =
-            apple_sys::media::probe(&primary).map_err(|error| bad_capture(&error.to_string()))?;
-        let screen = asset
-            .video
-            .ok_or_else(|| bad_capture("The staged screen movie has no video track."))?;
-        let frames = (asset.duration_seconds * f64::from(fps)).round();
-        if !frames.is_finite() || frames > f64::from(Frame::MAX) || asset.duration_seconds <= 0.0 {
-            return Err(bad_capture(
-                "The staged screen movie has an unsupported duration.",
-            ));
-        }
+        let mut probe = movie(&primary, fps)?;
         let take = TakeComponents {
             screen: Some("screen.mov".into()),
             mic: component(stage, "mic.m4a", false)?,
@@ -573,7 +601,7 @@ fn describe(stage: &Path, fps: u32, still: bool, size: u64) -> Result<Media, Sto
             cursors: component(stage, "cursors", true)?,
             pointer: Vec::new(),
         };
-        let audio = [("mic", &take.mic), ("system", &take.system)]
+        probe.audio = [("mic", &take.mic), ("system", &take.system)]
             .into_iter()
             .filter(|(_, component)| component.is_some())
             .map(|(name, _)| AudioTrack {
@@ -581,24 +609,7 @@ fn describe(stage: &Path, fps: u32, still: bool, size: u64) -> Result<Media, Sto
                 channels: Some(2),
             })
             .collect();
-        (
-            Probe {
-                fps: f64::from(fps),
-                frames: frames.max(1.0) as Frame,
-                width: screen.width,
-                height: screen.height,
-                codec: screen.codec.map(|code| {
-                    if matches!(&code, b"hvc1" | b"hev1") {
-                        "hevc".into()
-                    } else {
-                        String::from_utf8_lossy(&code).into_owned()
-                    }
-                }),
-                audio,
-                loudness: None,
-            },
-            Some(take),
-        )
+        (probe, Some(take))
     };
     Ok(Media {
         id: MediaId::from_serial(0),
@@ -614,6 +625,111 @@ fn describe(stage: &Path, fps: u32, still: bool, size: u64) -> Result<Media, Sto
         probe,
         take,
     })
+}
+
+/// A staged movie's picture and length at the project rate (`fps`).
+fn movie(path: &Path, fps: u32) -> Result<Probe, StoreError> {
+    let asset = apple_sys::media::probe(path).map_err(|error| bad_capture(&error.to_string()))?;
+    let video = asset
+        .video
+        .ok_or_else(|| bad_capture("A staged screen or window movie has no video track."))?;
+    let frames = (asset.duration_seconds * f64::from(fps)).round();
+    if !frames.is_finite() || frames > f64::from(Frame::MAX) || asset.duration_seconds <= 0.0 {
+        return Err(bad_capture(
+            "A staged screen or window movie has an unsupported duration.",
+        ));
+    }
+    Ok(Probe {
+        fps: f64::from(fps),
+        frames: frames.max(1.0) as Frame,
+        width: video.width,
+        height: video.height,
+        codec: video.codec.map(|code| {
+            if matches!(&code, b"hvc1" | b"hev1") {
+                "hevc".into()
+            } else {
+                String::from_utf8_lossy(&code).into_owned()
+            }
+        }),
+        audio: Vec::new(),
+        loudness: None,
+    })
+}
+
+/// The windows of a multi-window take (T46.6): every `window-<n>.mov` staged beside the screen,
+/// as layers (the screen first) and as video media descriptors whose `path` is the file name.
+/// `bounds` lists each window's `win_` ID and bounds in file order (the start receipt's
+/// `settings.source.windows`, or `source.windows` in events.json); without them the layers
+/// stand in a row. A single-source take has none.
+fn windows(
+    stage: &Path,
+    fps: u32,
+    screen: &Media,
+    bounds: Option<&Json>,
+) -> Result<(Vec<Layer>, Vec<Media>), StoreError> {
+    let files: Vec<String> = (1..*crate::record_options::WINDOWS.end())
+        .map(|n| format!("window-{n}.mov"))
+        .take_while(|file| stage.join(file).is_file())
+        .collect();
+    if files.is_empty() || screen.take.is_none() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let listed = bounds.and_then(Json::as_array).unwrap_or(&[]);
+    let layer = |n: usize, file: &str, probe: &Probe| {
+        let entry = listed.get(n);
+        let rect = entry.map(|entry| entry.field("rect").unwrap_or(entry));
+        let side = |key| rect.and_then(|rect| rect.field(key)).and_then(Json::as_f64);
+        Layer {
+            file: file.into(),
+            window: entry.and_then(|entry| {
+                entry
+                    .field("id")?
+                    .as_str()?
+                    .strip_prefix("win_")?
+                    .parse()
+                    .ok()
+            }),
+            rect: match (side("x"), side("y"), side("width"), side("height")) {
+                (Some(x), Some(y), Some(w), Some(h)) => Some([x, y, w, h]),
+                _ => None,
+            },
+            size: [probe.width, probe.height],
+            frames: probe.frames,
+        }
+    };
+    let mut layers = vec![layer(0, "screen.mov", &screen.probe)];
+    let mut media = Vec::new();
+    for (n, file) in files.iter().enumerate() {
+        let path = stage.join(file);
+        let probe = movie(&path, fps)?;
+        layers.push(layer(n + 1, file, &probe));
+        media.push(Media {
+            id: MediaId::from_serial(0),
+            kind: MediaKind::Video,
+            path: file.clone(),
+            bookmark: None,
+            size: fs::metadata(&path).map_err(storage)?.len(),
+            mtime: fs::metadata(&path).map_err(storage)?.mtime(),
+            probe,
+            take: None,
+        });
+    }
+    Ok((layers, media))
+}
+
+/// Where a multi-window take's layers land on the canvas this batch leaves (`aspect` when it
+/// sets one), inside the spine's window look; and that canvas.
+fn arrange(
+    project: &splice_model::Project,
+    layers: &[Layer],
+    aspect: Option<&str>,
+) -> (record_windows::Plan, [f64; 2]) {
+    let canvas = record_windows::canvas(project, aspect);
+    let window = splice_eval::resolve_effect(&[&project.effects, &project.spine.effects], "window");
+    (
+        record_windows::plan(layers, canvas, window.as_ref()),
+        canvas,
+    )
 }
 
 fn component(stage: &Path, name: &str, directory: bool) -> Result<Option<String>, StoreError> {
@@ -685,6 +801,7 @@ mod tests {
             video,
             true,
             movie,
+            Vec::new(),
             &WriteOptions::default(),
             Default::default(),
         )
@@ -706,6 +823,7 @@ mod tests {
             still,
             true,
             image,
+            Vec::new(),
             &WriteOptions::default(),
             Default::default(),
         )
@@ -716,5 +834,99 @@ mod tests {
                 .is_file()
         );
         assert!(receipt.clip.is_some());
+    }
+
+    /// A staged multi-window take (T46.6) as the capture agent leaves it: the screen, two more
+    /// windows and events with every window's bounds. Live capture needs the installed app, so
+    /// the movies are the probe fixture.
+    #[test]
+    fn capture_agent_multi_window_take_publishes_every_window_as_a_layer() {
+        let temp = TestDirectory::new("capture-publish-windows");
+        let mut store = Store::create(&temp.0.join("w.splice"), &Project::default()).unwrap();
+        let id = JobId::from_serial(3);
+        let stage = stage_path(store.path(), id);
+        fs::create_dir_all(&stage).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/media/probe.mov");
+        for file in ["screen.mov", "window-1.mov", "window-2.mov"] {
+            fs::copy(&fixture, stage.join(file)).unwrap();
+        }
+        fs::write(
+            stage.join("events.json"),
+            br#"{"t0":1,"source":{"kind":"window","rect":{"x":0,"y":0,"width":48,"height":32},"scale":2,"windows":[{"x":0,"y":0,"width":48,"height":32},{"x":60,"y":0,"width":48,"height":32},{"x":0,"y":40,"width":48,"height":32}]},"events":[]}"#,
+        )
+        .unwrap();
+        let screen = describe(&stage, 30, false, 9000).unwrap();
+        // The start receipt's settings name each window.
+        let settings = splice_json::parse(
+            r#"[{"id":"win_5","file":"screen.mov","rect":{"x":0,"y":0,"width":48,"height":32}},{"id":"win_6","file":"window-1.mov","rect":{"x":60,"y":0,"width":48,"height":32}},{"id":"win_7","file":"window-2.mov","rect":{"x":0,"y":40,"width":48,"height":32}}]"#,
+        )
+        .unwrap();
+        let (layers, media) = windows(&stage, 30, &screen, Some(&settings)).unwrap();
+        assert_eq!(layers.len(), 3);
+        assert_eq!(
+            (layers[2].file.as_str(), layers[2].window, layers[2].rect),
+            ("window-2.mov", Some(7), Some([0.0, 40.0, 48.0, 32.0]))
+        );
+        assert_eq!((layers[1].size, layers[1].frames), ([96, 64], 30));
+        assert_eq!(media[0].kind, MediaKind::Video);
+        let (plan, canvas) = arrange(store.project(), &layers, None);
+        assert_eq!(plan.arrangement, "captured");
+        let ops = (
+            Vec::new(),
+            vec![("ref", text("take"))],
+            record_windows::ops(&layers, &plan),
+        );
+        let sealed = publish(
+            &mut store,
+            id,
+            true,
+            screen,
+            media,
+            &WriteOptions::default(),
+            ops,
+        )
+        .unwrap();
+        let project = store.project();
+        assert_eq!(project.media.len(), 3);
+        let take = sealed.media;
+        for (media, file) in
+            project
+                .media
+                .iter()
+                .zip(["screen.mov", "window-1.mov", "window-2.mov"])
+        {
+            assert_eq!(media.path, format!("takes/{take}/{file}"));
+            assert!(store.path().join(&media.path).is_file());
+        }
+        assert_eq!(sealed.layers.len(), 3);
+        assert!(sealed.layers[1].1.as_deref().unwrap().starts_with("ovl_"));
+        let (summary, _, _) = crate::record_publish::summary(
+            &store,
+            &sealed,
+            [30, 0],
+            None,
+            Some((&layers, &plan, canvas)),
+        );
+        let listed = summary.field("layers").unwrap().as_array().unwrap();
+        assert_eq!(
+            listed[1].field("window").and_then(Json::as_str),
+            Some("win_6")
+        );
+        // A crash recovery without the receipt reads the bounds from events.json.
+        let events = splice_json::parse(
+            &fs::read_to_string(store.path().join(format!("takes/{take}/events.json"))).unwrap(),
+        )
+        .unwrap();
+        let bounds = events
+            .field("source")
+            .and_then(|source| source.field("windows"));
+        let stage = store.path().join(format!("takes/{take}"));
+        let screen = describe(&stage, 30, false, 9000).unwrap();
+        let (recovered, _) = windows(&stage, 30, &screen, bounds).unwrap();
+        assert_eq!(
+            recovered.iter().map(|layer| layer.rect).collect::<Vec<_>>(),
+            layers.iter().map(|layer| layer.rect).collect::<Vec<_>>()
+        );
+        assert_eq!(recovered[1].window, None);
     }
 }

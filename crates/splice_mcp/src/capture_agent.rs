@@ -389,8 +389,18 @@ fn dispatch(
         "record.start" => {
             let snapshot = permissions::snapshot();
             let mut result = permissions::report(identity, &snapshot);
-            let sources = capture::sources(permissions::screen_granted(&snapshot))
-                .map_err(capture_source_error)?;
+            let granted = permissions::screen_granted(&snapshot);
+            let sources = capture::sources(granted).map_err(capture_source_error)?;
+            // A dry run with a window source checks every window now (T46.6), so a typo fails
+            // here with the open windows instead of after the countdown.
+            if granted
+                && (args.field("window").is_some()
+                    || args.field("source").is_some_and(|source| {
+                        source.field("window").is_some() || source.field("windows").is_some()
+                    }))
+            {
+                sources::resolve(&record_options::source(args)?, &sources)?;
+            }
             result.push(("sources", sources::payload(&sources)));
             let devices: Vec<Json> = apple_sys::capture::devices()
                 .into_iter()
@@ -453,7 +463,8 @@ fn plan(options: &Options) -> Result<jobs::Plan, StoreError> {
         }
         _ => Vec::new(),
     };
-    let target = sources::target(&options.source)?;
+    let targets = sources::targets(&options.source)?;
+    let target = targets[0];
     let resized = match (options.size, target) {
         (Some(size), Target::Window(id)) => Some((size, resize(&listed, id, size)?)),
         _ => None,
@@ -471,8 +482,18 @@ fn plan(options: &Options) -> Result<jobs::Plan, StoreError> {
             geometry = capture::geometry(target).map_err(capture_source_error)?;
         }
     }
+    let windows = targets[1..]
+        .iter()
+        .map(|&window| {
+            Ok((
+                window,
+                capture::geometry(window).map_err(capture_source_error)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, StoreError>>()?;
     Ok(jobs::Plan {
         target,
+        windows,
         mic,
         camera,
         audio_apps,

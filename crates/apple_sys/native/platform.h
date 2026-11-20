@@ -117,7 +117,10 @@ _Static_assert(sizeof(SpliceRecordingStats) == 24, "recording stats ABI");
 
 // microphone and camera: NULL to omit, "" for the system default, or a device unique ID.
 // audio_apps: NULL for every app's sound, or newline-separated bundle IDs or names (with system_audio).
-void *splice_recording_start(const SpliceCaptureTarget *target, const char *directory, const char *microphone,
+// windows: window_count more windows (T46.6), each its own stream into window-<n>.mov (n from 1)
+// on the take's clock; NULL with 0 for a single source.
+void *splice_recording_start(const SpliceCaptureTarget *target, const SpliceCaptureTarget *windows,
+                             size_t window_count, const char *directory, const char *microphone,
                              bool system_audio, const char *audio_apps, const char *camera, bool events,
                              bool *denied, char **error);
 bool splice_recording_status(void *recording, SpliceRecordingStats *out, bool *denied, char **error);

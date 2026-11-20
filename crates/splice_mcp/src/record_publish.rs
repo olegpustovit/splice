@@ -1,6 +1,6 @@
-use crate::{Json, object, text, wire::failure};
+use crate::{Json, object, record_windows::Layer, text, wire::failure};
 use splice_core::history::{Store, StoreError, WriteOptions};
-use splice_model::{ClipId, JobId, Media, MediaId, MediaKind};
+use splice_model::{ClipId, ItemId, JobId, Media, MediaId, MediaKind};
 use std::{
     fs::{self, File},
     io,
@@ -11,6 +11,9 @@ pub(super) struct Publication {
     pub revision: u64,
     pub media: MediaId,
     pub clip: Option<ClipId>,
+    /// Every window of the take (T46.6): its media and the item showing it (the spine clip
+    /// first, then overlays); `None` when the take was not inserted.
+    pub layers: Vec<(MediaId, Option<String>)>,
 }
 
 /// A microphone quieter than this (loudest 10 ms RMS window, dBFS) recorded silence.
@@ -20,12 +23,14 @@ const SILENT_DB: f64 = -60.0;
 /// `TAKE_ASPECT` and `MIC_SILENT`: frames at the project rate, seconds, pixel size, the capture
 /// rate, components, clicks, keys and the microphone's peak. `frames` are the capture agent's
 /// written and dropped screen frames; `mic_peak` is the loudest 10 ms RMS window as linear
-/// amplitude, when the take has a microphone track that could be read.
+/// amplitude, when the take has a microphone track that could be read. `windows` are a
+/// multi-window take's layers, their placement and the canvas they were placed on (T46.6).
 pub(super) fn summary(
     store: &Store,
     publication: &Publication,
     frames: [u64; 2],
     mic_peak: Option<f32>,
+    windows: Option<(&[Layer], &crate::record_windows::Plan, [f64; 2])>,
 ) -> (Json, Vec<Json>, Json) {
     let project = store.project();
     let (mut lints, pacing) = crate::lints::check(project);
@@ -89,7 +94,17 @@ pub(super) fn summary(
             }
         }
     }
-    lints.extend(crate::lints::take_fit(project, media, publication.clip));
+    match windows {
+        // The windows are arranged into the canvas: no single picture has to fill it.
+        Some((layers, plan, canvas)) => {
+            fields.push(("arrangement", text(plan.arrangement)));
+            fields.push((
+                "layers",
+                crate::record_windows::summary(layers, plan, canvas, &publication.layers),
+            ));
+        }
+        None => lints.extend(crate::lints::take_fit(project, media, publication.clip)),
+    }
     (object(fields), lints, pacing)
 }
 
@@ -97,11 +112,16 @@ pub(super) fn stage_path(package: &Path, id: JobId) -> PathBuf {
     package.join("takes").join(format!(".{id}"))
 }
 
+/// Publishes staged take `job`: `descriptor` is its screen, and `windows` (T46.6) are the other
+/// windows of a multi-window take, each with `path` set to its file in the take directory
+/// (`window-1.mov`, …). Every window becomes a video media entry bound as `$window<n>` for the
+/// overlay ops in `after`; all of it is one batch.
 pub(super) fn publish(
     store: &mut Store,
     job: JobId,
     insert: bool,
     mut descriptor: Media,
+    mut windows: Vec<Media>,
     options: &WriteOptions,
     (before, extra, after): (Vec<Json>, Vec<(&'static str, Json)>, Vec<Json>),
 ) -> Result<Publication, StoreError> {
@@ -113,11 +133,20 @@ pub(super) fn publish(
     };
     let stage = stage_path(store.path(), job);
     let takes = stage.parent().expect("stage beneath takes").to_path_buf();
+    let regular = |name: &str| {
+        fs::symlink_metadata(stage.join(name))
+            .map_err(storage)
+            .map(|meta| meta.is_file())
+    };
     if !fs::symlink_metadata(&takes).map_err(storage)?.is_dir()
         || !fs::symlink_metadata(&stage).map_err(storage)?.is_dir()
-        || !fs::symlink_metadata(stage.join(primary))
-            .map_err(storage)?
-            .is_file()
+        || !regular(primary)?
+        || !windows
+            .iter()
+            .map(|window| regular(&window.path))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .all(|file| file)
     {
         return Err(failure(
             "BAD_MEDIA",
@@ -136,32 +165,76 @@ pub(super) fn publish(
     }
     let mut ops = before;
     ops.push(object(fields));
+    let files: Vec<String> = windows.iter().map(|window| window.path.clone()).collect();
+    for (n, (window, file)) in windows.iter_mut().zip(&files).enumerate() {
+        window.path = format!("takes/.{job}/{file}");
+        ops.push(object(vec![
+            ("cmd", text("clip.insert")),
+            ("path", text(&window.path)),
+            ("insert", Json::Bool(false)),
+            ("ref", text(&crate::record_windows::media_ref(n + 1))),
+        ]));
+    }
     if insert {
         ops.extend(after);
     }
     descriptor.path.clone_from(&request);
+    // Ops name the staged paths; the descriptors carry the paths the files publish at.
+    let staged: Vec<String> = windows.iter().map(|window| window.path.clone()).collect();
+    let pick = |path: &str, descriptor: &Media, windows: &[Media]| {
+        staged
+            .iter()
+            .position(|staged| staged == path)
+            .map_or_else(|| descriptor.clone(), |n| windows[n].clone())
+    };
     let mut preview = options.clone();
     preview.dry_run = true;
-    let plan = store.apply_with_media(&ops, &preview, &mut |_| Ok(descriptor.clone()))?;
-    let media = plan
+    let plan = store.apply_with_media(&ops, &preview, &mut |path| {
+        Ok(pick(path, &descriptor, &windows))
+    })?;
+    let minted: Vec<MediaId> = plan
         .report
         .mints
         .iter()
-        .find_map(|id| id.parse::<MediaId>().ok())
-        .ok_or_else(|| {
-            failure(
-                "EXISTS",
-                "This staged take already has a media entry.",
-                "Use project.info to find the existing media entry.",
-            )
-        })?;
+        .filter_map(|id| id.parse::<MediaId>().ok())
+        .collect();
+    let media = *minted.first().ok_or_else(|| {
+        failure(
+            "EXISTS",
+            "This staged take already has a media entry.",
+            "Use project.info to find the existing media entry.",
+        )
+    })?;
     let clip = plan
         .report
         .mints
         .iter()
         .find_map(|id| id.parse::<ClipId>().ok());
+    let overlays: Vec<ItemId> = plan
+        .report
+        .mints
+        .iter()
+        .filter_map(|id| id.parse::<ItemId>().ok())
+        .collect();
+    if minted.len() != windows.len() + 1 {
+        return Err(failure(
+            "EXISTS",
+            "A window of this staged take already has a media entry.",
+            "Use project.info to find the existing media entries.",
+        ));
+    }
     let destination = takes.join(media.to_string());
     descriptor.path = format!("takes/{media}/{primary}");
+    for (window, file) in windows.iter_mut().zip(&files) {
+        window.path = format!("takes/{media}/{file}");
+    }
+    let mut layers = vec![(media, clip.map(|clip| clip.to_string()))];
+    layers.extend(
+        minted[1..]
+            .iter()
+            .enumerate()
+            .map(|(n, id)| (*id, overlays.get(n).map(ToString::to_string))),
+    );
     let occupied = match fs::symlink_metadata(&destination) {
         Ok(_) => true,
         Err(error) if error.kind() == io::ErrorKind::NotFound => false,
@@ -186,7 +259,11 @@ pub(super) fn publish(
     fs::rename(&stage, &destination).map_err(storage)?;
     let result = sync_directory(&takes)
         .and_then(|()| sync_directory(store.path()))
-        .and_then(|()| store.apply_with_media(&ops, options, &mut |_| Ok(descriptor.clone())));
+        .and_then(|()| {
+            store.apply_with_media(&ops, options, &mut |path| {
+                Ok(pick(path, &descriptor, &windows))
+            })
+        });
     match result {
         Ok(edit) => {
             debug_assert_eq!(edit.report.mints, plan.report.mints);
@@ -194,6 +271,7 @@ pub(super) fn publish(
                 revision: edit.revision,
                 media,
                 clip,
+                layers,
             })
         }
         Err(error) => {
@@ -320,6 +398,7 @@ mod tests {
             id,
             true,
             descriptor.clone(),
+            Vec::new(),
             &write,
             Default::default(),
         )
@@ -356,6 +435,7 @@ mod tests {
                 id,
                 false,
                 descriptor.clone(),
+                Vec::new(),
                 &write,
                 Default::default()
             )
@@ -371,6 +451,7 @@ mod tests {
             id,
             false,
             descriptor,
+            Vec::new(),
             &write,
             Default::default(),
         )
@@ -431,10 +512,18 @@ mod tests {
                 ..Default::default()
             }),
         };
-        let published =
-            publish(&mut store, id, true, descriptor, &write, Default::default()).unwrap();
+        let published = publish(
+            &mut store,
+            id,
+            true,
+            descriptor,
+            Vec::new(),
+            &write,
+            Default::default(),
+        )
+        .unwrap();
         // A quiet microphone: 0.0001 linear is -80 dBFS.
-        let (take, lints, _) = summary(&store, &published, [178, 2], Some(0.0001));
+        let (take, lints, _) = summary(&store, &published, [178, 2], Some(0.0001), None);
         let mut text = String::new();
         splice_json::write(&take, &mut text).unwrap();
         assert_eq!(
@@ -465,7 +554,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.project().size, [1728, 1080]);
-        let (_, lints, _) = summary(&store, &published, [178, 2], Some(0.5));
+        let (_, lints, _) = summary(&store, &published, [178, 2], Some(0.5), None);
         assert!(
             lints
                 .iter()

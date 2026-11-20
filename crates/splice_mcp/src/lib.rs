@@ -45,6 +45,8 @@ mod record_cli;
 mod record_options;
 #[cfg(any(target_os = "macos", test))]
 mod record_publish;
+#[cfg(any(target_os = "macos", test))]
+mod record_windows;
 mod rpc;
 mod sheet;
 mod timeline;

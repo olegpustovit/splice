@@ -490,13 +490,33 @@ start writes nothing (the take publishes at `record.stop` against the revision c
 Without `sessionId` the server opens a session. The start receipt identifies the project, session,
 and job. Include the session in later edits or undo calls.
 
-Pass one `source` containing `display`, `window`, or `area`. A display is `"main"` or a display ID.
+Pass one `source` containing `display`, `window`, `windows` or `area`. A display is `"main"` or a display ID.
 A window is `{app:"Safari"}` (an app name or bundle ID; add `title` when the app has several
 windows) or a `win_<id>` from preflight. Selector errors name this form. An area has a display
 and a `rect` with `x`, `y`, `width` and `height` in display-local points. The default is the main
 display. `size:[w,h]` (window sources only, points, 100–16384) resizes the window with
 Accessibility before capture, keeping its top-left; without the Accessibility grant it returns
 `TCC_DENIED` naming the pane, and the receipt reports the size the app actually allowed.
+
+`windows:[{app:"Code"}, {app:"Safari"}, "win_812"]` (T46.6) records 2–4 windows in one take,
+each through its own ScreenCaptureKit stream on one clock, with one set of mic, system audio,
+camera and input tracks (system audio defaults to on, as for a window). Each entry is a window
+selector as above; each must match exactly one window and appear once, else `CAPTURE_SOURCE`
+naming the open windows (`win_<id> (App)`, never titles) in `fix`. `size`, `still`,
+`voiceover` and `screen:false` are refused with it. A dry run with a `window` or `windows`
+source checks every window the same way, so a typo fails before the countdown. The receipt's
+`settings` has `source:{kind:"windows", id, rect, scale, size}` for the first window plus
+`windows:[{id, file, rect, scale, size}]` for all of them in file order (`screen.mov`,
+`window-1.mov`, …). Events are normalized to the first window (docs/FORMAT.md): the cursor,
+click rings and click zooms show over it only. At `record.stop` the first window is the spine
+clip and every other window a media overlay anchored to the take's first frame, all one undo
+step. They keep their on-screen positions with one shared scale (`arrangement:"captured"`), or
+stand in a row of equal heights in source order when any two overlap (`"row"`), centered inside
+the spine's window look padding; each layer gets a `transform` (x, y, scale) that puts it there,
+and the overlays a `window` effect with `background:"none"` (one backdrop, D14) and the same
+padding. A take into a spine with no window look gets one (the defaults); a look turned off stays
+off. `create:true` picks the canvas nearest the arranged windows. Move or resize a layer with its
+`transform` (`effect.set`); camera zooms frame the spine window.
 
 Tracks: `mic` and `camera` take `true` (the system default device) or a device `id` (or exact
 name) from the dry run; an unknown one returns `NO_DEVICE` with the valid IDs in `fix` and
@@ -534,6 +554,10 @@ seconds, size, captureFps, videoFrames, droppedFrames, tracks, clicks, keys, mic
 (`frames` at the project's `fps`; `micPeakDb` is the loudest 10 ms RMS window in dBFS, `silent:true`
 below −60) and the `lints` and `pacing` an edit returns, with two record lints: `TAKE_ASPECT` (the
 picture's shape is not the canvas's; `ops` sets the nearest canvas or crops to it) and `MIC_SILENT`.
+A multi-window take's `take` adds `arrangement` and `layers:[{file, window, mediaId, item, box}]`
+(every window: its media, the clip or overlay showing it, `null` with `insert:false`, and its
+`box {x, y, w, h}` as fractions of the canvas) and has no `TAKE_ASPECT`. `recover:true` keeps the
+layers too, with the bounds `events.json` recorded (in a row without them).
 The media entry and clip form one undoable edit. Set `insert:false` at start or stop to save the media without a clip. `jobs.cancel`
 discards a take before publication. If publishing fails after the capture stopped (a full disk,
 a stale revision), the take stays staged and the job remembers the stop: fix the cause and call

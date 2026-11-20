@@ -9,9 +9,18 @@ use std::time::Duration;
 pub(super) enum Source {
     Display(u32),
     Window(u32),
-    NamedWindow { app: String, title: Option<String> },
+    NamedWindow {
+        app: String,
+        title: Option<String>,
+    },
     Area(u32, [f64; 4]),
+    /// `source:{windows:[…]}`: 2–4 windows, each its own stream in one take (T46.6). Each is
+    /// `Window` or `NamedWindow`; the first is the take's screen.
+    Windows(Vec<Source>),
 }
+
+/// How many windows one multi-window take records.
+pub(super) const WINDOWS: std::ops::RangeInclusive<usize> = 2..=4;
 
 /// A microphone or camera choice: `false`, `true` (the system default), or a device ID or name
 /// from `record.start {dryRun:true}` `devices`.
@@ -116,7 +125,17 @@ impl Options {
             mic => mic,
         };
         let source = source(args)?;
-        let window = matches!(source, Source::Window(_) | Source::NamedWindow { .. });
+        let window = matches!(
+            source,
+            Source::Window(_) | Source::NamedWindow { .. } | Source::Windows(_)
+        );
+        let windows = matches!(source, Source::Windows(_));
+        if windows && (still || voiceover || args.field("screen") == Some(&Json::Bool(false))) {
+            return Err(bad(
+                "source.windows",
+                "a screen recording: still, voiceover and screen:false take one source (display, window or area)",
+            ));
+        }
         // A window or app capture usually wants its sound: record it unless told otherwise.
         let system_audio = match args.field("systemAudio") {
             None if !still && window => SystemAudio::All,
@@ -156,6 +175,12 @@ impl Options {
             ));
         }
         let size = args.field("size").map(window_size).transpose()?;
+        if size.is_some() && windows {
+            return Err(bad(
+                "size",
+                "omitted with source:{windows} (size resizes a single window source); resize the windows first",
+            ));
+        }
         if size.is_some() && !window {
             return Err(bad(
                 "size",
@@ -349,9 +374,9 @@ pub(super) fn resolve_apps(
 }
 
 /// What a capture source may be; window:{app} needs no window ID or title (T36.10).
-const SELECTOR: &str = "one selector: display:\"main\", window:{app:\"Safari\", title?} (or a win_ ID), or area:{display, rect}";
+const SELECTOR: &str = "one selector: display:\"main\", window:{app:\"Safari\", title?} (or a win_ ID), windows:[{app}, {app}] (2–4 windows in one take), or area:{display, rect}";
 
-fn source(args: &Json) -> Result<Source, StoreError> {
+pub(super) fn source(args: &Json) -> Result<Source, StoreError> {
     let fields = ["display", "window", "area"];
     let selectors = args.field("source");
     if let Some(selectors) = selectors
@@ -363,28 +388,29 @@ fn source(args: &Json) -> Result<Source, StoreError> {
         return Err(bad("source", SELECTOR));
     }
     let input = selectors.unwrap_or(args);
+    if let Some(list) = selectors.and_then(|source| source.field("windows")) {
+        let list = list
+            .as_array()
+            .filter(|list| WINDOWS.contains(&list.len()))
+            .ok_or_else(|| {
+                bad(
+                    "source.windows",
+                    "2 to 4 windows, each {app:\"Safari\", title?} or a win_ ID",
+                )
+            })?;
+        return list
+            .iter()
+            .map(|value| window(value, "source.windows"))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Source::Windows);
+    }
     match (
         input.field("display"),
         input.field("window"),
         input.field("area"),
     ) {
         (Some(value), None, None) => Ok(Source::Display(display(value)?)),
-        (None, Some(value), None) if value.as_object().is_some() => {
-            let app = value.string("app")?;
-            if app.is_empty() {
-                return Err(bad("window.app", "an application name or bundle ID"));
-            }
-            Ok(Source::NamedWindow {
-                app: app.into(),
-                title: value.optional_string("title")?.map(str::to_owned),
-            })
-        }
-        (None, Some(value), None) => id(value, "win_").map(Source::Window).ok_or_else(|| {
-            bad(
-                "window",
-                "{app:\"Safari\"} (an app name or bundle ID, with an optional title) or a win_ ID from record.start dryRun",
-            )
-        }),
+        (None, Some(value), None) => window(value, "window"),
         (None, None, Some(value)) => {
             let target = value
                 .field("display")
@@ -413,6 +439,29 @@ fn source(args: &Json) -> Result<Source, StoreError> {
         (None, None, None) if selectors.is_none() => Ok(Source::Display(0)),
         _ => Err(bad("source", SELECTOR)),
     }
+}
+
+/// One window selector, `{app, title?}` or a `win_` ID; `param` names it in errors.
+fn window(value: &Json, param: &str) -> Result<Source, StoreError> {
+    if value.as_object().is_some() {
+        let app = value.string("app")?;
+        if app.is_empty() {
+            return Err(bad(
+                &format!("{param}.app"),
+                "an application name or bundle ID",
+            ));
+        }
+        return Ok(Source::NamedWindow {
+            app: app.into(),
+            title: value.optional_string("title")?.map(str::to_owned),
+        });
+    }
+    id(value, "win_").map(Source::Window).ok_or_else(|| {
+        bad(
+            param,
+            "{app:\"Safari\"} (an app name or bundle ID, with an optional title) or a win_ ID from record.start dryRun",
+        )
+    })
 }
 
 fn display(value: &Json) -> Result<u32, StoreError> {
@@ -499,6 +548,84 @@ mod tests {
                 "BAD_ARGS",
                 "{invalid}"
             );
+        }
+    }
+
+    #[test]
+    fn recording_options_take_two_to_four_windows_in_one_take() {
+        let args = splice_json::parse(
+            r#"{"source":{"windows":[{"app":"Safari"},"win_7",{"app":"Notes","title":"Plan"}]},"mic":true}"#,
+        )
+        .unwrap();
+        let options = Options::parse(&args).unwrap();
+        assert_eq!(
+            options.source,
+            Source::Windows(vec![
+                Source::NamedWindow {
+                    app: "Safari".into(),
+                    title: None
+                },
+                Source::Window(7),
+                Source::NamedWindow {
+                    app: "Notes".into(),
+                    title: Some("Plan".into())
+                },
+            ])
+        );
+        // Window sources record their sound by default; one take, one set of tracks.
+        assert_eq!(options.system_audio, SystemAudio::All);
+        assert!(options.events && options.mic.on());
+        for (invalid, param) in [
+            (
+                r#"{"source":{"windows":[{"app":"Safari"}]}}"#,
+                "source.windows",
+            ),
+            (
+                r#"{"source":{"windows":["win_1","win_2","win_3","win_4","win_5"]}}"#,
+                "source.windows",
+            ),
+            (
+                r#"{"source":{"windows":{"app":"Safari"}}}"#,
+                "source.windows",
+            ),
+            (
+                r#"{"source":{"windows":["win_1",{"app":""}]}}"#,
+                "source.windows.app",
+            ),
+            (
+                r#"{"source":{"windows":["win_1","Safari"]}}"#,
+                "source.windows",
+            ),
+            (
+                r#"{"source":{"windows":["win_1","win_2"],"display":"main"}}"#,
+                "source",
+            ),
+            (
+                r#"{"source":{"windows":["win_1","win_2"]},"size":[800,600]}"#,
+                "size",
+            ),
+            (
+                r#"{"source":{"windows":["win_1","win_2"]},"still":true}"#,
+                "source.windows",
+            ),
+            (
+                r#"{"source":{"windows":["win_1","win_2"]},"voiceover":true}"#,
+                "source.windows",
+            ),
+            (
+                r#"{"source":{"windows":["win_1","win_2"]},"exclude":["Slack"]}"#,
+                "exclude",
+            ),
+            (
+                r#"{"source":{"windows":["win_1","win_2"]},"screen":false,"camera":true}"#,
+                "source.windows",
+            ),
+        ] {
+            let error = Options::parse(&splice_json::parse(invalid).unwrap())
+                .err()
+                .unwrap();
+            assert_eq!(error.code, "BAD_ARGS", "{invalid}");
+            assert_eq!(error.rule.unwrap().param, param, "{invalid}");
         }
     }
 

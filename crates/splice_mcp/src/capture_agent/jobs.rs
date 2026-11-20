@@ -32,6 +32,9 @@ pub(super) const CAPTURE_FPS: u32 = 60;
 /// records, echoed back so an agent sees what it will get.
 pub(super) struct Plan {
     pub target: Target,
+    /// The other windows of a multi-window take (T46.6), in file order (`window-1.mov`, …),
+    /// with their capture geometry.
+    pub windows: Vec<(Target, Geometry)>,
     pub mic: Option<DeviceInfo>,
     pub camera: Option<DeviceInfo>,
     /// Apps whose sound `systemAudio:{apps}` records: bundle ID and name.
@@ -271,9 +274,11 @@ impl Job {
                 .iter()
                 .map(|(bundle, _)| bundle.clone())
                 .collect();
+            let mut targets = vec![target];
+            targets.extend(self.plan.windows.iter().map(|(window, _)| *window));
             let recording = Recording::start(
                 &stage.0,
-                target,
+                &targets,
                 self.plan.mic.as_ref().map(|device| device.id.as_str()),
                 self.options.system_audio.on(),
                 &apps,
@@ -305,7 +310,7 @@ impl Job {
         }
         if self.options.events {
             let stage = self.stage.as_ref().expect("running job has a stage");
-            poll_events(stage, recording, log)?;
+            poll_events(stage, recording, log, &self.plan.windows)?;
         }
         // Within one poll (12 ms) of the limit: under a frame at 60 fps.
         match record_options::at_limit(
@@ -341,7 +346,7 @@ impl Job {
         let result = recording.finish().map_err(native).and_then(|stats| {
             self.stats = stats;
             if self.options.events {
-                poll_events(stage, &mut recording, &mut log)?;
+                poll_events(stage, &mut recording, &mut log, &self.plan.windows)?;
                 let log = log
                     .take()
                     .ok_or_else(|| recording_error("The input clock never started."))?;
@@ -499,6 +504,7 @@ fn bytes_in(path: &Path, include_cursors: bool) -> Result<u64, StoreError> {
 pub(super) fn settings(options: &Options, plan: &Plan) -> Json {
     let pair = |[a, b]: [f64; 2]| Json::Array(vec![Json::Float(a), Json::Float(b)]);
     let (kind, id) = match plan.target {
+        Target::Window(id) if !plan.windows.is_empty() => ("windows", text(&format!("win_{id}"))),
         Target::Display(0) => ("display", text("main")),
         Target::Display(id) => ("display", display(&id)),
         Target::Window(id) => ("window", text(&format!("win_{id}"))),
@@ -506,9 +512,9 @@ pub(super) fn settings(options: &Options, plan: &Plan) -> Json {
         Target::Area { display: id, .. } => ("area", display(&id)),
     };
     let mut source = vec![("kind", text(kind)), ("id", id)];
-    if let Some(geometry) = plan.geometry {
+    let bounds = |geometry: Geometry| {
         let rect = geometry.rect;
-        source.extend([
+        [
             (
                 "rect",
                 object(vec![
@@ -526,7 +532,27 @@ pub(super) fn settings(options: &Options, plan: &Plan) -> Json {
                     Json::Unsigned(u64::from(geometry.height)),
                 ]),
             ),
-        ]);
+        ]
+    };
+    if let Some(geometry) = plan.geometry {
+        source.extend(bounds(geometry));
+    }
+    // Every window of a multi-window take, in file order: screen.mov, window-1.mov, …
+    if let (Target::Window(first), Some(geometry)) = (plan.target, plan.geometry)
+        && !plan.windows.is_empty()
+    {
+        let window = |id: u32, file: String, geometry: Geometry| {
+            let mut fields = vec![("id", text(&format!("win_{id}"))), ("file", text(&file))];
+            fields.extend(bounds(geometry));
+            object(fields)
+        };
+        let mut windows = vec![window(first, "screen.mov".into(), geometry)];
+        for (n, (target, geometry)) in plan.windows.iter().enumerate() {
+            if let Target::Window(id) = target {
+                windows.push(window(*id, format!("window-{}.mov", n + 1), *geometry));
+            }
+        }
+        source.push(("windows", Json::Array(windows)));
     }
     if let Some((requested, actual)) = plan.resized {
         source.push((
@@ -587,11 +613,18 @@ fn poll_events(
     stage: &Stage,
     recording: &mut Recording,
     log: &mut Option<EventLog>,
+    windows: &[(Target, Geometry)],
 ) -> Result<(), StoreError> {
     if log.is_none()
         && let Some(state) = recording.input_state()
     {
-        *log = Some(EventLog::open(&stage.0, state).map_err(storage)?);
+        // A multi-window take lists every window's bounds; events stay relative to the first.
+        let mut rects = Vec::new();
+        if !windows.is_empty() {
+            rects.push(state.rect);
+            rects.extend(windows.iter().map(|(_, geometry)| geometry.rect));
+        }
+        *log = Some(EventLog::open(&stage.0, state, &rects).map_err(storage)?);
     }
     if let Some(log) = log {
         log.poll(recording).map_err(storage)?;
@@ -629,6 +662,7 @@ mod tests {
     fn display_plan() -> Plan {
         Plan {
             target: Target::Display(0),
+            windows: Vec::new(),
             mic: None,
             camera: None,
             audio_apps: Vec::new(),
@@ -646,6 +680,7 @@ mod tests {
         let options = Options::parse(&args).unwrap();
         let plan = Plan {
             target: Target::Window(7),
+            windows: Vec::new(),
             mic: Some(DeviceInfo {
                 kind: "mic".into(),
                 id: "usb".into(),
@@ -681,6 +716,41 @@ mod tests {
         ] {
             assert!(echo.contains(part), "{part} in {echo}");
         }
+    }
+
+    #[test]
+    fn capture_agent_echoes_every_window_of_a_multi_window_take() {
+        let args = splice_json::parse(r#"{"source":{"windows":["win_7","win_9"]}}"#).unwrap();
+        let options = Options::parse(&args).unwrap();
+        let geometry = |x: f64, width: f64| Geometry {
+            rect: apple_sys::capture::Rect {
+                x,
+                y: 0.0,
+                width,
+                height: 600.0,
+            },
+            scale: 2.0,
+            width: (width * 2.0) as u32,
+            height: 1200,
+        };
+        let plan = Plan {
+            target: Target::Window(7),
+            windows: vec![(Target::Window(9), geometry(800.0, 400.0))],
+            mic: None,
+            camera: None,
+            audio_apps: Vec::new(),
+            geometry: Some(geometry(0.0, 800.0)),
+            resized: None,
+        };
+        let mut echo = String::new();
+        splice_json::write(&settings(&options, &plan), &mut echo).unwrap();
+        assert!(
+            echo.starts_with(
+                r#"{"source":{"kind":"windows","id":"win_7","rect":{"x":0,"y":0,"width":800,"height":600},"scale":2,"size":[1600,1200],"windows":[{"id":"win_7","file":"screen.mov","rect":{"x":0,"y":0,"width":800,"height":600},"scale":2,"size":[1600,1200]},{"id":"win_9","file":"window-1.mov","rect":{"x":800,"y":0,"width":400,"height":600},"scale":2,"size":[800,1200]}]},"#
+            ),
+            "{echo}"
+        );
+        assert!(echo.contains(r#""systemAudio":"all""#), "{echo}");
     }
 
     #[test]

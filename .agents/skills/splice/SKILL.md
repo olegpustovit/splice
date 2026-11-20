@@ -41,6 +41,12 @@ has the project open in the viewer, they see your edits as you make them.
   there; `record.start {resume:jobId, duration:3}` records exactly 3 s more. Then
   `record.stop {jobId, wait:30}` returns once it ends. `countdown` is seconds too.
 - A new project (`create:true`) gets the canvas nearest the source's shape; pass `aspect` to pick.
+- Several windows at once (an editor beside its preview): `source:{windows:[{app:"Code"},
+  {app:"Safari"}]}` (2–4; dry-run it first, an unknown window fails with the open ones listed).
+  One take: the first window is the spine clip, the others overlays in their on-screen positions
+  (or a row when they overlap). `record.stop` lists them in its take summary's `layers` (`item`, `box`); move one
+  with `effect.set {target:item, type:"transform", params:{x, y, scale}}`. The cursor and click
+  zooms follow the first window only, so list the window you work in first.
 - `record.stop {jobId}`: the take lands on the spine as one undoable batch, with its cursor, clicks
   and keys as components you can query (`takes.events`) and edit. Check its `take` summary
   (`seconds`, `size`, `clicks`, `micPeakDb`/`silent`) and `lints` (`TAKE_ASPECT`, `MIC_SILENT`).

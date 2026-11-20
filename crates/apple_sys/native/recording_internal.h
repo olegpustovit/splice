@@ -12,6 +12,9 @@
 - (instancetype)initWithDirectory:(NSURL *)directory width:(NSInteger)width height:(NSInteger)height
                         microphone:(BOOL)microphone audio:(BOOL)audio camera:(BOOL)camera error:(NSError **)error;
 - (BOOL)prepareCamera:(NSString *)identifier error:(NSError **)error;
+// Another window of a multi-window take (T46.6): its stream and its writer into url.
+- (BOOL)addWindow:(SCStream *)stream url:(NSURL *)url width:(NSInteger)width height:(NSInteger)height
+            error:(NSError **)error;
 - (void)activateCamera;
 - (void)append:(CMSampleBufferRef)sample type:(SCStreamOutputType)type;
 - (void)appendCamera:(CMSampleBufferRef)sample atHostTime:(CMTime)hostPTS;

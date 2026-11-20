@@ -72,6 +72,8 @@ pub struct Recording {
 unsafe extern "C" {
     fn splice_recording_start(
         target: *const RawTarget,
+        windows: *const RawTarget,
+        window_count: usize,
         directory: *const c_char,
         microphone: *const c_char,
         system_audio: bool,
@@ -106,16 +108,27 @@ impl Recording {
     /// `None` to omit them; the camera records into `camera.mov`. System audio is every app's
     /// sound, or only `audio_apps` (bundle IDs or names) when that is not empty.
     /// Input defaults to the caller's explicit selection and requires Input Monitoring permission.
+    /// `targets` is the screen source, then up to three more windows (T46.6), each recorded by
+    /// its own stream into `window-<n>.mov` (n from 1) on the take's clock; events stay
+    /// relative to the first.
     pub fn start(
         directory: &Path,
-        target: Target,
+        targets: &[Target],
         microphone: Option<&str>,
         system_audio: bool,
         audio_apps: &[String],
         camera: Option<&str>,
         events: bool,
     ) -> Result<Self, CaptureError> {
+        let (target, windows) = targets.split_first().ok_or_else(|| CaptureError {
+            permission_denied: false,
+            error: Error::message("A recording needs a capture source."),
+        })?;
         let raw = target.native()?;
+        let windows = windows
+            .iter()
+            .map(|window| window.native())
+            .collect::<Result<Vec<RawTarget>, _>>()?;
         let directory = c_string(directory.as_os_str().as_bytes())?;
         let optional =
             |value: Option<&str>| value.map(|value| c_string(value.as_bytes())).transpose();
@@ -132,6 +145,12 @@ impl Recording {
         let handle = unsafe {
             splice_recording_start(
                 &raw,
+                if windows.is_empty() {
+                    ptr::null()
+                } else {
+                    windows.as_ptr()
+                },
+                windows.len(),
                 directory.as_ptr(),
                 pointer(&microphone),
                 system_audio,

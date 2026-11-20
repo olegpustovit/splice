@@ -1,5 +1,5 @@
 use apple_sys::{
-    capture::{InputSourceKind, InputState, Recording},
+    capture::{InputSourceKind, InputState, Recording, Rect},
     events::{Event, InputEvent, InputKind},
     image::{self, CursorImage},
 };
@@ -29,8 +29,10 @@ pub struct EventLog {
 const CARET_PERIOD_NS: u64 = 100_000_000;
 
 impl EventLog {
-    /// Starts a log after the first screen sample establishes its clock.
-    pub fn open(directory: &Path, source: InputState) -> io::Result<Self> {
+    /// Starts a log after the first screen sample establishes its clock. `windows` are every
+    /// window of a multi-window take in file order (T46.6), in global points; events stay
+    /// normalized to `source`, the first of them.
+    pub fn open(directory: &Path, source: InputState, windows: &[Rect]) -> io::Result<Self> {
         let kind = match source.kind {
             InputSourceKind::Display => "display",
             InputSourceKind::Window => "window",
@@ -43,6 +45,11 @@ impl EventLog {
             || rect.width <= 0.0
             || rect.height <= 0.0
             || source.scale <= 0.0
+            || windows.iter().any(|window| {
+                ![window.x, window.y, window.width, window.height]
+                    .into_iter()
+                    .all(f64::is_finite)
+            })
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -63,7 +70,7 @@ impl EventLog {
         fs::create_dir(directory.join("cursors"))?;
         write!(
             log.file,
-            "{{\"t0\":{},\"source\":{{\"kind\":\"{kind}\",\"rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\"scale\":{}}},\"events\":[",
+            "{{\"t0\":{},\"source\":{{\"kind\":\"{kind}\",\"rect\":{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}},\"scale\":{}",
             seconds(source.origin_ns),
             rect.x,
             rect.y,
@@ -71,6 +78,22 @@ impl EventLog {
             rect.height,
             source.scale,
         )?;
+        if !windows.is_empty() {
+            write!(log.file, ",\"windows\":[")?;
+            for (n, window) in windows.iter().enumerate() {
+                write!(
+                    log.file,
+                    "{}{{\"x\":{},\"y\":{},\"width\":{},\"height\":{}}}",
+                    if n == 0 { "" } else { "," },
+                    window.x,
+                    window.y,
+                    window.width,
+                    window.height,
+                )?;
+            }
+            write!(log.file, "]")?;
+        }
+        write!(log.file, "}},\"events\":[")?;
         Ok(log)
     }
 
@@ -271,7 +294,7 @@ fn write_chars(output: &mut dyn Write, text: &[u16]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apple_sys::{capture::Rect, image::CursorInfo};
+    use apple_sys::image::CursorInfo;
 
     #[test]
     fn event_log_round_trips_text_and_reuses_cursor_assets() {
@@ -290,7 +313,13 @@ mod tests {
             elapsed_ns: 0,
             active: true,
         };
-        let mut log = EventLog::open(&path, source).unwrap();
+        let other = Rect {
+            x: 160.0,
+            y: 10.0,
+            width: 80.0,
+            height: 60.0,
+        };
+        let mut log = EventLog::open(&path, source, &[source.rect, other]).unwrap();
         let mut key = Event {
             kind: 6,
             time_ns: 250_000_000,
@@ -333,6 +362,10 @@ mod tests {
             document.field("t0").and_then(splice_json::Value::as_f64),
             Some(8.0)
         );
+        // Every window of a multi-window take, in global points (T46.6).
+        assert!(saved.starts_with(
+            r#"{"t0":8,"source":{"kind":"area","rect":{"x":-50,"y":10,"width":200,"height":100},"scale":2,"windows":[{"x":-50,"y":10,"width":200,"height":100},{"x":160,"y":10,"width":80,"height":60}]},"events":["#
+        ), "{saved}");
         assert_eq!(
             document
                 .field("dropped")
@@ -381,6 +414,7 @@ mod tests {
                 elapsed_ns: 0,
                 active: true,
             },
+            &[],
         )
         .unwrap();
         let events = [Event {
