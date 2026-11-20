@@ -512,7 +512,8 @@ records and edits a screen video correctly".
   one coordinate space per parameter, documented in `commands.describe`, with `intent.autoZoom`
   correct on cropped clips (A5); `takes.events {kinds, stride}` (A8); `items.inspect` shows resolved
   default effects (A10); `project.set {fps, aspect:auto|16:10}` and export fps (G1); doc drift (A9).
-- [x] T46.5 [L] (21 tasks x 3 runs x 2 arms at 2c8a123: 120/126; every task 3/3 in both arms except voiceover, which this Mac mini cannot run: no microphone, NO_DEVICE up front) Evals: record-app-landscape, record-pause-marker, keys-private, crop-autozoom,
+- [x] T46.5 [L] (21 tasks x 3 runs x 2 arms at 2c8a123: 120/126; every task 3/3 in both arms except voiceover, which this Mac mini cannot run: no microphone, NO_DEVICE up front)
+- [x] T46.6 [L] Multi-window takes: `record.start {source:{windows}}` (2–4 windows, one take), layers placed as captured with matched native corners (2cf4226 + fixes). Live-verified on the Mac: two windows, app-limited system audio (tone app vs TextEdit), desktop icons hidden, alwaysArrow. Final run at 63fe58a: 22 tasks x 3 x 2 arms, 126/132, every task 3/3 in both arms except voiceover (no microphone on this Mac). Evals: record-app-landscape, record-pause-marker, keys-private, crop-autozoom,
   cursor-range-hide, camera-layout, gif-teaser, retake-replace; all 3/3 in both arms with the
   existing 13.
 
