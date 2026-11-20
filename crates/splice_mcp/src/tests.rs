@@ -1910,3 +1910,24 @@ fn docs_name_only_tools_commands_presets_and_lints_that_exist() {
         );
     }
 }
+
+/// Found by record-app-landscape (code mode): code.run filled ifRevision from what it read,
+/// and record.start without a session answered NO_SESSION. Alone, ifRevision is a
+/// precondition and the take starts its own session.
+#[test]
+fn record_start_takes_if_revision_without_a_session() {
+    let root = TestDirectory::new("record-revision");
+    let store = splice_core::history::Store::create(
+        &root.0.join("p.splice"),
+        &splice_model::Project::default(),
+    )
+    .unwrap();
+    let args = |revision: &str| object(vec![("ifRevision", text(revision))]);
+    assert!(
+        super::platform::record_write_options(&store, &args("r0"))
+            .unwrap()
+            .is_none()
+    );
+    let stale = super::platform::record_write_options(&store, &args("r5")).unwrap_err();
+    assert!(format!("{stale:?}").contains("STALE_REVISION"), "{stale:?}");
+}

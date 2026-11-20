@@ -477,7 +477,20 @@ pub(super) fn record_write_options(
     store: &splice_core::history::Store,
     args: &Json,
 ) -> Result<Option<splice_core::history::WriteOptions>, StoreError> {
-    if args.field("sessionId").is_none() && args.field("ifRevision").is_none() {
+    // Without a session, ifRevision is only a precondition: the take then starts its own
+    // session as it does with neither (code.run fills ifRevision from what it read).
+    if args.field("sessionId").is_none() {
+        if args.field("ifRevision").is_some() {
+            let asked = args.revision("ifRevision")?;
+            let current = store.project().rev;
+            if asked != current {
+                return Err(failure(
+                    "STALE_REVISION",
+                    &format!("ifRevision r{asked} is stale. Current revision is r{current}."),
+                    "Re-read the project (project.info) and pass its revision.",
+                ));
+            }
+        }
         return Ok(None);
     }
     Ok(Some(splice_core::history::WriteOptions {
