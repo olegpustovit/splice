@@ -733,3 +733,15 @@ date	commit	agent	task	result	checks	calls	errors	recoveries	wall_s	tokens
 2026-11-20	3d5073c39	claude+code	voiceover	fail	1/4	7	1	1	23.3	237047
 2026-11-20	3d5073c39	claude+code	voiceover	fail	1/4	8	2	1	22.1	271671
 2026-11-20	3d5073c39	claude+code	voiceover	fail	1/4	5	1	1	22.5	196864
+2026-11-20	a631ac775-dirty	claude	gif-teaser	pass	3/3	9	2	1	28.6	282831
+2026-11-20	a631ac775-dirty	claude	gif-teaser	pass	3/3	5	0	0	15.0	133823
+2026-11-20	a631ac775-dirty	claude	gif-teaser	pass	3/3	7	0	0	24.9	194712
+2026-11-20	a631ac775-dirty	claude	record-two-windows	pass	3/3	4	0	0	22.7	170510
+2026-11-20	a631ac775-dirty	claude	record-two-windows	pass	3/3	5	0	0	27.3	201034
+2026-11-20	a631ac775-dirty	claude	record-two-windows	pass	3/3	5	0	0	28.6	203288
+2026-11-20	a631ac775-dirty	claude+code	gif-teaser	pass	3/3	11	1	1	40.9	378518
+2026-11-20	a631ac775-dirty	claude+code	gif-teaser	pass	3/3	6	0	0	23.3	225324
+2026-11-20	a631ac775-dirty	claude+code	gif-teaser	pass	3/3	5	0	0	26.0	193707
+2026-11-20	a631ac775-dirty	claude+code	record-two-windows	pass	3/3	2	0	0	20.1	106134
+2026-11-20	a631ac775-dirty	claude+code	record-two-windows	pass	3/3	2	0	0	19.6	106266
+2026-11-20	a631ac775-dirty	claude+code	record-two-windows	pass	3/3	2	0	0	18.7	106220
