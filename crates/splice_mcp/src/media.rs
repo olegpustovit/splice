@@ -496,6 +496,7 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
     let mut cursor = Vec::new();
     let mut clicks = Vec::new();
     let mut keys = Vec::new();
+    let mut caret = Vec::new();
     let mut key_index = 0;
     if let Some(events_name) = media.take.as_ref().and_then(|take| take.events.as_deref()) {
         let dir = dir.join("takes").join(media.id.to_string());
@@ -559,6 +560,18 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
                     ]);
                     keys.push(object(fields));
                 }
+                // The text insertion point (T45.4): where typing lands, from Accessibility.
+                "caret" => {
+                    for axis in ["x", "y", "w", "h"] {
+                        let value = event
+                            .field(axis)
+                            .and_then(Json::as_f64)
+                            .filter(|v| v.is_finite())
+                            .ok_or_else(events_format)?;
+                        fields.push((axis, Json::Float(value)));
+                    }
+                    caret.push(object(fields));
+                }
                 _ => {}
             }
             Ok(())
@@ -570,6 +583,7 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
         ("cursor", Json::Array(cursor)),
         ("clicks", Json::Array(clicks)),
         ("keys", Json::Array(keys)),
+        ("caret", Json::Array(caret)),
     ]))
 }
 

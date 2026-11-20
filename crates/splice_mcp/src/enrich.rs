@@ -403,23 +403,35 @@ fn typing_bursts(events: &Json) -> Vec<Json> {
         if !lull {
             continue;
         }
-        let pointer = list("cursor")
-            .iter()
-            .chain(list("clicks"))
-            .filter(|c| {
-                c.field("sourceFrame")
-                    .and_then(Json::as_i64)
-                    .is_some_and(|f| f <= at)
-            })
-            .max_by_key(|c| c.field("sourceFrame").and_then(Json::as_i64));
-        if let Some(pointer) = pointer
-            && let (Some(x), Some(y)) = (pointer.field("x"), pointer.field("y"))
-        {
-            out.push(object(vec![
-                ("at", Json::Signed(at)),
-                ("x", x.clone()),
-                ("y", y.clone()),
-            ]));
+        let frame = |c: &Json| c.field("sourceFrame").and_then(Json::as_i64);
+        let latest = |kinds: &[&str]| {
+            kinds
+                .iter()
+                .flat_map(|kind| list(kind))
+                .filter(|c| frame(c).is_some_and(|f| f <= at))
+                .max_by_key(|c| frame(c))
+        };
+        // Typing lands at the text caret (T45.4), unless a click since its last sample moved
+        // the focus; without caret samples, where the pointer last was.
+        let click = latest(&["clicks"]).and_then(frame);
+        let caret = latest(&["caret"]).filter(|caret| frame(caret) >= click);
+        let point = match caret {
+            Some(caret) => {
+                let number = |key: &str| caret.field(key).and_then(Json::as_f64);
+                match (number("x"), number("y"), number("w"), number("h")) {
+                    (Some(x), Some(y), Some(w), Some(h)) => Some((
+                        Json::Float((x + w / 2.0).clamp(0.0, 1.0)),
+                        Json::Float((y + h / 2.0).clamp(0.0, 1.0)),
+                    )),
+                    _ => None,
+                }
+            }
+            None => latest(&["cursor", "clicks"]).and_then(|pointer| {
+                Some((pointer.field("x")?.clone(), pointer.field("y")?.clone()))
+            }),
+        };
+        if let Some((x, y)) = point {
+            out.push(object(vec![("at", Json::Signed(at)), ("x", x), ("y", y)]));
         }
     }
     out

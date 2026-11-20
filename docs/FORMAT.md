@@ -19,7 +19,7 @@ Name.splice/
   takes/<med>/          a recorded take, in Recorder's layout (recordings live in the package; imports stay where they are):
     screen.mov          HEVC, cursor-less, variable frame rate
     mic.m4a  system.m4a camera.mov   optional, one file per source, AAC 48 kHz / HEVC
-    events.json         {"t0","source":{kind,rect,scale},"events":[{t,k:move|down|up|drag|scroll|key|flags|cursor,…}],"dropped"?:count}
+    events.json         {"t0","source":{kind,rect,scale},"events":[{t,k:move|down|up|drag|scroll|key|flags|cursor|caret,…}],"dropped"?:count}
     cursors/<hash>.png  + <hash>.json {hotX, hotY, scale}
   media/                consolidated copies (media.consolidate, med_<id>.<ext>) and html.add's
                         rendered pages (html-<hash>.mov, ProRes 4444 with alpha)
@@ -33,7 +33,11 @@ For a recorded take, `t0` is the host-clock time of the first complete screen fr
 Event `t` values are seconds from that frame with pauses removed. Positions are normalized to
 0…1 within the source rectangle. `dropped` counts input events lost if the native queue fills.
 A cursor event references a SHA-256 digest of the PNG, hotspot and scale. The hotspot is in
-PNG pixels, and `scale` is pixels per point.
+PNG pixels, and `scale` is pixels per point. A caret event (0.4, T45.4)
+`{"t","k":"caret","x","y","w","h"}` is the focused text element's insertion point or selection
+from Accessibility, normalized like positions (it may fall outside 0…1). The recorder samples it
+at most 10 times a second and writes it only when it moves; without the Accessibility permission
+a take has no caret events and readers use the pointer. Readers skip event kinds they do not know.
 
 ## Durability
 

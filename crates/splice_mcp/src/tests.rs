@@ -807,6 +807,68 @@ fn edit_apply_fills_cursor_crops_and_typing_zooms() {
     .unwrap();
 }
 
+/// T45.4: caret samples (Accessibility) are listed by takes.events, and typing zooms land on the
+/// caret instead of the resting pointer, unless a click since the caret's last sample moved
+/// the focus. Takes without caret samples keep the pointer rule.
+#[test]
+fn typing_zooms_follow_the_text_caret() {
+    let root = TestDirectory::new("enrich-caret");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    let take = sample.join("takes/med_screen");
+    fs::create_dir_all(&take).unwrap();
+    let typing_focus = |events: &str| {
+        fs::write(take.join("events.json"), events).unwrap();
+        let store = splice_core::history::Store::open(&sample).unwrap();
+        let ops = splice_json::parse(r#"[{"cmd":"intent.autoZoom","item":"clp_take"}]"#).unwrap();
+        let filled = super::enrich::ops(
+            &store,
+            ops.as_array().unwrap(),
+            &mut splice_core::edit::missing_media,
+        )
+        .unwrap()
+        .unwrap();
+        let clicks = filled[0].field("clicks").unwrap().as_array().unwrap();
+        let burst = clicks.last().unwrap();
+        let x = |key: &str| burst.field(key).unwrap().as_f64().unwrap();
+        (x("x"), x("y"))
+    };
+    let base = r#"{"t":0.4,"k":"down","b":0,"x":0.9,"y":0.1},{"t":4.0,"k":"move","x":0.8,"y":0.8}"#;
+    let caret = r#"{"t":4.5,"k":"caret","x":0.3,"y":0.59,"w":0.002,"h":0.02}"#;
+    let key = r#"{"t":5.0,"k":"key","ch":"a","keyCode":4}"#;
+    let (x, y) = typing_focus(&format!(r#"{{"events":[{base},{caret},{key}]}}"#));
+    assert!(
+        (x - 0.301).abs() < 1e-9 && (y - 0.6).abs() < 1e-9,
+        "{x} {y}"
+    );
+    // A click after the caret's last sample moved the focus: back to the pointer.
+    let click = r#"{"t":4.8,"k":"down","b":0,"x":0.7,"y":0.2}"#;
+    let (x, y) = typing_focus(&format!(r#"{{"events":[{base},{caret},{click},{key}]}}"#));
+    assert_eq!((x, y), (0.7, 0.2));
+    // No caret samples (no Accessibility permission): the pointer, as before.
+    let (x, y) = typing_focus(&format!(r#"{{"events":[{base},{key}]}}"#));
+    assert_eq!((x, y), (0.8, 0.8));
+    // takes.events lists the samples; a malformed one is a bad package, not a silent skip.
+    fs::write(
+        take.join("events.json"),
+        format!(r#"{{"events":[{base},{caret},{key}]}}"#),
+    )
+    .unwrap();
+    let store = splice_core::history::Store::open(&sample).unwrap();
+    let args = splice_json::parse(r#"{"clip":"clp_take"}"#).unwrap();
+    let listed = super::media::events(&sample, store.project(), &args).unwrap();
+    let samples = listed.field("caret").unwrap().as_array().unwrap();
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].field("w").and_then(Json::as_f64), Some(0.002));
+    fs::write(
+        take.join("events.json"),
+        r#"{"events":[{"t":4.5,"k":"caret","x":0.3}]}"#,
+    )
+    .unwrap();
+    let error = super::media::events(&sample, store.project(), &args).unwrap_err();
+    assert!(format!("{error:?}").contains("BAD_PACKAGE"), "{error:?}");
+}
+
 /// T41: on a silent take, edit.apply fills intent.steps, intent.speedTyping and the smart cuts'
 /// activity from the take's events; an `auto` basis with words on the timeline needs nothing.
 #[test]

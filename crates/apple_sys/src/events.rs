@@ -154,6 +154,7 @@ unsafe extern "C" {
     fn splice_events_peek(ring: *mut c_void, out: *mut Event, capacity: usize) -> usize;
     fn splice_events_ack(ring: *mut c_void, count: usize) -> bool;
     fn splice_events_dropped(ring: *mut c_void) -> u64;
+    fn splice_ax_caret(out: *mut f64) -> bool;
 }
 
 impl EventRing {
@@ -208,4 +209,13 @@ impl Drop for EventRing {
         // SAFETY: the constructor transferred one retained handle to this owner.
         unsafe { splice_events_release(self.handle.as_ptr()) };
     }
+}
+
+/// The focused text element's caret (or selection) in global screen points, `[x, y, w, h]`
+/// with a top-left origin, from Accessibility (T45.4). `None` without the Accessibility
+/// permission (it never prompts) or without a focused text element.
+pub fn caret() -> Option<[f64; 4]> {
+    let mut rect = [0.0_f64; 4];
+    // SAFETY: the bridge writes at most four doubles into `rect` and keeps no pointer.
+    unsafe { splice_ax_caret(rect.as_mut_ptr()) }.then_some(rect)
 }

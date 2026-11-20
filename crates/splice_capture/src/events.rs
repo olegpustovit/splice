@@ -18,7 +18,15 @@ pub struct EventLog {
     file: BufWriter<File>,
     empty: bool,
     last_cursor: Option<[u8; 32]>,
+    /// Capture bounds in global points (x, y, width, height), to normalize caret samples.
+    bounds: [f64; 4],
+    /// The last caret written, normalized, and when the next sample is due (take ns).
+    last_caret: Option<[f64; 4]>,
+    caret_due: u64,
 }
+
+/// Caret samples come at most this often (10 Hz), and only when the caret moved.
+const CARET_PERIOD_NS: u64 = 100_000_000;
 
 impl EventLog {
     /// Starts a log after the first screen sample establishes its clock.
@@ -48,6 +56,9 @@ impl EventLog {
             staged,
             empty: true,
             last_cursor: None,
+            bounds: [rect.x, rect.y, rect.width, rect.height],
+            last_caret: None,
+            caret_due: 0,
         };
         fs::create_dir(directory.join("cursors"))?;
         write!(
@@ -80,7 +91,37 @@ impl EventLog {
         {
             self.cursor(state.elapsed_ns, &cursor)?;
         }
+        if let Some(state) = recording.input_state()
+            && state.active
+            && state.elapsed_ns >= self.caret_due
+        {
+            self.caret_due = state.elapsed_ns + CARET_PERIOD_NS;
+            self.caret(state.elapsed_ns)?;
+        }
         Ok(())
+    }
+
+    /// Samples the focused text caret through Accessibility (T45.4), normalized to the source
+    /// like pointer positions. Without the permission there is no sample and nothing is written:
+    /// consumers fall back to the pointer.
+    fn caret(&mut self, at: u64) -> io::Result<()> {
+        let Some([x, y, w, h]) = apple_sys::events::caret() else {
+            return Ok(());
+        };
+        let [left, top, width, height] = self.bounds;
+        let normalized = [
+            (x - left) / width,
+            (y - top) / height,
+            w / width,
+            h / height,
+        ];
+        if self.last_caret == Some(normalized) {
+            return Ok(());
+        }
+        self.last_caret = Some(normalized);
+        self.begin(seconds(at), "caret")?;
+        let [x, y, w, h] = normalized;
+        write!(self.file, ",\"x\":{x},\"y\":{y},\"w\":{w},\"h\":{h}}}")
     }
 
     fn append(&mut self, records: &[Event]) -> io::Result<()> {

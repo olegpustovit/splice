@@ -9,6 +9,7 @@ fn main() {
             "native/app.m",
             "native/audio.m",
             "native/capture.m",
+            "native/caret.m",
             "native/cursor.m",
             "native/error.m",
             "native/events.m",
@@ -29,6 +30,7 @@ fn main() {
     for framework in [
         "Accelerate",
         "AppKit",
+        "ApplicationServices",
         "AudioToolbox",
         "AVFoundation",
         "Carbon",

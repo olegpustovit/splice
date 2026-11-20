@@ -203,6 +203,8 @@ Agents cannot restore a revision that would change the project's access level.
 
 `takes.events` reports timeline frame numbers and source frame numbers. Key events expose their
 indexes, visibility and categories. Captured characters and raw key codes stay in the take.
+`caret` lists the text caret samples (`{frame, sourceFrame, x, y, w, h}`, from Accessibility when
+the recorder had that permission; empty otherwise).
 `media.analyze {clip|media, kinds}` returns track settings and transcript-derived pauses, plus the
 requested native kinds: `loudness`, `peaks`, `beats` (onsets and tempo), `sounds` (SoundAnalysis
 labels as runs), `shots`, `text` (Vision OCR with boxes), `faces`, `people` and `matte` (a person
@@ -264,7 +266,8 @@ and viewer edits fill them the same way before the batch applies, so the journal
 that replay without media. A `$ref` to an object the same batch creates (`"item":"$cut.right"`,
 `"mask":"$mask"`) is read from the batch staged up to that op; an item the fill cannot read (an
 overlay for clicks or a cursor crop) is refused with `WRONG_KIND` and `param:"item"`. The fills:
-`intent.autoZoom` (clicks and typing bursts from the take's events; it writes `zoom` items on a
+`intent.autoZoom` (clicks and typing bursts from the take's events, a burst aimed at the text caret
+when the take has caret samples and no click moved the focus since, else at the pointer; it writes `zoom` items on a
 camera lane), `intent.steps` (`activity`: the take's busy source ranges), `intent.speedTyping`
 (`typing`: its typing runs), the smart cuts `cut.pauses`, `intent.pace` and `intent.fitDuration`
 (`activity: [{media, from, to}]` for every take on the spine, when `basis` is `activity`, or
