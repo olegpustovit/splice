@@ -902,3 +902,35 @@ fn h2_gap_and_past_end_placement_keep_the_timeline_at_the_spine() {
         "items end at {items}, past the spine end {spine}"
     );
 }
+
+/// Found by the cursor-range-hide eval: two splits of one clip in a batch. The second frame is
+/// past the shortened clip, and the error names the piece that holds it.
+#[test]
+fn a_second_split_past_the_shortened_clip_names_the_piece_holding_the_frame() {
+    let mut project = sample();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"item.split","item":"clp_take","at":200},{"cmd":"item.split","item":"clp_take","at":300}]"#,
+    )
+    .unwrap();
+    let error = apply(&mut project, ops.as_array().unwrap(), Source::Agent, true).unwrap_err();
+    let text = error.to_string();
+    assert!(
+        text.contains("OUT_OF_RANGE") && text.contains("$ref.right"),
+        "{text}"
+    );
+    // The ref form the fix suggests works.
+    let ops = splice_json::parse(
+        r#"[{"cmd":"item.split","item":"clp_take","at":200,"ref":"a"},{"cmd":"item.split","item":"$a.right","at":300}]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, true).unwrap();
+    // A stray field in an at object is named as such, with the field it likely meant.
+    let ops = splice_json::parse(r#"[{"cmd":"title.add","at":{"clip":"clp_take"},"length":30}]"#)
+        .unwrap();
+    let error = apply(&mut project, ops.as_array().unwrap(), Source::Agent, true).unwrap_err();
+    let text = error.to_string();
+    assert!(
+        text.contains("at has no field clip") && text.contains("\"item\""),
+        "{text}"
+    );
+}

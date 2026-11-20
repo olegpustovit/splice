@@ -291,7 +291,12 @@ pub(crate) fn closest(name: &str, known: &mut dyn Iterator<Item = &str>) -> Opti
 }
 
 /// Argument names that mean the same thing elsewhere in the API, for didYouMean.
-const SYNONYMS: &[(&str, &str)] = &[("ids", "items"), ("id", "item"), ("items", "ids")];
+const SYNONYMS: &[(&str, &str)] = &[
+    ("ids", "items"),
+    ("id", "item"),
+    ("items", "ids"),
+    ("clip", "item"),
+];
 
 /// Levenshtein distance over bytes (names are ASCII).
 fn distance(a: &str, b: &str) -> usize {

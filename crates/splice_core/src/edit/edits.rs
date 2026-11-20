@@ -149,6 +149,28 @@ impl Editor {
         if matches!(id, TimelineId::Marker(_)) {
             return Err(wrong_kind("Split a clip or overlay."));
         }
+        if let (TimelineId::Clip(_), true) = (id, at < span.start || at >= span.end) {
+            // Typically an earlier split in the same batch shortened this clip: name the piece
+            // that holds the frame instead of only the range it missed.
+            let holder = self.project.clips.order().iter().find_map(|&slot| {
+                let timing = self.project.clips.timing(slot)?;
+                (timing.start <= at && at < timing.start + timing.length).then(|| {
+                    let id = self.project.clips.id(slot).expect("live clip");
+                    (id, timing.start, timing.start + timing.length)
+                })
+            });
+            if let Some((holder, start, end)) = holder {
+                return Err(CommandError::rule(
+                    "OUT_OF_RANGE",
+                    "at",
+                    Some(Json::Signed(i64::from(at))),
+                    &format!("a frame inside {id} ({}–{})", span.start, span.end),
+                    &format!(
+                        "Frame {at} is in {holder} ({start}–{end}); split {holder}. When an earlier op of the batch split {id}, give it a ref and split \"$ref.right\"."
+                    ),
+                ));
+            }
+        }
         check_split(span.start, span.end, at)?;
         let cut = at - span.start;
         let created = match id {

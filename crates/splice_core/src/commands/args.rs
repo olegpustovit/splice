@@ -135,10 +135,19 @@ fn shape(value: &Json, key: &str, allowed: &[&str]) -> Result<(), Error> {
         .ok_or_else(|| Error::bad(key, "an object"))?;
     for (field, _) in fields {
         if !allowed.contains(&field.as_str()) {
-            return Err(Error::bad(
-                &format!("{key}.{field}"),
-                &format!("one of the fields {}", allowed.join(", ")),
-            ));
+            // Name the stray field as such: "at.clip: expected item, …" read like a shape for clip.
+            let mut error = Error::unknown_name(
+                "UNKNOWN_PARAM",
+                format!("{key} has no field {field}."),
+                format!("Pass {key} as an object with {}.", allowed.join(", ")),
+                field,
+                &mut allowed.iter().copied(),
+            );
+            if let Some(rule) = error.rule.as_mut() {
+                rule.param = format!("{key}.{field}");
+                rule.expected = format!("one of the fields {}", allowed.join(", "));
+            }
+            return Err(error);
         }
     }
     Ok(())
