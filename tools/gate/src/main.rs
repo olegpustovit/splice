@@ -145,6 +145,7 @@ fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
             "splice_mcp",
             "splice_model",
         ],
+        // T45.2: Lottie/SVG frames for picture movies; evidence in crates/thorvg_sys/README.md.
         "splice_av" => &[
             "apple_sys",
             "ogpu_core",
@@ -153,6 +154,7 @@ fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
             "splice_gpu",
             "splice_json",
             "splice_model",
+            "thorvg_sys",
         ],
         // D1: the portable compositor renders through PXUI's open-tier OGPU.
         "splice_gpu" => &["ogpu_core"],
@@ -160,6 +162,7 @@ fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
         "splice_core" => &["splice_model", "splice_json"],
         "splice_eval" => &["splice_model"],
         // D2: QuickJS-NG for code mode; size and build time in crates/quickjs_sys/README.md.
+        // T45.2: ThorVG probes Lottie/SVG imports on every platform (crates/thorvg_sys/README.md).
         "splice_mcp" => &[
             "apple_sys",
             "quickjs_sys",
@@ -170,6 +173,7 @@ fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
             "splice_json",
             "splice_media",
             "splice_model",
+            "thorvg_sys",
         ],
         "splice_media" => &["apple_sys", "splice_model"],
         "splice_testkit" => &["splice_core", "splice_json"],
@@ -207,7 +211,7 @@ fn manifest_violations(name: &str, manifest: &str) -> Vec<&'static str> {
             || (name == "splice_eval" && matches!(key, "splice_core" | "splice_json")))
             && table.ends_with("dev-dependencies");
         let allowed_build = key == "cc"
-            && matches!(name, "apple_sys" | "quickjs_sys")
+            && matches!(name, "apple_sys" | "quickjs_sys" | "thorvg_sys")
             && table.ends_with("build-dependencies");
         if !(allowed.contains(&key) || allowed_test || allowed_build) {
             issues.push("dependency is outside this crate's allowlist");
@@ -277,6 +281,7 @@ mod tests {
         );
         assert!(manifest_violations("apple_sys", "[build-dependencies]\ncc = \"1\"").is_empty());
         assert!(manifest_violations("quickjs_sys", "[build-dependencies]\ncc = \"1\"").is_empty());
+        assert!(manifest_violations("thorvg_sys", "[build-dependencies]\ncc = \"1\"").is_empty());
         assert!(!manifest_violations("splice_core", "[build-dependencies]\ncc = \"1\"").is_empty());
         assert!(
             manifest_violations(

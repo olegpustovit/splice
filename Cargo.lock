@@ -282,3 +282,12 @@ dependencies = [
  "splice_core",
  "splice_json",
 ]
+
+[[package]]
+name = "thorvg_sys"
+version = "0.4.0"
+dependencies = [
+ "cc",
+ "mem_sys",
+ "splice_testkit",
+]
