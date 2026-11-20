@@ -1,16 +1,31 @@
 use super::look::Num;
-use splice_model::{Effect, EffectParam, EffectValue, Frame};
+use splice_model::{Effect, EffectParam, EffectValue, Frame, MediaId};
 
 /// Window background inside a layer's placement rectangle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Background {
     /// Keep the existing backdrop.
     None,
     /// Fill with an RGB color.
     Solid(u32),
-    /// Diagonal gradient between two RGB colors.
+    /// Corner-to-corner gradient between two RGB colors (top left to bottom right).
     Gradient(u32, u32),
+    /// Gradient between two RGB colors along an angle in degrees: 0 runs left to right, 90 top
+    /// to bottom (T46.3).
+    Angled(u32, u32, f64),
+    /// A still image, cover-fit to the bounds, blurred 0…1 (T46.3).
+    Image(MediaId, f64),
 }
+
+/// Generated wallpapers (T46.3): name, the two colors and the angle. Code, not assets.
+pub const WALLPAPERS: &[(&str, u32, u32, f64)] = &[
+    ("aurora", 0x1f8a70, 0x2b1b5a, 120.0),
+    ("sunset", 0xff7e5f, 0x6a3093, 160.0),
+    ("ocean", 0x2bc0e4, 0x0b2a6f, 100.0),
+    ("forest", 0x8bc34a, 0x0f3d2e, 140.0),
+    ("ember", 0xf9a825, 0x7b1e1e, 60.0),
+    ("slate", 0x5b6b7f, 0x14181f, 135.0),
+];
 
 /// Per-picture Window effect after inheritance.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,14 +66,27 @@ pub enum Corner {
     BottomRight,
 }
 
-#[derive(Clone, Copy, Debug)]
+/// The camera effect after inheritance (T46.3): numbers may be keyed (owner-relative frames).
+#[derive(Clone, Debug)]
 pub(super) struct CameraStyle {
     /// Background behind the presenter: 0 keep, 1 blur, 2 remove (person matte).
     pub(super) background: u8,
     pub(super) corner: Corner,
-    pub(super) size: f64,
-    pub(super) roundness: f64,
-    pub(super) shadow: f64,
+    /// Longer bubble side as a fraction of the canvas's shorter side.
+    pub(super) size: Num,
+    pub(super) roundness: Num,
+    pub(super) shadow: Num,
+    /// Bubble width over height.
+    pub(super) aspect: f64,
+    /// A circle (aspect 1, fully round).
+    pub(super) circle: bool,
+    /// Bubble center in canvas fractions, replacing the corner.
+    pub(super) position: Option<[Num; 2]>,
+    pub(super) mirror: bool,
+    /// Shrink the bubble while the timeline camera zooms in.
+    pub(super) shrink: bool,
+    /// Layout index (0 bubble, 1 full, 2 hidden); keys switch at their frame.
+    pub(super) layout: Num,
 }
 
 /// Keystroke-chip placement.
@@ -126,10 +154,29 @@ pub(super) fn window(scopes: &[&[Effect]]) -> Option<Window> {
     }
     let a = style.color("color", 0x5b6f63);
     let b = style.color("color2", 0x1d2420);
+    let gradient = match style.value("angle") {
+        Some(EffectValue::Number(angle)) if angle.is_finite() => {
+            Background::Angled(a, b, angle.rem_euclid(360.0))
+        }
+        _ => Background::Gradient(a, b),
+    };
     let background = match style.text("background") {
         Some("none") => Background::None,
         Some("color") => Background::Solid(a),
-        _ => Background::Gradient(a, b),
+        // Without an image the window keeps its gradient (the writer refuses that state).
+        Some("image") => match style.text("image").and_then(|id| id.parse().ok()) {
+            Some(media) => Background::Image(media, style.number("blur", 0.0).clamp(0.0, 1.0)),
+            None => gradient,
+        },
+        Some("wallpaper") => {
+            let name = style.text("wallpaper").unwrap_or("aurora");
+            let &(_, from, to, angle) = WALLPAPERS
+                .iter()
+                .find(|w| w.0 == name)
+                .unwrap_or(&WALLPAPERS[0]);
+            Background::Angled(from, to, angle)
+        }
+        _ => gradient,
     };
     Some(Window {
         padding: style.number("padding", 0.07).clamp(0.0, 0.3),
@@ -174,8 +221,8 @@ pub(super) fn cursor(scopes: &[&[Effect]]) -> Option<Cursor> {
     })
 }
 
-pub(super) fn camera(scopes: &[&[Effect]]) -> CameraStyle {
-    let mut style = Resolution::new(scopes, "camera");
+pub(super) fn camera(scopes: &[&[Effect]], shifts: &[Frame]) -> CameraStyle {
+    let mut style = Resolution::shifted(scopes, shifts, "camera");
     if style.enabled == Some(false) {
         style.params.clear();
     }
@@ -192,9 +239,30 @@ pub(super) fn camera(scopes: &[&[Effect]]) -> CameraStyle {
             _ => 0,
         },
         corner,
-        size: style.number("size", 0.24).clamp(0.12, 0.45),
-        roundness: style.number("roundness", 0.2).clamp(0.0, 1.0),
-        shadow: style.number("shadow", 0.5).clamp(0.0, 1.0),
+        size: style.num("size", 0.24),
+        roundness: style.num("roundness", 0.2),
+        shadow: style.num("shadow", 0.5),
+        aspect: match style.text("aspect") {
+            Some("4:3") => 4.0 / 3.0,
+            Some("3:4") => 3.0 / 4.0,
+            Some("16:9") => 16.0 / 9.0,
+            Some("9:16") => 9.0 / 16.0,
+            _ => 1.0,
+        },
+        circle: style.text("aspect") == Some("circle"),
+        // Either coordinate places the bubble freely; the other defaults to the middle.
+        position: (style.value("x").is_some() || style.value("y").is_some())
+            .then(|| [style.num("x", 0.5), style.num("y", 0.5)]),
+        mirror: style.boolean("mirror", false),
+        shrink: style.boolean("shrinkWhenZoomed", false),
+        layout: match style.value("layout") {
+            Some(EffectValue::Text(name)) => Num::Const(match name.as_str() {
+                "full" => 1.0,
+                "hidden" => 2.0,
+                _ => 0.0,
+            }),
+            _ => style.num("layout", 0.0),
+        },
     }
 }
 
@@ -506,7 +574,7 @@ impl Resolution {
         }
     }
 
-    fn value(&self, name: &str) -> Option<&EffectValue> {
+    pub(crate) fn value(&self, name: &str) -> Option<&EffectValue> {
         self.params
             .iter()
             .find(|param| param.name == name)

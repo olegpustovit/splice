@@ -53,6 +53,8 @@ fn render_plan_matches_ten_prototype_frames() {
                         Background::None => "-".into(),
                         Background::Solid(a) => format!("{a:06x}"),
                         Background::Gradient(a, b) => format!("{a:06x}/{b:06x}"),
+                        Background::Angled(a, b, angle) => format!("{a:06x}/{b:06x}@{angle:.0}"),
+                        Background::Image(media, blur) => format!("{media}~{blur:.2}"),
                     };
                     writeln!(
                         &mut output,

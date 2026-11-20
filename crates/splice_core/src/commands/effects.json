@@ -41,7 +41,9 @@
         "options": [
           "gradient",
           "color",
-          "none"
+          "none",
+          "image",
+          "wallpaper"
         ],
         "label": "Background"
       },
@@ -54,6 +56,38 @@
         "type": "color",
         "def": "#1d2420",
         "label": "Color 2"
+      },
+      "angle": {
+        "type": "number",
+        "min": 0,
+        "max": 360,
+        "step": 1,
+        "label": "Gradient angle (degrees; 0 runs left to right, 90 top to bottom; unset runs corner to corner)"
+      },
+      "image": {
+        "type": "media",
+        "label": "Background image (a file path, imported on apply, or its med_ ID)"
+      },
+      "blur": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "label": "Image blur"
+      },
+      "wallpaper": {
+        "type": "enum",
+        "def": "aurora",
+        "options": [
+          "aurora",
+          "sunset",
+          "ocean",
+          "forest",
+          "ember",
+          "slate"
+        ],
+        "label": "Wallpaper (generated gradient)"
       }
     },
     "applies": "visual"
@@ -144,10 +178,11 @@
       "size": {
         "type": "number",
         "def": 0.24,
-        "min": 0.12,
-        "max": 0.45,
+        "min": 0.1,
+        "max": 1,
         "step": 0.01,
-        "label": "Size"
+        "label": "Size",
+        "keys": true
       },
       "roundness": {
         "type": "number",
@@ -155,7 +190,8 @@
         "min": 0,
         "max": 1,
         "step": 0.05,
-        "label": "Roundness"
+        "label": "Roundness",
+        "keys": true
       },
       "shadow": {
         "type": "number",
@@ -163,7 +199,8 @@
         "min": 0,
         "max": 1,
         "step": 0.05,
-        "label": "Shadow"
+        "label": "Shadow",
+        "keys": true
       },
       "background": {
         "type": "enum",
@@ -174,6 +211,56 @@
           "remove"
         ],
         "label": "Background"
+      },
+      "aspect": {
+        "type": "enum",
+        "def": "square",
+        "options": [
+          "square",
+          "circle",
+          "4:3",
+          "3:4",
+          "16:9",
+          "9:16"
+        ],
+        "label": "Aspect"
+      },
+      "x": {
+        "type": "number",
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Center x (0–1 of the canvas; with y, replaces the corner)",
+        "keys": true
+      },
+      "y": {
+        "type": "number",
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "label": "Center y (0–1 of the canvas; with x, replaces the corner)",
+        "keys": true
+      },
+      "mirror": {
+        "type": "bool",
+        "def": false,
+        "label": "Mirror"
+      },
+      "shrinkWhenZoomed": {
+        "type": "bool",
+        "def": false,
+        "label": "Shrink when zoomed"
+      },
+      "layout": {
+        "type": "enum",
+        "def": "bubble",
+        "options": [
+          "bubble",
+          "full",
+          "hidden"
+        ],
+        "label": "Layout (keys switch at their frame and ease over 0.3 s)",
+        "keys": true
       }
     },
     "applies": "take"
@@ -599,6 +686,20 @@
         "type": "color",
         "def": "#000000",
         "label": "Cover color"
+      },
+      "start": {
+        "type": "number",
+        "min": 0,
+        "max": 10000000,
+        "step": 1,
+        "label": "First frame (relative to the owner's start; unset: from its start)"
+      },
+      "end": {
+        "type": "number",
+        "min": 0,
+        "max": 10000000,
+        "step": 1,
+        "label": "Frame after the last (relative to the owner's start; unset: to its end)"
       }
     }
   },

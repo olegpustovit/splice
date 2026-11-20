@@ -34,6 +34,7 @@ fn needs(op: &Json) -> bool {
         "captions.translate" => missing("texts"),
         "html.add" => missing("movie"),
         "music.add" => missing("path") && !missing("track"),
+        "look.apply" => missing("effects") && missing("pack") && !missing("file"),
         _ => false,
     }
 }
@@ -61,6 +62,14 @@ pub(super) fn ops(
             if let Json::Object(fields) = &mut filled[index] {
                 fields.retain(|(key, _)| !extra.iter().any(|(added, _)| added == key));
                 fields.extend(extra);
+            }
+            continue;
+        }
+        if cmd(&filled[index]) == "look.apply" {
+            let file = filled[index].field("file").and_then(Json::as_str);
+            let effects = read_look(store.path(), file.unwrap_or(""))?;
+            if let Json::Object(fields) = &mut filled[index] {
+                fields.push(("effects".into(), effects));
             }
             continue;
         }
@@ -345,6 +354,97 @@ pub(super) fn consolidate(
     Ok(())
 }
 
+/// A look file's path: relative paths resolve in the package.
+fn look_path(package: &Path, file: &str) -> std::path::PathBuf {
+    let path = Path::new(file);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        package.join(path)
+    }
+}
+
+/// The `effects` of a look file `look.save` wrote (T46.3), for `look.apply {file}`.
+fn read_look(package: &Path, file: &str) -> Result<Json, StoreError> {
+    let path = look_path(package, file);
+    let unreadable = |why: &str| {
+        StoreError::from(CommandError::rule(
+            "BAD_LOOK",
+            "file",
+            Some(Json::String(file.into())),
+            "a look file look.save wrote ({\"splice\":\"look\",\"version\":1,\"effects\":{…}})",
+            &format!(
+                "{} {why}. Save one with look.save {{target, file}}, or apply a pack.",
+                path.display()
+            ),
+        ))
+    };
+    let text = fs::read_to_string(&path).map_err(|error| unreadable(&error.to_string()))?;
+    let value = splice_json::parse(&text).map_err(|_| unreadable("is not JSON"))?;
+    if value.field("splice").and_then(Json::as_str) != Some("look")
+        || value.field("version").and_then(Json::as_i64) != Some(1)
+    {
+        return Err(unreadable("is not a version 1 look"));
+    }
+    value
+        .field("effects")
+        .cloned()
+        .ok_or_else(|| unreadable("has no effects"))
+}
+
+/// `look.save` (T46.3): writes each op's look file from the batch staged up to it. Run only for
+/// a batch that will commit.
+pub(super) fn save_looks(
+    store: &Store,
+    ops: &[Json],
+    load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
+) -> Result<(), StoreError> {
+    for (index, op) in ops.iter().enumerate() {
+        if cmd(op) != "look.save" {
+            continue;
+        }
+        let target = op.field("target").and_then(Json::as_str).unwrap_or("");
+        let refs: Vec<&str> = [target]
+            .into_iter()
+            .filter(|t| t.starts_with('$'))
+            .collect();
+        let (staged, targets) = store.preview(&ops[..=index], &refs, load)?;
+        let target = match targets.into_iter().next() {
+            Some(target) => target,
+            None => match splice_core::commands::decode(op)?.op {
+                splice_core::commands::Op::LookSave { target, .. } => target,
+                _ => unreachable!("a look.save op"),
+            },
+        };
+        let look = splice_core::edit::saved_look(&staged, &target, store.path())?;
+        let file = op.field("file").and_then(Json::as_str).unwrap_or("");
+        let to = look_path(store.path(), file);
+        let mut text = String::new();
+        splice_json::write(&look, &mut text).expect("finite look");
+        text.push('\n');
+        let dir = to.parent().unwrap_or(store.path());
+        fs::create_dir_all(dir).map_err(|error| write_failure(dir, &error))?;
+        let mut partial = to.as_os_str().to_owned();
+        partial.push(".partial");
+        let partial = Path::new(&partial);
+        fs::write(partial, text)
+            .and_then(|()| fs::rename(partial, &to))
+            .map_err(|error| {
+                let _ = fs::remove_file(partial);
+                write_failure(&to, &error)
+            })?;
+    }
+    Ok(())
+}
+
+fn write_failure(path: &Path, error: &io::Error) -> StoreError {
+    failure(
+        "IO",
+        &format!("Could not write {}: {error}.", path.display()),
+        "Pick a writable path for file (relative paths land in the package).",
+    )
+}
+
 fn copy_verified(from: &Path, to: &Path) -> Result<(), StoreError> {
     if to.exists() && same_bytes(from, to).map_err(|error| io_failure(from, &error))? {
         return Ok(());
@@ -543,3 +643,7 @@ fn follow_cursor(
     }
     Ok(Json::Array(keys))
 }
+
+#[cfg(test)]
+#[path = "look_tests.rs"]
+mod look_tests;

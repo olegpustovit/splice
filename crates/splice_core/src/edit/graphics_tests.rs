@@ -233,3 +233,179 @@ fn look_packs_write_ordinary_effects_and_skip_what_does_not_fit() {
     .unwrap_err();
     assert_eq!(crate::package::project::encode(&untouched), before);
 }
+
+/// T46.3: look.save changes nothing and names what it saves; the file it describes applies
+/// back through look.apply {file, effects} (splice mcp fills effects from the file), window and
+/// camera included, keys kept.
+#[test]
+fn saved_looks_round_trip_through_look_apply() {
+    let mut styled = sample();
+    run(
+        &mut styled,
+        r##"[{"cmd":"effect.set","target":"project","type":"window","params":{"background":"wallpaper","wallpaper":"ember","padding":0.1}},
+            {"cmd":"effect.add","target":"project","type":"color","params":{"saturation":1.3}},
+            {"cmd":"effect.set","target":"clp_take","type":"camera","params":{"mirror":true,"aspect":"circle","layout":{"keys":[{"at":0,"value":"bubble"},{"at":90,"value":"hidden"}]}}}]"##,
+    )
+    .unwrap();
+    let before = crate::package::project::encode(&styled);
+    let report = run(
+        &mut styled,
+        r#"[{"cmd":"look.save","target":"project","file":"looks/brand.json"}]"#,
+    )
+    .unwrap();
+    assert_eq!(crate::package::project::encode(&styled), before);
+    let summary = &report.changes[0].summary;
+    assert!(
+        summary.contains("(window, cursor, color)") && summary.contains("looks/brand.json"),
+        "{summary}"
+    );
+    let file = saved_look(&styled, &Target::Project, std::path::Path::new("/pkg")).unwrap();
+    assert_eq!(file.field("splice").and_then(Json::as_str), Some("look"));
+    let window = file
+        .field("effects")
+        .and_then(|e| e.field("window"))
+        .unwrap();
+    assert_eq!(
+        window.field("wallpaper").and_then(Json::as_str),
+        Some("ember")
+    );
+    let take = Target::Timeline(TimelineId::Clip("clp_take".parse().unwrap()));
+    let camera = saved_look(&styled, &take, std::path::Path::new("/pkg")).unwrap();
+    let mut text = String::new();
+    splice_json::write(camera.field("effects").unwrap(), &mut text).unwrap();
+    // A fresh project gets the same values from the file.
+    let mut fresh = sample();
+    run(
+        &mut fresh,
+        &format!(r#"[{{"cmd":"look.apply","target":"clp_take","file":"looks/cam.json","effects":{text}}}]"#),
+    )
+    .unwrap();
+    let slot = fresh.clips.find("clp_take".parse().unwrap()).unwrap();
+    let applied = effect(
+        &fresh.clips.data(slot).unwrap().appearance.effects,
+        "camera",
+    );
+    assert_eq!(param(&applied, "mirror"), EffectValue::Bool(true));
+    assert_eq!(
+        param(&applied, "aspect"),
+        EffectValue::Text("circle".into())
+    );
+    let EffectValue::Keys(keys) = param(&applied, "layout") else {
+        panic!("layout keys")
+    };
+    assert_eq!(
+        keys.iter().map(|k| (k.at, k.value)).collect::<Vec<_>>(),
+        [(0, 0.0), (90, 2.0)]
+    );
+    // Nothing to save, an unknown look type and a missing fill are refused with the rule.
+    assert_eq!(
+        refused(r#"[{"cmd":"look.save","target":"clp_open","file":"a.json"}]"#),
+        ("NOTHING_TO_SAVE".into(), "target".into())
+    );
+    assert_eq!(
+        refused(
+            r#"[{"cmd":"look.apply","target":"project","file":"a.json","effects":{"shape":{}}}]"#
+        )
+        .0,
+        "UNKNOWN_PARAM"
+    );
+    assert_eq!(
+        refused(r#"[{"cmd":"look.apply","target":"project","file":"a.json"}]"#),
+        ("BAD_ARGS".into(), "effects".into())
+    );
+}
+
+/// T46.3: a window image given as a path imports once like any file (the journal keeps the
+/// descriptor) and is stored as its media ID.
+#[test]
+fn window_images_import_by_path_and_store_the_media_id() {
+    let base = sample();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"effect.set","target":"clp_take","type":"window","params":{"background":"image","image":"/tmp/wall.png","blur":0.3}},
+            {"cmd":"effect.set","target":"clp_open","type":"window","params":{"background":"image","image":"/tmp/wall.png"}}]"#,
+    )
+    .unwrap();
+    let mut loads = 0;
+    let mut load = |path: &str| {
+        loads += 1;
+        Ok(Media {
+            id: MediaId::from_serial(0),
+            kind: MediaKind::Image,
+            path: path.into(),
+            bookmark: None,
+            size: 1,
+            mtime: 0,
+            probe: Probe {
+                fps: 30.0,
+                frames: 1_000_000,
+                width: 64,
+                height: 64,
+                audio: Vec::new(),
+                codec: None,
+                loudness: None,
+            },
+            take: None,
+        })
+    };
+    let (project, _, imports) = stage_above(
+        &base,
+        ops.as_array().unwrap(),
+        Source::Agent,
+        None,
+        base.serial,
+        &mut load,
+    )
+    .unwrap();
+    assert_eq!((loads, imports.len()), (1, 1));
+    let id = imports[0].descriptor.id;
+    let slot = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    let window = effect(
+        &project.clips.data(slot).unwrap().appearance.effects,
+        "window",
+    );
+    assert_eq!(param(&window, "image"), EffectValue::Text(id.to_string()));
+    // Without a media backend a path is offline; a non-image media ID is the wrong kind.
+    assert_eq!(
+        refused(r#"[{"cmd":"effect.set","target":"clp_take","type":"window","params":{"image":"/tmp/wall.png"}}]"#).0,
+        "MEDIA_OFFLINE"
+    );
+    assert_eq!(
+        refused(
+            r#"[{"cmd":"effect.set","target":"clp_take","type":"window","params":{"image":"med_broll"}}]"#
+        ),
+        ("WRONG_KIND".into(), "image".into())
+    );
+}
+
+/// T46.3: mask.add/mask.set from/to are timeline frames inside the owner, stored on its clock.
+#[test]
+fn timed_masks_refuse_frames_outside_their_item() {
+    // clp_take covers 120–540.
+    assert_eq!(
+        refused(r#"[{"cmd":"mask.add","item":"clp_take","from":100,"to":200}]"#),
+        ("OUT_OF_RANGE".into(), "from".into())
+    );
+    assert_eq!(
+        refused(r#"[{"cmd":"mask.add","item":"clp_take","from":200,"to":541}]"#),
+        ("OUT_OF_RANGE".into(), "to".into())
+    );
+    assert_eq!(
+        refused(r#"[{"cmd":"mask.add","item":"clp_take","from":200,"to":200}]"#),
+        ("BAD_ARGS".into(), "to".into())
+    );
+    let mut project = sample();
+    run(
+        &mut project,
+        r#"[{"cmd":"mask.add","item":"clp_take","from":200,"ref":"m"},{"cmd":"mask.set","mask":"$m","to":300}]"#,
+    )
+    .unwrap();
+    let slot = project.clips.find("clp_take".parse().unwrap()).unwrap();
+    let mask = effect(
+        &project.clips.data(slot).unwrap().appearance.effects,
+        "mask",
+    );
+    assert_eq!(
+        (param(&mask, "start"), param(&mask, "end")),
+        (EffectValue::Number(80.0), EffectValue::Number(180.0))
+    );
+}

@@ -26,11 +26,13 @@ pub use look::{
     Transition, TransitionKind,
 };
 pub use style::{
-    Animate, Background, CaptionPreset, CaptionStyle, Cursor, KeyPosition, Keys, TextStyle, Window,
-    resolve_effect,
+    Animate, Background, CaptionPreset, CaptionStyle, Cursor, KeyPosition, Keys, TextStyle,
+    WALLPAPERS, Window, resolve_effect,
 };
 pub use text::{grapheme_len, ink_crop, text_units};
 
+#[cfg(test)]
+mod compositing_tests;
 #[cfg(test)]
 mod graphics_tests;
 #[cfg(test)]
@@ -119,6 +121,10 @@ pub enum Layer {
         shadow: f64,
         /// Background behind the presenter: 0 keep, 1 blur, 2 remove.
         background: u8,
+        /// Opacity (a `hidden` layout fades it out).
+        opacity: f64,
+        /// Flip the picture horizontally.
+        mirror: bool,
     },
     /// Recorded keystrokes on the current source clock.
     Keystrokes {

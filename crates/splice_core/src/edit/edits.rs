@@ -9,6 +9,8 @@ impl Editor {
         _cmd: &str,
         load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
     ) -> Result<Outcome, CommandError> {
+        let mut op = op;
+        self.import_images(&mut op, load)?;
         match op {
             Op::MediaRelink {
                 media,
@@ -142,6 +144,67 @@ impl Editor {
             Op::ProjectSet { aspect, access } => self.set_project(aspect, access),
             op => self.run_tier_b(op),
         }
+    }
+
+    /// A window `image` (T46.3) given as a file path imports like any other file and is stored
+    /// as its media ID; a media ID must name a still image of the project.
+    fn import_images(
+        &mut self,
+        op: &mut Op,
+        load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,
+    ) -> Result<(), CommandError> {
+        use crate::commands::EffectSelection;
+        let params = match op {
+            Op::EffectAdd { kind, params, .. }
+            | Op::EffectSet {
+                target: EffectSelection::Owner { kind, .. },
+                params,
+                ..
+            } if kind == "window" => params,
+            Op::EffectSet {
+                target: EffectSelection::Id(_),
+                params,
+                ..
+            } => params,
+            Op::LookApply { effects, .. } => {
+                match effects.iter_mut().find(|(k, _)| k == "window") {
+                    Some((_, params)) => params,
+                    None => return Ok(()),
+                }
+            }
+            _ => return Ok(()),
+        };
+        for param in params.iter_mut().filter(|param| param.name == "image") {
+            let EffectValue::Text(value) = &param.value else {
+                continue;
+            };
+            let id = match value.parse::<MediaId>() {
+                Ok(id) => id,
+                Err(_) => self.import_path(value.clone(), load)?,
+            };
+            let kind = self
+                .project
+                .media
+                .iter()
+                .find(|media| media.id == id)
+                .map(|media| media.kind);
+            if kind != Some(MediaKind::Image) {
+                return Err(CommandError::rule(
+                    if kind.is_none() {
+                        "NOT_FOUND"
+                    } else {
+                        "WRONG_KIND"
+                    },
+                    "image",
+                    Some(Json::String(value.clone())),
+                    "a still image file (png, jpg, heic) or the med_… ID of one",
+                    "Pass the image's file path (it is imported) or an image media ID from \
+                     project.info.",
+                ));
+            }
+            param.value = EffectValue::Text(id.to_string());
+        }
+        Ok(())
     }
 
     fn split(&mut self, id: TimelineId, at: Frame) -> Result<Outcome, CommandError> {

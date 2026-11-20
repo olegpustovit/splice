@@ -171,6 +171,37 @@ refused at render with the fix). `look.apply {target, pack}` writes a named pack
 pack replaces every grade parameter it names, restyles a window only where the target already has
 one, and its summary names the parts it skipped because they do not apply to the target.
 
+Compositing (T46.3) is ordinary `window`, `camera` and `mask` effects (`Splice.Effects`
+lists every parameter and range):
+
+- **Backdrops.** `window.background` is `gradient`, `color`, `none`, `image` or `wallpaper`.
+  `image` takes a file path (imported like any file, once, and stored as its `med_` ID; a
+  `med_` ID of a still works too; video is `WRONG_KIND`), cover-fits it to the canvas and
+  blurs it by `blur` 0–1. `angle` (degrees: 0 runs `color` to `color2` left to right, 90
+  top to bottom) turns the gradient; unset it runs corner to corner as before. `wallpaper`
+  picks a gradient generated in code: aurora, sunset, ocean, forest, ember or slate.
+- **Camera bubble.** `camera.size` is 0.1–1 of the canvas's shorter side (the bubble's longer
+  side), `aspect` is square, circle, 4:3, 3:4, 16:9 or 9:16 (the camera is cover-cropped to
+  it), `x`/`y` place its center in canvas fractions instead of `corner` (kept on the
+  canvas), `mirror` flips it, and `shrinkWhenZoomed` shrinks it toward 60% as the timeline
+  camera zooms to 2× (it follows the solved D12 amount, so it eases with the zoom). `size`,
+  `roundness`, `shadow`, `x` and `y` take keys. `layout` is `bubble`, `full` (the camera
+  fills the canvas) or `hidden`; keyed, each key switches at its frame and eases there over
+  0.3 s with its own ease (`hold` cuts, a spring takes its settle time), so a fullscreen or
+  hidden stretch needs no split: `effect.set {target:"clp_take", type:"camera",
+  params:{layout:{keys:[{at:0, value:"bubble"}, {at:120, value:"full"}, {at:240,
+  value:"bubble"}]}}}`. Key values are the layout names (files store their index 0, 1, 2).
+- **Timed masks.** `mask.add`/`mask.set` take `from` and `to`: **timeline frames**, `to`
+  exclusive, both inside the item (`OUT_OF_RANGE` otherwise). They are stored as the mask's
+  `start`/`end`, frames relative to the item's start, so the mask stays on its content when
+  the item moves. Outside them the mask does nothing.
+- **Saved looks.** `look.save {target, file}` writes the target's own window, camera, cursor,
+  color and captions effects to a JSON file (`{"splice":"look","version":1,"effects":{type:
+  {param: value}}}`, keys kept, a window image as an absolute path) when the batch commits; a dry
+  run writes nothing and the project does not change. `look.apply {target, file}` applies such a
+  file like a pack, except that a saved window is applied even where the target has none.
+  Relative `file` paths resolve in the package.
+
 Use `at` for a placement calculated from a frame or anchor. Use `anchor` to retain an explicit
 item, marker, or transcript relation. A frame in a gap between clips keeps its position, anchored
 to the end of the clip before it (or the start of the first clip). Overlapping items can move to a
@@ -277,7 +308,8 @@ camera lane), `intent.steps` (`activity`: the take's busy source ranges), `inten
 (`activity: [{media, from, to}]` for every take on the spine, when `basis` is `activity`, or
 `auto` on a timeline without transcript words; activity as in `media.analyze`, never characters), `crop.keys {follow:"cursor"|"face",
 aspect}` (keys every half second), `music.add {track}` (the library file, its length and loudness,
-and its title, artist and license; see Music library), `media.consolidate` (copies files into `media/` only when
+and its title, artist and license; see Music library), `look.apply {file}` (the file's
+`effects`; `look.save` writes its file only when the batch commits), `media.consolidate` (copies files into `media/` only when
 the batch commits, never on a dry run or a stale or failing batch; an existing copy is reused only
 when its bytes match the source), `mask.track` (Vision object tracking), `audio.sync` (envelope
 cross-correlation offset) and `captions.translate` without `texts` (on-device Translation).
@@ -505,7 +537,9 @@ animate; the fix lists the keyable ones, also marked `keys:true` in `Splice.Effe
 `UNLICENSED` (`music.add` of a track whose license is unknown, without `allowUnlicensed:true`),
 `NO_ACTIVITY` (an activity basis or `intent.steps` with no recorded input on the timeline or
 inside the clip), `NO_TYPING` (`intent.speedTyping` found no run of at least `minRun`), `HTML_FAILED` (`html.add`'s page
-did not load, could not be written, or drew a frame differently the second time).
+did not load, could not be written, or drew a frame differently the second time),
+`NOTHING_TO_SAVE` (`look.save` on a target with no window, camera, cursor, color or captions
+effect of its own), `BAD_LOOK` (`look.apply {file}` of a file that is missing or not a look).
 0.3 edits: `NO_HANDLES` (roll, slip, slide; a transition whose clips lack the source it consumes),
 `NO_NEIGHBOR`, `NOT_ADJACENT`, `NOT_JOINABLE`,
 `NOT_JOINED`, `NOTHING_TO_RESTORE`, `NOTHING_TO_UNDO`, `NO_TRANSITION`, `TOO_LONG`, `FIT_IMPOSSIBLE`, `NEEDS_TEXT`,

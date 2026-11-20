@@ -406,6 +406,7 @@ pub(super) fn caption_patches(value: &Json) -> Result<Vec<CaptionWordPatch>, Err
 /// The `params` object, built in `reuse` (its name buffers kept).
 pub(super) fn effect_params(
     value: &Json,
+    kind: Option<&str>,
     reuse: &mut Vec<EffectParam>,
 ) -> Result<Vec<EffectParam>, Error> {
     let mut result = std::mem::take(reuse);
@@ -424,7 +425,7 @@ pub(super) fn effect_params(
             EffectValue::Text(s.into())
         } else if let Some(n) = parameter.as_f64().filter(|n| n.is_finite()) {
             EffectValue::Number(n)
-        } else if let Some(keys) = crate::package::decode_keys(parameter) {
+        } else if let Some(keys) = decode_named_keys(parameter, kind, key) {
             EffectValue::Keys(keys)
         } else {
             return Err(Error::bad(
@@ -473,7 +474,7 @@ pub(super) fn schema_params(
             EffectValue::Text(s.into())
         } else if let Some(n) = parameter.as_f64().filter(|n| n.is_finite()) {
             EffectValue::Number(n)
-        } else if let Some(keys) = crate::package::decode_keys(parameter) {
+        } else if let Some(keys) = decode_named_keys(parameter, Some(kind), key) {
             EffectValue::Keys(keys)
         } else {
             return Err(Error::bad(key, "a number, boolean, string or {keys}"));
@@ -495,11 +496,24 @@ pub(super) fn schema_params(
     Ok(result)
 }
 
-/// `[{at, value, ease}]` with increasing frames.
-pub(super) fn keys(value: &Json, key: &str) -> Result<Vec<Key>, Error> {
+/// `{keys:[…]}` whose values may name a keyed enum's options (`camera.layout`).
+fn decode_named_keys(value: &Json, kind: Option<&str>, param: &str) -> Option<Vec<Key>> {
+    match super::named_keys(value, kind, param) {
+        Some(named) => crate::package::decode_keys(&named),
+        None => crate::package::decode_keys(value),
+    }
+}
+
+/// `[{at, value, ease}]` with increasing frames, for the parameter at `path` (`type.param`): a
+/// keyed enum's values may be option names.
+pub(super) fn keys(value: &Json, key: &str, path: Option<&str>) -> Result<Vec<Key>, Error> {
     let list = value
         .field(key)
         .ok_or_else(|| Error::bad(key, "an array of {at, value, ease}"))?;
+    let named = path
+        .and_then(|path| path.split_once('.'))
+        .and_then(|(kind, param)| super::named_keys(list, Some(kind), param));
+    let list = named.as_ref().unwrap_or(list);
     // A bad ease names its key and every accepted form.
     for (index, entry) in list.as_array().into_iter().flatten().enumerate() {
         if let Some(ease) = entry.field("ease")

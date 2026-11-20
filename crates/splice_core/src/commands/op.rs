@@ -455,6 +455,8 @@ pub enum Op {
         item: Target,
         /// Mask parameters.
         params: Vec<EffectParam>,
+        /// Timeline frames the mask shows from and until (exclusive), when it is timed.
+        span: [Option<Frame>; 2],
     },
     /// Edit Mask.
     MaskSet {
@@ -464,6 +466,8 @@ pub enum Op {
         params: Vec<EffectParam>,
         /// Turn the mask on or off.
         enabled: Option<bool>,
+        /// Timeline frames the mask shows from and until (exclusive), when it is timed.
+        span: [Option<Frame>; 2],
     },
     /// Translate Captions.
     CaptionsTranslate {
@@ -815,8 +819,20 @@ pub enum Op {
     LookApply {
         /// Clip, overlay, lane or the project.
         target: Target,
-        /// Pack name.
-        pack: String,
+        /// Pack name, or the look file it came from (T46.3).
+        name: String,
+        /// Whether `name` is a pack (a pack only restyles a window the target already has).
+        pack: bool,
+        /// Effect types and their values, in order.
+        effects: Vec<(String, Vec<EffectParam>)>,
+    },
+    /// Save Look (T46.3): the target's look effects as a file. Changes nothing in the project;
+    /// splice mcp writes the file when the batch commits.
+    LookSave {
+        /// Clip, overlay, lane or the project.
+        target: Target,
+        /// Destination `.json` path (relative paths resolve in the package).
+        file: String,
     },
 }
 

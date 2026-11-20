@@ -1,5 +1,7 @@
 use super::{CommandError as Error, DecodeScratch, Json, args::*, op::*};
-use splice_model::{CameraMode, Duck, Ease, Fit, Frame, Placement, Rect, ShapeKind, Spring, Zoom};
+use splice_model::{
+    CameraMode, Duck, Ease, EffectParam, Fit, Frame, Placement, Rect, ShapeKind, Spring, Zoom,
+};
 
 type DecodedOp = Result<Op, Error>;
 
@@ -645,7 +647,11 @@ pub(super) fn effect_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::EffectAdd {
         target: a.target("target")?,
         kind: a.string("type")?.into(),
-        params: effect_params(a, &mut scratch.params)?,
+        params: effect_params(
+            a,
+            a.field("type").and_then(Json::as_str),
+            &mut scratch.params,
+        )?,
         enabled: a.opt_flag("enabled")?,
     })
 }
@@ -671,7 +677,11 @@ pub(super) fn effect_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     }
     Ok(Op::EffectSet {
         target,
-        params: effect_params(a, &mut scratch.params)?,
+        params: effect_params(
+            a,
+            a.field("type").and_then(Json::as_str),
+            &mut scratch.params,
+        )?,
         enabled: a.opt_flag("enabled")?,
         reset,
     })
@@ -945,6 +955,7 @@ pub(super) fn mask_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::MaskAdd {
         item: a.target("item")?,
         params: schema_params(a, "mask", &mut scratch.params)?,
+        span: mask_span(a)?,
     })
 }
 
@@ -953,7 +964,26 @@ pub(super) fn mask_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
         mask: a.target("mask")?,
         params: schema_params(a, "mask", &mut scratch.params)?,
         enabled: a.opt_flag("enabled")?,
+        span: mask_span(a)?,
     })
+}
+
+/// A timed mask's `from`/`to`: timeline frames, `to` exclusive (T46.3). Stored owner-relative
+/// as `mask.start`/`mask.end`, so the mask stays on its content when the owner moves.
+fn mask_span(a: &Json) -> Result<[Option<Frame>; 2], Error> {
+    let (from, to) = (a.opt_int("from")?, a.opt_int("to")?);
+    if let (Some(from), Some(to)) = (from, to)
+        && to <= from
+    {
+        return Err(Error::rule(
+            "BAD_ARGS",
+            "to",
+            a.field("to").cloned(),
+            "a timeline frame after from",
+            "Pass to greater than from (to is exclusive): from:90, to:150 shows the mask for 60 frames.",
+        ));
+    }
+    Ok([from, to])
 }
 
 pub(super) fn mask_track(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
@@ -1327,10 +1357,11 @@ pub(super) fn param_keys(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         Some("merge") => true,
         _ => return Err(Error::bad("mode", "replace or merge")),
     };
+    let path = param_path(a, &mut String::new())?;
     Ok(Op::ParamKeys {
         target: a.target("target")?,
-        path: param_path(a, &mut String::new())?,
-        keys: keys(a, "keys")?,
+        keys: keys(a, "keys", Some(&path))?,
+        path,
         merge,
     })
 }
@@ -1566,10 +1597,38 @@ pub(super) fn particles_add(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp 
     })
 }
 
-/// `look.apply` (T45.4): a pack from `looks.json`.
+/// `look.apply` (T45.4): a pack from `looks.json`, or (T46.3) a look file `look.save` wrote,
+/// whose `effects` splice mcp fills from the file (the journal keeps them, so replay never
+/// reads the file).
 pub(super) fn look_apply(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let target = a.target("target")?;
+    if a.field("pack").is_none()
+        && let Some(file) = a.opt_string("file")?
+    {
+        let effects = a.field("effects").ok_or_else(|| {
+            Error::rule(
+                "BAD_ARGS",
+                "effects",
+                None,
+                "the look file's effects (splice mcp and splice apply fill them from file)",
+                "Send look.apply {target, file} through edit.apply or splice apply, or pass \
+                 effects:{type:{param:value}} yourself.",
+            )
+        })?;
+        return Ok(Op::LookApply {
+            target,
+            name: file,
+            pack: false,
+            effects: look_effects(effects)?,
+        });
+    }
     let packs = super::look_packs();
-    let pack = a.string("pack")?;
+    let pack = a.field("pack").and_then(Json::as_str).ok_or_else(|| {
+        Error::bad(
+            "pack",
+            "a pack name (vivid, film, mono, pastel, neon), or file: a look.save .json path",
+        )
+    })?;
     if packs.field(pack).is_none() {
         let names: Vec<&str> = packs
             .as_object()
@@ -1590,8 +1649,51 @@ pub(super) fn look_apply(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         }
         return Err(error);
     }
+    let effects = packs
+        .field(pack)
+        .and_then(|pack| pack.field("effects"))
+        .expect("listed pack");
     Ok(Op::LookApply {
+        target,
+        name: pack.into(),
+        pack: true,
+        effects: look_effects(effects)?,
+    })
+}
+
+/// `{type: {param: value}}` of a look, in order; values as in `effect.set` params.
+fn look_effects(value: &Json) -> Result<Vec<(String, Vec<EffectParam>)>, Error> {
+    let fields = value
+        .as_object()
+        .ok_or_else(|| Error::bad("effects", "an object {type: {param: value}}"))?;
+    let mut effects = Vec::with_capacity(fields.len());
+    for (kind, params) in fields {
+        if !super::LOOK_KINDS.contains(&kind.as_str()) {
+            return Err(Error::unknown_name(
+                "UNKNOWN_PARAM",
+                format!("A look has no {kind} effect."),
+                format!("Looks carry {}.", super::LOOK_KINDS.join(", ")),
+                kind,
+                &mut super::LOOK_KINDS.iter().copied(),
+            ));
+        }
+        let wrapped = Json::Object(vec![("params".into(), params.clone())]);
+        effects.push((
+            kind.clone(),
+            effect_params(&wrapped, Some(kind), &mut Vec::new())?,
+        ));
+    }
+    Ok(effects)
+}
+
+/// `look.save` (T46.3).
+pub(super) fn look_save(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let file = a.string("file")?;
+    if file.trim().is_empty() || file.contains('\0') {
+        return Err(Error::bad("file", "a .json path"));
+    }
+    Ok(Op::LookSave {
         target: a.target("target")?,
-        pack: pack.into(),
+        file: file.into(),
     })
 }

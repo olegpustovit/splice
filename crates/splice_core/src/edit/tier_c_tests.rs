@@ -44,8 +44,8 @@ fn tier_c_described_examples_apply_replay_undo_and_match_goldens() {
         .collect();
     // 35 rows of 0.3, then intent.steps, intent.speedTyping, caption.add (T41), item.order and
     // motion.preset (T42), html.add (T45.1), music.add (T45.3), counter.add, progress.add,
-    // particles.add and look.apply (T45.4).
-    assert_eq!(rows.len(), 46);
+    // particles.add and look.apply (T45.4), look.save (T46.3).
+    assert_eq!(rows.len(), 47);
     for command in rows {
         let described = commands::describe(Some(command.id), None).unwrap();
         let example = described.field("example").unwrap().clone();
@@ -276,8 +276,9 @@ fn keys_stay_on_their_content_across_split_trim_and_roll() {
 fn schema_backed_rows_list_every_schema_parameter() {
     let schemas = commands::effect_schemas();
     for (id, schema, skip) in [
-        ("mask.add", "mask", &[][..]),
-        ("mask.set", "mask", &[]),
+        // A timed mask's start/end come from from/to (timeline frames, T46.3).
+        ("mask.add", "mask", &["start", "end"][..]),
+        ("mask.set", "mask", &["start", "end"]),
         ("transition.add", "transition", &[]),
         ("transition.set", "transition", &[]),
         ("style.set", "brand", &[]),

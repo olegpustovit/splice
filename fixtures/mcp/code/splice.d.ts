@@ -559,6 +559,10 @@ declare namespace Splice {
       invert?: boolean;
       /** #rrggbb · cover color */
       color?: string;
+      /** timeline frame the mask appears (omit: the item start) */
+      from?: At;
+      /** timeline frame it disappears, exclusive (omit: the item end) */
+      to?: At;
     }
     /** Edit Mask (edit, 0.3). */
     interface MaskSet extends Base {
@@ -585,6 +589,10 @@ declare namespace Splice {
       invert?: boolean;
       /** #rrggbb · cover color */
       color?: string;
+      /** timeline frame the mask appears */
+      from?: At;
+      /** timeline frame it disappears, exclusive */
+      to?: At;
     }
     /** Translate Captions (edit, 0.3). */
     interface CaptionsTranslate extends Base {
@@ -1057,7 +1065,19 @@ declare namespace Splice {
       /** clp_… | ovl_… | lan_… | project */
       target: string;
       /** ordinary color, window and captions effects; parts that do not apply to the target are skipped and named */
-      pack: "vivid" | "film" | "mono" | "pastel" | "neon";
+      pack?: "vivid" | "film" | "mono" | "pastel" | "neon";
+      /** a look.save .json file instead of a pack (relative paths resolve in the package); its window, camera, cursor, color and captions effects are written as saved */
+      file?: string;
+      /** the look file's effects by type, filled from file by splice mcp and splice apply */
+      effects?: Record<string, unknown>;
+    }
+    /** Save Look (edit, 0.3). */
+    interface LookSave extends Base {
+      cmd: "look.save";
+      /** clp_… | ovl_… | lan_… | project */
+      target: string;
+      /** .json path (relative paths resolve in the package) · written when the batch commits, never on a dry run; changes nothing in the project */
+      file: string;
     }
   }
   /** Effect types and parameters (effects.json, the validator's own schema). */
@@ -1073,11 +1093,19 @@ declare namespace Splice {
       /** Inset · 0–0.02 · @default 0 */
       inset?: number;
       /** Background · @default "gradient" */
-      background?: "gradient" | "color" | "none";
+      background?: "gradient" | "color" | "none" | "image" | "wallpaper";
       /** Color · #rrggbb · @default "#5b6f63" */
       color?: string;
       /** Color 2 · #rrggbb · @default "#1d2420" */
       color2?: string;
+      /** Gradient angle (degrees; 0 runs left to right, 90 top to bottom; unset runs corner to corner) · 0–360 */
+      angle?: number;
+      /** Background image (a file path, imported on apply, or its med_ ID) */
+      image?: string;
+      /** Image blur · 0–1 · @default 0 */
+      blur?: number;
+      /** Wallpaper (generated gradient) · @default "aurora" */
+      wallpaper?: "aurora" | "sunset" | "ocean" | "forest" | "ember" | "slate";
     };
     /** Cursor: screen takes. */
     cursor: {
@@ -1104,14 +1132,26 @@ declare namespace Splice {
     camera: {
       /** Corner · @default "br" */
       corner?: "br" | "bl" | "tr" | "tl";
-      /** Size · 0.12–0.45 · @default 0.24 */
-      size?: number;
+      /** Size · 0.1–1 · @default 0.24 */
+      size?: number | { keys: Key[] };
       /** Roundness · 0–1 · @default 0.2 */
-      roundness?: number;
+      roundness?: number | { keys: Key[] };
       /** Shadow · 0–1 · @default 0.5 */
-      shadow?: number;
+      shadow?: number | { keys: Key[] };
       /** Background · @default "keep" */
       background?: "keep" | "blur" | "remove";
+      /** Aspect · @default "square" */
+      aspect?: "square" | "circle" | "4:3" | "3:4" | "16:9" | "9:16";
+      /** Center x (0–1 of the canvas; with y, replaces the corner) · 0–1 */
+      x?: number | { keys: Key[] };
+      /** Center y (0–1 of the canvas; with x, replaces the corner) · 0–1 */
+      y?: number | { keys: Key[] };
+      /** Mirror · @default false */
+      mirror?: boolean;
+      /** Shrink when zoomed · @default false */
+      shrinkWhenZoomed?: boolean;
+      /** Layout (keys switch at their frame and ease over 0.3 s) · @default "bubble" */
+      layout?: "bubble" | "full" | "hidden" | { keys: { at: number; value: "bubble" | "full" | "hidden"; ease?: Ease }[] };
     };
     /** Caption Style: captions lanes, caption cues and the project. */
     captions: {
@@ -1214,6 +1254,10 @@ declare namespace Splice {
       invert?: boolean;
       /** Cover color · #rrggbb · @default "#000000" */
       color?: string;
+      /** First frame (relative to the owner's start; unset: from its start) · 0–10000000 */
+      start?: number;
+      /** Frame after the last (relative to the owner's start; unset: to its end) · 0–10000000 */
+      end?: number;
     };
     /** Chroma Key: spine clips and media overlays. */
     key: {
@@ -1508,7 +1552,8 @@ declare namespace Splice {
     | op.CounterAdd
     | op.ProgressAdd
     | op.ParticlesAdd
-    | op.LookApply;
+    | op.LookApply
+    | op.LookSave;
 }
 
 declare const splice: {
@@ -1679,6 +1724,7 @@ declare const splice: {
     };
     look: {
       apply(args: Omit<Splice.op.LookApply, "cmd">): Splice.op.LookApply;
+      save(args: Omit<Splice.op.LookSave, "cmd">): Splice.op.LookSave;
     };
   };
   project: {

@@ -30,7 +30,7 @@ struct Layer {
     float4 grade1;   // temperature, tint, highlights, shadows
     float4 lut;      // amount, cube size, cutout amount, unused
     float4 key0;     // key rgb, tolerance (shapes: stroke rgb, unused)
-    float4 key1;     // softness, spill, unused, unused (ellipse and arc shapes: 1 - sweep)
+    float4 key1;     // softness, spill, unused, unused (ellipse and arc shapes: 1 - sweep; gradients: direction xy, angled flag z)
     float4 clip;     // visible region x, y, w, h in target pixels
     Mask masks[4];
     uint blend;      // 0 normal, 1 multiply, 2 screen, 3 overlay, 4 add, 5 darken, 6 lighten
@@ -90,9 +90,16 @@ static float2 oriented(float2 uv, uint orient) {
 }
 
 static float4 fetch(texture2d<float> source, sampler s, float2 uv, constant Layer &l) {
-    float2 lo = l.crop.xy, hi = l.crop.xy + l.crop.zw;
+    // A negative crop width or height samples mirrored (camera mirror, T46.3).
+    float2 lo = min(l.crop.xy, l.crop.xy + l.crop.zw), hi = max(l.crop.xy, l.crop.xy + l.crop.zw);
     float4 c = source.sample(s, oriented(clamp(uv, lo, hi), l.orient));
     return (l.flags & 1u) ? c.bgra : c;
+}
+
+// Gradient progress 0…1: corner to corner, or along an angle (key1.xy, flag key1.z; T46.3).
+static float gradient_t(float2 px, constant Layer &l) {
+    if (l.key1.z > 0.5) return clamp(0.5 + dot(px - (l.dest.xy + l.dest.zw * 0.5), l.key1.xy), 0.0, 1.0);
+    return clamp(dot(px - l.dest.xy, l.dest.zw) / dot(l.dest.zw, l.dest.zw), 0.0, 1.0);
 }
 
 static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
@@ -177,8 +184,7 @@ static inline float4 layer_body(Out in, constant Layer &l, texture2d<float> sour
         if (l.kind == 1) {
             color = l.color0;
         } else {
-            float t = clamp(dot(in.px - l.dest.xy, l.dest.zw) / dot(l.dest.zw, l.dest.zw), 0.0, 1.0);
-            color = mix(l.color0, l.color1, t);
+            color = mix(l.color0, l.color1, gradient_t(in.px, l));
         }
     } else if (l.kind == 3) {
         float d = abs(length(in.px - c) - (h.x - l.ring * 0.5)) - l.ring * 0.5;
@@ -241,7 +247,7 @@ static inline float4 layer_body(Out in, constant Layer &l, texture2d<float> sour
             color = fetch(source, linear, in.uv, l);
             float m = 1.0;
             if (l.flags & 32u) {
-                float2 lo = l.crop.xy, hi = l.crop.xy + l.crop.zw;
+                float2 lo = min(l.crop.xy, l.crop.xy + l.crop.zw), hi = max(l.crop.xy, l.crop.xy + l.crop.zw);
                 m = matte.sample(linear, oriented(clamp(in.uv, lo, hi), l.orient)).r;
             }
             for (uint i = 0; i < l.mask_count; i++) {
@@ -301,8 +307,7 @@ static inline float4 layer_body(Out in, constant Layer &l, texture2d<float> sour
         } else if (l.kind == 1) {
             color = l.color0;
         } else {
-            float t = clamp(dot(in.px - l.dest.xy, l.dest.zw) / dot(l.dest.zw, l.dest.zw), 0.0, 1.0);
-            color = mix(l.color0, l.color1, t);
+            color = mix(l.color0, l.color1, gradient_t(in.px, l));
         }
     }
     if (l.flags & 128u) {

@@ -238,15 +238,25 @@ fn effects(out: &mut String) {
                 Some("number") if keyable(spec) => "number | { keys: Key[] }".to_string(),
                 Some("number") => "number".into(),
                 Some("bool") => "boolean".into(),
-                Some("enum") => spec
-                    .field("options")
-                    .and_then(Json::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Json::as_str)
-                    .map(|option| format!("\"{option}\""))
-                    .collect::<Vec<_>>()
-                    .join(" | "),
+                Some("enum") => {
+                    let options = spec
+                        .field("options")
+                        .and_then(Json::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Json::as_str)
+                        .map(|option| format!("\"{option}\""))
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    // A keyed enum (camera.layout) keys its option names.
+                    if keyable(spec) {
+                        format!(
+                            "{options} | {{ keys: {{ at: number; value: {options}; ease?: Ease }}[] }}"
+                        )
+                    } else {
+                        options
+                    }
+                }
                 _ => "string".into(),
             };
             let mut doc = text("label").trim_matches('"').to_string();

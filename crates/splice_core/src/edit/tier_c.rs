@@ -133,8 +133,13 @@ impl Editor {
                     self.owner_label(owner)
                 )))
             }
-            Op::MaskAdd { item, params } => {
+            Op::MaskAdd {
+                item,
+                mut params,
+                span,
+            } => {
                 let owner = self.owner(&item)?;
+                self.mask_span(owner, span, &mut params)?;
                 let mut created = Vec::new();
                 let id = self.upsert(owner, "mask", params, None, &mut created)?;
                 Ok(Outcome {
@@ -148,10 +153,12 @@ impl Editor {
             }
             Op::MaskSet {
                 mask,
-                params,
+                mut params,
                 enabled,
+                span,
             } => {
-                self.expect_kind(&mask, "mask")?;
+                let (owner, _) = self.expect_kind(&mask, "mask")?;
+                self.mask_span(owner, span, &mut params)?;
                 self.set_effect(EffectSelection::Id(mask), params, enabled, &[])
             }
             Op::MaskTrack { mask, keys } => self.track_mask(&mask, &keys),
@@ -351,7 +358,8 @@ impl Editor {
             op @ (Op::CounterAdd { .. }
             | Op::ProgressAdd { .. }
             | Op::ParticlesAdd { .. }
-            | Op::LookApply { .. }) => self.run_graphics(op),
+            | Op::LookApply { .. }
+            | Op::LookSave { .. }) => self.run_graphics(op),
             _ => unreachable!("tier C dispatch"),
         }
     }
@@ -878,6 +886,63 @@ impl Editor {
             return Err(wrong_kind(&format!("Pass a {kind} effect ID (fx_…).")));
         }
         Ok((owner, index))
+    }
+
+    /// A timed mask (T46.3): timeline `from`/`to` (exclusive) become the owner-relative
+    /// `start`/`end` parameters, so the mask stays on its content when the owner moves. Both
+    /// must fall inside the owner; nothing is clamped.
+    fn mask_span(
+        &self,
+        owner: Owner,
+        span: [Option<Frame>; 2],
+        params: &mut Vec<EffectParam>,
+    ) -> Result<(), CommandError> {
+        if span == [None, None] {
+            return Ok(());
+        }
+        let id = match owner {
+            Owner::Clip(slot) => TimelineId::Clip(self.project.clips.id(slot).expect("live clip")),
+            Owner::Item(slot) => TimelineId::Item(self.project.items.id(slot).expect("live item")),
+            _ => {
+                return Err(wrong_kind(
+                    "Masks belong to a clip (clp_) or an overlay (ovl_).",
+                ));
+            }
+        };
+        let range = time::span(&self.project, id)?;
+        for (name, value, key) in [("from", span[0], "start"), ("to", span[1], "end")] {
+            let Some(frame) = value else { continue };
+            let inside = if key == "start" {
+                frame >= range.start && frame < range.end
+            } else {
+                frame > range.start && frame <= range.end
+            };
+            if !inside {
+                return Err(CommandError::rule(
+                    "OUT_OF_RANGE",
+                    name,
+                    Some(Json::Signed(i64::from(frame))),
+                    &format!(
+                        "a timeline frame within {id} ({}–{}, to exclusive)",
+                        range.start, range.end
+                    ),
+                    &format!(
+                        "Pass {name} between {} and {}: from/to are timeline frames, not \
+                         frames of the item.",
+                        range.start, range.end
+                    ),
+                ));
+            }
+            let relative = EffectValue::Number(f64::from(frame - range.start));
+            match params.iter_mut().find(|param| param.name == key) {
+                Some(param) => param.value = relative,
+                None => params.push(EffectParam {
+                    name: key.into(),
+                    value: relative,
+                }),
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn set_param(

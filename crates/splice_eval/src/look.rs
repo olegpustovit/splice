@@ -19,7 +19,7 @@ impl Num {
         }
     }
 
-    fn keys(&self) -> &[Key] {
+    pub(crate) fn keys(&self) -> &[Key] {
         match self {
             Self::Const(_) => &[],
             Self::Keys(list) => list,
@@ -231,6 +231,8 @@ struct RigMask {
     feather: Num,
     invert: bool,
     color: u32,
+    /// Owner-relative frames the mask shows in, `end` exclusive (T46.3).
+    span: [f64; 2],
 }
 
 /// Compiled look for one layer.
@@ -333,6 +335,10 @@ impl Rig {
                 feather: m.num("feather", 0.01),
                 invert: m.boolean("invert", false),
                 color: m.color("color", 0),
+                span: [
+                    m.number("start", f64::NEG_INFINITY),
+                    m.number("end", f64::INFINITY),
+                ],
             });
         }
         if let Some(k) = Resolution::on(&own, &[], "key") {
@@ -393,6 +399,9 @@ impl Rig {
             });
         }
         for (slot, mask) in look.masks.iter_mut().zip(&self.masks) {
+            if frame < mask.span[0] || frame >= mask.span[1] {
+                continue;
+            }
             *slot = Some(Mask {
                 shape: mask.shape,
                 mode: mask.mode,

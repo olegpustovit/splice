@@ -58,6 +58,7 @@ pub const EXTENSIONS: &[&str] = &[
     "progress.add",
     "particles.add",
     "look.apply",
+    "look.save",
 ];
 
 #[cfg(test)]
@@ -397,6 +398,9 @@ pub fn effect_schemas() -> &'static Json {
     })
 }
 
+/// The effect types a look carries (T46.3): what `look.save` writes and `look.apply` accepts.
+pub const LOOK_KINDS: [&str; 5] = ["window", "camera", "cursor", "color", "captions"];
+
 /// Look packs for `look.apply` (T45.4): `{name: {about, effects: {type: {param: value}}}}`.
 pub fn look_packs() -> &'static Json {
     static PACKS: std::sync::OnceLock<Json> = std::sync::OnceLock::new();
@@ -625,6 +629,53 @@ fn param_spec(kind: &str, name: &str) -> Result<&'static Json, CommandError> {
     })
 }
 
+/// `keys` (an array of `{at, value, ease}`, or `{keys:[…]}`) with option names of a keyed enum
+/// (`camera.layout`) replaced by their index, the form files store; `None` when no value is a
+/// name (nothing to translate, nothing allocated). `kind` is the effect type when the caller
+/// knows it; otherwise any type with a keyed enum called `param` (names are unique).
+pub(crate) fn named_keys(keys: &Json, kind: Option<&str>, param: &str) -> Option<Json> {
+    let list = keys.field("keys").unwrap_or(keys).as_array()?;
+    if !list
+        .iter()
+        .any(|entry| entry.field("value").is_some_and(|v| v.as_str().is_some()))
+    {
+        return None;
+    }
+    let options = effect_schemas()
+        .as_object()?
+        .iter()
+        .filter(|(name, _)| kind.is_none_or(|kind| kind == name))
+        .filter_map(|(_, schema)| schema.field("params")?.field(param))
+        .find(|spec| keyable(spec) && spec.field("type").and_then(Json::as_str) == Some("enum"))?
+        .field("options")?
+        .as_array()?;
+    let translated = list
+        .iter()
+        .map(
+            |entry| match (entry, entry.field("value").and_then(Json::as_str)) {
+                (Json::Object(fields), Some(name)) => {
+                    // An unknown name stays a string, so the shape check names the parameter.
+                    let Some(index) = options.iter().position(|o| o.as_str() == Some(name)) else {
+                        return entry.clone();
+                    };
+                    let mut fields = fields.clone();
+                    for (key, value) in &mut fields {
+                        if key == "value" {
+                            *value = Json::Unsigned(index as u64);
+                        }
+                    }
+                    Json::Object(fields)
+                }
+                _ => entry.clone(),
+            },
+        )
+        .collect();
+    Some(match keys.field("keys") {
+        Some(_) => Json::Object(vec![("keys".into(), Json::Array(translated))]),
+        None => Json::Array(translated),
+    })
+}
+
 /// Whether a parameter schema entry accepts keys (`"keys": true`).
 pub fn keyable(spec: &Json) -> bool {
     spec.field("keys").and_then(Json::as_bool) == Some(true)
@@ -685,6 +736,20 @@ pub fn check_effect(kind: &str, params: &[EffectParam]) -> Result<(), CommandErr
                 .field("options")
                 .and_then(Json::as_array)
                 .is_some_and(|options| options.iter().any(|o| o.as_str() == Some(text))),
+            // A keyed enum (camera.layout) stores each option's index.
+            (Some("enum"), EffectValue::Keys(keys)) => {
+                let count = spec
+                    .field("options")
+                    .and_then(Json::as_array)
+                    .map_or(0, |options| options.len()) as f64;
+                !keys.is_empty()
+                    && keys
+                        .iter()
+                        .all(|key| key.value.fract() == 0.0 && (0.0..count).contains(&key.value))
+            }
+            (Some("media"), EffectValue::Text(text)) => {
+                text.parse::<splice_model::MediaId>().is_ok()
+            }
             (Some("color"), EffectValue::Text(text)) => {
                 text.len() == 7
                     && text.starts_with('#')
@@ -705,12 +770,19 @@ pub fn check_effect(kind: &str, params: &[EffectParam]) -> Result<(), CommandErr
                 Some("bool") => "true or false".into(),
                 Some("color") => "a #rrggbb color".into(),
                 Some("file") => "a file path".into(),
+                Some("media") => "an image file path (imported on apply) or a med_… ID".into(),
                 Some("text") => "text".into(),
                 _ => {
                     let mut options = String::new();
                     splice_json::write(spec.field("options").unwrap_or(&Json::Null), &mut options)
                         .expect("finite schema");
-                    format!("one of {options}")
+                    if keyable(spec) {
+                        format!(
+                            "one of {options}, or {{keys:[{{at, value, ease}}]}} with those values"
+                        )
+                    } else {
+                        format!("one of {options}")
+                    }
                 }
             };
             return Err(CommandError::bad(&param.name, &expected));

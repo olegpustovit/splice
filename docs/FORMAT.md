@@ -217,6 +217,22 @@ Rules:
   on a shape (`preset` confetti, sparkle, snow or hearts, `count` 1–120, `seed`, `size`: the
   shape's rect is the region; same seed, same particles; the shape itself is not drawn).
   Files without them read as before.
+- **Compositing (T46.3).** `window` adds `background` `image` (with `image`: a `med_` ID of a
+  still in `media`, cover-fit to the bounds, blurred by `blur` 0–1) and `wallpaper` (`wallpaper`:
+  aurora, sunset, ocean, forest, ember or slate, gradients the renderer generates), and `angle`
+  (degrees; 0 runs `color` to `color2` left to right, 90 top to bottom; absent, the gradient runs
+  corner to corner as in 0.3). `camera` adds `aspect` (square, circle, 4:3, 3:4, 16:9, 9:16),
+  `x`/`y` (the bubble's center in canvas fractions, replacing `corner`), `mirror`,
+  `shrinkWhenZoomed` and `layout` (`bubble`, `full`, `hidden`); `size` widens to 0.1–1, and
+  `size`, `roundness`, `shadow`, `x`, `y` and `layout` may be keyed. `layout` keys store the
+  option's index (0 bubble, 1 full, 2 hidden): each switches at its frame and eases there over
+  0.3 s with its own ease (`hold` cuts). `mask` adds `start`/`end`: frames relative to the
+  owner's start (`end` exclusive) outside which the mask does nothing; `mask.add {from, to}`
+  writes them from timeline frames. Files without these read and render as before.
+- **Look files (T46.3).** `look.save` writes `{"splice":"look","version":1,"effects":{type:
+  {param: value}}}` outside the package format (any path; relative paths land in the package):
+  the target's own `window`, `camera`, `cursor`, `color` and `captions` values, keys as
+  `{"keys":[…]}`, a window `image` as an absolute file path. `look.apply {file}` reads it.
 
 - **Declared pointer marks (T39.4).** A take's `components` may carry
   `"pointer":[{"t":2.0,"x":0.6,"y":0.4,"click":true}]` (source seconds, positions normalized to the

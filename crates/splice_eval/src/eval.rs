@@ -186,11 +186,13 @@ impl Input {
     }
 }
 
+/// A take's camera bubble, laid out per frame (keys, layouts, shrink when zoomed).
 struct Camera {
-    bounds: Rect,
-    radius: f64,
-    shadow: f64,
-    background: u8,
+    style: style::CameraStyle,
+    screen: bool,
+    keys: bool,
+    /// A layout switch's ease length in frames (0.3 s).
+    ease: f64,
 }
 
 struct Visual {
@@ -1015,14 +1017,29 @@ impl Evaluator {
             self.draw_overlays(frame, true, true, out);
         }
         if let Some(camera) = &clip.camera {
+            let amount = usize::try_from(frame)
+                .ok()
+                .and_then(|f| self.camera.get(f))
+                .map_or(1.0, |view| view.amount);
+            let bubble = layout::camera(
+                self.size.map(f64::from),
+                &camera.style,
+                camera.screen,
+                camera.keys,
+                local,
+                amount,
+                camera.ease,
+            );
             out.layers.push(Layer::Camera {
                 clip: clip.id,
                 media: input.id,
                 source_frame: picture_source,
-                bounds: camera.bounds,
-                radius: camera.radius,
-                shadow: camera.shadow,
-                background: camera.background,
+                bounds: bubble.bounds,
+                radius: bubble.radius,
+                shadow: bubble.shadow,
+                background: camera.style.background,
+                opacity: bubble.opacity,
+                mirror: camera.style.mirror,
             });
         }
         if let Some(style) = clip.keys {
@@ -1399,7 +1416,7 @@ impl Evaluator {
             }
             ItemKind::Media(overlay) => {
                 let media = media(p, overlay.media)?;
-                let window = style::window(&[lane, local]);
+                let window = backdrop(p, style::window(&[lane, local]))?;
                 let tracks = if overlay.muted {
                     Vec::new()
                 } else {
@@ -1512,7 +1529,7 @@ fn prepare_clip(
     clip.input = Some(input);
     if media.kind != MediaKind::Audio {
         let [w, h] = size;
-        let window = style::window(&scopes);
+        let window = backdrop(p, style::window(&scopes))?;
         let bounds = layout::rect(0.0, 0.0, w, h);
         let mut visual = if screen {
             visual(media, TimelineId::Clip(id), bounds, data.framing, window)?
@@ -1531,13 +1548,11 @@ fn prepare_clip(
             clip.keys = style::keys(&scopes);
         }
         if enabled.camera == Some(true) {
-            let style = style::camera(&scopes);
-            let (bounds, radius) = layout::camera(size, style, screen, keys);
             clip.camera = Some(Camera {
-                bounds,
-                radius,
-                shadow: style.shadow,
-                background: style.background,
+                style: style::camera(&scopes, &shifts),
+                screen,
+                keys,
+                ease: (0.3 * f64::from(p.fps)).round().max(1.0),
             });
         }
     }
@@ -1562,6 +1577,19 @@ fn speed_map(rate: &Num, step: f64, length: Frame) -> Vec<f64> {
         map.push(sum);
     }
     map
+}
+
+/// A window whose image backdrop names a still image of the project (T46.3).
+fn backdrop(
+    project: &Project,
+    window: Option<style::Window>,
+) -> Result<Option<style::Window>, EvalError> {
+    if let Some(Background::Image(id, _)) = window.map(|w| w.background)
+        && media(project, id)?.kind != MediaKind::Image
+    {
+        return Err(EvalError::Media(id));
+    }
+    Ok(window)
 }
 
 fn media(project: &Project, id: MediaId) -> Result<&Media, EvalError> {

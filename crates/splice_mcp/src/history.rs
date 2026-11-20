@@ -74,19 +74,26 @@ pub fn apply_batch(
     };
     let filled = super::enrich::ops(store, ops, &mut load)?;
     let ops = filled.as_deref().unwrap_or(ops);
-    if !options.dry_run
-        && ops
-            .iter()
-            .any(|op| op.field("cmd").and_then(Json::as_str) == Some("media.consolidate"))
-    {
-        // Files are copied only for a batch that commits: a failing, stale or refused batch
-        // copies nothing. A keyed retry of a committed batch replays; its copies exist.
+    let has = |name: &str| {
+        ops.iter()
+            .any(|op| op.field("cmd").and_then(Json::as_str) == Some(name))
+    };
+    let (consolidates, saves) = (has("media.consolidate"), has("look.save"));
+    if !options.dry_run && (consolidates || saves) {
+        // Files are copied (and looks written) only for a batch that commits: a failing,
+        // stale or refused batch writes nothing. A keyed retry of a committed batch replays;
+        // its files exist.
         let check = WriteOptions {
             dry_run: true,
             ..options.clone()
         };
         if store.apply_with_media(ops, &check, &mut load).is_ok() {
-            super::enrich::consolidate(store, ops, &mut load)?;
+            if consolidates {
+                super::enrich::consolidate(store, ops, &mut load)?;
+            }
+            if saves {
+                super::enrich::save_looks(store, ops, &mut load)?;
+            }
         }
     }
     store.apply_with_media(ops, options, &mut load)

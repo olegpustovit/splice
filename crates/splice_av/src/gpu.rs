@@ -396,10 +396,38 @@ impl GpuProgram {
                 fill,
                 opacity,
             } => {
-                let [a, b] = match fill {
+                let ([a, b], angle) = match fill {
                     splice_eval::Background::None => return Ok(()),
-                    splice_eval::Background::Solid(c) => [c, c],
-                    splice_eval::Background::Gradient(a, b) => [a, b],
+                    splice_eval::Background::Solid(c) => ([c, c], None),
+                    splice_eval::Background::Gradient(a, b) => ([a, b], None),
+                    splice_eval::Background::Angled(a, b, degrees) => ([a, b], Some(degrees)),
+                    splice_eval::Background::Image(_, blur) => {
+                        // The image's still track (T46.3), cover-fit like a camera bubble.
+                        let Some(texture) = texture else {
+                            return Ok(());
+                        };
+                        let dest = [bounds.x, bounds.y, bounds.w, bounds.h];
+                        let crop = center_crop(source, orient, [0.0, 0.0, 1.0, 1.0], dest);
+                        let mut out = Layer::new(Layer::TEXTURE, rect(bounds), target);
+                        out.crop = crop.map(|v| v as f32);
+                        out.opacity = opacity as f32;
+                        out.flags = Layer::BGRA;
+                        out.orient = orient;
+                        if blur > 0.0 {
+                            // One mask over the whole picture: the 16-tap disk blur, up to
+                            // 4.5% of the picture. ponytail: a separable or MPS pre-blur once
+                            // per image if large blurs look grainy on detailed photos.
+                            out.masks[0].rect = [-0.01, -0.01, 1.02, 1.02];
+                            out.masks[0].params = [0.0, 0.0, (blur * 1.5) as f32, 0.0];
+                            out.mask_count = 1;
+                        }
+                        let bound = Bound {
+                            source: Some(texture),
+                            ..Bound::default()
+                        };
+                        self.push(out, bound);
+                        return Ok(());
+                    }
                 };
                 let kind = if a == b {
                     Layer::SOLID
@@ -408,6 +436,9 @@ impl GpuProgram {
                 };
                 let mut out = Layer::new(kind, rect(bounds), target);
                 (out.color0, out.color1, out.opacity) = (rgb(a), rgb(b), opacity as f32);
+                if let Some(degrees) = angle {
+                    out.key1 = gradient_direction(degrees, [bounds.w, bounds.h]);
+                }
                 self.push(out, Bound::default());
             }
             splice_eval::Layer::Fade { opacity, color } => {
@@ -420,6 +451,8 @@ impl GpuProgram {
                 radius,
                 shadow,
                 background,
+                opacity,
+                mirror,
                 ..
             } => {
                 let Some(texture) = texture else {
@@ -427,9 +460,14 @@ impl GpuProgram {
                 };
                 let look = camera_look(background);
                 let dest = [bounds.x, bounds.y, bounds.w, bounds.h];
-                let crop = center_crop(source, orient, [0.0, 0.0, 1.0, 1.0], dest);
+                let mut crop = center_crop(source, orient, [0.0, 0.0, 1.0, 1.0], dest);
+                if mirror {
+                    // A negative width samples right to left (the shader orders the bounds).
+                    crop = [crop[0] + crop[2], crop[1], -crop[2], crop[3]];
+                }
                 let mut camera = Layer::new(Layer::TEXTURE, rect(bounds), target);
                 camera.crop = crop.map(|v| v as f32);
+                camera.opacity = opacity as f32;
                 camera.corner = radius as f32;
                 camera.shadow = shadow.clamp(0.0, 1.0) as f32;
                 camera.flags = Layer::BGRA;
@@ -975,6 +1013,15 @@ fn rect(r: splice_model::Rect) -> [f32; 4] {
 }
 
 /// The crop (normalized to the oriented source) that center-fills `dest` from `base`.
+/// A gradient's direction for the shader (T46.3), in `key1`: the unit direction of `degrees`
+/// (0 left to right, 90 top to bottom) over the bounds' extent along it, and a flag, so
+/// `t = 0.5 + dot(p − center, key1.xy)` runs 0…1 from corner to corner.
+fn gradient_direction(degrees: f64, [w, h]: [f64; 2]) -> [f32; 4] {
+    let (dy, dx) = degrees.to_radians().sin_cos();
+    let extent = (w * dx.abs() + h * dy.abs()).max(1e-9);
+    [(dx / extent) as f32, (dy / extent) as f32, 1.0, 0.0]
+}
+
 fn center_crop(
     source: FrameSource,
     orient: u32,

@@ -26,6 +26,7 @@ enum Key {
     Camera(ClipId),
     Audio(TimelineId, Track, bool),
     Black,
+    Backdrop(MediaId, usize),
 }
 
 /// What a lowered video layer is for, so the GPU can apply the owner's per-frame look.
@@ -142,6 +143,7 @@ pub(super) fn build(
     let mut last = evaluator.buffer();
     let mut chips: Vec<(ClipId, MediaId, Keys)> = Vec::new();
     let mut video = Vec::new();
+    let mut backdrops: Vec<MediaId> = Vec::new();
     let mut tracks = Vec::new();
     let mut audio = Vec::new();
     for pair in cuts.windows(2) {
@@ -155,6 +157,7 @@ pub(super) fn build(
             )));
         }
         video.clear();
+        backdrops.clear();
         audio.clear();
         // Keep a real video track under blank, audio-only and text-only intervals.
         if !first
@@ -175,11 +178,18 @@ pub(super) fn build(
                     slot.cursor = state.cursor_table(a, project, package)?;
                     video.push(slot);
                 }
-                (Layer::Background { fill, .. }, Layer::Background { .. }) => {
-                    if fill != Background::None {
-                        video.push(Slot::new(black, Role::Plain, depth));
+                (Layer::Background { fill, .. }, Layer::Background { .. }) => match fill {
+                    Background::None => {}
+                    // An image backdrop (T46.3) decodes its still; the GPU cover-fits it.
+                    Background::Image(media, _) => {
+                        // A second use in one frame (an overlay card) gets its own track.
+                        let copy = backdrops.iter().filter(|known| **known == media).count();
+                        backdrops.push(media);
+                        let track = state.backdrop(media, copy, project, package)?;
+                        video.push(Slot::new(track, Role::Plain, depth));
                     }
-                }
+                    _ => video.push(Slot::new(black, Role::Plain, depth)),
+                },
                 (Layer::Fade { .. }, Layer::Fade { .. }) => {
                     video.push(Slot::new(black, Role::Plain, depth));
                 }
@@ -708,6 +718,40 @@ impl Lowering {
         };
         let track = self.builder.source(Source::Color(0, 0), &timing)?;
         self.tracks.push((key, track));
+        Ok(track)
+    }
+
+    /// A window's image backdrop (T46.3): one still track per image over the whole timeline,
+    /// shared by every clip that uses it.
+    fn backdrop(
+        &mut self,
+        id: MediaId,
+        copy: usize,
+        project: &Project,
+        package: &Path,
+    ) -> Result<i32, Error> {
+        let key = Key::Backdrop(id, copy);
+        if let Some(track) = self.cached(key) {
+            return Ok(track);
+        }
+        let media = Self::media(project, id)?;
+        let path = media_path(package, media, None)?;
+        if matches!(media.probe.codec.as_deref(), Some("lottie" | "svg")) {
+            self.vector(&path, project.size)?;
+        }
+        let timing = Timing {
+            timeline: [0, self.end],
+            source_start: 0.0,
+            source_limit: 1.0,
+            speed: 1.0,
+            source_frame_duration: 1.0,
+        };
+        let track = self.builder.source(Source::Still(path), &timing)?;
+        self.tracks.push((key, track));
+        let orient = self.builder.orientation(track);
+        if orient != 0 {
+            self.plan.orients.push((track, orient));
+        }
         Ok(track)
     }
 

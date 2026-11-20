@@ -110,6 +110,14 @@ The capability sweep runs these exact ops, so they stay correct.
   looped or cut with a fade-out, ducked under speech and leveled to -14 LUFS. A track with
   `license:"unknown"` is refused: ask the human, then `allowUnlicensed:true`. The export writes a
   `.credits.txt` beside the movie; pass it on with the video.
+- **Screen-demo look:** `effect.set {target:"project", type:"window", params:{background:"image",
+  image:"/path/wall.jpg", blur:0.4}}` (or `background:"wallpaper", wallpaper:"ocean"`, or a
+  gradient with `angle`); `effect.set {target:"clp_take", type:"camera", params:{aspect:"circle",
+  x:0.85, y:0.8, size:0.3, mirror:true, shrinkWhenZoomed:true}}`; a fullscreen camera stretch is
+  `layout:{keys:[{at:0, value:"bubble"}, {at:300, value:"full"}, {at:450, value:"bubble"}]}`
+  (clip-relative frames, each key eases over 0.3 s, no split); a timed blur is `mask.add {item,
+  mode:"blur", x, y, w, h, from, to}` (timeline frames). `look.save {target:"project",
+  file:"looks/brand.json"}` keeps the look; `look.apply {target, file}` reuses it in any project.
 - **Hand-off:** `export.start {format:"fcpxml"}` for Final Cut Pro, `{preset:"prores-422"}` for a
   master, `{captions:"srt"}` for a sidecar.
 

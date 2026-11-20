@@ -333,11 +333,25 @@ fn m20_every_keyable_parameter_renders_its_keys() {
                 continue;
             }
             let bound = |key: &str| spec.field(key).and_then(Json::as_f64).unwrap();
-            let (min, max) = (bound("min"), bound("max"));
+            // A keyed enum (camera.layout, T46.3) keys option indices.
+            let options = spec.field("options").and_then(Json::as_array);
             let (a, b) = match (kind.as_str(), name.as_str()) {
                 // The take has 120 spare media frames: ramp gently.
                 ("speed", "rate") => (1.0, 1.1),
-                _ => (min + 0.25 * (max - min), min + 0.75 * (max - min)),
+                _ if options.is_some() => (0.0, 1.0),
+                _ => {
+                    let (min, max) = (bound("min"), bound("max"));
+                    (min + 0.25 * (max - min), min + 0.75 * (max - min))
+                }
+            };
+            let set = match options {
+                Some(options) => format!(
+                    r#"{{"cmd":"effect.set","target":"{{target}}","type":"{kind}","params":{{"{name}":"{}"}}}}"#,
+                    options[0].as_str().unwrap()
+                ),
+                None => format!(
+                    r#"{{"cmd":"param.set","target":"{{target}}","path":"{kind}.{name}","value":{a}}}"#
+                ),
             };
             // A crop pans inside the slack its size leaves; counters and progress live on
             // their own title and shape (T45.4).
@@ -357,11 +371,11 @@ fn m20_every_keyable_parameter_renders_its_keys() {
                 ),
                 _ => ("", "clp_take"),
             };
-            let held = render(&format!(
-                r#"[{context}{{"cmd":"param.set","target":"{target}","path":"{kind}.{name}","value":{a}}}]"#
-            ));
+            let held = render(&format!("[{context}{}]", set.replace("{target}", target)));
+            // Layout keys switch at their frame: the switch lands before frame 180.
+            let second = if options.is_some() { 30 } else { 120 };
             let keyed = render(&format!(
-                r#"[{context}{{"cmd":"param.keys","target":"{target}","path":"{kind}.{name}","keys":[{{"at":0,"value":{a}}},{{"at":120,"value":{b}}}]}}]"#
+                r#"[{context}{{"cmd":"param.keys","target":"{target}","path":"{kind}.{name}","keys":[{{"at":0,"value":{a}}},{{"at":{second},"value":{b}}}]}}]"#
             ));
             assert_ne!(
                 held, keyed,
@@ -370,7 +384,7 @@ fn m20_every_keyable_parameter_renders_its_keys() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 35, "keyable parameters");
+    assert_eq!(checked, 41, "keyable parameters");
 }
 
 /// T40.4: whip, zoomPunch and swipe move content only: the outgoing side's backdrop is never

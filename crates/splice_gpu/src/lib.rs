@@ -58,7 +58,7 @@ pub struct Mask {
 pub struct Layer {
     /// x, y, w, h in target pixels before rotation.
     pub dest: [f32; 4],
-    /// u, v, w, h normalized to the oriented source.
+    /// u, v, w, h normalized to the oriented source; a negative w or h samples mirrored.
     pub crop: [f32; 4],
     /// Fill, ring or shape color.
     pub color0: [f32; 4],
@@ -92,7 +92,8 @@ pub struct Layer {
     pub lut: [f32; 4],
     /// Key RGB and tolerance; for shapes, the stroke RGB.
     pub key0: [f32; 4],
-    /// Key softness and spill; for ellipse and arc shapes, `1 - sweep` in the first slot.
+    /// Key softness and spill; for ellipse and arc shapes, `1 - sweep` in the first slot; for
+    /// gradients, the direction over its extent in x, y and 1 in z when angled (T46.3).
     pub key1: [f32; 4],
     /// Visible region in target pixels when `CLIP` is set.
     pub clip: [f32; 4],

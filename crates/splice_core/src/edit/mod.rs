@@ -21,6 +21,7 @@ mod tier_b;
 mod tier_c;
 mod time;
 
+pub use graphics::saved_look;
 pub use tier_c::{consolidated_path, is_filler, parse_cues, retakes};
 pub(crate) use time::resolve_word_anchors;
 pub use time::{resolve_view_frame, span};

@@ -870,6 +870,204 @@ mod looks {
         assert!(near(card, [110, 115, 15], 8), "card {card:?}");
     }
 
+    /// A 96 × 64 PNG still: left half red, right half blue.
+    fn split_still(dir: &std::path::Path, serial: u64) -> Media {
+        let pixels: Vec<u8> = (0..96 * 64)
+            .flat_map(|i| {
+                if i % 96 < 48 {
+                    [220, 30, 30, 255]
+                } else {
+                    [30, 30, 220, 255]
+                }
+            })
+            .collect();
+        let name = format!("split{serial}.png");
+        fs::write(
+            dir.join(&name),
+            apple_sys::image::png(&pixels, [96, 64], 96).unwrap(),
+        )
+        .unwrap();
+        Media {
+            path: name,
+            ..still(dir, serial, [0, 0, 0])
+        }
+    }
+
+    /// Exports `project` (in `dir`) as an H.264 movie named `name`.
+    fn movie(project: &Project, dir: &std::path::Path, name: &str) -> PathBuf {
+        let composition = Composition::prepare(project, dir).unwrap();
+        let file = dir.join(name);
+        let mut job = composition
+            .start_export(&file, &Encoding::new(Codec::H264))
+            .unwrap();
+        while let ExportState::Running(_) = job.step(Duration::from_millis(16)).unwrap() {}
+        assert_eq!(job.status(), ExportState::Complete, "{name}");
+        file
+    }
+
+    /// T46.3: an image backdrop cover-fits and blurs, a gradient follows its angle, and the
+    /// camera bubble mirrors, sits where x/y put it and eases to the full canvas or away.
+    pub(super) fn t46_backdrops_and_the_camera_bubble_render() {
+        let dir = scratch("t46");
+        let grey = still(&dir.0, 2, [128, 128, 128]);
+        let window = |extra: Vec<(&'static str, EffectValue)>| {
+            let mut params = vec![("padding", n(0.25)), ("corner", n(0.0)), ("shadow", n(0.0))];
+            params.extend(extra);
+            fx(9, "window", params)
+        };
+        // The split image behind a grey card: each half shows in the padding.
+        let backdrop = |blur: f64| {
+            let mut project = project(
+                vec![grey.clone(), split_still(&dir.0, 1)],
+                vec![(2, 10, vec![])],
+            );
+            project.effects.push(window(vec![
+                ("background", s("image")),
+                ("image", s(&MediaId::from_serial(1).to_string())),
+                ("blur", n(blur)),
+            ]));
+            Composition::prepare(&project, &dir.0).unwrap()
+        };
+        let sharp = backdrop(0.0);
+        let (left, right) = (pixel(&sharp, 5, [2, 4]), pixel(&sharp, 5, [93, 4]));
+        assert!(near(left, [220, 30, 30], 6) && near(right, [30, 30, 220], 6));
+        assert!(near(pixel(&sharp, 5, [46, 4]), [220, 30, 30], 6));
+        // Blurred, the edge mixes both halves; far from it the colors hold.
+        let soft = backdrop(1.0);
+        let edge = pixel(&soft, 5, [46, 4]);
+        assert!(edge[2] > 60 && edge[0] < 200, "blurred edge {edge:?}");
+        assert!(near(pixel(&soft, 5, [2, 32]), [220, 30, 30], 12));
+        // A 90° gradient runs top to bottom: rows are uniform.
+        let mut angled = project(vec![grey.clone()], vec![(2, 10, vec![])]);
+        angled.effects.push(window(vec![
+            ("color", s("#ff0000")),
+            ("color2", s("#0000ff")),
+            ("angle", n(90.0)),
+        ]));
+        let angled = Composition::prepare(&angled, &dir.0).unwrap();
+        let (top, bottom) = (pixel(&angled, 5, [48, 1]), pixel(&angled, 5, [48, 62]));
+        assert!(top[0] > 220 && bottom[2] > 220, "{top:?} {bottom:?}");
+        let (a, b) = (pixel(&angled, 5, [2, 32]), pixel(&angled, 5, [93, 32]));
+        assert!(
+            near(a, b, 3),
+            "a row of a 90° gradient is uniform: {a:?} {b:?}"
+        );
+
+        // A take: grey screen, the split picture as its camera.
+        let take = dir.0.join("takes/med_7");
+        fs::create_dir_all(&take).unwrap();
+        let screen = project(vec![grey.clone()], vec![(2, 30, vec![])]);
+        fs::rename(
+            movie(&screen, &dir.0, "screen.mov"),
+            take.join("screen.mov"),
+        )
+        .unwrap();
+        let camera = project(vec![split_still(&dir.0, 1)], vec![(1, 30, vec![])]);
+        fs::rename(
+            movie(&camera, &dir.0, "camera.mov"),
+            take.join("camera.mov"),
+        )
+        .unwrap();
+        let bubble = |params: Vec<(&'static str, EffectValue)>| {
+            let mut project = project(vec![], vec![]);
+            project.media = vec![Media {
+                id: MediaId::from_serial(7),
+                kind: MediaKind::Take,
+                path: "takes/med_7".into(),
+                bookmark: None,
+                size: 0,
+                mtime: 0,
+                probe: Probe {
+                    fps: 30.0,
+                    frames: 30,
+                    width: 96,
+                    height: 64,
+                    audio: Vec::new(),
+                    codec: None,
+                    loudness: None,
+                },
+                take: Some(TakeComponents {
+                    screen: Some("screen.mov".into()),
+                    camera: Some("camera.mov".into()),
+                    ..TakeComponents::default()
+                }),
+            }];
+            project
+                .clips
+                .insert(Clip {
+                    id: ClipId::from_serial(1),
+                    timing: ClipTiming {
+                        start: 0,
+                        length: 30,
+                        source: 0,
+                        speed: 1.0,
+                    },
+                    data: ClipData {
+                        media: Some(MediaId::from_serial(7)),
+                        enabled: ComponentStates {
+                            screen: Some(true),
+                            camera: Some(true),
+                            ..ComponentStates::default()
+                        },
+                        appearance: Appearance {
+                            effects: vec![fx(3, "camera", params)],
+                            ..Appearance::default()
+                        },
+                        ..ClipData::default()
+                    },
+                })
+                .unwrap();
+            Composition::prepare(&project, &dir.0).unwrap()
+        };
+        // Centered, half the short side, square: the bubble covers 32..64 × 16..48 and shows the
+        // middle of the camera (red left of its center, blue right).
+        let centered = vec![
+            ("x", n(0.5)),
+            ("y", n(0.5)),
+            ("size", n(0.5)),
+            ("roundness", n(0.0)),
+            ("shadow", n(0.0)),
+        ];
+        let plain = bubble(centered.clone());
+        assert!(near(pixel(&plain, 5, [40, 32]), [220, 30, 30], 30));
+        assert!(near(pixel(&plain, 5, [56, 32]), [30, 30, 220], 30));
+        assert!(
+            near(pixel(&plain, 5, [20, 32]), [128, 128, 128], 12),
+            "screen beside it"
+        );
+        let mut mirrored = centered.clone();
+        mirrored.push(("mirror", EffectValue::Bool(true)));
+        let mirrored = bubble(mirrored);
+        assert!(near(pixel(&mirrored, 5, [40, 32]), [30, 30, 220], 30));
+        assert!(near(pixel(&mirrored, 5, [56, 32]), [220, 30, 30], 30));
+        // Full from frame 10 (a cut with hold): the camera covers the canvas; hidden shows the
+        // screen where the bubble was.
+        let mut full = centered.clone();
+        full.push((
+            "layout",
+            EffectValue::Keys(vec![
+                Key {
+                    at: 0,
+                    value: 0.0,
+                    ease: Ease::Hold,
+                },
+                Key {
+                    at: 10,
+                    value: 1.0,
+                    ease: Ease::Hold,
+                },
+            ]),
+        ));
+        let full = bubble(full);
+        assert!(near(pixel(&full, 5, [10, 32]), [128, 128, 128], 12));
+        assert!(near(pixel(&full, 15, [10, 32]), [220, 30, 30], 30));
+        assert!(near(pixel(&full, 15, [86, 32]), [30, 30, 220], 30));
+        let mut hidden = centered;
+        hidden.push(("layout", s("hidden")));
+        let hidden = bubble(hidden);
+        assert!(near(pixel(&hidden, 5, [40, 32]), [128, 128, 128], 12));
+    }
+
     /// in the active color.
     pub(super) fn h8_caption_stroke_sits_under_the_fill_and_the_active_word_is_colored() {
         use apple_sys::composition::{TextLayer, TextStyle, text_rgba};
@@ -1421,6 +1619,10 @@ fn main() {
         (
             "looks_cutout_uses_the_person_matte",
             looks::cutout_uses_the_person_matte,
+        ),
+        (
+            "looks_t46_backdrops_and_the_camera_bubble_render",
+            looks::t46_backdrops_and_the_camera_bubble_render,
         ),
     ]);
 }

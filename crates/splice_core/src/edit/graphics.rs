@@ -158,7 +158,33 @@ impl Editor {
                 self.upsert(owner, "particles", params, None, &mut Vec::new())?;
                 Ok(outcome)
             }
-            Op::LookApply { target, pack } => self.apply_look_pack(&target, &pack),
+            Op::LookApply {
+                target,
+                name,
+                pack,
+                effects,
+            } => self.apply_saved_look(&target, &name, pack, effects),
+            Op::LookSave { target, file } => {
+                let owner = self.owner(&target)?;
+                let kinds = saved_kinds(effects(&self.project, owner));
+                let label = self.owner_label(owner);
+                if kinds.is_empty() {
+                    return Err(CommandError::rule(
+                        "NOTHING_TO_SAVE",
+                        "target",
+                        None,
+                        "a target with its own window, camera, cursor, color or captions effect",
+                        &format!(
+                            "{label} has no look effects of its own. Save the owner that holds \
+                             them (items.inspect shows each effect's scope), often \"project\"."
+                        ),
+                    ));
+                }
+                Ok(Outcome::edit(
+                    format!("Saved the look of {label} ({}) to {file}", kinds.join(", ")),
+                    target,
+                ))
+            }
             _ => unreachable!("graphics dispatch"),
         }
     }
@@ -171,43 +197,32 @@ impl Editor {
         Ok(self.project.items.timing(slot).expect("live item").length)
     }
 
-    /// Writes a pack's effects into the target. A part the target cannot hold is skipped and
-    /// named; a window is only restyled where the target already has one (a new window effect
-    /// would put every picture in a window).
-    fn apply_look_pack(&mut self, target: &Target, pack: &str) -> Result<Outcome, CommandError> {
+    /// Writes a look's effects into the target. A part the target cannot hold is skipped and
+    /// named; a pack only restyles a window where the target already has one (a new window
+    /// effect would put every picture in a window), while a saved look brings its window along.
+    fn apply_saved_look(
+        &mut self,
+        target: &Target,
+        pack: &str,
+        is_pack: bool,
+        parts: Vec<(String, Vec<EffectParam>)>,
+    ) -> Result<Outcome, CommandError> {
         let owner = self.owner(target)?;
-        let parts = crate::commands::look_packs()
-            .field(pack)
-            .and_then(|pack| pack.field("effects"))
-            .and_then(Json::as_object)
-            .expect("decoded pack");
         let mut written = Vec::new();
         let mut skipped = Vec::new();
-        for (kind, values) in parts {
-            let (class, _) = applies(kind)?;
-            let windowless = kind == "window"
+        for (kind, params) in parts {
+            let (class, _) = applies(&kind)?;
+            let windowless = is_pack
+                && kind == "window"
                 && !effects(&self.project, owner)
                     .iter()
                     .any(|e| e.kind == "window");
             if !self.fits(class, owner) || windowless {
-                skipped.push(kind.as_str());
+                skipped.push(kind);
                 continue;
             }
-            let params = values
-                .as_object()
-                .into_iter()
-                .flatten()
-                .map(|(name, value)| EffectParam {
-                    name: name.clone(),
-                    value: match value {
-                        Json::String(text) => EffectValue::Text(text.clone()),
-                        Json::Bool(flag) => EffectValue::Bool(*flag),
-                        number => EffectValue::Number(number.as_f64().expect("checked pack")),
-                    },
-                })
-                .collect();
-            self.upsert(owner, kind, params, None, &mut Vec::new())?;
-            written.push(kind.as_str());
+            self.upsert(owner, &kind, params, None, &mut Vec::new())?;
+            written.push(kind);
         }
         let label = self.owner_label(owner);
         let mut summary = format!("Applied the {pack} look to {label}: {}", written.join(", "));
@@ -222,6 +237,100 @@ impl Editor {
         }
         Ok(Outcome::edit(summary, target.clone()))
     }
+}
+
+/// The look effect types an owner holds itself and has on.
+fn saved_kinds(list: &[Effect]) -> Vec<&'static str> {
+    crate::commands::LOOK_KINDS
+        .iter()
+        .copied()
+        .filter(|kind| {
+            list.iter()
+                .any(|effect| effect.kind == *kind && effect.enabled != Some(false))
+        })
+        .collect()
+}
+
+/// The file `look.save {target}` writes (T46.3): `{"splice":"look","version":1,"effects":
+/// {type: {param: value}}}` with the target's own window, camera, cursor, color and captions
+/// values (keys as `{keys:[…]}`), the form `look.apply {file}` reads. A window `image` is the
+/// media's file, made absolute against `package`, so the look applies in any project.
+pub fn saved_look(
+    project: &Project,
+    target: &Target,
+    package: &std::path::Path,
+) -> Result<Json, CommandError> {
+    let list: &[Effect] = match target {
+        Target::Project => &project.effects,
+        Target::Lane(id) if *id == LaneId::SPINE => &project.spine.effects,
+        Target::Lane(id) => {
+            &project
+                .lanes
+                .iter()
+                .find(|lane| lane.id == *id)
+                .ok_or_else(|| not_found(id, "project.info lists lanes."))?
+                .effects
+        }
+        Target::Timeline(TimelineId::Clip(id)) => {
+            let slot = super::time::clip_slot(project, *id)?;
+            &project
+                .clips
+                .data(slot)
+                .expect("live clip")
+                .appearance
+                .effects
+        }
+        Target::Timeline(TimelineId::Item(id)) => {
+            let slot = item_slot(project, *id)?;
+            &project
+                .items
+                .data(slot)
+                .expect("live item")
+                .appearance
+                .effects
+        }
+        _ => {
+            return Err(wrong_kind(
+                "Targets: a clip (clp_), an overlay (ovl_), a lane (lan_…, lan_spine) or \"project\".",
+            ));
+        }
+    };
+    let mut kinds = Vec::new();
+    for kind in saved_kinds(list) {
+        let mut params: Vec<(String, Json)> = Vec::new();
+        for effect in list
+            .iter()
+            .filter(|e| e.kind == kind && e.enabled != Some(false))
+        {
+            for param in &effect.params {
+                let value = match &param.value {
+                    EffectValue::Number(n) => Json::Float(*n),
+                    EffectValue::Bool(b) => Json::Bool(*b),
+                    EffectValue::Text(text) if kind == "window" && param.name == "image" => {
+                        let path = text
+                            .parse::<MediaId>()
+                            .ok()
+                            .and_then(|id| project.media.iter().find(|m| m.id == id))
+                            .map_or(text.as_str(), |media| media.path.as_str());
+                        Json::String(package.join(path).display().to_string())
+                    }
+                    EffectValue::Text(text) => Json::String(text.clone()),
+                    EffectValue::Keys(keys) => crate::package::encode_keys(keys),
+                };
+                match params.iter_mut().find(|(name, _)| *name == param.name) {
+                    Some(slot) => slot.1 = value,
+                    None => params.push((param.name.clone(), value)),
+                }
+            }
+        }
+        params.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        kinds.push((kind.to_owned(), Json::Object(params)));
+    }
+    Ok(Json::Object(vec![
+        ("splice".into(), Json::String("look".into())),
+        ("version".into(), Json::Unsigned(1)),
+        ("effects".into(), Json::Object(kinds)),
+    ]))
 }
 
 fn text_param(params: &[EffectParam], name: &str) -> Option<String> {
