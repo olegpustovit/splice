@@ -250,6 +250,10 @@ static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShar
     configuration.width = (size_t)width;
     configuration.height = (size_t)height;
     configuration.showsCursor = NO;
+    // The working space (composition.m splice_video_color): sRGB with the 709 matrix, as
+    // Recorder captures, so a take decodes to what was on screen and to what export makes.
+    configuration.colorSpaceName = kCGColorSpaceSRGB;
+    configuration.colorMatrix = kCGDisplayStreamYCbCrMatrix_ITU_R_709_2;
     if (geometry != NULL) {
         *geometry = (SpliceCaptureGeometry){
             .rect = capture_rect(frame), .scale = filter.pointPixelScale, .kind = target->kind,

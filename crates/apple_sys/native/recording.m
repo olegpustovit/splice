@@ -28,6 +28,7 @@ static uint64_t nanoseconds(CMTime time) {
 static NSDictionary *video_settings(NSInteger width, NSInteger height, NSNumber *frame_rate) {
     return @{
         AVVideoCodecKey: AVVideoCodecTypeHEVC, AVVideoWidthKey: @(width), AVVideoHeightKey: @(height),
+        AVVideoColorPropertiesKey: splice_video_color(),
         AVVideoCompressionPropertiesKey: @{
             AVVideoAverageBitRateKey: @(MIN(width * height * 4, 60000000)),
             AVVideoExpectedSourceFrameRateKey: frame_rate, AVVideoAllowFrameReorderingKey: @NO,
