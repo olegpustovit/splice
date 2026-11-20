@@ -258,10 +258,16 @@ impl Package {
         match lock.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => {
+                // Name the holder: an agent can then route the read through it.
+                let pid = std::fs::read_to_string(&lock_path)
+                    .ok()
+                    .and_then(|owner| splice_json::parse(&owner).ok())
+                    .and_then(|owner| owner.field("pid").and_then(Json::as_u64));
+                let holder = pid.map_or(String::new(), |pid| format!(" (process {pid})"));
                 return Err(PackageError::new(
                     "LOCKED",
-                    format!("{} already has a writer", path.display()),
-                    "Close the other writer or forward the call to the open viewer.",
+                    format!("{} already has a writer{holder}", path.display()),
+                    "Another Splice process has the project open: a splice mcp server, the viewer, or a running splice command. Make the call through it (over MCP: view.frames, timeline.snapshot, edit.apply), or close it first.",
                 ));
             }
             Err(TryLockError::Error(error)) => return Err(PackageError::io(&lock_path, error)),

@@ -70,7 +70,16 @@ fn package_writer_lock_has_owner_and_releases() {
     );
     assert!(!owner.field("host").unwrap().as_str().unwrap().is_empty());
     assert!(owner.field("since").unwrap().as_u64().unwrap() > 0);
-    assert_eq!(Package::open(&path).unwrap_err().code, "LOCKED");
+    let locked = Package::open(&path).unwrap_err();
+    assert_eq!(locked.code, "LOCKED");
+    // The holder is named so an agent can route its call through it.
+    assert!(
+        locked
+            .message
+            .contains(&format!("process {}", std::process::id())),
+        "{}",
+        locked.message
+    );
     drop(held);
     assert!(Package::open(&path).is_ok());
 }
