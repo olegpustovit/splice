@@ -1,0 +1,62 @@
+{
+  "id": "follow-cursor-zoom",
+  "platform": "macos",
+  "seed": {
+    "record": {
+      "app": "TextEdit",
+      "duration": 10,
+      "events": [
+        {
+          "t": 1.0,
+          "do": "click",
+          "x": 0.3,
+          "y": 0.3
+        },
+        {
+          "t": 1.5,
+          "do": "type",
+          "for": 2
+        },
+        {
+          "t": 4.0,
+          "do": "move",
+          "x": 0.6,
+          "y": 0.5
+        },
+        {
+          "t": 5.0,
+          "do": "click",
+          "x": 0.7,
+          "y": 0.6
+        },
+        {
+          "t": 7.0,
+          "do": "move",
+          "x": 0.4,
+          "y": 0.7
+        },
+        {
+          "t": 8.0,
+          "do": "click",
+          "x": 0.5,
+          "y": 0.4
+        }
+      ]
+    }
+  },
+  "prompt": "In the Splice project {project}, zoom in to 2x from second 2 to second 6 of the recording, with the zoom following the mouse cursor as it moves. Use the splice MCP tools only.",
+  "checks": [
+    {
+      "name": "a zoom following the cursor",
+      "expr": "any(i['kind'] == 'zoom' and i['params'].get('focus') == 'cursor' for i in items)"
+    },
+    {
+      "name": "about 2x",
+      "expr": "any(i['kind'] == 'zoom' and abs(i['params'].get('amount', 0) - 2) < 0.15 for i in items)"
+    },
+    {
+      "name": "about 2-6 s",
+      "expr": "any(i['kind'] == 'zoom' and 3.4 <= seconds(i['length']) <= 4.6 for i in items)"
+    }
+  ]
+}

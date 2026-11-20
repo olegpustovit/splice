@@ -1,0 +1,62 @@
+{
+  "id": "brand-look",
+  "platform": "macos",
+  "seed": {
+    "record": {
+      "app": "TextEdit",
+      "duration": 10,
+      "events": [
+        {
+          "t": 1.0,
+          "do": "click",
+          "x": 0.3,
+          "y": 0.3
+        },
+        {
+          "t": 1.5,
+          "do": "type",
+          "for": 2
+        },
+        {
+          "t": 4.0,
+          "do": "move",
+          "x": 0.6,
+          "y": 0.5
+        },
+        {
+          "t": 5.0,
+          "do": "click",
+          "x": 0.7,
+          "y": 0.6
+        },
+        {
+          "t": 7.0,
+          "do": "move",
+          "x": 0.4,
+          "y": 0.7
+        },
+        {
+          "t": 8.0,
+          "do": "click",
+          "x": 0.5,
+          "y": 0.4
+        }
+      ]
+    }
+  },
+  "prompt": "In the Splice project {project}, put the recording on the 'ocean' wallpaper background with rounded corners and a soft shadow, then save this look to the file {work}/brand.json so it can be reused on other projects. Use the splice MCP tools only.",
+  "checks": [
+    {
+      "name": "ocean wallpaper",
+      "expr": "any((look('window', c['id']) or {}).get('background') == 'wallpaper' and (look('window', c['id']) or {}).get('wallpaper') == 'ocean' for c in take_clips())"
+    },
+    {
+      "name": "rounded and shadowed",
+      "expr": "all((look('window', c['id']) or {}).get('corner', 0.03) > 0 and (look('window', c['id']) or {}).get('shadow', 0) > 0 for c in take_clips())"
+    },
+    {
+      "name": "look saved",
+      "expr": "work_file('brand.json')"
+    }
+  ]
+}

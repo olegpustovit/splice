@@ -1,0 +1,71 @@
+{
+  "id": "music-bed",
+  "platform": "macos",
+  "seed": {
+    "record": {
+      "app": "TextEdit",
+      "duration": 10,
+      "events": [
+        {
+          "t": 1.0,
+          "do": "click",
+          "x": 0.3,
+          "y": 0.3
+        },
+        {
+          "t": 1.5,
+          "do": "type",
+          "for": 2
+        },
+        {
+          "t": 4.0,
+          "do": "move",
+          "x": 0.6,
+          "y": 0.5
+        },
+        {
+          "t": 5.0,
+          "do": "click",
+          "x": 0.7,
+          "y": 0.6
+        },
+        {
+          "t": 7.0,
+          "do": "move",
+          "x": 0.4,
+          "y": 0.7
+        },
+        {
+          "t": 8.0,
+          "do": "click",
+          "x": 0.5,
+          "y": 0.4
+        }
+      ]
+    }
+  },
+  "assets": {
+    "music.wav": {
+      "tone": 30
+    }
+  },
+  "prompt": "Add the file {music} as background music under the whole Splice project {project}: it should duck under speech and fade out at the end of the video. Use the splice MCP tools only.",
+  "checks": [
+    {
+      "name": "the music file as a sound item",
+      "expr": "any(i['kind'] == 'sound' and str(media.get(i['params']['media'], {}).get('path', '')).endswith('music.wav') for i in items)"
+    },
+    {
+      "name": "ducked",
+      "expr": "any(i['kind'] == 'sound' and i['params'].get('duck') for i in items)"
+    },
+    {
+      "name": "fades out",
+      "expr": "any(i['kind'] == 'sound' and i.get('fadeOut', 0) > 0 for i in items)"
+    },
+    {
+      "name": "spans the video",
+      "expr": "any(i['kind'] == 'sound' and i['length'] >= 0.9 * sum(c['length'] for c in clips) for i in items)"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "id": "motion-graphics",
+  "platform": "macos",
+  "seed": {
+    "record": {
+      "app": "TextEdit",
+      "duration": 10,
+      "events": [
+        {
+          "t": 1.0,
+          "do": "click",
+          "x": 0.3,
+          "y": 0.3
+        },
+        {
+          "t": 1.5,
+          "do": "type",
+          "for": 2
+        },
+        {
+          "t": 4.0,
+          "do": "move",
+          "x": 0.6,
+          "y": 0.5
+        },
+        {
+          "t": 5.0,
+          "do": "click",
+          "x": 0.7,
+          "y": 0.6
+        },
+        {
+          "t": 7.0,
+          "do": "move",
+          "x": 0.4,
+          "y": 0.7
+        },
+        {
+          "t": 8.0,
+          "do": "click",
+          "x": 0.5,
+          "y": 0.4
+        }
+      ]
+    }
+  },
+  "prompt": "In the Splice project {project} (a 10-second screen recording), add an animated counter that counts up from 0 to 1,000 users over the first 3 seconds, a thin progress bar along the bottom that fills over the whole video, and a confetti burst at 3 seconds. Use the splice MCP tools only.",
+  "checks": [
+    {
+      "name": "a counter to 1000",
+      "expr": "any(i['kind'] == 'title' and any(e['type'] == 'counter' for e in i.get('effects', [])) for i in items)"
+    },
+    {
+      "name": "a progress bar",
+      "expr": "any(i['kind'] == 'shape' and any(e['type'] == 'progress' for e in i.get('effects', [])) for i in items)"
+    },
+    {
+      "name": "confetti",
+      "expr": "any(i['kind'] == 'shape' and any(e['type'] == 'particles' for e in i.get('effects', [])) for i in items)"
+    },
+    {
+      "name": "length unchanged",
+      "expr": "9 <= seconds(sum(c['length'] for c in clips)) <= 11"
+    }
+  ]
+}

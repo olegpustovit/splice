@@ -1,0 +1,62 @@
+{
+  "id": "export-variants",
+  "platform": "macos",
+  "seed": {
+    "record": {
+      "app": "TextEdit",
+      "duration": 10,
+      "events": [
+        {
+          "t": 1.0,
+          "do": "click",
+          "x": 0.3,
+          "y": 0.3
+        },
+        {
+          "t": 1.5,
+          "do": "type",
+          "for": 2
+        },
+        {
+          "t": 4.0,
+          "do": "move",
+          "x": 0.6,
+          "y": 0.5
+        },
+        {
+          "t": 5.0,
+          "do": "click",
+          "x": 0.7,
+          "y": 0.6
+        },
+        {
+          "t": 7.0,
+          "do": "move",
+          "x": 0.4,
+          "y": 0.7
+        },
+        {
+          "t": 8.0,
+          "do": "click",
+          "x": 0.5,
+          "y": 0.4
+        }
+      ]
+    }
+  },
+  "prompt": "From the Splice project {project}, export an MP4 of the whole video at 60 frames per second, and a 960-pixel-wide GIF of its first 5 seconds at 24 fps. Use the splice MCP tools only.",
+  "checks": [
+    {
+      "name": "a 60 fps MP4",
+      "expr": "any(abs(movie_fps(name) - 60) < 0.5 for name in exports('.mp4'))"
+    },
+    {
+      "name": "a 960 px GIF",
+      "expr": "any(gif_width(name) == 960 for name in exports('.gif'))"
+    },
+    {
+      "name": "the GIF is 5 s",
+      "expr": "any(abs(gif_seconds(name) - 5) <= 0.3 for name in exports('.gif'))"
+    }
+  ]
+}

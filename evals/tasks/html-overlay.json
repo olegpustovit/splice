@@ -1,0 +1,62 @@
+{
+  "id": "html-overlay",
+  "platform": "macos",
+  "seed": {
+    "record": {
+      "app": "TextEdit",
+      "duration": 10,
+      "events": [
+        {
+          "t": 1.0,
+          "do": "click",
+          "x": 0.3,
+          "y": 0.3
+        },
+        {
+          "t": 1.5,
+          "do": "type",
+          "for": 2
+        },
+        {
+          "t": 4.0,
+          "do": "move",
+          "x": 0.6,
+          "y": 0.5
+        },
+        {
+          "t": 5.0,
+          "do": "click",
+          "x": 0.7,
+          "y": 0.6
+        },
+        {
+          "t": 7.0,
+          "do": "move",
+          "x": 0.4,
+          "y": 0.7
+        },
+        {
+          "t": 8.0,
+          "do": "click",
+          "x": 0.5,
+          "y": 0.4
+        }
+      ]
+    }
+  },
+  "prompt": "In the Splice project {project}, add a custom animated lower-third built with HTML and CSS: it slides in from the left at second 1, reads 'Splice demo', and stays for 4 seconds. Check that it renders, using the splice MCP tools only.",
+  "checks": [
+    {
+      "name": "an HTML overlay",
+      "expr": "any(i['kind'] == 'media' and str(media.get(i['params']['media'], {}).get('path', '')).startswith('media/html-') for i in items)"
+    },
+    {
+      "name": "about 4 s",
+      "expr": "any(i['kind'] == 'media' and str(media.get(i['params']['media'], {}).get('path', '')).startswith('media/html-') and 100 <= i['length'] <= 140 for i in items)"
+    },
+    {
+      "name": "length unchanged",
+      "expr": "9 <= seconds(sum(c['length'] for c in clips)) <= 11"
+    }
+  ]
+}

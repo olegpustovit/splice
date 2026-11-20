@@ -338,6 +338,27 @@ def helpers(project_path, work, seed_hash):
             at += 1
         return total / 100
 
+    def work_file(name):
+        """Whether the task's work folder holds a file (a saved look, a sidecar)."""
+        return os.path.isfile(os.path.join(work, name))
+
+    def movie_fps(path):
+        """The first track's frame rate in an MP4/MOV: mdhd timescale over the first stts delta."""
+        data = open(path, "rb").read()
+        mdhd = data.find(b"mdhd")
+        stts = data.find(b"stts")
+        if mdhd < 0 or stts < 0:
+            return 0.0
+        version = data[mdhd + 4]
+        at = mdhd + 4 + 4 + (16 if version == 1 else 8)
+        timescale = struct.unpack(">I", data[at:at + 4])[0]
+        delta = struct.unpack(">I", data[stts + 16:stts + 20])[0]
+        return timescale / delta if delta else 0.0
+
+    def gif_width(path):
+        """A GIF's logical screen width in pixels."""
+        return struct.unpack("<H", open(path, "rb").read()[6:8])[0]
+
     def agent_said(pattern):
         """Whether the agent's final answer matches a regex (case-insensitive)."""
         import re
@@ -358,6 +379,7 @@ def helpers(project_path, work, seed_hash):
         "media_kind": lambda mid: media.get(mid, {}).get("kind"),
         "markers": project.get("markers", []), "param_at": param_at, "look": look,
         "cursor_hidden": cursor_hidden, "camera_hidden": camera_hidden, "agent_said": agent_said,
+        "work_file": work_file, "movie_fps": movie_fps, "gif_width": gif_width,
         "gif_seconds": gif_seconds,
         "takes": [m["id"] for m in project.get("media", []) if m.get("kind") == "take"],
         "seconds": lambda frames: frames / project["fps"],
@@ -377,7 +399,7 @@ def run_task(task, agent, dry, code=False):
     project, assets, window = seed(task, work)
     seed_hash = splice("check", project).get("stateHash") if os.path.isdir(project) else None
     windows = {f"window{n + 1 if n else ''}": name for n, name in enumerate(window or [])}
-    prompt = task["prompt"].format(project=project, assets=json.dumps(assets), **windows, **assets_by_stem(assets))
+    prompt = task["prompt"].format(project=project, work=work, assets=json.dumps(assets), **windows, **assets_by_stem(assets))
     stats = {"calls": 0, "errors": 0, "recoveries": 0, "tokens": 0, "wall": 0, "exit": 0} if dry else run_agent(agent, prompt, work, code)
     if window:
         sh(["killall", task["seed"]["open"].get("app", "TextEdit")])
