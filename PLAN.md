@@ -482,10 +482,10 @@ eight places; the board below already carries the changes.
 
 ### T45 · Gated extras, brought into 0.4 (user decisions 2026-11-20) [L]
 - [x] T45.1 [L] HTML escape hatch: `html.add {html | file}` renders the page with WebKit on a virtual clock (Date.now, performance.now, rAF, Web Animations, `window.seek`) into a ProRes 4444 alpha movie in `media/`, imported as a full-canvas media overlay; frame 0 and the middle frame are redrawn and must match (HTML_FAILED otherwise). Journal keeps the movie, so replay needs no WebKit.
-- [ ] T45.2 [L] Lottie/SVG through vendored ThorVG (decision: vendor, MIT, built with cc, one gate allowlist entry).
+- [x] T45.2 [L] Lottie/SVG through vendored ThorVG 1.1.4 (MIT; JerryScript for expressions, Apache-2.0): `.json`/`.lot`/`.svg` import as looping pictures on every platform, rendered into picture movies on macOS (4577054, 6e1ae5f, 673be56). Not drawn: embedded rasters, font text, dotLottie.
   M23 (animated GIF/APNG stickers) fixed natively ahead of it: 51ba13b (frames at their own delays, looping).
-- [ ] T45.3 [M] Music library around user-supplied CC0 tracks (decision: the user supplies the files): catalog, `music.search`, `music.add` with fit/duck/loudness, license refusal, credits sidecar.
-- [ ] T45.4 [L] Counters, progress, particles, look packs, per-glyph text bounds, caret track via AX.
+- [x] T45.3 [M] Music library around user-supplied tracks (`SPLICE_MUSIC`, setting, or ~/Music/Splice): catalog, search as `commands.describe {music}` (D3 keeps 20 tools), `music.add` with fit/duck/loudness, UNLICENSED refusal, export credits (6df250a, 2868b4f).
+- [x] T45.4 [L] `counter.add`, `progress.add` (bar, ring), `particles.add`, `look.apply`, glyph-cropped animator units, caret samples via AX steering typing zooms (25169ac, 782a207, d1b1782). ponytail: units still rasterize a full box on the CPU at prepare; CoreText run bounds when long animated titles show up in profiles.
 
 ## Log
 
