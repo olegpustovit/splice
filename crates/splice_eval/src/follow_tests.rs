@@ -177,7 +177,7 @@ fn a_looping_cursor_eases_back_to_its_first_position() {
         .collect();
     assert!(xs.windows(2).all(|w| w[1] <= w[0]), "{xs:?}");
     let project = applied(
-        r#"[{"cmd":"effect.add","target":"clp_take","type":"cursor","params":{"loop":45,"motionBlur":0.5,"alwaysArrow":true,"clickSound":true}}]"#,
+        r#"[{"cmd":"effect.add","target":"clp_take","type":"cursor","params":{"loop":45,"motionBlur":0.5,"rotate":0.75,"alwaysArrow":true,"clickSound":true}}]"#,
     );
     let evaluator = Evaluator::prepare(&project).unwrap();
     let mut plan = evaluator.buffer();
@@ -190,7 +190,10 @@ fn a_looping_cursor_eases_back_to_its_first_position() {
             _ => None,
         })
         .unwrap();
-    assert_eq!((cursor.loop_frames, cursor.motion_blur), (45.0, 0.5));
+    assert_eq!(
+        (cursor.loop_frames, cursor.motion_blur, cursor.rotate),
+        (45.0, 0.5, 0.75)
+    );
     assert!(cursor.motion.always_arrow);
     assert!(evaluator.click_sound("clp_take".parse().unwrap()));
     assert!(!evaluator.click_sound("clp_open".parse().unwrap()));

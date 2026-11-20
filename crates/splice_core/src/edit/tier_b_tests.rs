@@ -1228,7 +1228,7 @@ fn cursor_set_takes_every_cursor_parameter() {
     let mut project = sample();
     run(
         &mut project,
-        r#"[{"cmd":"cursor.set","clip":"clp_take","alwaysArrow":true,"loop":20,"clickSound":true}]"#,
+        r#"[{"cmd":"cursor.set","clip":"clp_take","alwaysArrow":true,"loop":20,"clickSound":true,"rotate":0.5}]"#,
     )
     .unwrap();
     let error = run(

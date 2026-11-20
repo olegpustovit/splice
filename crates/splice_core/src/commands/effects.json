@@ -192,6 +192,14 @@
         "max": 1,
         "step": 0.05,
         "label": "Motion blur"
+      },
+      "rotate": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "label": "Rotate while moving (tilt with horizontal speed, 12° at 1)"
       }
     },
     "applies": "take"

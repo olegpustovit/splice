@@ -750,7 +750,23 @@ impl GpuProgram {
                     sprite.flags |= Layer::MOTION;
                 }
             }
-            (sprite.pivot, sprite.rotation) = (pivot, rotation);
+            // Rotate while moving (cursor `rotate`): the tilt about the hotspot, then the item's
+            // rotation about its pivot, as one rotation about the hotspot's rotated position.
+            let tilt = cursor.rotate * table.track.tilt(st);
+            if tilt == 0.0 {
+                (sprite.pivot, sprite.rotation) = (pivot, rotation);
+            } else {
+                let (sin, cos) = f64::from(rotation).sin_cos();
+                let [px, py] = pivot.map(f64::from);
+                let hot = [
+                    px + (x - px) * cos - (y - py) * sin,
+                    py + (x - px) * sin + (y - py) * cos,
+                ];
+                sprite.dest[0] += (hot[0] - x) as f32;
+                sprite.dest[1] += (hot[1] - y) as f32;
+                sprite.pivot = hot.map(|v| v as f32);
+                sprite.rotation = rotation + tilt.to_radians() as f32;
+            }
             self.push(
                 sprite,
                 Bound {

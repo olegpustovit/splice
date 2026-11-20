@@ -180,7 +180,10 @@ it as `pacing`). Without `profile` neither tool reads event logs or changes its 
   lag aside: `none` 0, `rapid` ≈ 0.1, `medium` ≈ 0.3, `smooth` ≈ 0.75 (1 is softer still).
   `removeShakes` (default on) drops hand shake under 0.35 % of the source; once the hand rests
   80 ms the cursor eases onto the recorded point, so it rests where the hand stopped. Off draws
-  every small movement.
+  every small movement. `rotate` (0–1, default 0; Recorder's rotate while moving) tilts the
+  cursor about its hotspot with the drawn path's horizontal speed, clockwise moving right:
+  `rotate` × 12° once it crosses the whole source in a second, proportionally less below that,
+  easing with the smoothed path and upright at rest. It composes with the clip's `rotation`.
 
 ## Command descriptions
 

@@ -119,7 +119,7 @@ control: an agent sends the command the control would.
 | Loop cursor position | `cursor.set {loop: frames}` | `splice_eval::follow_tests::a_looping_cursor_eases_back_to_its_first_position`, `splice_av::motion_cursor_always_arrow_and_loop` | verified |
 | Always use arrow | `cursor.set {alwaysArrow:true}` | `splice_av::motion_cursor_always_arrow_and_loop`, live: alwaysArrow render | verified |
 | Remove cursor shakes (toggle) | `cursor.set {removeShakes:false}` keeps every small movement (default on) | `splice_eval::cursor::tests::remove_shakes_off_keeps_every_small_movement`, `splice_eval::cursor::tests::shake_is_removed_and_slow_moves_survive` | verified |
-| Rotate while moving (tilt with horizontal speed, max 12°) | none | — | GAP: extends `splice_eval::cursor::Point` with a tilt from the table's velocity and the cursor sprite in `splice_av::gpu` (rotation about the hotspot composed with the item's) |
+| Rotate while moving (tilt with horizontal speed, max 12°) | `cursor.set {rotate:0–1}` (the `cursor` effect's `rotate`; 1 is Recorder's toggle on: 12° at a sweep of the source per second) | `splice_eval::cursor::tests::the_cursor_tilts_with_its_horizontal_speed`, `splice_av::motion_cursor_rotates_while_moving`, `splice_core::edit::tier_b_tests::cursor_set_takes_every_cursor_parameter` | verified |
 | Click pulse | `cursor.set {clickPulse}` | `splice_eval::cursor::tests::a_click_pulses_to_four_fifths` | verified |
 | Mouse click sound | `cursor.set {clickSound:true}` | `splice_av::motion_click_sound_is_mixed_at_each_press` | verified |
 

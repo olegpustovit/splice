@@ -201,8 +201,8 @@ Rules:
   segments, holding the center outside them. `"focus":"cursor"` (T46.2) follows the drawn cursor
   of the take under the segment with a dead zone (the central 60 % of the view) instead of a
   point; `motionBlur` (0–1, omitted when 0) blurs the camera's per-frame move while the segment
-  drives it. The `cursor` effect adds `alwaysArrow`, `loop` (frames), `clickSound`, `removeShakes` and
-  `motionBlur` (all off by default except `removeShakes`; MCP.md, Camera and cursor motion). 0.3 `motion` items migrate to zoom items
+  drives it. The `cursor` effect adds `alwaysArrow`, `loop` (frames), `clickSound`, `removeShakes`,
+  `motionBlur` and `rotate` (all off by default except `removeShakes`; MCP.md, Camera and cursor motion). 0.3 `motion` items migrate to zoom items
   (`amount = max(to, 1)`, same focus) and the 0.3 `clickZoom` effect is dropped
   (`intent.autoZoom` writes zoom items instead).
 - **Keys only where they animate (T36.4).** A 0.3 file with keys on a parameter that is not

@@ -386,6 +386,30 @@ mod motion {
         );
     }
 
+    /// `rotate` tilts the cursor about its hotspot while it moves (Recorder's rotate while
+    /// moving): mid-move the red square's centre swings left and down of where it is drawn
+    /// upright (clockwise, moving right); at rest nothing changes.
+    pub(super) fn cursor_rotates_while_moving() {
+        let dir = scratch("rotate");
+        let events = events(&across, &[]);
+        let render = |params, at| {
+            red(&frame(
+                &Composition::prepare(&take(&dir.0, &events, params, &[]), &dir.0).unwrap(),
+                at,
+            ))
+        };
+        let upright = render(vec![], 11);
+        let tilted = render(vec![("rotate", EffectValue::Number(1.0))], 11);
+        assert!(
+            tilted.2[0] < upright.2[0] - 0.5 && tilted.2[1] > upright.2[1] + 0.4,
+            "{upright:?} -> {tilted:?}"
+        );
+        assert_eq!(
+            render(vec![], 2),
+            render(vec![("rotate", EffectValue::Number(1.0))], 2)
+        );
+    }
+
     /// `clickSound` mixes a click into the exported audio at each recorded press, and nothing
     /// between them.
     pub(super) fn click_sound_is_mixed_at_each_press() {
@@ -431,6 +455,10 @@ fn main() {
         (
             "motion_cursor_always_arrow_and_loop",
             motion::cursor_always_arrow_and_loop,
+        ),
+        (
+            "motion_cursor_rotates_while_moving",
+            motion::cursor_rotates_while_moving,
         ),
         (
             "motion_click_sound_is_mixed_at_each_press",

@@ -58,6 +58,8 @@ pub struct Cursor {
     pub loop_frames: f64,
     /// Motion blur 0–1 along the cursor's own per-frame movement.
     pub motion_blur: f64,
+    /// Tilt with horizontal speed, 0–1 of [`crate::cursor::MAX_TILT`] (Recorder's rotate).
+    pub rotate: f64,
 }
 
 /// Camera bubble corner.
@@ -213,6 +215,7 @@ pub(super) fn cursor(scopes: &[&[Effect]]) -> Option<Cursor> {
             },
             loop_frames: 0.0,
             motion_blur: 0.0,
+            rotate: 0.0,
         });
     }
     if style.boolean("hidden", false) {
@@ -234,6 +237,7 @@ pub(super) fn cursor(scopes: &[&[Effect]]) -> Option<Cursor> {
         },
         loop_frames: style.number("loop", 0.0).clamp(0.0, 600.0).round(),
         motion_blur: style.number("motionBlur", 0.0).clamp(0.0, 1.0),
+        rotate: style.number("rotate", 0.0).clamp(0.0, 1.0),
     })
 }
 

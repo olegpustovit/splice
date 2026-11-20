@@ -149,6 +149,8 @@ pub struct Track {
 
 /// Table rate in points per second.
 pub const RATE: f64 = 60.0;
+/// The largest tilt of a moving cursor in degrees (Recorder's rotate while moving).
+pub const MAX_TILT: f64 = 12.0;
 /// A sample gap longer than this holds the last position (no interpolation across it).
 const HOLD_GAP: f64 = 0.067;
 /// Hand shake below this many UV is removed.
@@ -365,6 +367,29 @@ impl Track {
             opacity: lerp(a.opacity, b.opacity),
             scale: lerp(a.scale, b.scale),
         })
+    }
+
+    /// The tilt at source second `t` in degrees, clockwise (Recorder's rotate while moving):
+    /// proportional to the drawn path's horizontal speed, so a sweep across the whole source in
+    /// one second reaches [`MAX_TILT`], and clamped there. Moving right leans the tip right.
+    /// From the smoothed table (a central difference over one point each side), so the tilt
+    /// eases in and out with the spring. Zero before the first and past the last point.
+    /// Allocation-free.
+    pub fn tilt(&self, t: f64) -> f64 {
+        let f = (t - self.start) * RATE;
+        if self.points.len() < 2 || f < 0.0 || f > (self.points.len() - 1) as f64 {
+            return 0.0;
+        }
+        let x = |at: f64| {
+            let i = (at.floor().max(0.0) as usize).min(self.points.len() - 1);
+            let a = self.points[i].x;
+            let b = self.points.get(i + 1).map_or(a, |p| p.x);
+            a + (b - a) * (at - i as f64).clamp(0.0, 1.0)
+        };
+        let last = (self.points.len() - 1) as f64;
+        let (before, after) = ((f - 1.0).max(0.0), (f + 1.0).min(last));
+        let speed = (x(after) - x(before)) * RATE / (after - before);
+        (speed * MAX_TILT).clamp(-MAX_TILT, MAX_TILT)
     }
 
     /// Presses as (source seconds, x, y).
@@ -966,9 +991,74 @@ mod tests {
             &mut || {
                 for i in 0..1000 {
                     sum += track.at(i as f64 * 0.01).map_or(0.0, |p| p.x);
+                    sum += track.tilt(i as f64 * 0.01).abs() * 1e-9;
                 }
             },
         );
         assert!(sum > 0.0);
+    }
+
+    /// Recorder's rotate while moving: the tilt follows the smoothed horizontal speed (right
+    /// leans clockwise, left the other way), saturates at 12° for a sweep across the source in
+    /// a second, eases back to zero at rest, and ignores vertical motion.
+    #[test]
+    fn the_cursor_tilts_with_its_horizontal_speed() {
+        // Rest, sweep right 0.6 of the width in 0.5 s, rest, then sweep back slowly in 2 s.
+        let path = |t: f64| {
+            if t < 1.0 {
+                0.2
+            } else if t < 1.5 {
+                0.2 + 1.2 * (t - 1.0)
+            } else if t < 3.0 {
+                0.8
+            } else if t < 5.0 {
+                0.8 - 0.3 * (t - 3.0)
+            } else {
+                0.2
+            }
+        };
+        let samples: Vec<Sample> = (0..=420)
+            .map(|i| sample(f64::from(i) / 60.0, path(f64::from(i) / 60.0), 0.5, false))
+            .collect();
+        let motion = Motion {
+            smoothing: 0.0,
+            hide_idle: false,
+            synthesize: false,
+            ..Motion::default()
+        };
+        let track = Track::build(&samples, SIZE, motion);
+        // 1.2 widths per second saturates; 0.3 per second is 0.3 of the tilt, to the left.
+        assert!(
+            (track.tilt(1.25) - MAX_TILT).abs() < 1e-9,
+            "{}",
+            track.tilt(1.25)
+        );
+        assert!(
+            (track.tilt(4.0) + 0.3 * MAX_TILT).abs() < 0.2,
+            "{}",
+            track.tilt(4.0)
+        );
+        assert!(
+            track.tilt(0.5).abs() < 0.01 && track.tilt(2.5).abs() < 0.01,
+            "{} {}",
+            track.tilt(0.5),
+            track.tilt(2.5)
+        );
+        assert_eq!((track.tilt(-1.0), track.tilt(60.0)), (0.0, 0.0));
+        // Vertical motion alone does not tilt.
+        let vertical: Vec<Sample> = (0..=120)
+            .map(|i| sample(f64::from(i) / 60.0, 0.5, f64::from(i) / 120.0, false))
+            .collect();
+        let track = Track::build(&vertical, SIZE, motion);
+        assert!(track.tilt(1.0).abs() < 1e-9);
+        // With the spring the tilt rises and settles smoothly instead of stepping.
+        let track = Track::build(&samples, SIZE, Motion::default());
+        let steps: Vec<f64> = (60..200).map(|i| track.tilt(f64::from(i) / 60.0)).collect();
+        let jump = steps
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f64::max);
+        assert!(jump < 3.0, "{jump}");
+        assert!(steps.iter().any(|t| *t > 6.0));
     }
 }

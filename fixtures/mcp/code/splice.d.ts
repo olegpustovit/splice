@@ -347,6 +347,8 @@ declare namespace Splice {
       clickSound?: boolean;
       /** 0–1 · blur along the cursor's motion */
       motionBlur?: number;
+      /** 0–1 · tilt the cursor with its horizontal speed (Recorder's rotate while moving; 1 tilts up to 12°) */
+      rotate?: number;
     }
     /** Keystroke Chip Settings (edit, 0.2). */
     interface KeysSet extends Base {
@@ -1185,6 +1187,8 @@ declare namespace Splice {
       clickSound?: boolean;
       /** Motion blur · 0–1 · @default 0 */
       motionBlur?: number;
+      /** Rotate while moving (tilt with horizontal speed, 12° at 1) · 0–1 · @default 0 */
+      rotate?: number;
     };
     /** Camera Layout: screen takes. */
     camera: {
