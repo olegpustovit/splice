@@ -30,7 +30,7 @@ pub(super) struct Tool {
 /// The code profile's runner (`splice mcp --code`); the default profile does not list it.
 const CODE_RUN: Tool = Tool {
     name: "code.run",
-    description: "Run JavaScript that calls Splice tools synchronously through the global `splice`, e.g. `const s = splice.timeline.snapshot({}); return s.spine.length;`. Call commands.describe {format:\"ts\"} for the API index, then {format:\"ts\", query:\"clip.crop,effect.add\"} for the types of the commands you use. The return value enters your context: return only the fields you need (ids, ranges, revision), not whole snapshots.",
+    description: "Run JavaScript that calls Splice tools synchronously through the global `splice`, e.g. `const s = splice.timeline.snapshot({}); return s.spine.length;`. Call commands.describe {format:\"ts\"} for the API index, then {format:\"ts\", query:\"clip.crop,effect.add\"} for the types of the commands you use. The return value enters your context: return only the fields you need (ids, ranges, revision), not whole snapshots. Calls default projectId to the first project the program opens, sessionId to the open session (session.start's or record.start's), and ifRevision to the newest revision the program has read of that project (read project.info first when the program edits before reading anything).",
     read_only: false,
     input: &[
         ("code", r#"{"type":"string","maxLength":65536}"#),

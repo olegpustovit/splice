@@ -748,6 +748,49 @@ fn code_run_adopts_the_first_opened_project_and_session() {
     assert_eq!(seen[1].1, Some(text("prj_4")));
 }
 
+/// Found by the record-app-landscape code-mode eval: record.start opened ses_1 outside the
+/// program, and edit.apply failed with NO_SESSION, then "Missing ifRevision".
+#[test]
+fn code_run_adopts_an_open_session_and_the_revision_it_read() {
+    let args = splice_json::parse(
+        r#"{"projectId":"prj_1","code":"splice.timeline.snapshot({}); splice.edit.apply({ops:[]}); splice.edit.apply({ops:[]}); return splice.sessionId;"}"#,
+    )
+    .unwrap();
+    let mut seen = Vec::new();
+    let mut edits = 0;
+    let reply = code::run(&args, &mut |name, args| {
+        seen.push((
+            name.to_owned(),
+            args.field("sessionId").cloned(),
+            args.field("ifRevision").cloned(),
+        ));
+        let body = match name {
+            "project.info" => object(vec![
+                ("projectId", text("prj_1")),
+                ("revision", text("r1")),
+                ("openSession", text("ses_1")),
+            ]),
+            "timeline.snapshot" => object(vec![("revision", text("r1"))]),
+            "edit.apply" => {
+                edits += 1;
+                object(vec![("revision", text(&format!("r{}", 1 + edits)))])
+            }
+            _ => object(Vec::new()),
+        };
+        Ok(object(vec![("structuredContent", body)]))
+    })
+    .unwrap();
+    assert_eq!(reply.field("result"), Some(&text("ses_1")), "{reply:?}");
+    let edits: Vec<_> = seen
+        .iter()
+        .filter(|(name, ..)| name == "edit.apply")
+        .collect();
+    assert_eq!(edits[0].1, Some(text("ses_1")));
+    assert_eq!(edits[0].2, Some(text("r1")));
+    // The next edit's precondition is the revision the first one made.
+    assert_eq!(edits[1].2, Some(text("r2")));
+}
+
 /// The sample project, loaded through the package reader.
 pub(crate) fn sample_project() -> splice_model::Project {
     let root = TestDirectory::new("sample-project");

@@ -15,7 +15,7 @@ A task file:
      "checks": [{"name": "...", "expr": "python expression over the helpers below"}]}
 
 Check helpers: project (`splice snapshot`, journal included), clips, items, lanes, markers, media_kind(id),
-effect(kind, owner=None), look(kind, clip), param_at(params, name, frame), take_clips(), takes (take media in import order),
+effect(kind, owner=None), look(kind, clip), cursor_hidden(clip, frame), param_at(params, name, frame), take_clips(), takes (take media in import order),
 seconds(frames), frame(at) -> Frame with .bands(), exports(ext=".mp4"), words_on_timeline(), seed_hash,
 state_hash, batches (journal batches).
 Task files are trusted repository content.
@@ -290,6 +290,13 @@ def helpers(project_path, work, seed_hash):
             return (before[-1] if before else keys[0])["value"]
         return value
 
+    def cursor_hidden(clip, at):
+        """Whether a clip draws no cursor at a clip-local frame: the cursor effect's hidden, or
+        the take's pointer component switched off (both hide it)."""
+        row = next(c for c in clips if c["id"] == clip)
+        return (row.get("enabled") or {}).get("pointer") is False or \
+            param_at(look("cursor", clip), "hidden", at) is True
+
     def words_on_timeline():
         """Transcript word texts whose start is inside a clip of their media."""
         out = []
@@ -307,6 +314,7 @@ def helpers(project_path, work, seed_hash):
         "project": project, "clips": clips, "items": items, "lanes": lanes, "media": media,
         "media_kind": lambda mid: media.get(mid, {}).get("kind"),
         "markers": project.get("markers", []), "param_at": param_at, "look": look,
+        "cursor_hidden": cursor_hidden,
         "takes": [m["id"] for m in project.get("media", []) if m.get("kind") == "take"],
         "seconds": lambda frames: frames / project["fps"],
         "take_clips": lambda: [c for c in clips if media.get(c.get("media"), {}).get("kind") == "take"],

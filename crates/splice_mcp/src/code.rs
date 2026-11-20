@@ -27,14 +27,25 @@ const PRELUDE: &str = r#"(() => {
   const call = (name, args) => {
     const a = Object.assign({}, args), t = ctx.tools[name];
     if (t && t[0] && a.projectId === undefined && ctx.projectId) a.projectId = ctx.projectId;
+    if (t && t[1] && a.sessionId === undefined && !ctx.sessionId && ctx.projectId && name !== "project.info") {
+      // A session opened outside this program (record.start starts one) is the default too.
+      const info = call("project.info", { projectId: ctx.projectId });
+      if (info && typeof info.openSession === "string") ctx.sessionId = info.openSession;
+    }
     if (t && t[1] && a.sessionId === undefined && ctx.sessionId) a.sessionId = ctx.sessionId;
+    // ifRevision defaults to the newest revision this program saw of its project, never to one
+    // it did not read: the precondition still guards against changes made by someone else.
+    if (t && t[2] && a.ifRevision === undefined && ctx.revision && (a.projectId === undefined || a.projectId === ctx.projectId)) a.ifRevision = ctx.revision;
     let r;
     try { r = host(String(name), JSON.stringify(a)); }
     catch (e) { throw e && typeof e === "object" && !(e instanceof Error) ? new SpliceError(e) : e; }
     // The first project opened and session started become the defaults for later calls.
     if (r && typeof r === "object") {
       if (!ctx.projectId && typeof r.projectId === "string") ctx.projectId = r.projectId;
-      if (!ctx.sessionId && name === "session.start" && typeof r.sessionId === "string") ctx.sessionId = r.sessionId;
+      if (!ctx.sessionId && typeof r.sessionId === "string") ctx.sessionId = r.sessionId;
+      if (!ctx.sessionId && typeof r.openSession === "string") ctx.sessionId = r.openSession;
+      const pid = typeof r.projectId === "string" ? r.projectId : a.projectId || ctx.projectId;
+      if (typeof r.revision === "string" && pid === ctx.projectId) ctx.revision = r.revision;
     }
     return r;
   };
@@ -141,13 +152,18 @@ fn context(project: Option<&str>, session: Option<&str>) -> Result<String, Store
             let accepts = |field: &str| Json::Bool(tool.input.iter().any(|(key, _)| *key == field));
             (
                 tool.name.to_string(),
-                Json::Array(vec![accepts("projectId"), accepts("sessionId")]),
+                Json::Array(vec![
+                    accepts("projectId"),
+                    accepts("sessionId"),
+                    accepts("ifRevision"),
+                ]),
             )
         })
         .collect();
     let context = object(vec![
         ("projectId", optional(project)),
         ("sessionId", optional(session)),
+        ("revision", Json::Null),
         ("tools", Json::Object(tools)),
         (
             "commands",
