@@ -1,0 +1,13 @@
+{
+  "id": "keys-private",
+  "platform": "macos",
+  "seed": {"record": {"app": "TextEdit", "duration": 8,
+           "events": [{"t": 1.0, "do": "click", "x": 0.4, "y": 0.4}, {"t": 1.5, "do": "type", "for": 3},
+                      {"t": 5.5, "do": "shortcut", "keyCode": 1}, {"t": 6.5, "do": "shortcut", "keyCode": 8}]}},
+  "prompt": "The Splice project {project} is a screen recording where I type a password-like text and then press keyboard shortcuts. Show the keyboard shortcuts on screen as key chips, but viewers must never see what I typed. Check your work. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "chips on", "expr": "all((c.get('enabled') or {}).get('keys') is True for c in take_clips())"},
+    {"name": "only shortcuts shown", "expr": "all((look('keystrokes', c['id']) or {}).get('show') == 'shortcuts' for c in take_clips())"},
+    {"name": "length unchanged", "expr": "7 <= seconds(sum(c['length'] for c in clips)) <= 9"}
+  ]
+}

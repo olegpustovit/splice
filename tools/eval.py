@@ -15,7 +15,7 @@ A task file:
      "checks": [{"name": "...", "expr": "python expression over the helpers below"}]}
 
 Check helpers: project (`splice snapshot`, journal included), clips, items, lanes, markers, media_kind(id),
-effect(kind, owner=None), look(kind, clip), cursor_hidden(clip, frame), camera_hidden(clip, frame), param_at(params, name, frame), take_clips(), takes (take media in import order),
+effect(kind, owner=None), look(kind, clip), cursor_hidden(clip, frame), camera_hidden(clip, frame), agent_said(regex), param_at(params, name, frame), take_clips(), takes (take media in import order),
 seconds(frames), frame(at) -> Frame with .bands(), exports(ext=".mp4"), words_on_timeline(), seed_hash,
 state_hash, batches (journal batches).
 Task files are trusted repository content.
@@ -94,7 +94,7 @@ def record_seed(project, spec):
 
 def script_events(project, actions):
     """Replaces a recorded take's input events with scripted actions (an automated recording
-    sees no hand): [{"t": seconds, "do": "click"|"type"|"move", "x", "y", "for": seconds}].
+    sees no hand): [{"t": seconds, "do": "click"|"type"|"move"|"shortcut", "x", "y", "for": seconds}].
     Typing writes key events without characters, so evals never depend on key text."""
     takes = os.path.join(project, "takes")
     for take in sorted(os.listdir(takes)):  # every take gets the same script
@@ -112,6 +112,8 @@ def script_events(project, actions):
             elif a["do"] == "type":
                 n = int(a.get("for", 2) * 8)
                 events += [{"t": round(t + i / 8, 3), "k": "key", "keyCode": 4} for i in range(n)]
+            elif a["do"] == "shortcut":  # ⌘ + key (NSEvent command bit 20); default ⌘S
+                events.append({"t": t + 0.02, "k": "key", "keyCode": a.get("keyCode", 1), "mods": 1 << 20})
         log["events"] = sorted(events, key=lambda e: e["t"])
         json.dump(log, open(path, "w"))
 
@@ -316,12 +318,26 @@ def helpers(project_path, work, seed_hash):
                     out.append(w["text"].lower())
         return out
 
+    def agent_said(pattern):
+        """Whether the agent's final answer matches a regex (case-insensitive)."""
+        import re
+        text = ""
+        path = os.path.join(work, "agent.jsonl")
+        for line in open(path) if os.path.exists(path) else []:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("type") == "result":
+                text = str(event.get("result") or "")
+        return re.search(pattern, text, re.I) is not None
+
     state = splice("check", project_path)
     return {
         "project": project, "clips": clips, "items": items, "lanes": lanes, "media": media,
         "media_kind": lambda mid: media.get(mid, {}).get("kind"),
         "markers": project.get("markers", []), "param_at": param_at, "look": look,
-        "cursor_hidden": cursor_hidden, "camera_hidden": camera_hidden,
+        "cursor_hidden": cursor_hidden, "camera_hidden": camera_hidden, "agent_said": agent_said,
         "takes": [m["id"] for m in project.get("media", []) if m.get("kind") == "take"],
         "seconds": lambda frames: frames / project["fps"],
         "take_clips": lambda: [c for c in clips if media.get(c.get("media"), {}).get("kind") == "take"],

@@ -1,0 +1,11 @@
+{
+  "id": "gif-teaser",
+  "platform": "macos",
+  "seed": {"copy": "fixtures/projects/sample.splice"},
+  "prompt": "From the Splice project {project}, make a 15-second GIF teaser of the start of the video, and an MP4 of the whole video. Tell me if anything could not be done exactly as asked. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "a GIF", "expr": "len(exports('.gif')) >= 1"},
+    {"name": "an MP4", "expr": "len(exports('.mp4')) >= 1"},
+    {"name": "GIF limit reported", "expr": "agent_said(r'10[ -]?(s\\b|sec)|150 frames|limit')"}
+  ]
+}
