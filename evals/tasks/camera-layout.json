@@ -1,0 +1,13 @@
+{
+  "id": "camera-layout",
+  "platform": "any",
+  "seed": {"copy": "fixtures/projects/sample.splice"},
+  "prompt": "In the Splice project {project}, the screen take has a webcam. Put the camera bubble in the top-left corner and make it clearly bigger (about a third of the frame). Hide the camera from second 8 to second 11 of the video, where the detail matters, and show it as the bubble everywhere else in the take. Don't cut or change the timing of anything. Use the splice MCP tools only.",
+  "checks": [
+    {"name": "timing unchanged", "expr": "sum(c['length'] for c in clips) == 660 and all(c['speed'] == 1 for c in clips)"},
+    {"name": "bubble top-left", "expr": "all((look('camera', c['id']) or {}).get('corner') == 'tl' or ((look('camera', c['id']) or {}).get('x', 1) < 0.5 and (look('camera', c['id']) or {}).get('y', 1) < 0.5) for c in take_clips())"},
+    {"name": "bigger (size >= 0.3)", "expr": "all((param_at(look('camera', c['id']), 'size', 0) or 0.24) >= 0.3 for c in take_clips() if not camera_hidden(c['id'], 0))"},
+    {"name": "hidden 8-11 s", "expr": "all(any(c['start'] <= s * 30 < c['start'] + c['length'] and camera_hidden(c['id'], s * 30 - c['start']) for c in take_clips()) for s in [8.2, 9.5, 10.8])"},
+    {"name": "shown elsewhere in the take", "expr": "all(any(c['start'] <= s * 30 < c['start'] + c['length'] and not camera_hidden(c['id'], s * 30 - c['start']) for c in take_clips()) for s in [4.5, 6.5, 12.5, 17.5])"}
+  ]
+}

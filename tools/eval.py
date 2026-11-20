@@ -15,7 +15,7 @@ A task file:
      "checks": [{"name": "...", "expr": "python expression over the helpers below"}]}
 
 Check helpers: project (`splice snapshot`, journal included), clips, items, lanes, markers, media_kind(id),
-effect(kind, owner=None), look(kind, clip), cursor_hidden(clip, frame), param_at(params, name, frame), take_clips(), takes (take media in import order),
+effect(kind, owner=None), look(kind, clip), cursor_hidden(clip, frame), camera_hidden(clip, frame), param_at(params, name, frame), take_clips(), takes (take media in import order),
 seconds(frames), frame(at) -> Frame with .bands(), exports(ext=".mp4"), words_on_timeline(), seed_hash,
 state_hash, batches (journal batches).
 Task files are trusted repository content.
@@ -297,6 +297,13 @@ def helpers(project_path, work, seed_hash):
         return (row.get("enabled") or {}).get("pointer") is False or \
             param_at(look("cursor", clip), "hidden", at) is True
 
+    def camera_hidden(clip, at):
+        """Whether a take clip shows no camera at a clip-local frame: the camera component off,
+        or the camera effect's layout hidden there."""
+        row = next(c for c in clips if c["id"] == clip)
+        return (row.get("enabled") or {}).get("camera") is False or \
+            param_at(look("camera", clip), "layout", at) in ("hidden", 2)
+
     def words_on_timeline():
         """Transcript word texts whose start is inside a clip of their media."""
         out = []
@@ -314,7 +321,7 @@ def helpers(project_path, work, seed_hash):
         "project": project, "clips": clips, "items": items, "lanes": lanes, "media": media,
         "media_kind": lambda mid: media.get(mid, {}).get("kind"),
         "markers": project.get("markers", []), "param_at": param_at, "look": look,
-        "cursor_hidden": cursor_hidden,
+        "cursor_hidden": cursor_hidden, "camera_hidden": camera_hidden,
         "takes": [m["id"] for m in project.get("media", []) if m.get("kind") == "take"],
         "seconds": lambda frames: frames / project["fps"],
         "take_clips": lambda: [c for c in clips if media.get(c.get("media"), {}).get("kind") == "take"],
