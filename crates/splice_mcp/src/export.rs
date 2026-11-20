@@ -1,4 +1,4 @@
-use super::presets::{Kind, Output as Request, reframed};
+use super::presets::{GIF_FRAMES, GIF_WIDTH, Kind, Output as Request, gif_step, reframed};
 use super::{
     Json,
     export_file::{Output, path_error},
@@ -117,12 +117,15 @@ pub(super) fn still(
         }
         None => store.project(),
     };
-    // GIFs render at most 480 px wide.
+    // GIFs render at most GIF_WIDTH px wide (the settings report the size).
     let gif = request.kind == Kind::Gif;
     let shrunk;
-    let project = if gif && project.size[0] > 480 {
+    let project = if gif && project.size[0] > GIF_WIDTH {
         let mut small = project.clone();
-        small.size = [480, (project.size[1] * 480 / project.size[0]) & !1];
+        small.size = [
+            GIF_WIDTH,
+            (project.size[1] * GIF_WIDTH / project.size[0]) & !1,
+        ];
         shrunk = small;
         &shrunk
     } else {
@@ -134,13 +137,24 @@ pub(super) fn still(
     let [w, h] = project.size;
     let frame_bytes = (w * h * 4) as usize;
     let mut rgba = vec![0u8; frame_bytes];
+    let mut settings = vec![
+        ("preset", text(request.preset)),
+        ("width", Json::Unsigned(u64::from(w))),
+        ("height", Json::Unsigned(u64::from(h))),
+    ];
     if gif {
-        // 15 fps, at most 10 s.
-        let step = (project.fps / 15).max(1) as Frame;
+        // About 15 fps; resolve refused a range over GIF_FRAMES, so nothing is cut short.
+        let step = gif_step(project.fps) as Frame;
         let frames: Vec<Frame> = (request.range[0]..request.range[1])
             .step_by(step as usize)
-            .take(150)
             .collect();
+        debug_assert!(frames.len() <= GIF_FRAMES);
+        settings.extend([
+            ("fps", Json::Float(f64::from(project.fps) / f64::from(step))),
+            ("frames", Json::Unsigned(frames.len() as u64)),
+            ("from", Json::Signed(i64::from(request.range[0]))),
+            ("to", Json::Signed(i64::from(request.range[1]))),
+        ]);
         let mut all = Vec::with_capacity(frames.len() * frame_bytes);
         for at in frames {
             composition
@@ -171,14 +185,7 @@ pub(super) fn still(
             "output",
             Json::String(output.file().to_string_lossy().into_owned()),
         ),
-        (
-            "settings",
-            object(vec![
-                ("preset", text(request.preset)),
-                ("width", Json::Unsigned(u64::from(w))),
-                ("height", Json::Unsigned(u64::from(h))),
-            ]),
-        ),
+        ("settings", object(settings)),
     ]))
 }
 

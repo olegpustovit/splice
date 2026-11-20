@@ -262,6 +262,9 @@ pub(super) fn resolve(
             size: fixed,
             mbps,
         } = preset(name)?;
+        if kind == Kind::Gif {
+            gif_fits(project.fps, range, end)?;
+        }
         let size = match (aspect, fixed) {
             (Some(aspect), _) => canvas(fixed.unwrap_or(project.size), aspect)?,
             (None, Some(size)) => size,
@@ -315,6 +318,43 @@ pub(super) fn resolve(
             Ok(outputs)
         }
     }
+}
+
+/// A GIF keeps every `gif_step`-th frame (about 15 fps), at most [`GIF_FRAMES`] of them, at most
+/// [`GIF_WIDTH`] pixels wide.
+pub(super) const GIF_FRAMES: usize = 150;
+/// Widest GIF in pixels; wider canvases scale down (reported in the result's settings).
+pub(super) const GIF_WIDTH: u32 = 480;
+
+/// Timeline frames between two GIF frames.
+pub(super) fn gif_step(fps: u32) -> u32 {
+    (fps / 15).max(1)
+}
+
+/// A GIF longer than [`GIF_FRAMES`] is refused with the limit and a range that fits (A4): it
+/// is never cut short silently.
+fn gif_fits(fps: u32, range: [Frame; 2], end: Frame) -> Result<(), StoreError> {
+    let step = gif_step(fps);
+    let longest = Frame::try_from(GIF_FRAMES as u32 * step).unwrap_or(Frame::MAX);
+    if range[1] - range[0] <= longest {
+        return Ok(());
+    }
+    let to = (range[0] + longest).min(end);
+    let seconds = f64::from(longest) / f64::from(fps.max(1));
+    Err(CommandError::rule(
+        "OUT_OF_RANGE",
+        "to",
+        Some(Json::Signed(i64::from(range[1]))),
+        &format!(
+            "a GIF of at most {GIF_FRAMES} frames at {:.0} fps: {longest} timeline frames ({seconds:.1} s), at most {GIF_WIDTH} px wide",
+            f64::from(fps) / f64::from(step)
+        ),
+        &format!(
+            "Pass from/to at most {longest} frames apart (e.g. from:{} to:{to}), or export a video preset (social-h264) for the whole timeline.",
+            range[0]
+        ),
+    )
+    .into())
 }
 
 /// An export bound: a whole frame inside the timeline, never clamped or wrapped.
@@ -432,6 +472,22 @@ mod tests {
             resolve(&Project::default(), 120, &args).unwrap()[0].range,
             [0, 120]
         );
+    }
+
+    /// A4: a GIF past 150 frames at 15 fps (10 s at 30 fps) is refused with the limit and a
+    /// range that fits, never cut short.
+    #[test]
+    fn gifs_over_the_frame_limit_are_refused_with_a_range_that_fits() {
+        let project = Project::default();
+        let args = splice_json::parse(r#"{"preset":"gif","from":30}"#).unwrap();
+        let error = resolve(&project, 600, &args).unwrap_err();
+        assert_eq!(error.code, "OUT_OF_RANGE");
+        assert!(error.fix.contains("from:30 to:330"), "{}", error.fix);
+        let rule = error.rule.unwrap();
+        assert_eq!(rule.param, "to");
+        assert!(rule.expected.contains("10.0 s"), "{}", rule.expected);
+        let args = splice_json::parse(r#"{"preset":"gif","from":30,"to":330}"#).unwrap();
+        assert_eq!(resolve(&project, 600, &args).unwrap()[0].range, [30, 330]);
     }
 
     #[test]

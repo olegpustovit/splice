@@ -431,7 +431,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "export.start",
-        description: "Export the timeline: presets for social (youtube-1080/4k, shorts, reels, tiktok, linkedin), masters (prores-422, prores-4444 and hevc-alpha keep transparency), audio (audio-m4a, audio-wav), gif and poster (done at once). from/to or marker limit the range; markers become chapters; captions:\"srt\" writes a sidecar; variants:[{aspect, preset}] renders several aspects, each reframed to fill; format:\"fcpxml\" writes the cut for Final Cut Pro (every platform). Video and audio need macOS and run as jobs (two at a time). Without sessionId the export opens its own session.",
+        description: "Export the timeline: presets for social (youtube-1080/4k, shorts, reels, tiktok, linkedin), masters (prores-422, prores-4444 and hevc-alpha keep transparency), audio (audio-m4a, audio-wav), gif (about 15 fps, at most 150 frames and 480 px wide; a longer range is refused with the limit) and poster (done at once). from/to or marker limit the range; markers become chapters; captions:\"srt\" writes a sidecar; variants:[{aspect, preset}] renders several aspects, each reframed to fill; format:\"fcpxml\" writes the cut for Final Cut Pro (every platform). Video and audio need macOS and run as jobs (two at a time). Without sessionId the export opens its own session.",
         read_only: false,
         input: &[
             ("projectId", "string"),

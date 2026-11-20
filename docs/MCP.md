@@ -395,9 +395,13 @@ the project package. An explicit MP4 path can be absolute or relative to that pa
 Pass `overwrite:true` to replace an existing movie after encoding succeeds.
 By default, publishing a new filename uses a hard link on the destination volume.
 
-`preset` is one of `social-hevc`, `social-h264`, `youtube`, `shorts`, `reels`, `tiktok`,
-`linkedin`, `prores-422`, `prores-4444`, `hevc-alpha`, `audio-m4a`, `audio-wav`, `gif` or
-`poster` (a PNG still). `from`/`to` (whole frames from 0 to the timeline's end; anything else is
+`preset` is one of `social`, `social-hevc`, `social-h264`, `youtube-1080`, `youtube-4k`, `shorts`,
+`reels`, `tiktok`, `linkedin`, `prores-422`, `prores-4444`, `hevc-alpha`, `audio-m4a`, `audio-wav`,
+`gif` or `poster` (a PNG still). A `gif` has every second frame at 30 fps (about 15 fps; every
+frame at 24 or 25), at most 150 frames (10 s at 30 fps) and 480 px wide: a longer range is
+refused with `OUT_OF_RANGE` (`param:"to"`, the limit, and a `from`/`to` that fits in the fix),
+never cut short, and the result's `settings` report `width`, `height`, `fps`, `frames`, `from`
+and `to`. `from`/`to` (whole frames from 0 to the timeline's end; anything else is
 refused with the broken rule, never clamped) or `marker` export part of the timeline; `bitrate`
 overrides the preset (the frame rate is the project's). `variants:[{aspect, preset?}]` exports
 reframed copies, one job each; variants that would write the same file (same size and container)
