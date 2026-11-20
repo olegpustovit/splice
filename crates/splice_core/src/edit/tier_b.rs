@@ -119,23 +119,7 @@ impl Editor {
                 }
                 Ok(outcome)
             }
-            Op::CursorSet {
-                clip,
-                size,
-                click_rings,
-            } => {
-                let mut params = Vec::new();
-                if let Some(size) = size {
-                    params.push(number("size", size));
-                }
-                if let Some(rings) = click_rings {
-                    params.push(EffectParam {
-                        name: "clickRings".into(),
-                        value: EffectValue::Bool(rings),
-                    });
-                }
-                self.clip_effect(&clip, "cursor", params, "Cursor")
-            }
+            Op::CursorSet { clip, params } => self.clip_effect(&clip, "cursor", params, "Cursor"),
             Op::KeysSet { clip, size, show } => self.set_keys(&clip, size, show),
             Op::KeysHide {
                 clip,

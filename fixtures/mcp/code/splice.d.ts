@@ -319,9 +319,32 @@ declare namespace Splice {
       cmd: "cursor.set";
       /** clp_… */
       clip: string;
-      /** 0.5–4 */
+      /** 0.5–4 · cursor scale (keyable) */
       size?: number;
+      /** rings at each click */
       clickRings?: boolean;
+      /** the cursor pulses at each click */
+      clickPulse?: boolean;
+      /** draw no cursor on this clip (split first for a range, or key it) */
+      hidden?: boolean;
+      /** fade the cursor out while it rests */
+      hideWhenIdle?: boolean;
+      /** 0–1 · Recorder presets: none 0, rapid 0.1, medium 0.3, smooth 0.75 */
+      smoothing?: number;
+      /** synthesized human path between marks, or the raw samples */
+      path?: "auto" | "recorded";
+      /** 0–0.5 · curve of synthesized paths */
+      arc?: number;
+      /** 0–1 s · synthesized paths arrive this early before a click */
+      arriveBefore?: number;
+      /** draw the arrow whatever shape was recorded */
+      alwaysArrow?: boolean;
+      /** frames 0–600 · ease back to the clip's first position over its last N frames (0 off) */
+      loop?: number;
+      /** a click sound in the export at every press */
+      clickSound?: boolean;
+      /** 0–1 · blur along the cursor's motion */
+      motionBlur?: number;
     }
     /** Keystroke Chip Settings (edit, 0.2). */
     interface KeysSet extends Base {

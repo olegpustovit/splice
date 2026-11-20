@@ -1207,3 +1207,34 @@ fn zoom_follows_the_cursor_and_carries_motion_blur() {
         assert!(error.error.rule.is_some(), "{op}: {error:?}");
     }
 }
+
+/// Found live: cursor.set refused alwaysArrow (T46.2 added it to the effect only). cursor.set
+/// is sugar for the cursor effect, so every schema parameter is an argument, range-checked.
+#[test]
+fn cursor_set_takes_every_cursor_parameter() {
+    let schema = crate::commands::effect_schemas();
+    let row = crate::commands::COMMANDS
+        .iter()
+        .find(|row| row.id == "cursor.set")
+        .unwrap();
+    for (name, _) in schema
+        .field("cursor")
+        .and_then(|cursor| cursor.field("params"))
+        .and_then(Json::as_object)
+        .unwrap()
+    {
+        assert!(row.params.iter().any(|(key, _)| key == name), "{name}");
+    }
+    let mut project = sample();
+    run(
+        &mut project,
+        r#"[{"cmd":"cursor.set","clip":"clp_take","alwaysArrow":true,"loop":20,"clickSound":true}]"#,
+    )
+    .unwrap();
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"cursor.set","clip":"clp_take","size":9}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.rule.unwrap().param, "size");
+}

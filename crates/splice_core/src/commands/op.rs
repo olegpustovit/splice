@@ -256,10 +256,8 @@ pub enum Op {
     CursorSet {
         /// Recorded clip.
         clip: Target,
-        /// Cursor scale.
-        size: Option<f64>,
-        /// Draw click rings.
-        click_rings: Option<bool>,
+        /// Cursor effect parameters named at the top level (every one the schema has).
+        params: Vec<EffectParam>,
     },
     /// Keystroke Chip Settings.
     KeysSet {

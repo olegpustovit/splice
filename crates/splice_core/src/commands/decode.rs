@@ -573,11 +573,17 @@ pub(super) fn audio_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     })
 }
 
-pub(super) fn cursor_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+pub(super) fn cursor_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
+    let params = schema_params(a, "cursor", &mut scratch.params)?;
+    if params.is_empty() {
+        return Err(Error::bad(
+            "size, clickRings, hidden or another cursor parameter",
+            "at least one change",
+        ));
+    }
     Ok(Op::CursorSet {
         clip: a.target("clip")?,
-        size: a.opt_within("size", 0.5, 4.0)?,
-        click_rings: a.opt_flag("clickRings")?,
+        params,
     })
 }
 
