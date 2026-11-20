@@ -1680,10 +1680,12 @@ fn record_start_joins_a_session_without_if_revision() {
     assert_eq!(joined.session, Some(session));
     assert_eq!(joined.if_revision, Some(store.project().rev));
     store.check_write(&joined).unwrap();
-    let error = super::platform::record_write_options(&store, &parse(r#"{"ifRevision":"r0"}"#))
-        .unwrap_err();
-    assert_eq!(error.code, "NO_SESSION");
-    assert!(error.fix.contains("session"), "{}", error.fix);
+    // ifRevision alone is a precondition (record_start_takes_if_revision_without_a_session).
+    assert!(
+        super::platform::record_write_options(&store, &parse(r#"{"ifRevision":"r0"}"#))
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// A5: on a cropped take, intent.autoZoom (clicks in captured-source coordinates, as
