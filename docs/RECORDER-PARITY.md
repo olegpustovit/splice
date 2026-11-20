@@ -1,5 +1,14 @@
 # Recorder parity (headless)
 
+> **Independent audit (2026-11-20): this matrix overclaims in places.** A reviewer who built none
+> of it ([RECORDER-PARITY-AUDIT.md](RECORDER-PARITY-AUDIT.md)) found 7 capabilities missing or
+> overclaimed (e.g. voice-over range re-record, layer backdrop dim/blur and free placement,
+> export tails past the last clip, `cut.pauses` seam fades, Recorder's auto-zoom clustering
+> rules), 37 of 86 sampled "verified" rows resting on weak evidence and 4 on wrong evidence, and
+> 19 agent-clarity issues (top: the redaction blur defaults to 0.6; mask x/y is the top-left
+> corner, camera x/y the centre; analysis returns timeline frames where intents take source
+> frames). Treat rows the audit names as unverified until each is fixed and re-tested.
+
 Every user-facing recording, editing and export capability of Recorder (the reference app,
 `~/projects/recorder`: `docs/SPEC.md` with its `AC-*` acceptance criteria, `docs/MCP.md`,
 `docs/AUDIO-LAYERS.md`) against Splice's headless MCP surface. One row per capability.
