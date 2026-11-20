@@ -7,7 +7,7 @@
 > {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"code.run","arguments":{"projectId":"prj_1","sessionId":"ses_1","code":"try {\n  splice.edit.apply({ifRevision: \"r1\", ops: [{cmd: \"item.nope\"}]});\n} catch (e) {\n  return {name: e.name, spliceError: e instanceof SpliceError, code: e.code, fix: e.fix};\n}"}}}
 < {"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"result":{"name":"SpliceError","spliceError":true,"code":"UNKNOWN_COMMAND","fix":"…"},"calls":[{"tool":"edit.apply","ok":false}],"revisions":null},"isError":false}}
 > {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"code.run","arguments":{"projectId":"prj_1","code":"const a = 1;\n\nsplice.timeline.snapshot({projectId: \"prj_9\"});"}}}
-< {"jsonrpc":"2.0","id":5,"result":{"structuredContent":{"result":null,"error":{"code":"NOT_FOUND","message":"Project prj_9 is not open.","fix":"Call project.info with the package path.","line":3}},"isError":true}}
+< {"jsonrpc":"2.0","id":5,"result":{"structuredContent":{"result":null,"error":{"code":"NOT_FOUND","message":"Project prj_9 is not open.","fix":"Call project.info with the package path; it returns the projectId.","line":3}},"isError":true}}
 > {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"code.run","arguments":{"code":"splice.call(\"code.run\", {code: \"1\"});"}}}
 < {"jsonrpc":"2.0","id":6,"result":{"structuredContent":{"error":{"code":"UNKNOWN_TOOL","fix":"…","valid":"…","line":1}},"isError":true}}
 > {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"code.run","arguments":{"code":"// a comment\nconst x = null;\nreturn x.y;"}}}

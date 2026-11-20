@@ -231,11 +231,13 @@ impl Projects {
         let entry = project_index(id)
             .and_then(|index| self.open.get_mut(index))
             .ok_or_else(|| {
-                failure(
-                    "NOT_FOUND",
-                    &format!("Project {id} is not open."),
-                    "Call project.info with the package path.",
-                )
+                // Agents pass the package path as projectId: say which argument it belongs in.
+                let fix = if id.ends_with(".splice") || id.contains('/') {
+                    format!("projectId takes the prj_ ID project.info returns; pass the path as project.info {{path:{id:?}}}.")
+                } else {
+                    "Call project.info with the package path; it returns the projectId.".to_owned()
+                };
+                failure("NOT_FOUND", &format!("Project {id} is not open."), &fix)
             })?;
         let store = entry.local_mut().ok_or_else(|| {
             failure(

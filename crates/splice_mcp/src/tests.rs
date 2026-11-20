@@ -1971,3 +1971,14 @@ fn record_start_takes_if_revision_without_a_session() {
     let stale = super::platform::record_write_options(&store, &args("r5")).unwrap_err();
     assert!(format!("{stale:?}").contains("STALE_REVISION"), "{stale:?}");
 }
+
+/// Found by cursor-range-hide (code mode): the agent passed the package path as projectId.
+#[test]
+fn a_path_passed_as_project_id_is_pointed_at_path() {
+    let mut projects = super::project::Projects::default();
+    let error = projects
+        .lookup(&object(vec![("projectId", text("/tmp/x/project.splice"))]))
+        .map(|_| ())
+        .unwrap_err();
+    assert!(error.fix.contains("project.info {path:"), "{}", error.fix);
+}
