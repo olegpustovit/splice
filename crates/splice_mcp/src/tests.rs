@@ -2439,3 +2439,27 @@ fn recorder_parity_evidence_exists() {
     assert!(rows > 80, "{rows} rows");
     assert!(problems.is_empty(), "{problems:#?}");
 }
+
+/// From the final eval run: export.start {path:"…teaser.gif"} in code mode lost the default
+/// project ("Missing projectId"): path names the output there, not a project.
+#[test]
+fn an_output_path_keeps_the_default_project() {
+    let args = object(vec![
+        ("projectId", text("prj_1")),
+        (
+            "code",
+            text(r#"splice.export.start({preset:"gif", path:"/tmp/teaser.gif"});"#),
+        ),
+    ]);
+    let mut seen = Vec::new();
+    code::run(&args, &mut |name, args| {
+        seen.push((name.to_owned(), args.field("projectId").cloned()));
+        Ok(object(vec![("structuredContent", object(Vec::new()))]))
+    })
+    .unwrap();
+    let export = seen
+        .iter()
+        .find(|(name, _)| name == "export.start")
+        .unwrap();
+    assert_eq!(export.1, Some(text("prj_1")), "{seen:?}");
+}

@@ -323,7 +323,7 @@ def helpers(project_path, work, seed_hash):
 
     def gif_seconds(name):
         """Playing time of an exported GIF: its frame delays summed (hundredths of a second)."""
-        data = open(os.path.join(project_path, "exports", name), "rb").read()
+        data = open(name if os.path.isabs(name) else os.path.join(project_path, "exports", name), "rb").read()
         at, total = 13 + (3 << ((data[10] & 7) + 1) if data[10] & 0x80 else 0), 0
         while at < len(data) and data[at] != 0x3B:
             if data[at] == 0x21:
@@ -363,8 +363,11 @@ def helpers(project_path, work, seed_hash):
         "seconds": lambda frames: frames / project["fps"],
         "take_clips": lambda: [c for c in clips if media.get(c.get("media"), {}).get("kind") == "take"],
         "effect": effect, "frame": frame, "words_on_timeline": words_on_timeline,
-        "exports": lambda ext=".mp4": sorted(f for f in os.listdir(os.path.join(project_path, "exports"))
-                                  if f.endswith(ext)) if os.path.isdir(os.path.join(project_path, "exports")) else [],
+        # Exports anywhere an agent may reasonably put them: the package's exports/, the package
+        # root, or the task's work folder.
+        "exports": lambda ext=".mp4": sorted(
+            os.path.join(d, f) for d in (os.path.join(project_path, "exports"), project_path, work)
+            if os.path.isdir(d) for f in os.listdir(d) if f.endswith(ext)),
         "seed_hash": seed_hash, "state_hash": state.get("stateHash"), "batches": state.get("batches", 0),
     }
 

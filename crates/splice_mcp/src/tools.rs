@@ -800,8 +800,11 @@ fn with_defaults(
             }
             _ => {}
         }
+        // path selects the project only for project.info and record.start; export.start's
+        // path is its output file.
+        let selects = matches!(name, "project.info" | "record.start");
         if field(&fields, "projectId").is_none()
-            && field(&fields, "path").is_none()
+            && !(selects && field(&fields, "path").is_some())
             && let Some(only) = projects.only_open()
         {
             fields.push(("projectId".into(), text(&only)));

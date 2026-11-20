@@ -455,6 +455,12 @@ pub(super) fn source(args: &Json) -> Result<Source, StoreError> {
 
 /// One window selector, `{app, title?}` or a `win_` ID; `param` names it in errors.
 fn window(value: &Json, param: &str) -> Result<Source, StoreError> {
+    // {window:"win_…"} / {id:"win_…"}: the ID form wrapped the way agents wrap it (eval).
+    if let Some(inner) = value.field("window").or_else(|| value.field("id"))
+        && inner.as_str().is_some()
+    {
+        return window(inner, param);
+    }
     if value.as_object().is_some() {
         let app = value.string("app")?;
         if app.is_empty() {
@@ -565,6 +571,11 @@ mod tests {
 
     #[test]
     fn recording_options_take_two_to_four_windows_in_one_take() {
+        // Found by an eval: {window:"win_…"} (and {id:"win_…"}) items are the ID form.
+        let wrapped =
+            splice_json::parse(r#"{"source":{"windows":[{"window":"win_7"},{"id":"win_8"}]}}"#)
+                .unwrap();
+        assert!(Options::parse(&wrapped).is_ok());
         let args = splice_json::parse(
             r#"{"source":{"windows":[{"app":"Safari"},"win_7",{"app":"Notes","title":"Plan"}]},"mic":true}"#,
         )

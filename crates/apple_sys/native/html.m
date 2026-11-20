@@ -159,6 +159,24 @@ bool splice_html_render(const char *html, const char *base, uint32_t width, uint
                                                        : "The page did not finish loading in 30 s.");
             return false;
         }
+        // Loaded is not painted: under load WebKit reported the navigation finished before the
+        // first paint and every snapshot came back black (identically, so the determinism check
+        // passed). Wait for the fonts, then force one committed paint with a discarded snapshot
+        // (requestAnimationFrame is throttled in this offscreen window, so it cannot be the signal).
+        __block BOOL painted = NO;
+        [web callAsyncJavaScript:@"await document.fonts.ready;"
+                       arguments:@{}
+                         inFrame:nil
+                  inContentWorld:WKContentWorld.pageWorld
+               completionHandler:^(id result, NSError *failure) {
+                   (void)result;
+                   (void)failure;
+                   painted = YES;
+               }];
+        if (!spin(^{ return painted; }, 10)) {
+            splice_set_error(error, "The page's fonts did not load within 10 s.");
+            return false;
+        }
         NSError *failure = nil;
         NSURL *url = [NSURL fileURLWithPath:@(out)];
         [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
@@ -192,6 +210,12 @@ bool splice_html_render(const char *html, const char *base, uint32_t width, uint
         if (CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
                                 (__bridge CFDictionaryRef)attributes, &pixel) != kCVReturnSuccess) {
             splice_set_error(error, "Could not allocate the HTML frame.");
+            return false;
+        }
+        // The discarded warm-up: a snapshot after screen updates commits the first paint.
+        if (!frame(web, 0, pixel, error)) {
+            CFRelease(pixel);
+            [writer cancelWriting];
             return false;
         }
         // The determinism gate: frames 0 and the middle are rendered again after the pass.
