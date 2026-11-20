@@ -512,7 +512,7 @@ records and edits a screen video correctly".
   one coordinate space per parameter, documented in `commands.describe`, with `intent.autoZoom`
   correct on cropped clips (A5); `takes.events {kinds, stride}` (A8); `items.inspect` shows resolved
   default effects (A10); `project.set {fps, aspect:auto|16:10}` and export fps (G1); doc drift (A9).
-- [~] T46.5 [L] (8 tasks live, all pass in both arms; full 21-task 3/3 run in progress) Evals: record-app-landscape, record-pause-marker, keys-private, crop-autozoom,
+- [x] T46.5 [L] (21 tasks x 3 runs x 2 arms at 2c8a123: 120/126; every task 3/3 in both arms except voiceover, which this Mac mini cannot run: no microphone, NO_DEVICE up front) Evals: record-app-landscape, record-pause-marker, keys-private, crop-autozoom,
   cursor-range-hide, camera-layout, gif-teaser, retake-replace; all 3/3 in both arms with the
   existing 13.
 
