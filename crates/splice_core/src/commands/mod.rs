@@ -287,13 +287,16 @@ pub fn closest(name: &str, known: &mut dyn Iterator<Item = &str>) -> Option<Stri
         .filter(|(d, _)| *d <= limit)
         .min_by_key(|(d, _)| *d)
         .map(|(_, candidate)| candidate.to_string());
-    best.or(synonym)
+    // A synonym is what the caller meant; a near spelling is only a guess ("id" is not "fit").
+    synonym.or(best)
 }
 
 /// Argument names that mean the same thing elsewhere in the API, for didYouMean.
 const SYNONYMS: &[(&str, &str)] = &[
     ("ids", "items"),
     ("id", "item"),
+    ("id", "items"),
+    ("ids", "item"),
     ("items", "ids"),
     ("clip", "item"),
 ];

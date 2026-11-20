@@ -934,3 +934,16 @@ fn a_second_split_past_the_shortened_clip_names_the_piece_holding_the_frame() {
         "{text}"
     );
 }
+
+/// Found by record-app-landscape: clip.crop {id} suggested "fit" (one edit away) instead of
+/// "items", the argument the agent meant.
+#[test]
+fn an_id_argument_suggests_items_before_a_near_spelling() {
+    let mut project = sample();
+    let ops =
+        splice_json::parse(r#"[{"cmd":"clip.crop","id":"clp_take","aspect":"canvas"}]"#).unwrap();
+    let text = apply(&mut project, ops.as_array().unwrap(), Source::Agent, true)
+        .unwrap_err()
+        .to_string();
+    assert!(text.contains("Did you mean \"items\""), "{text}");
+}

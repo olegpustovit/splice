@@ -169,18 +169,23 @@ pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreE
     let store = projects.lookup_id(&project)?;
     // record.start writes nothing until record.stop: a session is enough, ifRevision optional.
     let explicit = record_write_options(store, args)?;
-    // A project this recording creates takes its canvas from the source (A7).
-    let fresh = args.flag("create")?
-        && store.project().clips.order().is_empty()
+    // A take into an empty project sets its canvas: `aspect` when given, else the source's
+    // shape (A7) unless someone already chose a canvas (any batch on an empty project, e.g.
+    // project.set) and this call did not create the project.
+    let empty = store.project().clips.order().is_empty()
         && store.project().media.is_empty()
         && placement.voiceover.is_none();
-    if aspect.is_some() && !fresh {
+    if aspect.is_some() && !empty {
         return Err(bad(
             "aspect",
-            "omitted unless create:true makes a new, empty project; change an existing canvas with edit.apply project.set {aspect}",
+            "omitted when the project already has media; change the canvas with edit.apply project.set {aspect}",
         ));
     }
-    placement.canvas = fresh.then(|| aspect.unwrap_or("auto").to_owned());
+    let untouched = args.flag("create")? || store.project().rev == 0;
+    placement.canvas = match aspect {
+        Some(aspect) => Some(aspect.to_owned()),
+        None => (empty && untouched).then(|| "auto".to_owned()),
+    };
     let kept = store.project().size;
     // A retake of a clip that is gone would silently append at the end: refuse before capture.
     if let Some(clip) = placement.retake_of
