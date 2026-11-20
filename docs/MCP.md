@@ -340,6 +340,14 @@ PNG with a longest edge of up to 640 pixels. Out-of-range frame numbers return `
 `sheet:true` tiles the frames (360-pixel thumbnails in a near-square grid) into one PNG: one
 inline image and a `sheet` file URI.
 
+Offline media does not stop a look at the rest of the edit. `view.frames`, `view.check`,
+`splice frame` and the viewer (and its snapshot) draw each missing picture as a placeholder: a dark
+fill with a diagonal hatch and "Media offline: <file name>", at the item's exact geometry (window,
+crop, transforms), so titles, layout and zooms stay checkable; offline audio is silent. The result
+then carries `offline: [{mediaId, path}]` (the missing file) and a `warning` string. Export never
+draws placeholders: `export.start` and `splice export` refuse with `MEDIA_OFFLINE` until the file
+is restored or `media.relink` points at it. `project.info` lists `offlineMedia` up front.
+
 ## Silent takes (D15)
 
 Screen takes often have no speech. The smart cuts `cut.pauses`, `intent.pace` and

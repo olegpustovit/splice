@@ -31,6 +31,8 @@ pub struct Composition {
     end: Frame,
     text: Vec<TimedText>,
     plan: lower::Plan,
+    /// Missing files drawn as placeholders, by media (never in an export).
+    offline: Vec<(splice_model::MediaId, PathBuf)>,
     /// The frame-grab renderer, made on first use.
     offscreen: std::cell::RefCell<Option<Offscreen>>,
     /// The last read's decode, compose (draw and GPU completion) and readback times.
@@ -158,26 +160,45 @@ impl From<apple_sys::Error> for Error {
 }
 
 impl Composition {
-    /// Builds the program from a read-only project revision and its package directory.
+    /// Builds the program for delivery from a read-only project revision and its package
+    /// directory. A missing source file is `Error::Offline`: an export never has placeholders.
     pub fn prepare(project: &Project, package: &Path) -> Result<Self, Error> {
-        Self::build(project, package, false)
+        Self::build(project, package, false, false)
     }
 
     /// The program for renders an agent sees (view.frames, view.check): keystroke chips land
     /// where and when export draws them, with every typed character replaced by a dot; key
-    /// text stays human-only (D19), the geometry stays the export's (A1).
+    /// text stays human-only (D19), the geometry stays the export's (A1). Offline media draws
+    /// as a placeholder at the item's geometry; `offline` lists it.
     pub fn prepare_for_agent(project: &Project, package: &Path) -> Result<Self, Error> {
-        Self::build(project, package, true)
+        Self::build(project, package, true, true)
     }
 
-    fn build(project: &Project, package: &Path, redact_keys: bool) -> Result<Self, Error> {
+    /// The program the viewer shows: export's, with offline media drawn as placeholders.
+    pub fn prepare_for_viewer(project: &Project, package: &Path) -> Result<Self, Error> {
+        Self::build(project, package, false, true)
+    }
+
+    fn build(
+        project: &Project,
+        package: &Path,
+        redact_keys: bool,
+        placeholders: bool,
+    ) -> Result<Self, Error> {
         let pointers = lower::pointers(project, package)?;
         let evaluator =
             std::sync::Arc::new(Evaluator::prepare_with(project, &pointers).map_err(Error::Plan)?);
         let cuts = evaluator.breakpoints();
         let end = *cuts.last().unwrap_or(&0);
-        let (native, text, plan) =
-            lower::build(project, package, &evaluator, &cuts, end, redact_keys)?;
+        let (native, text, plan, offline) = lower::build(
+            project,
+            package,
+            &evaluator,
+            &cuts,
+            end,
+            redact_keys,
+            placeholders,
+        )?;
         Ok(Self {
             native,
             evaluator,
@@ -185,6 +206,7 @@ impl Composition {
             end,
             text,
             plan,
+            offline,
             offscreen: std::cell::RefCell::new(None),
             timings: Default::default(),
         })
@@ -198,6 +220,11 @@ impl Composition {
     /// Exclusive end of the composition in timeline frames.
     pub fn end(&self) -> Frame {
         self.end
+    }
+
+    /// Missing source files drawn as placeholders (or silent, for audio), with their media.
+    pub fn offline(&self) -> &[(splice_model::MediaId, PathBuf)] {
+        &self.offline
     }
 
     /// Playback evaluator for overlays drawn by the viewer.
@@ -301,6 +328,9 @@ impl Composition {
         file: &Path,
         encoding: &composition::Encoding,
     ) -> Result<Export, Error> {
+        if let Some((_, path)) = self.offline.first() {
+            return Err(Error::Offline(path.clone()));
+        }
         let mut encoding = encoding.clone();
         encoding.range = [
             encoding.range[0].clamp(0, self.end),

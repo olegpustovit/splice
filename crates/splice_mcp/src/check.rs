@@ -63,19 +63,19 @@ pub(super) fn view_check(
     );
     let pixels = wants("black") || wants("frozen") || wants("bleed");
     #[cfg(target_os = "macos")]
-    let (issues, sheet) = {
+    let (issues, sheet, offline) = {
         let mut issues = issues;
-        let sheet = if pixels {
+        let (sheet, offline) = if pixels {
             pixel_issues(store, &evaluator, [from, to], &wants, &mut issues, content)?
         } else {
-            None
+            (None, Vec::new())
         };
-        (issues, sheet)
+        (issues, sheet, offline)
     };
     #[cfg(not(target_os = "macos"))]
-    let sheet: Option<String> = {
+    let (sheet, offline): (Option<String>, Vec<(&str, Json)>) = {
         let _ = (store, &content);
-        None
+        (None, Vec::new())
     };
     let mut fields = vec![
         ("revision", rev(project.rev)),
@@ -85,6 +85,7 @@ pub(super) fn view_check(
     if let Some(sheet) = sheet {
         fields.push(("sheet", text(&sheet)));
     }
+    fields.extend(offline);
     Ok(object(fields))
 }
 
@@ -201,7 +202,8 @@ fn spans(samples: &[(Frame, bool)], stride: Frame, min: Frame) -> Vec<[Frame; 2]
     out
 }
 
-/// Black and frozen spans and backdrop bleed from rendered frames at 5 per second.
+/// Black and frozen spans and backdrop bleed from rendered frames at 5 per second, with the
+/// contact sheet and the offline media drawn as placeholders.
 #[cfg(target_os = "macos")]
 fn pixel_issues(
     store: &Store,
@@ -210,7 +212,7 @@ fn pixel_issues(
     wants: &dyn Fn(&str) -> bool,
     issues: &mut Vec<Json>,
     content: &mut Vec<Json>,
-) -> Result<Option<String>, StoreError> {
+) -> Result<(Option<String>, Vec<(&'static str, Json)>), StoreError> {
     use splice_av::Composition;
     let project = store.project();
     let render = |error: &dyn std::fmt::Display| {
@@ -278,8 +280,9 @@ fn pixel_issues(
             issues,
         )?;
     }
+    let offline = super::frames::offline_fields(&composition);
     if flagged.is_empty() {
-        return Ok(None);
+        return Ok((None, offline));
     }
     let (sheet, sheet_size) = super::sheet::tile(&flagged, size, 360);
     let png = splice_av::encode_frame_png(&sheet, sheet_size, 0).map_err(|e| render(&e))?;
@@ -295,7 +298,7 @@ fn pixel_issues(
         ("mimeType", text("image/png")),
         ("data", Json::String(super::frames::base64(&png))),
     ]));
-    Ok(Some(format!("file://{}", file.display())))
+    Ok((Some(format!("file://{}", file.display())), offline))
 }
 
 /// Inside each transition, the backdrop (a corner patch) must stay as it was just before.

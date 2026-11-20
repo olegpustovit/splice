@@ -9,9 +9,11 @@ use ogpu_core::{
 use pxui::{Commands, FrameIn, Image, Pass, Renderer, Ui, UiDesc};
 use splice_av::{Composition, encode_png};
 use splice_core::history::{Store, StoreError};
+use splice_json::Value as Json;
 
-/// Renders the viewer content at an exact timeline frame to a PNG without opening a window.
-pub fn render(store: &Store, at: i32) -> Result<Vec<u8>, StoreError> {
+/// Renders the viewer content at an exact timeline frame to a PNG without opening a window, with
+/// the `offline` and `warning` fields when offline media drew as placeholders.
+pub fn render(store: &Store, at: i32) -> Result<(Vec<u8>, Vec<(&'static str, Json)>), StoreError> {
     let composition = program::composition(store)?;
     let end = composition.as_ref().map_or(0, |program| program.end());
     if !(0..end.max(1)).contains(&at) {
@@ -122,7 +124,11 @@ pub fn render(store: &Store, at: i32) -> Result<Vec<u8>, StoreError> {
     let receipt = be::commit(&commands).map_err(gpu_error)?;
     be::complete_through(queue, receipt.epoch).map_err(gpu_error)?;
     let pixels = be::read_texture(target, i64::from(VIEWER_SIZE[0]) * 4).map_err(gpu_error)?;
-    encode_png(&pixels, VIEWER_SIZE, 0).map_err(|error| viewer_error(&error))
+    let png = encode_png(&pixels, VIEWER_SIZE, 0).map_err(|error| viewer_error(&error))?;
+    let offline = composition
+        .as_deref()
+        .map_or_else(Vec::new, splice_mcp::offline_fields);
+    Ok((png, offline))
 }
 
 struct Offscreen {

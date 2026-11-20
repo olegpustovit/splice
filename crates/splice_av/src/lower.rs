@@ -17,6 +17,8 @@ use std::sync::Arc;
 const VECTOR_SIDE: f64 = 1920.0;
 /// Frames of a Lottie loop that are drawn (an animated GIF's cap too, in native).
 const VECTOR_FRAMES: u32 = 2000;
+/// Longest side, in pixels, of an offline media's placeholder picture.
+const PLACEHOLDER_SIDE: f64 = 1280.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
@@ -108,7 +110,15 @@ struct Lowering {
     tracks: Vec<(Key, i32)>,
     /// Parsed take events and their registered cursor table, per media.
     takes: Vec<(MediaId, Option<TakeEvents>)>,
+    /// Draw offline media as placeholders instead of failing (renders an agent or the viewer
+    /// sees; never export).
+    placeholders: bool,
+    /// Missing files drawn as placeholders (or left silent, for audio), by media.
+    offline: Vec<(MediaId, PathBuf)>,
 }
+
+/// What lowering produced: the native composition, its text, the GPU plan and offline files.
+pub(super) type Lowered = (Composition, Vec<TimedText>, Plan, Vec<(MediaId, PathBuf)>);
 
 pub(super) fn build(
     project: &Project,
@@ -117,7 +127,8 @@ pub(super) fn build(
     cuts: &[Frame],
     end: Frame,
     redact_keys: bool,
-) -> Result<(Composition, Vec<TimedText>, Plan), Error> {
+    placeholders: bool,
+) -> Result<Lowered, Error> {
     let evaluator: &Evaluator = shared;
     let mut luts = Vec::new();
     while let Some(path) = evaluator.lut(luts.len() as u16) {
@@ -134,6 +145,8 @@ pub(super) fn build(
         end,
         tracks: Vec::new(),
         takes: Vec::new(),
+        placeholders,
+        offline: Vec::new(),
     };
     // One black track stands in for every fill: the GPU draws backgrounds and fades from the
     // evaluated layer, and a fill source decodes to no texture.
@@ -347,7 +360,12 @@ pub(super) fn build(
     for (clip, media, style) in chips {
         state.chips(clip, media, style, redact_keys, project, package, evaluator)?;
     }
-    Ok((state.builder.finish()?, state.text, state.plan))
+    Ok((
+        state.builder.finish()?,
+        state.text,
+        state.plan,
+        state.offline,
+    ))
 }
 
 /// Gain of the generated click under the program audio.
@@ -836,8 +854,8 @@ impl Lowering {
             return Ok(track);
         }
         let media = Self::media(project, id)?;
-        let path = media_path(package, media, None)?;
-        if matches!(media.probe.codec.as_deref(), Some("lottie" | "svg")) {
+        let (path, placeholder) = self.picture_path(package, media, None)?;
+        if !placeholder && matches!(media.probe.codec.as_deref(), Some("lottie" | "svg")) {
             self.vector(&path, project.size)?;
         }
         let timing = Timing {
@@ -869,12 +887,14 @@ impl Lowering {
         }
         let media = Self::media(project, picture.media)?;
         let timings = Self::timings(project.fps, evaluator, picture.item, media)?;
-        let path = media_path(
+        let (path, placeholder) = self.picture_path(
             package,
             media,
             media.take.as_ref().and_then(|take| take.screen.as_deref()),
         )?;
-        let source = if media.kind == MediaKind::Image {
+        let source = if placeholder {
+            Source::Still(path)
+        } else if media.kind == MediaKind::Image {
             if matches!(media.probe.codec.as_deref(), Some("lottie" | "svg")) {
                 self.vector(&path, project.size)?;
             }
@@ -977,8 +997,99 @@ impl Lowering {
             .as_ref()
             .and_then(|take| take.camera.as_deref())
             .ok_or_else(|| Error::Input(format!("{id} has no camera component.")))?;
-        let path = media_path(package, media, Some(component))?;
-        self.insert(key, Source::Video(path), &timings)
+        let (path, placeholder) = self.picture_path(package, media, Some(component))?;
+        let source = if placeholder {
+            Source::Still(path)
+        } else {
+            Source::Video(path)
+        };
+        self.insert(key, source, &timings)
+    }
+
+    /// The file a picture plays, or (`true`) a drawn placeholder still under the missing path
+    /// when the file is offline and this render allows placeholders.
+    fn picture_path(
+        &mut self,
+        package: &Path,
+        media: &Media,
+        component: Option<&str>,
+    ) -> Result<(PathBuf, bool), Error> {
+        match media_path(package, media, component) {
+            Err(Error::Offline(path)) if self.placeholders => {
+                if !self.offline.iter().any(|(_, known)| *known == path) {
+                    self.placeholder(media, &path)?;
+                    self.offline.push((media.id, path.clone()));
+                }
+                Ok((path, true))
+            }
+            other => other.map(|path| (path, false)),
+        }
+    }
+
+    /// Draws the placeholder picture movie for a missing file at the media's aspect: a dark
+    /// fill, a diagonal hatch and "Media offline: <file name>", so the item's window, crop and
+    /// transforms stay checkable.
+    fn placeholder(&mut self, media: &Media, path: &Path) -> Result<(), Error> {
+        let [w, h] = match [media.probe.width, media.probe.height] {
+            [0, _] | [_, 0] => [1280.0, 720.0],
+            [w, h] => [f64::from(w), f64::from(h)],
+        };
+        let fit = PLACEHOLDER_SIDE / w.max(h);
+        // Even and at least 32 px, as still_buffer encodes it.
+        let side =
+            |value: f64| ((value * fit).round().clamp(32.0, PLACEHOLDER_SIDE) as u32 + 1) & !1;
+        let size = [side(w), side(h)];
+        let name = path
+            .file_name()
+            .map_or_else(|| media.path.clone(), |n| n.to_string_lossy().into_owned());
+        let font = (f64::from(size[0].min(size[1])) / 10.0).max(8.0);
+        let band = [size[0] * 9 / 10, ((font * 2.5).round() as u32).min(size[1])];
+        let layer = TextLayer {
+            text: format!("Media offline: {name}"),
+            bounds: [0.0, 0.0, f64::from(band[0]), f64::from(band[1])],
+            font,
+            opacity: [1.0; 2],
+            color: 0xe0e0e4,
+            style: apple_sys::composition::TextStyle {
+                wrap: false,
+                ..Default::default()
+            },
+            visible: None,
+            active: None,
+        };
+        let text = apple_sys::composition::text_rgba(&layer, band)?;
+        let origin = [(size[0] - band[0]) / 2, (size[1] - band[1]) / 2];
+        let stripe = (size[0].max(size[1]) / 24).max(8);
+        let mut fill = |_: usize, rgba: &mut [u8]| {
+            for (index, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+                let [x, y] = [index as u32 % size[0], index as u32 / size[0]];
+                let base: [f32; 3] = if (x + y) % stripe < stripe / 4 {
+                    [60.0, 60.0, 66.0]
+                } else {
+                    [38.0, 38.0, 42.0]
+                };
+                let [tx, ty] = [x.wrapping_sub(origin[0]), y.wrapping_sub(origin[1])];
+                let ink = if tx < band[0] && ty < band[1] {
+                    let at = (ty * band[0] + tx) as usize * 4;
+                    Some((&text[at..at + 3], f32::from(text[at + 3]) / 255.0))
+                } else {
+                    None
+                };
+                for channel in 0..3 {
+                    pixel[channel] = match ink {
+                        Some((color, alpha)) => {
+                            base[channel] * (1.0 - alpha) + f32::from(color[channel]) * alpha
+                        }
+                        None => base[channel],
+                    } as u8;
+                }
+                pixel[3] = 255;
+            }
+            true
+        };
+        self.builder
+            .frames(path, size, 1, 1.0 / 30.0, &mut fill)
+            .map_err(Error::from)
     }
 
     fn audio(
@@ -992,29 +1103,15 @@ impl Lowering {
     ) -> Result<(), Error> {
         let media = Self::media(project, a.media)?;
         let timings = Self::timings(project.fps, evaluator, a.item, media)?;
-        let take = media.take.as_ref();
-        let (path, index) = match a.track {
-            Track::Imported(index) => (media_path(package, media, None)?, index),
-            Track::Mic | Track::System => {
-                let (name, file) = if a.track == Track::Mic {
-                    ("mic", take.and_then(|take| take.mic.as_deref()))
-                } else {
-                    ("system", take.and_then(|take| take.system.as_deref()))
-                };
-                if let Some(file) = file {
-                    (media_path(package, media, Some(file))?, 0)
-                } else {
-                    let index = media
-                        .probe
-                        .audio
-                        .iter()
-                        .position(|track| track.name == name)
-                        .ok_or_else(|| {
-                            Error::Input(format!("{} has no {name} audio track.", media.id))
-                        })?;
-                    (media_path(package, media, None)?, index as u32)
+        let (path, index) = match audio_source(package, media, a.track) {
+            // Renders that allow placeholders have no sound: offline audio is only reported.
+            Err(Error::Offline(path)) if self.placeholders => {
+                if !self.offline.iter().any(|(_, known)| *known == path) {
+                    self.offline.push((media.id, path));
                 }
+                return Ok(());
             }
+            other => other?,
         };
         let peak = evaluator
             .audio_gain(a.item, a.track)
@@ -1116,6 +1213,31 @@ fn arrow(package: &Path) -> Result<CursorImage, Error> {
         hot,
         scale: f64::from(SCALE),
     })
+}
+
+/// The file and audio track index a media's audio track plays from.
+fn audio_source(package: &Path, media: &Media, track: Track) -> Result<(PathBuf, u32), Error> {
+    let take = media.take.as_ref();
+    match track {
+        Track::Imported(index) => Ok((media_path(package, media, None)?, index)),
+        Track::Mic | Track::System => {
+            let (name, file) = if track == Track::Mic {
+                ("mic", take.and_then(|take| take.mic.as_deref()))
+            } else {
+                ("system", take.and_then(|take| take.system.as_deref()))
+            };
+            if let Some(file) = file {
+                return Ok((media_path(package, media, Some(file))?, 0));
+            }
+            let index = media
+                .probe
+                .audio
+                .iter()
+                .position(|track| track.name == name)
+                .ok_or_else(|| Error::Input(format!("{} has no {name} audio track.", media.id)))?;
+            Ok((media_path(package, media, None)?, index as u32))
+        }
+    }
 }
 
 fn media_path(package: &Path, media: &Media, component: Option<&str>) -> Result<PathBuf, Error> {

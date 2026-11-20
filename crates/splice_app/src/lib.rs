@@ -417,15 +417,22 @@ fn run_surface(
 
 /// Writes one offscreen viewer frame and returns the output path and revision.
 pub fn snapshot_output(store: &Store, at: i32, output: &Path) -> Result<Json, StoreError> {
-    let file = splice_mcp::write_png(output, &mut || snapshot(store, at))?;
-    Ok(Json::Object(vec![
+    let mut offline = Vec::new();
+    let file = splice_mcp::write_png(output, &mut || {
+        let (png, fields) = snapshot(store, at)?;
+        offline = fields;
+        Ok(png)
+    })?;
+    let mut fields = vec![
         ("output".into(), Json::String(file.to_string_lossy().into())),
         (
             "revision".into(),
             Json::String(format!("r{}", store.project().rev)),
         ),
         ("frame".into(), Json::Signed(i64::from(at))),
-    ]))
+    ];
+    fields.extend(offline.into_iter().map(|(key, value)| (key.into(), value)));
+    Ok(Json::Object(fields))
 }
 
 fn dispatch(

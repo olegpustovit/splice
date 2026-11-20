@@ -753,6 +753,102 @@ fn native_frames_cli_and_mcp_render_pngs_from_the_same_revision() {
     }
 }
 
+/// Offline media: `splice frame`, view.frames, view.check and the viewer snapshot draw a
+/// placeholder and report it; export refuses with MEDIA_OFFLINE.
+#[cfg(target_os = "macos")]
+#[test]
+fn native_viewer_and_agent_renders_draw_offline_media_and_export_refuses() {
+    let scratch = Scratch::new("offline-renders");
+    let project = export_sample(&scratch);
+    let package = project.to_str().unwrap();
+    fs::remove_file(project.join("probe.mov")).unwrap();
+    let reported = |result: &Json| {
+        let offline = result.field("offline").and_then(Json::as_array).unwrap();
+        assert_eq!(offline.len(), 1, "{result:?}");
+        assert!(
+            offline[0]
+                .field("mediaId")
+                .and_then(Json::as_str)
+                .is_some_and(|id| id.starts_with("med_"))
+        );
+        assert!(
+            offline[0]
+                .field("path")
+                .and_then(Json::as_str)
+                .is_some_and(|path| path.ends_with("probe.mov"))
+        );
+        let warning = result.field("warning").and_then(Json::as_str).unwrap();
+        assert!(
+            warning.contains("probe.mov") && warning.contains("MEDIA_OFFLINE"),
+            "{warning}"
+        );
+    };
+    let output = success(scratch.run(&["frame", "--at", "15", "grab.png", package]));
+    reported(&output);
+    assert_eq!(
+        &fs::read(scratch.0.join("grab.png")).unwrap()[..8],
+        b"\x89PNG\r\n\x1a\n"
+    );
+    reported(&success(scratch.run(&[
+        "open",
+        package,
+        "--snapshot",
+        "snap.png",
+    ])));
+    error(scratch.run(&["export", package]), "MEDIA_OFFLINE");
+    assert!(!project.join("exports/native-r1.mp4").exists());
+
+    let mut server = scratch
+        .command()
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    server.stdin.take().unwrap().write_all(concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"offline-test","version":"1"}}}"#, "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"native.splice"}}}"#, "\n",
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"view.frames","arguments":{"projectId":"prj_1","at":[15]}}}"#, "\n",
+        r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"view.check","arguments":{"projectId":"prj_1"}}}"#, "\n",
+        r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"export.start","arguments":{"projectId":"prj_1","ifRevision":"r1"}}}"#, "\n"
+    ).as_bytes()).unwrap();
+    let output = server.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let lines: Vec<Json> = std::str::from_utf8(&output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| parse(line).unwrap())
+        .collect();
+    let result = |id: u64| {
+        let line = lines
+            .iter()
+            .find(|line| line.field("id").and_then(Json::as_u64) == Some(id))
+            .unwrap();
+        line.field("result").unwrap()
+    };
+    for id in [3, 4] {
+        assert_eq!(
+            result(id).field("isError").and_then(Json::as_bool),
+            Some(false),
+            "{:?}",
+            result(id)
+        );
+        reported(result(id).field("structuredContent").unwrap());
+    }
+    let refused = result(5);
+    assert_eq!(refused.field("isError").and_then(Json::as_bool), Some(true));
+    assert_eq!(
+        refused
+            .field("structuredContent")
+            .and_then(|data| data.field("error"))
+            .and_then(|error| error.field("code"))
+            .and_then(Json::as_str),
+        Some("MEDIA_OFFLINE"),
+        "{refused:?}"
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn native_viewer_smoke_presents_media() {

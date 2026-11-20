@@ -132,10 +132,9 @@ pub(super) fn composition(store: &Store) -> Result<Option<Rc<Composition>>, Stor
     if project.clips.order().is_empty() && project.items.order().is_empty() {
         return Ok(None);
     }
-    match Composition::prepare(project, store.path()) {
+    // Offline media shows as a labeled placeholder; the title counts it.
+    match Composition::prepare_for_viewer(project, store.path()) {
         Ok(composition) => Ok(Some(Rc::new(composition))),
-        // Open without a picture; the title names the offline media.
-        Err(splice_av::Error::Offline(_)) => Ok(None),
         Err(error) => Err(viewer_error(&error)),
     }
 }

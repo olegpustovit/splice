@@ -617,6 +617,116 @@ mod native {
             Some(2)
         );
     }
+    /// Agent and viewer renders draw a missing file as a hatched, labeled placeholder at the
+    /// item's geometry and report it; delivery refuses it (an export never has placeholders).
+    pub(super) fn offline_media_draws_a_placeholder_for_agents_and_blocks_export() {
+        let lane = LaneId::from_serial(1);
+        let mut missing = video();
+        missing.path = "missing-offline-take.mov".into();
+        missing.probe.width = 160;
+        missing.probe.height = 90;
+        missing.probe.audio = vec![AudioTrack {
+            name: "stereo".into(),
+            channels: Some(2),
+        }];
+        let media = missing.id;
+        let mut project = Project {
+            size: [320, 180],
+            media: vec![missing],
+            lanes: vec![Lane {
+                id: lane,
+                name: "Overlay".into(),
+                kind: LaneKind::Overlay,
+                effects: Vec::new(),
+            }],
+            ..Project::default()
+        };
+        project
+            .clips
+            .insert(Clip {
+                id: ClipId::from_serial(1),
+                timing: ClipTiming {
+                    start: 0,
+                    length: 10,
+                    source: 0,
+                    speed: 1.0,
+                },
+                data: ClipData {
+                    media: Some(media),
+                    ..ClipData::default()
+                },
+            })
+            .unwrap();
+        project
+            .items
+            .insert(Item {
+                id: ItemId::from_serial(1),
+                timing: ItemTiming {
+                    anchor: Anchor::Pinned(20),
+                    length: 6,
+                },
+                data: ItemData {
+                    lane,
+                    kind: ItemKind::Media(Overlay {
+                        media,
+                        source: 0,
+                        placement: Placement::TopLeft,
+                        behind_presenter: false,
+                        muted: true,
+                        framing: Framing::default(),
+                    }),
+                    appearance: Appearance::default(),
+                },
+            })
+            .unwrap();
+        let file = fixture().join("missing-offline-take.mov");
+        assert!(!file.exists());
+        match Composition::prepare(&project, &fixture()) {
+            Err(Error::Offline(path)) => assert_eq!(path, file),
+            Err(error) => panic!("{error}"),
+            Ok(_) => panic!("export composition built with offline media"),
+        }
+        for composition in [
+            Composition::prepare_for_agent(&project, &fixture()).unwrap(),
+            Composition::prepare_for_viewer(&project, &fixture()).unwrap(),
+        ] {
+            assert_eq!(composition.offline(), [(media, file.clone())]);
+            // The spine clip fills the canvas: neutral dark fill or hatch, never black.
+            let fill = pixel(&composition, 5, [12, 12]);
+            assert!(
+                fill.iter().all(|c| (28..=76).contains(c)) && fill[0].abs_diff(fill[1]) <= 4,
+                "{fill:?}"
+            );
+            // Both shades of the hatch and the light label text are drawn.
+            let [w, h] = composition.size().map(|n| n as usize);
+            let mut rgba = vec![0; w * h * 4];
+            composition.read_frame(5, &mut rgba).unwrap();
+            let shade = |p: &[u8]| u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]);
+            let dark = rgba
+                .chunks(4)
+                .filter(|p| (90..140).contains(&shade(p)))
+                .count();
+            let light = rgba
+                .chunks(4)
+                .filter(|p| (160..230).contains(&shade(p)))
+                .count();
+            let text = rgba.chunks(4).filter(|p| shade(p) > 400).count();
+            assert!(
+                dark > w * h / 4 && light > w * h / 20 && text > 40,
+                "{dark} {light} {text}"
+            );
+            // The overlay keeps its place and size: placeholder inside, the black gap outside.
+            assert!(brightness(pixel(&composition, 22, [63, 39])) > 90);
+            assert!(brightness(pixel(&composition, 22, [240, 150])) <= 12);
+            let scratch = std::env::temp_dir().join("splice-av-offline-export.mp4");
+            match composition.start_export(&scratch, &Encoding::new(Codec::H264)) {
+                Err(Error::Offline(path)) => assert_eq!(path, file),
+                Err(error) => panic!("{error}"),
+                Ok(_) => panic!("exported placeholders"),
+            }
+            assert!(!scratch.exists());
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -638,6 +748,10 @@ fn main() {
         (
             "native_music_on_an_audio_lane_is_exported",
             native::native_music_on_an_audio_lane_is_exported,
+        ),
+        (
+            "offline_media_draws_a_placeholder_for_agents_and_blocks_export",
+            native::offline_media_draws_a_placeholder_for_agents_and_blocks_export,
         ),
     ]);
 }

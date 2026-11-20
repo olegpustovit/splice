@@ -33,13 +33,53 @@ pub fn grab_frame(store: &Store, at: Frame, file: &Path) -> Result<Json, StoreEr
     let png =
         encode_frame_png(&pixels, composition.size(), 0).map_err(|error| render_error(&error))?;
     save(&output, &png)?;
-    Ok(extend(
-        info(at, composition.size()),
-        vec![
-            ("revision", rev(revision)),
-            ("output", display(&output.file().display())),
-        ],
-    ))
+    let mut fields = vec![
+        ("revision", rev(revision)),
+        ("output", display(&output.file().display())),
+    ];
+    fields.extend(offline_fields(&composition));
+    Ok(extend(info(at, composition.size()), fields))
+}
+
+/// `offline` (`[{mediaId, path}]`) and `warning` for a render that drew missing media as
+/// placeholders; empty when every file is online.
+pub fn offline_fields(composition: &Composition) -> Vec<(&'static str, Json)> {
+    let offline = composition.offline();
+    if offline.is_empty() {
+        return Vec::new();
+    }
+    let mut names = String::new();
+    for (index, (_, path)) in offline.iter().enumerate() {
+        let name = path.file_name().unwrap_or(path.as_os_str());
+        let _ = write!(
+            names,
+            "{}{}",
+            if index == 0 { "" } else { ", " },
+            name.to_string_lossy()
+        );
+    }
+    vec![
+        (
+            "offline",
+            Json::Array(
+                offline
+                    .iter()
+                    .map(|(media, path)| {
+                        object(vec![
+                            ("mediaId", display(media)),
+                            ("path", display(&path.display())),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "warning",
+            text(&format!(
+                "Media offline ({names}): drawn as hatched \"Media offline\" placeholders at their items' geometry. Export fails with MEDIA_OFFLINE until the file is restored or media.relink points at it."
+            )),
+        ),
+    ]
 }
 
 /// Renders and atomically publishes a PNG to a new filename on the destination volume.
@@ -144,16 +184,17 @@ pub(super) fn render_tool(
             ("mimeType", text("image/png")),
             ("data", Json::String(base64(&png))),
         ]));
-        return Ok(object(vec![
+        let mut fields = vec![
             ("revision", rev(revision)),
             ("frames", Json::Array(frames)),
             ("sheet", text(&file_uri(output.file()))),
-        ]));
+        ];
+        fields.extend(offline_fields(&composition));
+        return Ok(object(fields));
     }
-    Ok(object(vec![
-        ("revision", rev(revision)),
-        ("frames", Json::Array(frames)),
-    ]))
+    let mut fields = vec![("revision", rev(revision)), ("frames", Json::Array(frames))];
+    fields.extend(offline_fields(&composition));
+    Ok(object(fields))
 }
 
 fn buffer(size: [u32; 2]) -> Result<Vec<u8>, StoreError> {
