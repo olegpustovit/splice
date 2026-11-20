@@ -314,3 +314,11 @@ date	commit	agent	task	result	checks	calls	errors	recoveries	wall_s	tokens
 2026-11-20	4fb78d36a	claude+code	record-app-landscape	pass	5/5	7	1	1	36.7	265263
 2026-11-20	4fb78d36a	claude+code	record-pause-marker	pass	3/3	4	1	1	23.0	162715
 2026-11-20	4fb78d36a	claude+code	retake-replace	pass	3/3	5	0	0	15.2	213944
+2026-11-20	36a6e76ad	claude	crop-autozoom	pass	4/4	11	0	0	33.0	267293
+2026-11-20	36a6e76ad	claude	crop-autozoom	pass	4/4	12	0	0	22.8	208574
+2026-11-20	36a6e76ad	claude	gif-teaser	pass	3/3	5	1	1	24.2	159944
+2026-11-20	36a6e76ad	claude	gif-teaser	pass	3/3	8	2	1	27.5	222571
+2026-11-20	36a6e76ad	claude+code	crop-autozoom	pass	4/4	6	1	1	32.9	257393
+2026-11-20	36a6e76ad	claude+code	crop-autozoom	pass	4/4	8	1	1	47.8	337157
+2026-11-20	36a6e76ad	claude+code	gif-teaser	pass	3/3	6	1	1	61.6	218409
+2026-11-20	36a6e76ad	claude+code	gif-teaser	pass	3/3	5	0	0	55.6	193697
