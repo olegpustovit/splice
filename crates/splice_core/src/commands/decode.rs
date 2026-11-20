@@ -520,6 +520,20 @@ pub(super) fn audio_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     if clip.is_some() && volume.is_none() {
         return Err(Error::bad("volume", "a gain from 0 to 2"));
     }
+    // A take component has a gain only: ducking and normalizing are for sound items (A3).
+    if clip.is_some() {
+        for key in ["duck", "normalize"] {
+            if let Some(value) = a.field(key) {
+                return Err(Error::rule(
+                    "BAD_ARGS",
+                    key,
+                    Some(value.clone()),
+                    "no duck or normalize with clip and component: a take component takes volume only",
+                    "Set the take's level with volume, or audio.unlink the component and duck or normalize the sound item it makes (audio.set {items}).",
+                ));
+            }
+        }
+    }
     if !items.is_empty() && volume.is_none() && duck.is_none() && normalize.is_none() {
         return Err(Error::bad(
             "volume, duck or normalize",

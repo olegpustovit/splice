@@ -432,6 +432,40 @@ pub(super) fn with_music(project: &mut Project) {
     });
 }
 
+/// A3: audio.set refuses what it would ignore (duck or normalize on a take component) and a
+/// normalize target past the 2× gain ceiling, naming the loudest target that works.
+#[test]
+fn audio_set_refuses_ignored_arguments_and_unreachable_loudness() {
+    let mut project = sample();
+    with_music(&mut project);
+    for (op, param) in [
+        (
+            r#"{"cmd":"audio.set","clip":"clp_take","component":"mic","volume":1,"duck":{"amount":0.3}}"#,
+            "duck",
+        ),
+        (
+            r#"{"cmd":"audio.set","clip":"clp_take","component":"system","volume":1,"normalize":-14}"#,
+            "normalize",
+        ),
+    ] {
+        let error = run(&mut project, &format!("[{op}]")).unwrap_err();
+        assert_eq!(error.error.code, "BAD_ARGS", "{op}");
+        let rule = error.error.rule.unwrap();
+        assert_eq!(rule.param, param, "{op}");
+        assert!(rule.got.is_some(), "{op}");
+    }
+    // Measured at -20 LUFS: -14 needs 1.995×, -13 needs 2.24× and is refused, never clamped.
+    let error = run(
+        &mut project,
+        r#"[{"cmd":"clip.insert","media":"med_music","ref":"$music"},
+            {"cmd":"audio.set","items":["$music"],"normalize":-13}]"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "OUT_OF_RANGE");
+    assert!(error.error.fix.contains("-13.98"), "{}", error.error.fix);
+    assert_eq!(error.error.rule.unwrap().param, "normalize");
+}
+
 #[test]
 fn tier_b_music_lands_on_an_audio_lane_with_volume_duck_and_loudness() {
     let mut project = sample();

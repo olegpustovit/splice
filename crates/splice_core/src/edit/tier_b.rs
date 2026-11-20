@@ -476,7 +476,7 @@ impl Editor {
                             "Import the file with clip.insert on macOS, which measures it.",
                         )
                     })?;
-                next.volume = 10f64.powf((target - loudness) / 20.0).clamp(0.0, 2.0);
+                next.volume = normalize_gain(target, loudness)?;
             }
             if let Some(duck) = duck {
                 next.duck = duck;
@@ -2070,6 +2070,29 @@ fn number(name: &str, value: f64) -> EffectParam {
 
 fn round4(value: f64) -> f64 {
     (value * 10_000.0).round() / 10_000.0
+}
+
+/// The gain that brings media measured at `loudness` LUFS to `target` (audio.set, music.add
+/// `normalize`). A target that needs more than the 2× gain ceiling is refused with the loudest
+/// reachable target, never clamped to a quieter level (A3).
+pub(super) fn normalize_gain(target: f64, loudness: f64) -> Result<f64, CommandError> {
+    let gain = 10f64.powf((target - loudness) / 20.0);
+    if gain > 2.0 + 1e-9 {
+        // Floored to a hundredth: a suggestion that is always reachable when passed back.
+        let loudest = ((loudness + 20.0 * 2f64.log10()) * 100.0).floor() / 100.0;
+        return Err(CommandError::rule(
+            "OUT_OF_RANGE",
+            "normalize",
+            Some(Json::Float(target)),
+            &format!(
+                "a target the 2× gain ceiling reaches from the measured {loudness:.1} LUFS: at most {loudest:.2} LUFS"
+            ),
+            &format!(
+                "Pass normalize at most {loudest:.2}, or volume:2 for the loudest this media gets."
+            ),
+        ));
+    }
+    Ok(gain)
 }
 
 fn no_source_frame() -> CommandError {

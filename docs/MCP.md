@@ -373,6 +373,13 @@ speech (`duck:true`: amount 0.25, attack 8, release 15 frames, as `audio.set`) a
 `normalize` LUFS (default -14, social) from the measured loudness, or set to `volume` (0–2)
 instead. The change summary names the track, its license, the pieces and the level.
 
+`audio.set` takes either `clip` + `component` (`mic` or `system` of a take: `volume` only) or
+`items` (sound items: `volume`, `duck`, `normalize`). `duck` or `normalize` with `clip` is
+refused with `BAD_ARGS` (it has nothing to apply them to; `audio.unlink` makes the component a
+sound item). Gain stays within 0–2: a `normalize` target (in `audio.set` or `music.add`) that
+needs more than 2× gain from the measured loudness is `OUT_OF_RANGE`, with the loudest
+reachable target in the fix, never clamped to a quieter level.
+
 `track` is a catalog ID (or an unambiguous title); an unknown one is `NOT_FOUND` with
 `didYouMean`. `edit.apply` fills `path`, `seconds`, `loudness`, `title`, `artist` and `license`
 from the catalog (replacing any the op carried), so the journal replays without the library.

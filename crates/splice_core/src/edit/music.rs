@@ -69,9 +69,7 @@ impl Editor {
         let loudness = media(&self.project, media_id)?.probe.loudness.or(measured);
         let volume = match (music.volume, loudness) {
             (Some(volume), _) => volume,
-            (None, Some(loudness)) => 10f64
-                .powf((music.normalize - loudness) / 20.0)
-                .clamp(0.0, 2.0),
+            (None, Some(loudness)) => super::tier_b::normalize_gain(music.normalize, loudness)?,
             (None, None) => {
                 return Err(error(
                     "LOUDNESS_UNKNOWN",

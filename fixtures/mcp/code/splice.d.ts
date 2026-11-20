@@ -305,9 +305,9 @@ declare namespace Splice {
       volume?: number;
       /** ovl_…[] sound items on an audio lane (instead of clip) */
       items?: string[];
-      /** {amount,attack,release} · amount 0–1, attack and release in frames; lowers sound items under speech, or null */
+      /** {amount,attack,release} · with items only (refused with clip) · amount 0–1, attack and release in frames; lowers sound items under speech, or null */
       duck?: { amount: number; attack?: number; release?: number } | null;
-      /** number · LUFS target for sound items (e.g. -14 for social), from the measured loudness */
+      /** number · with items only (refused with clip) · LUFS target -40…-5 (e.g. -14 for social), from the measured loudness; a target needing more than 2× gain is OUT_OF_RANGE with the loudest reachable one */
       normalize?: number;
     }
     /** Cursor Settings (edit, 0.2). */
