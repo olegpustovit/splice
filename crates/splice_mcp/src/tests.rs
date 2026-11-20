@@ -1906,6 +1906,7 @@ fn docs_name_only_tools_commands_presets_and_lints_that_exist() {
                 || tools::known(&name, true)
                 || splice_core::commands::lookup(&name).is_some()
                 || effect_param
+                || code::SAME.iter().any(|(alias, _)| *alias == name)
                 || FILES.contains(&last)
                 || OTHER.contains(&name.as_str()))
             {

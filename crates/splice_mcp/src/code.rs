@@ -251,7 +251,7 @@ fn host(
 }
 
 /// Tool names agents try that mean one tool with the same arguments: called as that tool.
-const SAME: &[(&str, &str)] = &[
+pub(super) const SAME: &[(&str, &str)] = &[
     ("project.open", "project.info"),
     ("project.load", "project.info"),
     ("job.status", "jobs.status"),

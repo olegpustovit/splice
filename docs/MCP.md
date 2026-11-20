@@ -90,6 +90,18 @@ Stay under 20 tools in the default profile: new capabilities become `edit.apply`
   process. Pass `sessionId` and `ifRevision` for edits. Recording job calls can use the session
   and current revision of the job's project.
   `commands.describe` works before a project is opened.
+- Defaults for what an agent means but leaves out (from the evals): with exactly one open
+  project, an omitted `projectId` is that project; a `.splice` path passed as `projectId` is the
+  open project at that path; `"undefined"`/`"null"` count as omitted. `edit.apply` and
+  `history.undo` without `sessionId` join the project's open session, or start one, and the
+  result's `session` says which. `history.undo {to}` is `{scope:"to", revision}`.
+  `commands.describe {id}` naming a tool (`record.start`, `edit.apply`) returns its schema.
+- In ops, an argument named by its one obvious other name is that argument: `item`/`id`/`ids`
+  for `items`, `id` for `item`, `item`/`items` for `zoom`; a one-element list names one target.
+  `$ref.left` is a split's left piece. Integer frame arguments refuse fractions with the
+  seconds-to-frames conversion in the fix. In code mode, `project.open`/`project.load` call
+  `project.info`, `job.status`/`record.status` call `jobs.status`, `edit.batch` calls
+  `edit.apply`.
 - Any tool accepts an optional `friction` string: a note from the agent about what was hard. It is
   logged and has no effect (docs/LOOP.md).
 - Results carry `structuredContent` matching the tool's `outputSchema` and a text block. The text
