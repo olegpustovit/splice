@@ -94,6 +94,10 @@ The capability sweep runs these exact ops, so they stay correct.
   keys:[…]}` for Ken Burns moves; `transition.add {item, kind:"dissolve"}` between clips;
   `media.analyze {kinds:["beats"]}` on the music and cut on the beats; `style.set` then
   `template.add {name:"title-card"}`.
+- **Custom motion (HTML):** when no command draws it (a chart, a code reveal, a branded card),
+  `html.add {html, at, length}` with a self-contained page: transparent body, motion from CSS
+  animations, `requestAnimationFrame` time or `window.seek(seconds)`, no network, no
+  `Math.random`. It becomes a full-canvas overlay; check it with `view.frames`.
 - **Hand-off:** `export.start {format:"fcpxml"}` for Final Cut Pro, `{preset:"prores-422"}` for a
   master, `{captions:"srt"}` for a sidecar.
 
