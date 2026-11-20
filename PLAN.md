@@ -480,13 +480,12 @@ eight places; the board below already carries the changes.
 - [x] T44.3 [L] One regression test per report bug id (C1–M23), named after it. (1603d40: one named test per report id; M22 and M23 below)
 - [x] T44.4 [M] All evals 3/3 both arms; budgets stay green. (13 tasks x 3 runs x 2 arms: all 3/3 after fixes, except voiceover on the Mac mini, which has no microphone; it now fails up front with NO_DEVICE)
 
-### 0.4.x (gated or asset-bound; not in the 0.4 exit)
-- T45.1 HTML escape hatch (HyperFrames-compatible seek contract) behind a determinism gate on macOS.
-- T45.2 Native Lottie/SVG/GIF vector engine (ThorVG-class): needs a dependency decision (std + cc rule).
-  Report bug M23 (animated GIF/APNG stickers play their first frame) lands here: ImageIO can decode
-  the frames natively, but frame timing belongs with the vector engine's playback model.
-- T45.3 Bundled CC0 music/SFX library: needs curated, licensed assets.
-- T45.4 Particles, counters, look packs, glyph atlas per-glyph quads, caret track via AX.
+### T45 · Gated extras, brought into 0.4 (user decisions 2026-11-20) [L]
+- [x] T45.1 [L] HTML escape hatch: `html.add {html | file}` renders the page with WebKit on a virtual clock (Date.now, performance.now, rAF, Web Animations, `window.seek`) into a ProRes 4444 alpha movie in `media/`, imported as a full-canvas media overlay; frame 0 and the middle frame are redrawn and must match (HTML_FAILED otherwise). Journal keeps the movie, so replay needs no WebKit.
+- [ ] T45.2 [L] Lottie/SVG through vendored ThorVG (decision: vendor, MIT, built with cc, one gate allowlist entry).
+  M23 (animated GIF/APNG stickers) fixed natively ahead of it: 51ba13b (frames at their own delays, looping).
+- [ ] T45.3 [M] Music library around user-supplied CC0 tracks (decision: the user supplies the files): catalog, `music.search`, `music.add` with fit/duck/loudness, license refusal, credits sidecar.
+- [ ] T45.4 [L] Counters, progress, particles, look packs, per-glyph text bounds, caret track via AX.
 
 ## Log
 

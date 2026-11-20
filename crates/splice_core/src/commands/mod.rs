@@ -52,6 +52,7 @@ pub const EXTENSIONS: &[&str] = &[
     "caption.add",
     "item.order",
     "motion.preset",
+    "html.add",
 ];
 
 #[cfg(test)]

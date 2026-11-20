@@ -1255,12 +1255,11 @@ fn capability_sweep_applies_every_row_and_restores_the_start() {
         if index > 0 {
             rows.push(',');
         }
-        rows.push_str(&format!(
-            "[\"{}\",{},{}]",
-            row.id,
-            row.example,
-            setup(row.id)
-        ));
+        // The sweep renders no HTML: a movie the package already has stands in for the page's.
+        let example = row
+            .example
+            .replace("media/html-5f1c.mov", "assets/broll.mov");
+        rows.push_str(&format!("[\"{}\",{},{}]", row.id, example, setup(row.id)));
     }
     rows.push(']');
     let program = fs::read_to_string(mcp_fixtures().join("../../evals/sweep.js"))

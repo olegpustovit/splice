@@ -749,6 +749,19 @@ pub enum Op {
         /// Whether `length` was given (loops otherwise fill the item).
         sized: bool,
     },
+    /// HTML overlay (T45.1): the page rendered once into an alpha movie, placed as media.
+    HtmlAdd {
+        /// The rendered movie (splice mcp fills it from `html` or `file`).
+        movie: String,
+        /// Start position.
+        at: FrameArg,
+        /// Duration in frames (the movie's length).
+        length: Frame,
+        /// Destination in the canvas.
+        placement: Placement,
+        /// Destination lane.
+        lane: Option<Target>,
+    },
 }
 
 /// A typed ID or a reference to a preceding operation.

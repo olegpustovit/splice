@@ -43,8 +43,8 @@ fn tier_c_described_examples_apply_replay_undo_and_match_goldens() {
         .filter(|row| row.tier == commands::Tier::Third)
         .collect();
     // 35 rows of 0.3, then intent.steps, intent.speedTyping, caption.add (T41), item.order and
-    // motion.preset (T42).
-    assert_eq!(rows.len(), 40);
+    // motion.preset (T42), html.add (T45.1).
+    assert_eq!(rows.len(), 41);
     for command in rows {
         let described = commands::describe(Some(command.id), None).unwrap();
         let example = described.field("example").unwrap().clone();
@@ -53,6 +53,7 @@ fn tier_c_described_examples_apply_replay_undo_and_match_goldens() {
             panic!()
         };
         list.push(example);
+        let sample = with_rendered_movie(&sample, command.id);
         let mut project = sample.clone();
         let report = apply(&mut project, list, Source::Agent, false)
             .unwrap_or_else(|error| panic!("{}: {error}", command.id));
@@ -76,6 +77,72 @@ fn tier_c_described_examples_apply_replay_undo_and_match_goldens() {
         assert_eq!(bytes, again, "{}", command.id);
         golden(command.id, &project);
     }
+}
+
+/// html.add's example names a movie splice mcp rendered and the media backend registered.
+fn with_rendered_movie(sample: &Project, id: &str) -> Project {
+    let mut project = sample.clone();
+    if id == "html.add" {
+        project
+            .media
+            .push(rendered("media/html-5f1c.mov", MediaId::from_serial(9000)));
+    }
+    project
+}
+
+fn rendered(path: &str, id: MediaId) -> Media {
+    let mut media = sample().media[0].clone();
+    media.id = id;
+    media.path = path.into();
+    media.probe.frames = 90;
+    media
+}
+
+#[test]
+fn html_add_imports_the_rendered_movie_as_a_full_canvas_overlay() {
+    let base = sample();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"html.add","html":"<p>hi</p>","at":30,"length":90,"movie":"media/html-1.mov","ref":"page"}]"#,
+    )
+    .unwrap();
+    let mut loads = 0;
+    let mut load = |path: &str| {
+        loads += 1;
+        Ok(rendered(path, MediaId::from_serial(0)))
+    };
+    let (project, report, _) = stage_above(
+        &base,
+        ops.as_array().unwrap(),
+        Source::Agent,
+        None,
+        base.serial,
+        &mut load,
+    )
+    .unwrap();
+    assert_eq!(loads, 1);
+    let media = project.media.last().unwrap();
+    assert_eq!(media.path, "media/html-1.mov");
+    let slot = *project.items.order().last().unwrap();
+    let data = project.items.data(slot).unwrap();
+    let ItemKind::Media(overlay) = &data.kind else {
+        panic!("{:?}", data.kind)
+    };
+    assert_eq!(project.items.timing(slot).unwrap().length, 90);
+    assert_eq!(overlay.placement, splice_model::Placement::Full);
+    assert_eq!(overlay.media, media.id);
+    assert!(report.mints.iter().any(|id| id.starts_with("med_")));
+    // Without a rendered movie (Linux, or a raw core call) the op says where it renders.
+    let bare = splice_json::parse(r#"[{"cmd":"html.add","html":"<p>hi</p>","at":0,"length":30}]"#)
+        .unwrap();
+    let error = apply(
+        &mut base.clone(),
+        bare.as_array().unwrap(),
+        Source::Agent,
+        true,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("UNSUPPORTED_PLATFORM"), "{error}");
 }
 
 #[test]

@@ -875,4 +875,17 @@ pub const COMMANDS: &[Command] = &[
         ui: &["Inspector ▸ Animation ▸ Presets"],
         example: r#"{"cmd":"motion.preset","items":["ovl_hook"],"preset":"bounceIn","length":24}"#, decoder: text::motion_preset,
     },
+    Command {
+        id: "html.add", title: "Add HTML", group: "Titles, motion and effects",
+        risk: "edit", shortcut: "", tier: Tier::Third,
+        params: &[("html", "string · a page (HTML, CSS, JS) drawn over a transparent canvas-sized viewport; pass html or file"),
+            ("file", "path to an .html file; relative URLs in it resolve next to it"),
+            ("at", "!frame or anchor form"),
+            ("length", "!frames (1–18000)"),
+            ("placement", "full (default)|card|corner-tl|corner-tr|corner-bl|corner-br"),
+            ("lane", "lan_…"),
+            ("movie", "the rendered movie · splice mcp fills it: the page runs on a virtual clock (Date.now, performance.now, requestAnimationFrame, CSS and Web Animations follow the frame; window.seek(seconds) if defined) and must draw the same frame twice")],
+        ui: &["Graphics lane menu ▸ Add HTML…"],
+        example: r#"{"cmd":"html.add","html":"<h1 style='color:white;animation:a 1s'>Hi</h1><style>@keyframes a{from{opacity:0}}</style>","at":30,"length":90,"movie":"media/html-5f1c.mov"}"#, decoder: decode::html_add,
+    },
 ];

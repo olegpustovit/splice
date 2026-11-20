@@ -292,7 +292,7 @@ impl Editor {
         ))
     }
 
-    fn import_path(
+    pub(super) fn import_path(
         &mut self,
         request: String,
         load: &mut dyn FnMut(&str) -> Result<Media, CommandError>,

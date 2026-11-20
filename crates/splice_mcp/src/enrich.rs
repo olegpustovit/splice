@@ -1,7 +1,7 @@
 //! Fills the inputs of 0.3 commands that the core can't read itself (PLAN.md T20, T21): take
 //! clicks for intent.autoZoom, take activity for intent.steps, intent.speedTyping and the
 //! activity basis of the smart cuts (T41), cursor crops, and (macOS) tracking, sync offsets and
-//! on-device translation; and copies the files behind media.consolidate once a batch will commit. Every
+//! on-device translation, html.add's rendered movie; and copies the files behind media.consolidate once a batch will commit. Every
 //! edit path (MCP, `splice apply`, the viewer) runs it through `history::apply_batch`. Batches
 //! that need none of this pass through untouched.
 use super::{Json, object, wire::*};
@@ -31,6 +31,7 @@ fn needs(op: &Json) -> bool {
         "mask.track" => missing("keys"),
         "audio.sync" => missing("offset"),
         "captions.translate" => missing("texts"),
+        "html.add" => missing("movie"),
         _ => false,
     }
 }
@@ -287,6 +288,7 @@ fn fill_input(
             "texts",
             super::platform::translate_captions(project, fields)?,
         )),
+        "html.add" => Ok(("movie", super::platform::render_html(dir, project, fields)?)),
         _ => unreachable!("needs() selects the filled commands"),
     }
 }

@@ -655,7 +655,9 @@ fn recognize(audio: &Path, language: &str, fps: f64, frames: Frame) -> Result<Js
 // ── 0.3 native analysis and inputs filled by `enrich` (macOS: `native.rs`) ──
 
 #[cfg(target_os = "macos")]
-pub(super) use super::native::{analyze, follow_face, sync_offset, track_mask, translate_captions};
+pub(super) use super::native::{
+    analyze, follow_face, render_html, sync_offset, track_mask, translate_captions,
+};
 
 /// Peaks, beats, sounds, shots, text, faces, people and mattes need native analysis.
 #[cfg(not(target_os = "macos"))]
@@ -728,5 +730,19 @@ pub(super) fn translate_captions(
         "NEEDS_TEXT",
         "On-device translation needs the macOS Translation framework.",
         "Pass texts: one translated string per cue (transcript.get {captions:\"json\"} lists cues).",
+    ))
+}
+
+/// html.add's page rendered into a movie in the package.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn render_html(
+    _: &Path,
+    _: &splice_model::Project,
+    _: &[(String, Json)],
+) -> Result<Json, StoreError> {
+    Err(failure(
+        "UNSUPPORTED_PLATFORM",
+        "Rendering HTML needs WebKit on macOS.",
+        "Run html.add on a Mac, or pass movie: a rendered alpha movie inside the package.",
     ))
 }

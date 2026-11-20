@@ -22,6 +22,9 @@ pub mod composition;
 /// The bounded native event queue.
 pub mod events;
 
+/// HTML pages rendered frame by frame into alpha movies (T45.1).
+pub mod html;
+
 /// Encoding for rendered RGBA frames.
 pub mod image;
 

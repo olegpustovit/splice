@@ -563,3 +563,69 @@ pub(super) fn follow_face(
             .collect(),
     ))
 }
+
+/// Renders html.add's page (`html`, or the `file` it names) with WebKit into
+/// `media/html-<hash>.mov` in the package and returns that path. The movie is keyed by the
+/// page, its base, the canvas and the length, so a retry or a dry run reuses it.
+pub(super) fn render_html(
+    dir: &Path,
+    p: &Project,
+    fields: &[(String, Json)],
+) -> Result<Json, StoreError> {
+    let (html, base) = match (field(fields, "html"), field(fields, "file")) {
+        (Some(html), None) => (html, dir.to_path_buf()),
+        (None, Some(file)) => {
+            let path = dir.join(&file);
+            let html = std::fs::read_to_string(&path).map_err(|e| {
+                failure(
+                    "MEDIA_OFFLINE",
+                    &format!("Could not read {}: {e}", path.display()),
+                    "Pass the path of an existing .html file, or the page inline as html.",
+                )
+            })?;
+            (html, path.parent().unwrap_or(dir).to_path_buf())
+        }
+        _ => {
+            return Err(bad(
+                "html",
+                "exactly one of html (the page) or file (an .html path)",
+            ));
+        }
+    };
+    let length = fields
+        .iter()
+        .find(|(key, _)| key == "length")
+        .and_then(|(_, value)| value.as_i64())
+        .filter(|n| (1..=18_000).contains(n))
+        .ok_or_else(|| bad("length", "1–18000 frames"))? as u32;
+    // shortcut: assets the page loads (images, fonts) are not part of the key; a changed asset
+    // under the same page reuses the old movie until the page text changes.
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let key = format!("{}|{:?}|{}|{length}", base.display(), p.size, p.fps);
+    for byte in html.bytes().chain(key.bytes()) {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+    }
+    let relative = format!("media/html-{hash:016x}.mov");
+    let out = dir.join(&relative);
+    if !out.exists() {
+        let io = |e: std::io::Error| {
+            failure(
+                "HTML_FAILED",
+                &format!("Could not write the rendered page: {e}"),
+                "Check the package is writable.",
+            )
+        };
+        std::fs::create_dir_all(dir.join("media")).map_err(io)?;
+        let partial = dir.join(format!("media/.html-{hash:016x}.partial.mov"));
+        apple_sys::html::render(&html, Some(&base), p.size, p.fps, length, &partial).map_err(|e| {
+            let _ = std::fs::remove_file(&partial);
+            failure(
+                "HTML_FAILED",
+                &e.to_string(),
+                "Make the page load without the network and drive its motion from time: CSS animations, requestAnimationFrame's timestamp, or window.seek(seconds).",
+            )
+        })?;
+        std::fs::rename(&partial, &out).map_err(io)?;
+    }
+    Ok(Json::String(relative))
+}

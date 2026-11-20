@@ -100,6 +100,25 @@ impl Editor {
                 speed,
                 ripple,
             } => self.speed(&items, speed, ripple),
+            Op::HtmlAdd {
+                movie,
+                at,
+                length,
+                placement,
+                lane,
+            } => {
+                let media = Target::Media(self.import_path(movie, load)?);
+                let content = OverlayContent::Media {
+                    media,
+                    source: 0,
+                    placement,
+                    behind_presenter: false,
+                    muted: true,
+                    crop: None,
+                    fit: splice_model::Fit::Fill,
+                };
+                self.add_item(content, Some(&at), None, lane.as_ref(), Some(length))
+            }
             Op::ClipInsert {
                 source,
                 at,

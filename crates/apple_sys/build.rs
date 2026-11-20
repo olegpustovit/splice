@@ -15,6 +15,7 @@ fn main() {
             "native/input_events.m",
             "native/media.m",
             "native/composition.m",
+            "native/html.m",
             "native/image.m",
             "native/permissions.m",
             "native/recording.m",
@@ -44,6 +45,7 @@ fn main() {
         "Speech",
         "Translation",
         "Vision",
+        "WebKit",
         "CoreImage",
     ] {
         println!("cargo:rustc-link-lib=framework={framework}");

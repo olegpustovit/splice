@@ -931,6 +931,24 @@ declare namespace Splice {
       /** 0–1 · @default 0.5 */
       intensity?: number;
     }
+    /** Add HTML (edit, 0.3). */
+    interface HtmlAdd extends Base {
+      cmd: "html.add";
+      /** a page (HTML, CSS, JS) drawn over a transparent canvas-sized viewport; pass html or file */
+      html?: string;
+      /** path to an .html file; relative URLs in it resolve next to it */
+      file?: string;
+      /** frame or anchor form */
+      at: At;
+      /** frames (1–18000) */
+      length: number;
+      /** full (default)|card|corner-tl|corner-tr|corner-bl|corner-br */
+      placement?: string;
+      /** lan_… */
+      lane?: string;
+      /** the rendered movie · splice mcp fills it: the page runs on a virtual clock (Date.now, performance.now, requestAnimationFrame, CSS and Web Animations follow the frame; window.seek(seconds) if defined) and must draw the same frame twice */
+      movie?: string;
+    }
   }
   /** Effect types and parameters (effects.json, the validator's own schema). */
   interface Effects {
@@ -1343,7 +1361,8 @@ declare namespace Splice {
     | op.IntentSpeedTyping
     | op.CaptionAdd
     | op.ItemOrder
-    | op.MotionPreset;
+    | op.MotionPreset
+    | op.HtmlAdd;
 }
 
 declare const splice: {
@@ -1496,6 +1515,9 @@ declare const splice: {
     };
     motion: {
       preset(args: Omit<Splice.op.MotionPreset, "cmd">): Splice.op.MotionPreset;
+    };
+    html: {
+      add(args: Omit<Splice.op.HtmlAdd, "cmd">): Splice.op.HtmlAdd;
     };
   };
   project: {

@@ -21,6 +21,8 @@ Name.splice/
     mic.m4a  system.m4a camera.mov   optional, one file per source, AAC 48 kHz / HEVC
     events.json         {"t0","source":{kind,rect,scale},"events":[{t,k:move|down|up|drag|scroll|key|flags|cursor,…}],"dropped"?:count}
     cursors/<hash>.png  + <hash>.json {hotX, hotY, scale}
+  media/                consolidated copies (media.consolidate, med_<id>.<ext>) and html.add's
+                        rendered pages (html-<hash>.mov, ProRes 4444 with alpha)
   exports/              rendered output; never overwritten unless asked
   friction.jsonl        MCP friction log for this project (docs/LOOP.md)
   cache/                disposable: thumbnails, peaks, proxies. Never in git, never required

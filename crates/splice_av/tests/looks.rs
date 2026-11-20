@@ -647,6 +647,35 @@ mod looks {
 
     /// H8, T36.5: a thick caption stroke outlines the glyphs instead of covering them, two
     /// lines that do not fit shrink instead of dropping the second, and the spoken word draws
+    /// T45.1: html.add's page renders on a virtual clock into a movie the compositor plays:
+    /// a CSS animation shows its state at each frame, and a page that draws a frame
+    /// differently the second time (randomness) is refused.
+    pub(super) fn t45_html_pages_render_deterministically() {
+        let dir = scratch("html");
+        let page = "<style>html,body{margin:0;height:100%}body{animation:c 1s linear}\
+            @keyframes c{0%,49%{background:#f00}50%,100%{background:#00f}}</style>";
+        let movie = dir.0.join("page.mov");
+        apple_sys::html::render(page, None, [96, 64], 30, 30, &movie).unwrap();
+        let mut media = still(&dir.0, 1, [0, 0, 0]);
+        media.kind = MediaKind::Video;
+        media.path = "page.mov".into();
+        media.probe.frames = 30;
+        let composition =
+            Composition::prepare(&project(vec![media], vec![(1, 30, vec![])]), &dir.0).unwrap();
+        let at = |frame| pixel(&composition, frame, [48, 32]);
+        let [r, _, b] = at(3);
+        assert!(r > 200 && b < 60, "red at 0.1 s: {:?}", at(3));
+        let [r, _, b] = at(25);
+        assert!(b > 200 && r < 60, "blue at 0.83 s: {:?}", at(25));
+        let random = "<body></body><script>requestAnimationFrame(function f(){\
+            document.body.style.background='rgb('+(Math.random()*255|0)+',0,0)';\
+            requestAnimationFrame(f)})</script>";
+        let error = apple_sys::html::render(random, None, [96, 64], 30, 10, &dir.0.join("r.mov"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not deterministic"), "{error}");
+    }
+
     /// M23: an animated GIF sticker plays its frames at their own delays and loops, instead of
     /// showing its first frame for the whole item.
     pub(super) fn m23_animated_gifs_play_and_loop() {
@@ -1294,6 +1323,10 @@ fn main() {
         (
             "looks_ocr_reads_text_and_a_blur_mask_hides_it",
             looks::ocr_reads_text_and_a_blur_mask_hides_it,
+        ),
+        (
+            "looks_t45_html_pages_render_deterministically",
+            looks::t45_html_pages_render_deterministically,
         ),
         (
             "looks_m23_animated_gifs_play_and_loop",

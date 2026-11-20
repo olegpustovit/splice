@@ -178,6 +178,40 @@ pub(super) fn overlay_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     })
 }
 
+pub(super) fn html_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let movie = match a.opt_string("movie")? {
+        Some(movie) if !movie.is_empty() && !movie.contains('\0') => movie,
+        _ => {
+            return Err(Error::rule(
+                "UNSUPPORTED_PLATFORM",
+                "movie",
+                None,
+                "the page's rendered movie",
+                "Run html.add through splice mcp or splice apply on macOS: they render html or file into movie with WebKit.",
+            ));
+        }
+    };
+    let length = a.opt_int("length")?.unwrap_or(0);
+    if !(1..=30 * 60 * 10).contains(&length) {
+        return Err(Error::bad(
+            "length",
+            "1–18000 frames (10 minutes at 30 fps)",
+        ));
+    }
+    Ok(Op::HtmlAdd {
+        movie,
+        at: a.frame("at")?,
+        length,
+        placement: a
+            .opt_string("placement")?
+            .as_deref()
+            .map(placement)
+            .transpose()?
+            .unwrap_or(Placement::Full),
+        lane: a.opt_target("lane")?,
+    })
+}
+
 pub(super) fn title_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     Ok(Op::TitleAdd {
         at: a.frame("at")?,

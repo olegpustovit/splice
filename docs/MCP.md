@@ -140,6 +140,19 @@ short). `title.add` and `title.set` carry `bounds: {final, swept, onCanvas}`: th
 by the title's own transform keys and unit animator, and whether the swept box stays on the
 canvas. `item.order` carries the `z` it set (higher paints in front, across every kind).
 
+`html.add {html | file, at, length, placement?, lane?}` (T45.1) is the escape hatch for motion
+the commands don't cover. Before the batch commits, splice mcp (and `splice apply`, the viewer)
+renders the page with WebKit at the canvas size into `media/html-<hash>.mov` (ProRes 4444 with
+alpha; transparent wherever the page draws nothing) and fills `movie`. The core imports the movie
+and places it as a media overlay, `full` by default. The journal keeps the page and the movie, so
+replay needs no WebKit, and a retry or dry run reuses the movie. The page runs on a virtual clock:
+`Date.now`, `performance.now` and `requestAnimationFrame` follow the frame; CSS animations,
+transitions and Web Animations are paused and set to the frame time; and a page may define
+`window.seek(seconds)` for its own timeline. Frame 0 and the middle frame are drawn a second time
+after the pass and must match, or the call fails with `HTML_FAILED` (use time, not timers or
+`Math.random`). Load nothing from the network. Inline pages resolve relative URLs in the package,
+`file` pages next to the file. On Linux, html.add without `movie` is `UNSUPPORTED_PLATFORM`.
+
 Use `at` for a placement calculated from a frame or anchor. Use `anchor` to retain an explicit
 item, marker, or transcript relation. A frame in a gap between clips keeps its position, anchored
 to the end of the clip before it (or the start of the first clip). Overlapping items can move to a
@@ -386,7 +399,8 @@ return {revision: e.revision, clips: t.spine.length};
 0.4: `NO_DEVICE` (recording a mic or camera this Mac does not have; refused before capture starts), `UNKNOWN_PARAM` (with `didYouMean`), `NOT_KEYABLE` (keys on a parameter the evaluator does not
 animate; the fix lists the keyable ones, also marked `keys:true` in `Splice.Effects`),
 `NO_ACTIVITY` (an activity basis or `intent.steps` with no recorded input on the timeline or
-inside the clip), `NO_TYPING` (`intent.speedTyping` found no run of at least `minRun`).
+inside the clip), `NO_TYPING` (`intent.speedTyping` found no run of at least `minRun`), `HTML_FAILED` (`html.add`'s page
+did not load, could not be written, or drew a frame differently the second time).
 0.3 edits: `NO_HANDLES` (roll, slip, slide; a transition whose clips lack the source it consumes),
 `NO_NEIGHBOR`, `NOT_ADJACENT`, `NOT_JOINABLE`,
 `NOT_JOINED`, `NOTHING_TO_RESTORE`, `NOTHING_TO_UNDO`, `NO_TRANSITION`, `TOO_LONG`, `FIT_IMPOSSIBLE`, `NEEDS_TEXT`,
