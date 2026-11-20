@@ -45,7 +45,9 @@ pub(super) fn view_check(
         }
     };
     let wants = |name: &str| wanted.iter().any(|w| w == name);
-    let evaluator = Evaluator::prepare(project).map_err(|error| {
+    // Zooms that follow the cursor are checked on the path the renderer draws (T46.2).
+    let pointers = super::media::pointers(store.path(), project);
+    let evaluator = Evaluator::prepare_with(project, &pointers).map_err(|error| {
         failure(
             "INVARIANT",
             &error.to_string(),
@@ -445,5 +447,44 @@ mod tests {
             .find(|issue| issue.field("check").and_then(Json::as_str) == Some("offCanvas"))
             .expect("off canvas");
         assert_eq!(off.field("from").and_then(Json::as_i64), Some(120));
+    }
+
+    /// T46.2: view.check reads the take's pointer, so a zoom that follows a fast cursor move
+    /// with an instant spring is a camera jump; without the pointer the same zoom holds still.
+    #[test]
+    fn camera_check_follows_the_recorded_cursor() {
+        let mut project = crate::tests::sample_project();
+        let ops = splice_json::parse(
+            r#"[{"cmd":"zoom.set","zoom":"ovl_detail","amount":3,"focus":"cursor","spring":"instant"},
+                {"cmd":"item.trim","item":"ovl_detail","edge":"out","delta":150}]"#,
+        )
+        .unwrap();
+        edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+        let dir = std::env::temp_dir().join(format!("splice-follow-check-{}", std::process::id()));
+        let take = dir.join("takes/med_screen");
+        std::fs::create_dir_all(&take).unwrap();
+        // Rests left until 6 s, then a hand move across the screen in 0.1 s.
+        let mut events = String::new();
+        for i in 0..=1200 {
+            let t = f64::from(i) / 120.0;
+            let x = 0.2 + 0.7 * ((t - 6.0) / 0.1).clamp(0.0, 1.0);
+            if !events.is_empty() {
+                events.push(',');
+            }
+            events.push_str(&format!(r#"{{"t":{t},"k":"move","x":{x},"y":0.5}}"#));
+        }
+        std::fs::write(
+            take.join("events.json"),
+            format!(r#"{{"source":{{"rect":{{"width":1440,"height":900}}}},"events":[{events}]}}"#),
+        )
+        .unwrap();
+        let pointers = crate::media::pointers(&dir, &project);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(pointers.len(), 1);
+        let jumps = |evaluator: &Evaluator| {
+            model_issues(&project, evaluator, [290, 340], true, false).len()
+        };
+        assert!(jumps(&Evaluator::prepare_with(&project, &pointers).unwrap()) > 0);
+        assert_eq!(jumps(&Evaluator::prepare(&project).unwrap()), 0);
     }
 }

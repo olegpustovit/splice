@@ -1154,3 +1154,56 @@ fn ripple_cuts_carry_markers() {
         [120, 372]
     );
 }
+
+/// T46.2: `focus:"cursor"` and `motionBlur` on zoom.add/zoom.set survive save and reopen as
+/// `"focus":"cursor"`; a point focus stops following; bad values are refused with the rule.
+#[test]
+fn zoom_follows_the_cursor_and_carries_motion_blur() {
+    let mut project = sample();
+    let zoom = |project: &Project, id: &str| {
+        let slot = project.items.find(id.parse().unwrap()).unwrap();
+        match project.items.data(slot).unwrap().kind {
+            ItemKind::Zoom(zoom) => zoom,
+            _ => panic!("zoom"),
+        }
+    };
+    run(
+        &mut project,
+        r#"[{"cmd":"zoom.set","zoom":"ovl_detail","focus":"cursor","motionBlur":0.6},
+            {"cmd":"zoom.add","at":10,"length":30,"focus":"cursor","ref":"follow"}]"#,
+    )
+    .unwrap();
+    let detail = zoom(&project, "ovl_detail");
+    assert!(detail.follow && detail.focus.is_none() && detail.motion_blur == 0.6);
+    let encoded = crate::package::project::encode(&project);
+    let mut text = String::new();
+    splice_json::write(&encoded, &mut text).unwrap();
+    assert!(
+        text.contains(r#""focus":"cursor""#) && text.contains(r#""motionBlur":0.6"#),
+        "{text}"
+    );
+    let dir = std::env::temp_dir().join(format!("splice-follow-{}.splice", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    drop(crate::package::Package::create(&dir, &project).unwrap());
+    let (package, reopened) = crate::package::Package::open(&dir).unwrap();
+    drop(package);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(zoom(&reopened, "ovl_detail"), detail);
+    run(
+        &mut project,
+        r#"[{"cmd":"zoom.set","zoom":"ovl_detail","focus":{"x":0.2,"y":0.3},"motionBlur":0}]"#,
+    )
+    .unwrap();
+    let detail = zoom(&project, "ovl_detail");
+    assert!(!detail.follow && detail.focus == Some([0.2, 0.3]) && detail.motion_blur == 0.0);
+    for op in [
+        r#"{"cmd":"zoom.set","zoom":"ovl_detail","focus":"mouse"}"#,
+        r#"{"cmd":"zoom.set","zoom":"ovl_detail","motionBlur":1.5}"#,
+        r#"{"cmd":"zoom.add","at":0,"motionBlur":-0.1}"#,
+        r#"{"cmd":"clip.crop","items":["clp_take"],"aspect":"9:16","focus":"cursor"}"#,
+    ] {
+        let error = run(&mut project, &format!("[{op}]")).unwrap_err();
+        assert_eq!(error.error.code, "BAD_ARGS", "{op}: {error:?}");
+        assert!(error.error.rule.is_some(), "{op}: {error:?}");
+    }
+}

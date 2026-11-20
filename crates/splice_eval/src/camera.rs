@@ -12,6 +12,9 @@ pub struct View {
     pub center: [f64; 2],
     /// What zooms.
     pub mode: CameraMode,
+    /// Motion blur 0–1 of the segment driving the camera (T46.2): the renderer blurs along the
+    /// move from the previous frame's view (`Evaluator::view`).
+    pub blur: f64,
 }
 
 impl View {
@@ -20,6 +23,7 @@ impl View {
         amount: 1.0,
         center: [0.5, 0.5],
         mode: CameraMode::Auto,
+        blur: 0.0,
     };
 
     /// The visible part of the content, normalized: always inside [0, 1]².
@@ -58,6 +62,9 @@ pub(crate) struct Segment {
     pub center: Option<[f64; 2]>,
     pub mode: CameraMode,
     pub spring: Spring,
+    /// Follow the cursor (the per-frame content points `solve` gets) with a dead zone.
+    pub follow: bool,
+    pub blur: f64,
 }
 
 /// Physics substeps per second: retargets carry velocity, and finer steps keep the analytic
@@ -67,8 +74,16 @@ const STEPS_PER_SECOND: f64 = 240.0;
 const PRE_AIM: f64 = 1.0005;
 
 /// Solves the camera for frames `0..end`. Segments are sorted by start; where they overlap the
-/// later one wins. Outside segments the target is 1× with the last center held.
-pub(crate) fn solve(segments: &[Segment], end: Frame, fps: u32) -> Vec<View> {
+/// later one wins. Outside segments the target is 1× with the last center held. A following
+/// segment aims at `cursor[frame]` (the drawn cursor as a content point, `None` where no take
+/// cursor shows): it centers on the cursor where it starts, then pans only when the cursor
+/// leaves the central `Zoom::FOLLOW_ZONE` of the viewport, just enough to bring it back.
+pub(crate) fn solve(
+    segments: &[Segment],
+    end: Frame,
+    fps: u32,
+    cursor: &[Option<[f64; 2]>],
+) -> Vec<View> {
     let frames = usize::try_from(end.max(0)).unwrap_or(0);
     let mut out = Vec::with_capacity(frames);
     let dt_frame = 1.0 / f64::from(fps.max(1));
@@ -78,6 +93,9 @@ pub(crate) fn solve(segments: &[Segment], end: Frame, fps: u32) -> Vec<View> {
     let (mut center, mut center_v) = ([0.5, 0.5], [0.0, 0.0]);
     let mut held = [0.5, 0.5];
     let mut active = 0usize;
+    // The following segment's aim (content point at the viewport center), by segment start.
+    let mut aim: Option<(Frame, [f64; 2])> = None;
+    let mut blur = 0.0;
     for frame in 0..end {
         while active < segments.len() && segments[active].end <= frame {
             active += 1;
@@ -90,8 +108,36 @@ pub(crate) fn solve(segments: &[Segment], end: Frame, fps: u32) -> Vec<View> {
             .last();
         let (target, spring, mode) = match current {
             Some(s) => {
-                let c = s.center.unwrap_or(held);
+                let point = usize::try_from(frame)
+                    .ok()
+                    .and_then(|f| cursor.get(f).copied().flatten());
+                let c = match (s.follow, point) {
+                    (true, Some(p)) => {
+                        let size = 1.0 / s.amount.max(1.0);
+                        let half = splice_model::Zoom::FOLLOW_ZONE * size / 2.0;
+                        let fresh = aim.is_none_or(|(start, _)| start != s.start);
+                        let mut a = if fresh { p } else { aim.map_or(p, |(_, a)| a) };
+                        for axis in 0..2 {
+                            if p[axis] < a[axis] - half {
+                                a[axis] = p[axis] + half;
+                            } else if p[axis] > a[axis] + half {
+                                a[axis] = p[axis] - half;
+                            }
+                            // Where the viewport can actually center.
+                            a[axis] = a[axis].clamp(size / 2.0, 1.0 - size / 2.0);
+                        }
+                        aim = Some((s.start, a));
+                        View::center_on(a, s.amount)
+                    }
+                    _ => s.center.unwrap_or(held),
+                };
                 held = c;
+                // An instant segment cuts; there is no move to blur.
+                blur = if s.spring == Spring::Instant {
+                    0.0
+                } else {
+                    s.blur
+                };
                 (s.amount.max(1.0), s.spring, s.mode)
             }
             None => (
@@ -131,6 +177,7 @@ pub(crate) fn solve(segments: &[Segment], end: Frame, fps: u32) -> Vec<View> {
             amount,
             center: center.map(|c| c.clamp(0.0, 1.0)),
             mode,
+            blur,
         });
     }
     out
@@ -179,12 +226,14 @@ mod tests {
             center: Some(center),
             mode: CameraMode::Auto,
             spring: Spring::Focused,
+            follow: false,
+            blur: 0.0,
         }
     }
 
     #[test]
     fn h11_the_focused_spring_settles_like_caps_and_never_snaps_back() {
-        let views = solve(&[segment(30, 90, 2.0, [0.5, 0.5])], 180, 60);
+        let views = solve(&[segment(30, 90, 2.0, [0.5, 0.5])], 180, 60, &[]);
         // 90% of the way in about 0.32 s (19 frames at 60 fps) after the segment starts.
         let reached = views.iter().position(|v| v.amount >= 1.9).unwrap();
         assert!((44..=54).contains(&reached), "90% at frame {reached}");
@@ -221,7 +270,7 @@ mod tests {
             ));
             at += length + (next() * 20.0) as Frame;
         }
-        for view in solve(&segments, at, 30) {
+        for view in solve(&segments, at, 30, &[]) {
             let [x, y, w, h] = view.viewport();
             assert!(
                 x >= -1e-9 && y >= -1e-9 && x + w <= 1.0 + 1e-9 && y + h <= 1.0 + 1e-9,
@@ -236,7 +285,7 @@ mod tests {
         let view = View {
             amount: 2.0,
             center: View::center_on([0.4, 0.6], 2.0),
-            mode: CameraMode::Auto,
+            ..View::IDENTITY
         };
         let [x, y, w, h] = view.viewport();
         assert!(((x + w / 2.0) - 0.4).abs() < 1e-9 && ((y + h / 2.0) - 0.6).abs() < 1e-9);
@@ -246,7 +295,7 @@ mod tests {
 
     #[test]
     fn pre_aim_snaps_the_center_while_unzoomed() {
-        let views = solve(&[segment(10, 40, 2.0, [1.0, 0.0])], 60, 30);
+        let views = solve(&[segment(10, 40, 2.0, [1.0, 0.0])], 60, 30, &[]);
         // The first zoomed frame is already aimed at the target corner.
         let first = views.iter().find(|v| v.amount > 1.01).unwrap();
         assert!(

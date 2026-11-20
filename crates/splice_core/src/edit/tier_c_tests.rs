@@ -837,3 +837,73 @@ fn auto_zoom_rerun_reports_the_zooms_it_replaces() {
     // The sample's own zoom plus one run's worth: nothing doubled.
     assert_eq!(zooms, 1 + made);
 }
+
+/// T46.2: `lead` and `tail` shape each zoom, `from`/`to` limit the clicks (and what a re-run
+/// replaces) to a window, and `focus:"cursor"` makes the zooms follow the cursor.
+#[test]
+fn auto_zoom_takes_lead_tail_a_window_and_cursor_focus() {
+    let auto = |project: &Project| -> Vec<(Frame, Frame, Zoom)> {
+        project
+            .items
+            .order()
+            .iter()
+            .filter_map(|&slot| {
+                let data = project.items.data(slot)?;
+                let ItemKind::Zoom(zoom) = data.kind else {
+                    return None;
+                };
+                (data.appearance.name.as_deref() == Some("Auto zoom")).then(|| {
+                    let at = splice_model::timing::anchor_start(
+                        project,
+                        project.items.timing(slot).unwrap().anchor,
+                    )
+                    .unwrap();
+                    (at, at + project.items.timing(slot).unwrap().length, zoom)
+                })
+            })
+            .collect()
+    };
+    let mut project = sample();
+    // clp_take plays source s at timeline 120 + s.
+    let ops = splice_json::parse(
+        r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.7,"y":0.3},{"at":300,"x":0.45,"y":0.6}],
+             "lead":6,"tail":30,"focus":"cursor","motionBlur":0.4}]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let zooms = auto(&project);
+    assert_eq!(
+        zooms.iter().map(|z| (z.0, z.1)).collect::<Vec<_>>(),
+        [(204, 240), (414, 450)]
+    );
+    for (.., zoom) in &zooms {
+        assert!(zoom.follow && zoom.focus.is_none() && zoom.motion_blur == 0.4);
+    }
+    // A window re-run: only the click inside it zooms, and only the zoom inside it is replaced.
+    let ops = splice_json::parse(
+        r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.7,"y":0.3},{"at":300,"x":0.45,"y":0.6}],
+             "from":300,"to":540}]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let zooms = auto(&project);
+    assert_eq!(zooms.len(), 2, "{zooms:?}");
+    assert!(zooms[0].2.follow && zooms[0].0 == 204);
+    // Default lead (0.3 s = 9 frames) and the click as a point of the crop (A5), snapped.
+    assert_eq!(zooms[1].0, 420 - 9);
+    assert_eq!(
+        (zooms[1].2.follow, zooms[1].2.focus),
+        (false, Some([0.0, 0.625]))
+    );
+    for ops in [
+        r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.7,"y":0.3}],"from":300,"to":200}]"#,
+        r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.7,"y":0.3}],"focus":"face"}]"#,
+        r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.7,"y":0.3}],"lead":-3}]"#,
+        r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.7,"y":0.3}],"from":900}]"#,
+        r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.7,"y":0.3}],"from":300}]"#,
+    ] {
+        let ops = splice_json::parse(ops).unwrap();
+        let error = apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap_err();
+        assert!(!error.error.fix.is_empty(), "{ops:?}: {error:?}");
+    }
+}

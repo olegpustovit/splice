@@ -511,36 +511,42 @@ impl GpuProgram {
         };
         let d = p.destination;
         let [dx, dy, dw, dh] = [d.x, d.y, d.w, d.h];
-        let base = look
-            .crop
-            .map_or([p.source.x, p.source.y, p.source.w, p.source.h], |c| c);
-        let [mut cx, mut cy, mut cwid, mut chei] =
-            [base[0] * w, base[1] * h, base[2] * w, base[3] * h];
-        if look.crop.is_some() {
-            let ratio = dw / dh;
-            let width = cwid.min(chei * ratio);
-            let height = chei.min(cwid / ratio);
-            cx += (cwid - width) / 2.0;
-            cy += (chei - height) / 2.0;
-            (cwid, chei) = (width, height);
-        }
+        // What the camera frames (a keyed crop cut to the destination's aspect), in pixels.
+        let [bx, by, bw, bh] = p.content([w, h]);
+        let region = [bx * w, by * h, bw * w, bh * h];
         // The timeline camera (D12, D13): content mode narrows the crop to the viewport inside
         // a fixed frame; frame mode scales the card so the viewport fills the card's place.
+        let portrait = ch > cw;
+        let framed = |view: splice_eval::View| {
+            let scale = view.amount.max(1.0);
+            let [vx, vy, vw, vh] = view.viewport();
+            if view.mode.zooms_content(portrait) || scale <= 1.0 {
+                (
+                    [
+                        region[0] + vx * region[2],
+                        region[1] + vy * region[3],
+                        region[2] * vw,
+                        region[3] * vh,
+                    ],
+                    [dx, dy, dw, dh],
+                )
+            } else {
+                (
+                    region,
+                    [
+                        dx - vx * scale * dw,
+                        dy - vy * scale * dh,
+                        dw * scale,
+                        dh * scale,
+                    ],
+                )
+            }
+        };
         let view = p.view;
         let scale = view.amount.max(1.0);
         let [vx, vy, vw, vh] = view.viewport();
-        let content = view.mode.zooms_content(ch > cw);
-        let zoomed = if content || scale <= 1.0 {
-            (cx, cy, cwid, chei) = (cx + vx * cwid, cy + vy * chei, cwid * vw, chei * vh);
-            [dx, dy, dw, dh]
-        } else {
-            [
-                dx - vx * scale * dw,
-                dy - vy * scale * dh,
-                dw * scale,
-                dh * scale,
-            ]
-        };
+        let content = view.mode.zooms_content(portrait);
+        let ([cx, cy, cwid, chei], zoomed) = framed(view);
         let card = if content { 1.0 } else { scale };
         let (dest, pivot) = transform(zoomed, look);
         let placed = dest.map(f64::from);
@@ -548,11 +554,23 @@ impl GpuProgram {
         let mut layer = Layer::new(Layer::TEXTURE, dest, target);
         layer.crop = [cx / w, cy / h, cwid / w, chei / h].map(|v| v as f32);
         layer.opacity = opacity;
+        // Camera motion blur (T46.2): taps toward what these pixels showed a frame earlier.
+        if view.blur > 0.0
+            && let Some(evaluator) = &plan.evaluator
+        {
+            let (crop, zoomed) = framed(evaluator.view(self.frame.frame - 1));
+            let (before, _) = transform(zoomed, look);
+            let crop = [crop[0] / w, crop[1] / h, crop[2] / w, crop[3] / h].map(|v| v as f32);
+            if let Some(motion) = motion_crop(layer.crop, dest, crop, before, view.blur) {
+                layer.flags |= Layer::MOTION;
+                layer.motion = motion;
+            }
+        }
         if let Some(window) = p.window {
             layer.corner = (window.corner * dw.min(dh) * card * look.scale) as f32;
             layer.shadow = window.shadow.clamp(0.0, 1.0) as f32;
         }
-        layer.flags = Layer::BGRA;
+        layer.flags |= Layer::BGRA;
         layer.orient = orient;
         layer.pivot = pivot;
         layer.rotation = look.rotation.to_radians() as f32;
@@ -658,14 +676,34 @@ impl GpuProgram {
                 self.push(ring, Bound::default());
             }
         }
-        // The smoothed table (T39): position, idle fade and click pulse at this source time.
+        // The smoothed table (T39): position, idle fade and click pulse at this source time,
+        // eased back to the clip's first position over its last `loop` frames (T46.2).
         let index = slot.cursor as usize;
-        let sprite = table
-            .track
-            .at(st)
+        let span = plan.evaluator.as_ref().and_then(|e| e.source_span(p.item));
+        let fps = table.fps.max(1.0);
+        let at = |t: f64| {
+            let point = table.track.at(t)?;
+            match span.filter(|_| cursor.loop_frames > 0.0) {
+                Some(span) => {
+                    let first = table.track.at(span.source / fps)?;
+                    let left = f64::from(span.end - 1 - self.frame.frame);
+                    Some(splice_eval::cursor::looped(
+                        point,
+                        first,
+                        left,
+                        cursor.loop_frames,
+                    ))
+                }
+                None => Some(point),
+            }
+        };
+        let sprite = at(st)
             .filter(|point| point.opacity > 0.0)
             .and_then(|point| {
+                // Always arrow: the table holds only the system arrow (a hidden system cursor
+                // stays hidden).
                 let image = usize::try_from(point.image).ok()?;
+                let image = if cursor.motion.always_arrow { 0 } else { image };
                 let (texture, size) = self.cursors[index].get(image)?;
                 Some((table.images.get(image)?, texture.clone(), *size, point))
             });
@@ -676,12 +714,39 @@ impl GpuProgram {
             // canvas px per PNG px
             let k = cursor.scale * point.scale * px_per_point * per_px / meta.scale;
             let [x, y] = to_canvas(x, y);
-            let mut sprite = Layer::new(
-                Layer::TEXTURE,
-                [x - meta.hot[0] * k, y - meta.hot[1] * k, pw * k, ph * k].map(|v| v as f32),
-                target,
-            );
+            let dest = [x - meta.hot[0] * k, y - meta.hot[1] * k, pw * k, ph * k];
+            let mut sprite = Layer::new(Layer::TEXTURE, dest.map(|v| v as f32), target);
             sprite.opacity = opacity * point.opacity as f32;
+            // Cursor motion blur (T46.2): along its own move since the previous frame. The quad
+            // grows to cover the trail; taps off the image are transparent.
+            if cursor.motion_blur > 0.0
+                && let Some(span) = span
+                && let Some(before) = at((p.source_frame - span.step) / fps)
+            {
+                let [bx, by] = to_canvas(before.x, before.y);
+                let shift = [(bx - x) * cursor.motion_blur, (by - y) * cursor.motion_blur];
+                if shift[0].hypot(shift[1]) >= 0.5 {
+                    let x0 = dest[0].min(dest[0] + shift[0]);
+                    let y0 = dest[1].min(dest[1] + shift[1]);
+                    let trail = [x0, y0, dest[2] + shift[0].abs(), dest[3] + shift[1].abs()];
+                    let crop = [
+                        (trail[0] - dest[0]) / dest[2],
+                        (trail[1] - dest[1]) / dest[3],
+                        trail[2] / dest[2],
+                        trail[3] / dest[3],
+                    ];
+                    sprite.dest = trail.map(|v| v as f32);
+                    sprite.crop = crop.map(|v| v as f32);
+                    sprite.motion = [
+                        crop[0] - shift[0] / dest[2],
+                        crop[1] - shift[1] / dest[3],
+                        crop[2],
+                        crop[3],
+                    ]
+                    .map(|v| v as f32);
+                    sprite.flags |= Layer::MOTION;
+                }
+            }
             (sprite.pivot, sprite.rotation) = (pivot, rotation);
             self.push(
                 sprite,
@@ -996,6 +1061,40 @@ fn move_layer(layer: &mut Layer, scale: f32, [ox, oy]: [f32; 2], [cx, cy]: [f32;
     }
     layer.corner *= scale;
     layer.ring *= scale;
+}
+
+/// The motion-blur crop for a layer drawn with `crop` at `dest` that showed `before_crop` at
+/// `before_dest` one frame earlier: the same pixels' previous source uv, expressed relative to
+/// the current `dest` (what `Layer::motion` holds), moved `amount` (0–1) of the way. `None`
+/// when no pixel moves half a canvas pixel (blur would be invisible; the taps cost time).
+fn motion_crop(
+    crop: [f32; 4],
+    dest: [f32; 4],
+    before_crop: [f32; 4],
+    before_dest: [f32; 4],
+    amount: f64,
+) -> Option<[f32; 4]> {
+    if before_dest[2] <= 0.0 || before_dest[3] <= 0.0 || crop[2] <= 0.0 || crop[3] <= 0.0 {
+        return None;
+    }
+    let mut motion = [0.0; 4];
+    for axis in 0..2 {
+        let size = before_crop[axis + 2] * dest[axis + 2] / before_dest[axis + 2];
+        let origin = before_crop[axis]
+            + (dest[axis] - before_dest[axis]) / before_dest[axis + 2] * before_crop[axis + 2];
+        motion[axis] = crop[axis] + (origin - crop[axis]) * amount as f32;
+        motion[axis + 2] = crop[axis + 2] + (size - crop[axis + 2]) * amount as f32;
+    }
+    // How far the layer's corners travel, in canvas pixels.
+    let moved = (0..2)
+        .flat_map(|axis| {
+            let px = dest[axis + 2] / crop[axis + 2];
+            let near = (motion[axis] - crop[axis]) * px;
+            let far = (motion[axis] + motion[axis + 2] - crop[axis] - crop[axis + 2]) * px;
+            [near.abs(), far.abs()]
+        })
+        .fold(0.0f32, f32::max);
+    (moved >= 0.5).then_some(motion)
 }
 
 /// A camera bubble's background treatment (0 none, 1 blur, 2 remove) as a cutout look.

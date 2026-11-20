@@ -24,5 +24,10 @@ name = "looks"
 path = "tests/looks.rs"
 harness = false
 
+[[test]]
+name = "motion"
+path = "tests/motion.rs"
+harness = false
+
 [lints]
 workspace = true

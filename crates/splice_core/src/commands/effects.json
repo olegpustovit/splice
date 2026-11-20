@@ -156,6 +156,32 @@
         "max": 1,
         "step": 0.01,
         "label": "Arrive before click (s)"
+      },
+      "alwaysArrow": {
+        "type": "bool",
+        "def": false,
+        "label": "Always use arrow"
+      },
+      "loop": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 600,
+        "step": 1,
+        "label": "Loop: frames to ease back to the start position (0 off)"
+      },
+      "clickSound": {
+        "type": "bool",
+        "def": false,
+        "label": "Click sound"
+      },
+      "motionBlur": {
+        "type": "number",
+        "def": 0,
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "label": "Motion blur"
       }
     },
     "applies": "take"

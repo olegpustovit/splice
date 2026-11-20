@@ -111,8 +111,42 @@ fix, ops?}`, where `ops` is a batch that fixes it when one exists. Codes: `OUTSI
 `TEXT_OVER_WINDOW` (a title covers over 30 % of itself with the recorded window), `ZOOM_OVERFLOW`
 (a frame-mode zoom past `fitSafeScale`), `LONG_STATIC` (over 8 s without a visual change on a
 vertical short), `KEYS_SHOW_TYPING` (a take's keystroke chips show every key, so typed text is in
-the export; `ops` keeps only shortcuts). `pacing` is `{cutsPerMinute, longestStatic, safeZone}`.
-`record.stop` returns the same plus `TAKE_ASPECT` and `MIC_SILENT` (see Recording jobs).
+the export; `ops` keeps only shortcuts), `ZOOM_FOLLOWS_NOTHING` (a `focus:"cursor"` zoom with no screen take that has an
+event log under it: the camera holds its framing there). `pacing` is
+`{cutsPerMinute, longestStatic, safeZone}`. `record.stop` returns the same plus `TAKE_ASPECT` and
+`MIC_SILENT` (see Recording jobs).
+
+## Camera and cursor motion (T46.2)
+
+- **Following zooms.** `zoom.add`/`zoom.set {focus:"cursor"}` makes a camera segment follow the
+  drawn cursor of the take under it: the exact smoothed table the renderer draws (the clip's
+  `cursor` effect: smoothing, synthesized paths, `loop`), mapped into the crop space `focus:{x,y}` uses
+  (through a keyed crop as drawn). The camera centers on the cursor where the segment starts,
+  then moves only when the cursor leaves the central 60 % of the viewport (Recorder's dead zone),
+  just enough to bring it back, through the segment's `spring`. The path is solved once per
+  revision (`view.frames`, `view.check` and export read the same camera); a take without an event
+  log holds its framing (lint `ZOOM_FOLLOWS_NOTHING`). `view.check`'s camera check reads the
+  take's pointer, so a following zoom with an `instant` spring over a fast move is reported.
+  A point focus (`{x,y}`) or `null` stops following. The file stores `"focus":"cursor"`.
+- **`intent.autoZoom {lead, tail, from, to, focus, motionBlur}`.** `lead` (default 0.3 s) and
+  `tail` (default 2.5 s) are frames before the first and after the last click of a zoom; `from`/
+  `to` are timeline frames: only clicks inside the window zoom, and a re-run replaces only this
+  clip's auto zooms that start inside it. `focus:"cursor"` writes following zooms (one per click
+  cluster) instead of zooms aimed at the clicks. A window outside the clip is `OUT_OF_RANGE`.
+- **Motion blur.** The timeline camera's home is the zoom segment (D12), so camera blur is
+  `motionBlur` (0–1, default 0) on `zoom.add`/`zoom.set`/`intent.autoZoom`: while a segment
+  drives the camera (into it, during it, and springing back out until the next one) each frame
+  averages 8 taps along the move from the previous frame's view, scaled by the amount. The cursor
+  effect's `motionBlur` does the same along the cursor's own move. Moves under half a pixel draw
+  no taps; with every blur at 0 (the default) nothing changes.
+- **Cursor effect** (`effect.add|set {type:"cursor"}`, or `cursor.set` for size and rings):
+  `alwaysArrow` draws the system arrow whatever shape was recorded (a hidden system cursor stays
+  hidden); `loop` (frames, 0 off) eases the cursor back to where the clip starts over the clip's
+  last `loop` frames, so a looping clip is seamless; `clickSound` mixes a generated click (no
+  shipped asset) into the program audio at every recorded press that plays, through trims and
+  speed (export and preview; also when the cursor is hidden); `smoothing` 0–1 blends the
+  shake-filtered path (0) with the leading spring (1). Against Recorder's presets on the same path,
+  lag aside: `none` 0, `rapid` ≈ 0.1, `medium` ≈ 0.3, `smooth` ≈ 0.75 (1 is softer still).
 
 ## Command descriptions
 

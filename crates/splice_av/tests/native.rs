@@ -365,6 +365,8 @@ mod native {
                         focus: Some([0.75, 0.5]),
                         mode: CameraMode::Auto,
                         spring: Spring::Instant,
+                        follow: false,
+                        motion_blur: 0.0,
                     }),
                     appearance: Appearance::default(),
                 },

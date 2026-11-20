@@ -302,14 +302,23 @@ pub(super) fn title_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     })
 }
 
-/// A camera segment's framing: `amount` (1–5, default 1.5), `focus`, `mode`, `spring`.
+/// A camera segment's framing: `amount` (1–5, default 1.5), `focus`, `mode`, `spring`,
+/// `motionBlur`.
 fn zoom_args(a: &Json) -> Result<Zoom, Error> {
+    let (focus, follow) = focus(a)?;
     Ok(Zoom {
         amount: zoom_amount(a)?.unwrap_or(1.5),
-        focus: focus(a)?.flatten(),
+        focus: focus.flatten(),
         mode: zoom_mode(a)?.unwrap_or_default(),
         spring: zoom_spring(a)?.unwrap_or_default(),
+        follow: follow.unwrap_or(false),
+        motion_blur: motion_blur(a)?.unwrap_or(0.0),
     })
+}
+
+/// `motionBlur`: 0–1, refused outside (never clamped).
+fn motion_blur(a: &Json) -> Result<Option<f64>, Error> {
+    a.opt_within("motionBlur", 0.0, 1.0)
 }
 
 fn zoom_amount(a: &Json) -> Result<Option<f64>, Error> {
@@ -361,22 +370,36 @@ pub(super) fn zoom_remove(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
 }
 
 pub(super) fn zoom_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let (focus, follow) = focus(a)?;
     Ok(Op::ZoomEdit {
         zoom: a.target("zoom")?,
         amount: zoom_amount(a)?,
-        focus: focus(a)?,
+        focus,
+        follow,
         mode: zoom_mode(a)?,
         spring: zoom_spring(a)?,
+        motion_blur: motion_blur(a)?,
     })
 }
 
-/// `focus`: absent (None), null (Some(None)) or a normalized canvas point {x, y}.
-fn focus(a: &Json) -> Result<Option<Option<[f64; 2]>>, Error> {
+/// `focus`: absent (None), null (Some(None)), a normalized content point {x, y}, or `"cursor"`
+/// (follow the drawn cursor). The second value says whether the segment follows the cursor;
+/// any present focus sets it.
+#[allow(clippy::type_complexity)]
+fn focus(a: &Json) -> Result<(Option<Option<[f64; 2]>>, Option<bool>), Error> {
     let Some(value) = a.field("focus") else {
-        return Ok(None);
+        return Ok((None, None));
     };
     if *value == Json::Null {
-        return Ok(Some(None));
+        return Ok((Some(None), Some(false)));
+    }
+    let expected = "{x, y} with both from 0 to 1, \"cursor\" to follow the cursor, or null";
+    if let Some(name) = value.as_str() {
+        return if name == "cursor" {
+            Ok((Some(None), Some(true)))
+        } else {
+            Err(Error::bad("focus", expected))
+        };
     }
     let x = value.number("x")?;
     let y = value.number("y")?;
@@ -384,9 +407,9 @@ fn focus(a: &Json) -> Result<Option<Option<[f64; 2]>>, Error> {
         || !(0.0..=1.0).contains(&y)
         || value.as_object().map_or(0, |fields| fields.len()) != 2
     {
-        return Err(Error::bad("focus", "{x, y} with both from 0 to 1, or null"));
+        return Err(Error::bad("focus", expected));
     }
-    Ok(Some(Some([x, y])))
+    Ok((Some(Some([x, y])), Some(false)))
 }
 
 pub(super) fn item_anchor(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
@@ -658,7 +681,17 @@ pub(super) fn clip_crop(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
             Some(Some(ratio))
         }
     };
-    let focus = focus(a)?.flatten();
+    let (focus, follow) = focus(a)?;
+    if follow == Some(true) {
+        return Err(Error::rule(
+            "BAD_ARGS",
+            "focus",
+            Some(Json::String("cursor".into())),
+            "{x, y} with both from 0 to 1",
+            "A crop holds still; animate it to the cursor with crop.keys {follow:\"cursor\"}.",
+        ));
+    }
+    let focus = focus.flatten();
     if rect.is_some() && aspect.is_some() {
         return Err(Error::bad("rect", "either rect or aspect, not both"));
     }
@@ -1327,11 +1360,44 @@ pub(super) fn intent_auto_zoom(a: &Json, _scratch: &mut DecodeScratch) -> Decode
             "{at, x, y} source clicks; splice mcp fills them from the take's events when omitted",
         ));
     }
+    let follow = match a.opt_string("focus")?.as_deref() {
+        None | Some("clicks") => false,
+        Some("cursor") => true,
+        Some(_) => {
+            return Err(Error::bad(
+                "focus",
+                "\"clicks\" (frame each click cluster) or \"cursor\" (follow the cursor)",
+            ));
+        }
+    };
+    let frames = |key: &str| -> Result<Option<Frame>, Error> {
+        match a.opt_int(key)? {
+            Some(value) if value < 0 => Err(Error::bad(key, "frames, at least 0")),
+            value => Ok(value),
+        }
+    };
+    let window = [frames("from")?, frames("to")?];
+    if let [Some(from), Some(to)] = window
+        && to <= from
+    {
+        return Err(Error::rule(
+            "BAD_ARGS",
+            "to",
+            Some(Json::Signed(i64::from(to))),
+            "a timeline frame after from",
+            "Pass a window {from, to} with to > from, or leave both out for the whole clip.",
+        ));
+    }
     Ok(Op::IntentAutoZoom {
         item: a.target("item")?,
         clicks,
         typing: source_ranges(a, "typing")?,
         amount: zoom_amount(a)?,
+        lead: frames("lead")?,
+        tail: frames("tail")?,
+        window,
+        follow,
+        motion_blur: motion_blur(a)?.unwrap_or(0.0),
     })
 }
 

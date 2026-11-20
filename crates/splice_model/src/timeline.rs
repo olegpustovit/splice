@@ -396,11 +396,21 @@ pub struct Zoom {
     pub mode: CameraMode,
     /// How the camera moves into the segment.
     pub spring: Spring,
+    /// Follow the drawn (smoothed) cursor of the take under the segment instead of `focus`
+    /// (wire `focus:"cursor"`): the camera moves only when the cursor leaves the central
+    /// `FOLLOW_ZONE` of the viewport (T46.2).
+    pub follow: bool,
+    /// Motion blur 0–1 along the camera's per-frame movement while this segment drives the
+    /// camera (into, during and springing back out of it). 0 is off.
+    pub motion_blur: f64,
 }
 
 impl Zoom {
     /// Magnification range a segment accepts.
     pub const AMOUNT: [f64; 2] = [1.0, 5.0];
+    /// The central fraction of the viewport the cursor moves in freely while a segment follows
+    /// it (Recorder's dead zone): leaving it pans the camera just enough to bring it back.
+    pub const FOLLOW_ZONE: f64 = 0.6;
 }
 
 /// What a camera segment zooms (D13).

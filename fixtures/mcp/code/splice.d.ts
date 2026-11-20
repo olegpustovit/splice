@@ -220,12 +220,14 @@ declare namespace Splice {
       length?: number;
       /** 1–5 · magnification · @default 1.5 */
       amount?: number;
-      /** {x,y} · crop space: 0–1 of the spine clip's crop (the whole source when uncropped) to center; the viewport never leaves the picture */
-      focus?: { x: number; y: number };
+      /** crop space: 0–1 of the spine clip's crop (the whole source when uncropped) to center, or "cursor" to follow the drawn cursor (the camera pans only when it leaves the central 60 % of the view); the viewport never leaves the picture */
+      focus?: { x: number; y: number } | "cursor";
       /** content zooms inside a fixed window frame (portrait default), frame zooms the whole card */
       mode?: "auto" | "content" | "frame";
       /** @default focused */
       spring?: "focused" | "smooth" | "snappy" | "instant";
+      /** 0–1 · blur along the camera's movement while this zoom drives it · @default 0 */
+      motionBlur?: number;
       /** lan_… camera lane */
       lane?: string;
     }
@@ -236,10 +238,12 @@ declare namespace Splice {
       zoom: string;
       /** 1–5 */
       amount?: number;
-      /** {x,y} · crop space: 0–1 of the spine clip's crop (the whole source when uncropped), or null to keep the current framing */
-      focus?: { x: number; y: number };
+      /** crop space: 0–1 of the spine clip's crop (the whole source when uncropped), "cursor" to follow the drawn cursor, or null to keep the current framing */
+      focus?: { x: number; y: number } | "cursor" | null;
       mode?: "auto" | "content" | "frame";
       spring?: "focused" | "smooth" | "snappy" | "instant";
+      /** 0–1 · 0 is off */
+      motionBlur?: number;
     }
     /** Pin / Unpin (edit, 0.1). */
     interface ItemAnchor extends Base {
@@ -706,6 +710,18 @@ declare namespace Splice {
       typing?: { from: number; to: number }[];
       /** 1–5 · @default 1.5 */
       amount?: number;
+      /** a zoom opens this long before its first click · @default 0.3 s */
+      lead?: number;
+      /** a zoom holds this long after its last click · @default 2.5 s */
+      tail?: number;
+      /** timeline frame; only clicks from here zoom (earlier auto zooms outside the window stay) */
+      from?: number;
+      /** timeline frame, exclusive */
+      to?: number;
+      /** cursor makes each zoom follow the drawn cursor · @default clicks */
+      focus?: "clicks" | "cursor";
+      /** 0–1 · @default 0 */
+      motionBlur?: number;
     }
     /** Set Transcript (edit, 0.2). */
     interface TranscriptSet extends Base {
@@ -1132,6 +1148,14 @@ declare namespace Splice {
       arc?: number;
       /** Arrive before click (s) · 0–1 · @default 0.15 */
       arriveBefore?: number;
+      /** Always use arrow · @default false */
+      alwaysArrow?: boolean;
+      /** Loop: frames to ease back to the start position (0 off) · 0–600 · @default 0 */
+      loop?: number;
+      /** Click sound · @default false */
+      clickSound?: boolean;
+      /** Motion blur · 0–1 · @default 0 */
+      motionBlur?: number;
     };
     /** Camera Layout: screen takes. */
     camera: {

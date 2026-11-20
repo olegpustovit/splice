@@ -10,7 +10,7 @@ struct Mask {
     float4 color;    // cover rgb, invert in w
 };
 
-// Mirrors splice_gpu::Layer (512 bytes).
+// Mirrors splice_gpu::Layer (432 bytes in a 512-byte slot).
 struct Layer {
     float4 dest;     // x, y, w, h in target pixels, top-left origin (before rotation)
     float4 crop;     // u, v, w, h normalized to the oriented source
@@ -22,7 +22,7 @@ struct Layer {
     float shadow;    // 0..1
     float ring;      // ring width in pixels (kind 3); stroke width for shapes
     uint kind;       // 0 texture, 1 solid, 2 gradient, 3 ring, 4 ellipse, 5 line, 6 arrow, 7 callout, 8 box, 9 arc, 10 heart
-    uint flags;      // 1 BGRA source, 2 BGRA output, 4 grade, 8 LUT, 16 key, 32 cutout, 64 cutout blur, 128 clip
+    uint flags;      // 1 BGRA source, 2 BGRA output, 4 grade, 8 LUT, 16 key, 32 cutout, 64 cutout blur, 128 clip, 256 motion
     float2 pivot;    // rotation pivot in target pixels
     float rotation;  // radians, clockwise
     uint orient;     // source orientation: 0 none, 1 90°, 2 180°, 3 270°
@@ -37,6 +37,7 @@ struct Layer {
     uint mask_count;
     uint pad0;
     uint pad1;
+    float4 motion;   // flag 256: the crop these pixels showed one frame earlier (relative to dest)
 };
 
 struct Out {
@@ -164,14 +165,16 @@ static float3 blend(float3 dst, float3 src, uint mode) {
     }
 }
 
-// One body for every entry point; `full` and `hw` are compile-time constants at each call site.
+// One body for every entry point; `full`, `hw` and `motion` are compile-time constants at each
+// call site. `motion` true compiles the motion-blur taps (T46.2) into its own entry, so layers
+// without blur never pay for them.
 // `full` false compiles the fill entry (solid and gradient, kinds 1 and 2) without the picture,
 // shape, mask, LUT and key paths. `hw` true leaves source-over to fixed-function blending (an
 // opaque canvas and the normal blend mode): no framebuffer read, so overlapping layers do not
 // serialize on programmable blending.
 static inline float4 layer_body(Out in, constant Layer &l, texture2d<float> source, sampler linear,
                                 texture2d<float> table, texture2d<float> matte, float4 framebuffer,
-                                const bool full, const bool hw) {
+                                const bool full, const bool hw, const bool motion) {
     float4 dst = hw ? float4(0.0) : ((l.flags & 2u) ? framebuffer.bgra : framebuffer);
     float2 h = l.dest.zw * 0.5;
     float2 c = l.dest.xy + h;
@@ -244,7 +247,21 @@ static inline float4 layer_body(Out in, constant Layer &l, texture2d<float> sour
         float d = rounded(in.px, c, h, min(l.corner, min(h.x, h.y)));
         coverage = clamp(0.5 - d, 0.0, 1.0);
         if (l.kind == 0) {
-            color = fetch(source, linear, in.uv, l);
+            if (motion && (l.flags & 256u)) {
+                // Motion blur (T46.2): average 8 taps from this frame's uv to last frame's,
+                // premultiplied; taps off the image (a cursor's trail) are transparent.
+                float2 before = l.motion.xy + (in.px - l.dest.xy) / l.dest.zw * l.motion.zw;
+                float4 sum = 0.0;
+                for (int j = 0; j < 8; j++) {
+                    float2 uv = mix(in.uv, before, float(j) / 7.0);
+                    if (any(uv < 0.0) || any(uv > 1.0)) continue;
+                    float4 c = fetch(source, linear, uv, l);
+                    sum += float4(c.rgb * c.a, c.a);
+                }
+                color = sum.a > 0.0 ? float4(sum.rgb / sum.a, sum.a / 8.0) : float4(0.0);
+            } else {
+                color = fetch(source, linear, in.uv, l);
+            }
             float m = 1.0;
             if (l.flags & 32u) {
                 float2 lo = min(l.crop.xy, l.crop.xy + l.crop.zw), hi = max(l.crop.xy, l.crop.xy + l.crop.zw);
@@ -337,18 +354,26 @@ fragment float4 layer_fragment(Out in [[stage_in]], constant Layer &l [[buffer(0
                                texture2d<float> source [[texture(1)]], sampler linear [[sampler(2)]],
                                texture2d<float> table [[texture(3)]], texture2d<float> matte [[texture(4)]],
                                float4 framebuffer [[color(0)]]) {
-    return layer_body(in, l, source, linear, table, matte, framebuffer, true, false);
+    return layer_body(in, l, source, linear, table, matte, framebuffer, true, false, false);
+}
+
+// Motion-blurred texture layers (flag 256), programmable blending like layer_fragment.
+fragment float4 motion_fragment(Out in [[stage_in]], constant Layer &l [[buffer(0)]],
+                                texture2d<float> source [[texture(1)]], sampler linear [[sampler(2)]],
+                                texture2d<float> table [[texture(3)]], texture2d<float> matte [[texture(4)]],
+                                float4 framebuffer [[color(0)]]) {
+    return layer_body(in, l, source, linear, table, matte, framebuffer, true, false, true);
 }
 
 // Hardware-blended entries: they never read [[color(0)]].
 fragment float4 layer_blend(Out in [[stage_in]], constant Layer &l [[buffer(0)]],
                             texture2d<float> source [[texture(1)]], sampler linear [[sampler(2)]],
                             texture2d<float> table [[texture(3)]], texture2d<float> matte [[texture(4)]]) {
-    return layer_body(in, l, source, linear, table, matte, float4(0.0), true, true);
+    return layer_body(in, l, source, linear, table, matte, float4(0.0), true, true, false);
 }
 
 fragment float4 fill_blend(Out in [[stage_in]], constant Layer &l [[buffer(0)]],
                            texture2d<float> source [[texture(1)]], sampler linear [[sampler(2)]],
                            texture2d<float> table [[texture(3)]], texture2d<float> matte [[texture(4)]]) {
-    return layer_body(in, l, source, linear, table, matte, float4(0.0), false, true);
+    return layer_body(in, l, source, linear, table, matte, float4(0.0), false, true, false);
 }

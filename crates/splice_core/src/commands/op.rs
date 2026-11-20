@@ -175,10 +175,14 @@ pub enum Op {
         amount: Option<f64>,
         /// New focus point; null keeps the current framing.
         focus: Option<Option<[f64; 2]>>,
+        /// Follow the cursor (`focus:"cursor"`); any other focus stops following.
+        follow: Option<bool>,
         /// New mode.
         mode: Option<CameraMode>,
         /// New spring.
         spring: Option<Spring>,
+        /// New motion blur 0–1.
+        motion_blur: Option<f64>,
     },
     /// Pin / Unpin.
     ItemAnchor {
@@ -559,6 +563,17 @@ pub enum Op {
         typing: Vec<(Frame, Frame)>,
         /// Magnification (default 1.5).
         amount: Option<f64>,
+        /// Frames a zoom opens before its first click (default 0.3 s).
+        lead: Option<Frame>,
+        /// Frames a zoom holds after its last click (default 2.5 s).
+        tail: Option<Frame>,
+        /// Timeline window `[from, to)`: only clicks inside it zoom, and only earlier auto zooms
+        /// starting inside it are replaced (default: the whole clip).
+        window: [Option<Frame>; 2],
+        /// The zooms follow the cursor instead of framing each click cluster.
+        follow: bool,
+        /// Motion blur of the zooms, 0–1.
+        motion_blur: f64,
     },
     /// Steps (Splice extension): a screen demo trimmed to its steps.
     IntentSteps {

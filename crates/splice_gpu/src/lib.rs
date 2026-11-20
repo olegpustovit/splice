@@ -105,9 +105,13 @@ pub struct Layer {
     pub mask_count: u32,
     /// Padding to the shader's 16-byte alignment.
     pub pad: [u32; 2],
+    /// With `MOTION`: the crop (u, v, w, h) this layer's pixels showed one frame earlier,
+    /// relative to the current `dest`; the shader averages taps along the way (T46.2), and taps
+    /// off the source (outside 0–1, a cursor's trail) are transparent.
+    pub motion: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<Layer>() == 416 && STRIDE >= 416);
+const _: () = assert!(std::mem::size_of::<Layer>() == 432 && STRIDE >= 432);
 
 impl Layer {
     /// Samples the bound source texture.
@@ -148,6 +152,10 @@ impl Layer {
     pub const CUTOUT_BLUR: u32 = 64;
     /// Limit drawing to `clip`.
     pub const CLIP: u32 = 128;
+    /// Motion blur: average `MOTION_TAPS` samples from `crop` toward `motion`.
+    pub const MOTION: u32 = 256;
+    /// Samples a motion-blurred texture layer averages per pixel.
+    pub const MOTION_TAPS: u32 = 8;
 
     /// A layer of `kind` covering `dest` in a `target`-sized canvas.
     pub fn new(kind: u32, dest: [f32; 4], target: [f32; 2]) -> Self {
@@ -181,6 +189,8 @@ pub struct Compositor {
     /// solid and gradient fills (kinds 1 and 2).
     blended: Pipeline,
     fill: Pipeline,
+    /// Motion-blurred texture layers (`Layer::MOTION`): the only entry with the blur taps.
+    motion: Pipeline,
     sampler: Sampler,
     blank: Texture,
     pages: [Buffer; PAGES],
@@ -220,6 +230,10 @@ impl Compositor {
                     },
                     EntryPoint {
                         name: "fill_blend".into(),
+                        stage: Stage::Fragment,
+                    },
+                    EntryPoint {
+                        name: "motion_fragment".into(),
                         stage: Stage::Fragment,
                     },
                 ],
@@ -323,6 +337,7 @@ impl Compositor {
         let pipeline = make("layer_fragment", None)?;
         let blended = make("layer_blend", Some(Blend::Alpha))?;
         let fill = make("fill_blend", Some(Blend::Alpha))?;
+        let motion = make("motion_fragment", None)?;
         let sampler = b::create_sampler(
             device,
             SamplerDescriptor {
@@ -366,6 +381,7 @@ impl Compositor {
             pipeline,
             blended,
             fill,
+            motion,
             sampler,
             blank,
             pages: [page()?, page()?, page()?, page()?, page()?, page()?],
@@ -444,13 +460,15 @@ impl Compositor {
             b::set_stage_sampler(&render, ShaderStage::Fragment, 2, &self.sampler)?;
             for (index, layer) in layers.iter().enumerate() {
                 let wanted = match (opaque && layer.blend == 0, layer.kind) {
-                    (false, _) => 0u8,
+                    _ if layer.flags & Layer::MOTION != 0 => 3u8,
+                    (false, _) => 0,
                     (true, 1 | 2) => 2,
                     (true, _) => 1,
                 };
                 if wanted != bound {
                     bound = wanted;
-                    let pipeline = [&self.pipeline, &self.blended, &self.fill][usize::from(wanted)];
+                    let pipeline = [&self.pipeline, &self.blended, &self.fill, &self.motion]
+                        [usize::from(wanted)];
                     b::set_render_pipeline(&render, pipeline)?;
                 }
                 let offset = Some((index * STRIDE) as i64);
@@ -517,6 +535,7 @@ fn layer_bytes(layer: &Layer, out: &mut [u8]) {
     for value in [layer.blend, layer.mask_count, layer.pad[0], layer.pad[1]] {
         put(value.to_le_bytes());
     }
+    floats(&mut put, &layer.motion);
     debug_assert_eq!(at, LAYER_BYTES);
 }
 
@@ -532,11 +551,13 @@ mod tests {
         layer.ring = 6.0;
         layer.blend = 3;
         layer.masks[3].color[3] = 1.0;
+        layer.motion = [0.25, 0.5, 0.75, 1.0];
         let mut bytes = [0u8; LAYER_BYTES];
         layer_bytes(&layer, &mut bytes);
         let float = |at: usize| f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
         let uint = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
         assert_eq!(uint(400), 3, "blend after the four masks");
+        assert_eq!([float(416), float(428)], [0.25, 1.0], "motion crop last");
         assert_eq!(float(400 - 4), 1.0, "last mask's invert slot");
         assert_eq!(
             float(116),

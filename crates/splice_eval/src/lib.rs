@@ -34,6 +34,8 @@ pub use text::{grapheme_len, ink_crop, text_units};
 #[cfg(test)]
 mod compositing_tests;
 #[cfg(test)]
+mod follow_tests;
+#[cfg(test)]
 mod graphics_tests;
 #[cfg(test)]
 mod look_tests;
@@ -224,6 +226,30 @@ pub struct Picture {
     pub cursor: Option<Cursor>,
     /// Keyed transform, color, masks, key and transition treatment.
     pub look: Look,
+}
+
+impl Picture {
+    /// The part of the source the timeline camera frames, normalized (x, y, w, h): a keyed crop
+    /// cut around its center to the destination's aspect, else the fitted source rectangle.
+    /// `size` is the displayed source size in pixels. `zoom.focus` and cursor-following zooms
+    /// are content points in this rectangle; the renderer zooms inside it.
+    pub fn content(&self, [w, h]: [f64; 2]) -> [f64; 4] {
+        let Some([x, y, cw, ch]) = self.look.crop else {
+            let s = self.source;
+            return [s.x, s.y, s.w, s.h];
+        };
+        let d = self.destination;
+        let ratio = d.w / d.h;
+        let (pw, ph) = (cw * w, ch * h);
+        let width = pw.min(ph * ratio);
+        let height = ph.min(pw / ratio);
+        [
+            x + (pw - width) / 2.0 / w,
+            y + (ph - height) / 2.0 / h,
+            width / w,
+            height / h,
+        ]
+    }
 }
 
 /// Audio track identity within a descriptor.

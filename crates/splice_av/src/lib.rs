@@ -171,7 +171,9 @@ impl Composition {
     }
 
     fn build(project: &Project, package: &Path, redact_keys: bool) -> Result<Self, Error> {
-        let evaluator = std::sync::Arc::new(Evaluator::prepare(project).map_err(Error::Plan)?);
+        let pointers = lower::pointers(project, package)?;
+        let evaluator =
+            std::sync::Arc::new(Evaluator::prepare_with(project, &pointers).map_err(Error::Plan)?);
         let cuts = evaluator.breakpoints();
         let end = *cuts.last().unwrap_or(&0);
         let (native, text, plan) =

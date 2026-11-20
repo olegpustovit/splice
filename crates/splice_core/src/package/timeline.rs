@@ -143,7 +143,9 @@ pub(super) fn encode_item(id: ItemId, timing: ItemTiming, data: &ItemData) -> Js
         ItemKind::Title { text: title } => ("title", object(vec![("text", text(title))])),
         ItemKind::Zoom(zoom) => {
             let mut fields = vec![("amount", Json::Float(zoom.amount))];
-            if let Some([x, y]) = zoom.focus {
+            if zoom.follow {
+                fields.push(("focus", text("cursor")));
+            } else if let Some([x, y]) = zoom.focus {
                 fields.push((
                     "focus",
                     object(vec![("x", Json::Float(x)), ("y", Json::Float(y))]),
@@ -154,6 +156,9 @@ pub(super) fn encode_item(id: ItemId, timing: ItemTiming, data: &ItemData) -> Js
             }
             if zoom.spring != Spring::Focused {
                 fields.push(("spring", text(zoom.spring.name())));
+            }
+            if zoom.motion_blur > 0.0 {
+                fields.push(("motionBlur", Json::Float(zoom.motion_blur)));
             }
             ("zoom", object(fields))
         }
@@ -253,9 +258,11 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
             }
         }
         "zoom" => {
-            shape(params, &["amount", "focus", "mode", "spring"])?;
+            shape(params, &["amount", "focus", "mode", "spring", "motionBlur"])?;
+            let follow = params.field("focus").and_then(Json::as_str) == Some("cursor");
             let focus = match params.field("focus") {
                 None => None,
+                Some(_) if follow => None,
                 Some(point) => {
                     shape(point, &["x", "y"])?;
                     let [x, y] = [number(point, "x")?, number(point, "y")?];
@@ -289,6 +296,17 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
                     Some(name) => Spring::parse(name)
                         .ok_or_else(|| bad("zoom.spring", "focused, smooth, snappy or instant"))?,
                 },
+                follow,
+                motion_blur: match params.field("motionBlur") {
+                    None => 0.0,
+                    Some(_) => {
+                        let blur = number(params, "motionBlur")?;
+                        if !(0.0..=1.0).contains(&blur) {
+                            return Err(bad("zoom.motionBlur", "a number from 0 to 1"));
+                        }
+                        blur
+                    }
+                },
             })
         }
         // 0.3 motion items migrate to camera segments that hold their end scale (D12): the old
@@ -308,6 +326,8 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
                 focus,
                 mode: CameraMode::Auto,
                 spring: Spring::Focused,
+                follow: false,
+                motion_blur: 0.0,
             })
         }
         "media" => {

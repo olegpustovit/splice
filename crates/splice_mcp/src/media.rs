@@ -704,6 +704,99 @@ fn events_format() -> StoreError {
 
 /// Streams a take's event log (T15.3): each event of the `events` array is parsed and visited
 /// on its own, so memory stays flat however long the take is.
+/// The recorded pointers of the project's takes for zooms that follow the cursor (T46.2), read
+/// the way the renderer reads them (splice_av `takes::load`): moves, drags and presses, plus a
+/// sample wherever the cursor image changes to one whose PNG exists. Empty when no zoom follows;
+/// a take whose log is missing or unreadable is left out (its following zooms hold).
+pub(super) fn pointers(dir: &Path, p: &Project) -> Vec<splice_eval::cursor::Recorded> {
+    use splice_eval::cursor::{Recorded, Sample};
+    let follows = p.items.order().iter().any(
+        |&slot| matches!(p.items.data(slot).map(|d| &d.kind), Some(ItemKind::Zoom(z)) if z.follow),
+    );
+    let mut out = Vec::new();
+    for media in p
+        .media
+        .iter()
+        .filter(|m| follows && m.kind == MediaKind::Take)
+    {
+        let Some(take) = media.take.as_ref() else {
+            continue;
+        };
+        let Some(events) = take.events.as_deref() else {
+            continue;
+        };
+        let base = dir.join("takes").join(media.id.to_string());
+        let Some(root) = fs::read_to_string(base.join(events))
+            .ok()
+            .and_then(|text| splice_json::parse(&text).ok())
+        else {
+            continue;
+        };
+        let rect = |key| {
+            root.field("source")
+                .and_then(|s| s.field("rect"))
+                .and_then(|r| r.field(key))
+                .and_then(Json::as_f64)
+                .filter(|v| *v > 0.0)
+        };
+        let Some(width) = rect("width") else {
+            continue;
+        };
+        let cursors = take.cursors.as_deref().map(|c| base.join(c));
+        let mut samples: Vec<Sample> = Vec::new();
+        let mut at: Option<[f64; 2]> = None;
+        let mut push = |t: f64, [x, y]: [f64; 2], click: bool| {
+            let t = samples.last().map_or(t, |last| t.max(last.t));
+            samples.push(Sample {
+                t,
+                x,
+                y,
+                image: 0,
+                click,
+            });
+        };
+        for event in root.field("events").and_then(Json::as_array).unwrap_or(&[]) {
+            let t = event.field("t").and_then(Json::as_f64).unwrap_or(-1.0);
+            if !t.is_finite() || t < 0.0 {
+                continue;
+            }
+            let number = |key| {
+                event
+                    .field(key)
+                    .and_then(Json::as_f64)
+                    .filter(|v| v.is_finite())
+            };
+            match event.field("k").and_then(Json::as_str) {
+                Some("cursor") => {
+                    let shown = event
+                        .field("id")
+                        .and_then(Json::as_str)
+                        .zip(cursors.as_ref());
+                    if let (Some((id, dir)), Some(p)) = (shown, at)
+                        && dir.join(format!("{id}.png")).is_file()
+                    {
+                        push(t, p, false);
+                    }
+                }
+                Some(kind @ ("move" | "drag" | "down" | "up")) => {
+                    if let (Some(x), Some(y)) = (number("x"), number("y")) {
+                        at = Some([x, y]);
+                        push(t, [x, y], kind == "down");
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push(Recorded {
+            media: media.id,
+            // Older logs carry only the width; assume a 16:10 display, as the renderer does.
+            size: [width, rect("height").unwrap_or(width / 1.6)],
+            samples,
+        });
+    }
+    out
+}
+
 fn for_each_event(
     dir: &Path,
     name: &str,

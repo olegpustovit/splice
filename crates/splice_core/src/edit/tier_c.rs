@@ -253,7 +253,24 @@ impl Editor {
                 clicks,
                 typing,
                 amount,
-            } => self.auto_zoom(&item, &clicks, &typing, amount.unwrap_or(1.5)),
+                lead,
+                tail,
+                window,
+                follow,
+                motion_blur,
+            } => self.auto_zoom(
+                &item,
+                &clicks,
+                &typing,
+                AutoZoomShape {
+                    amount: amount.unwrap_or(1.5),
+                    lead,
+                    tail,
+                    window,
+                    follow,
+                    motion_blur,
+                },
+            ),
             Op::ItemRoll { item, by } => self.roll(&item, by),
             Op::ItemSlip { item, by } => self.slip(&item, by),
             Op::ItemSlide { item, by } => self.slide(&item, by),
@@ -1530,27 +1547,46 @@ impl Editor {
     }
 
     /// Camera segments from a take's clicks (T38.4, Cap's rules plus Recorder's distance split):
-    /// a zoom opens 0.3 s before a click and holds 2.5 s after the last one; clicks merge into
-    /// one zoom while they come within 2.5 s and 0.25 of the screen; typing extends a zoom and
-    /// never moves it. Earlier auto zooms on the clip are replaced.
+    /// a zoom opens `lead` (0.3 s) before a click and holds `tail` (2.5 s) after the last one;
+    /// clicks merge into one zoom while they come within 2.5 s and 0.25 of the screen; typing
+    /// extends a zoom and never moves it. Earlier auto zooms on the clip (inside the window,
+    /// when one is given) are replaced. Following zooms track the cursor instead of the clicks.
     fn auto_zoom(
         &mut self,
         item: &Target,
         clicks: &[(Frame, f64, f64)],
         typing: &[(Frame, Frame)],
-        amount: f64,
+        shape: AutoZoomShape,
     ) -> Result<Outcome, CommandError> {
         let (id, slot) = self.spine_clip(item)?;
         let timing = self.project.clips.timing(slot).expect("live clip");
         let fps = f64::from(self.project.fps);
         let frames = |seconds: f64| (seconds * fps).round() as Frame;
         let (lead, tail, merge, settle, gap) = (
-            frames(0.3),
-            frames(2.5),
+            shape.lead.unwrap_or(frames(0.3)),
+            shape.tail.unwrap_or(frames(2.5)),
             frames(2.5),
             frames(0.5),
             frames(0.6),
         );
+        // The window on the clip's clock (timeline frames minus the clip start).
+        let window = [
+            shape.window[0].map_or(0, |from| from - timing.start),
+            shape.window[1].map_or(timing.length, |to| to - timing.start),
+        ];
+        if window[0] >= timing.length || window[1] <= 0 {
+            return Err(CommandError::rule(
+                "OUT_OF_RANGE",
+                "from",
+                None,
+                "a window that overlaps the clip",
+                &format!(
+                    "{id} plays over frames {}–{}; pass from/to inside that span.",
+                    timing.start,
+                    timing.start + timing.length
+                ),
+            ));
+        }
         // Where each source frame plays, through the clip's speed effect (as anchors resolve).
         let project = &self.project;
         let local = |source: Frame| -> Result<Frame, CommandError> {
@@ -1600,7 +1636,7 @@ impl Editor {
         let mut clusters: Vec<(Frame, Frame, [f64; 2], f64)> = Vec::new();
         for &(source, x, y) in clicks {
             let at = local(source)?;
-            if at < 0 || at >= timing.length {
+            if at < window[0].max(0) || at >= window[1].min(timing.length) {
                 continue;
             }
             let [cx, cy, cw, ch] = crop_at(at);
@@ -1628,7 +1664,7 @@ impl Editor {
                 if outside > 0 {
                     "clicks inside the clip's crop (every click here is cropped away)"
                 } else {
-                    "clicks inside the clip"
+                    "clicks inside the clip (and inside from/to when given)"
                 },
             ));
         }
@@ -1654,8 +1690,8 @@ impl Editor {
                     end = end.max(to + settle);
                 }
             }
-            let start = (first - lead).max(0);
-            let end = end.min(timing.length);
+            let start = (first - lead).max(0).max(window[0]);
+            let end = end.min(timing.length).min(window[1]);
             if let Some(previous) = segments.last_mut()
                 && previous.1 > start
             {
@@ -1666,6 +1702,7 @@ impl Editor {
         }
         // Replace this clip's earlier auto zooms.
         let clip = id;
+        let clip_start = timing.start;
         // A re-run replaces this clip's earlier auto zooms through delete, so the result
         // reports them and anything anchored to them cascades.
         let stale: Vec<Target> = self
@@ -1676,12 +1713,12 @@ impl Editor {
             .copied()
             .filter(|&slot| {
                 let data = self.project.items.data(slot).expect("live item");
+                let timing = self.project.items.timing(slot).expect("live item");
                 matches!(data.kind, ItemKind::Zoom(_))
                     && data.appearance.name.as_deref() == Some(AUTO_ZOOM)
-                    && matches!(
-                        self.project.items.timing(slot).expect("live item").anchor,
-                        Anchor::ClipSource { clip: c, .. } if c == clip
-                    )
+                    && matches!(timing.anchor, Anchor::ClipSource { clip: c, .. } if c == clip)
+                    && splice_model::timing::anchor_start(&self.project, timing.anchor)
+                        .is_ok_and(|at| (window[0]..window[1]).contains(&(at - clip_start)))
             })
             .filter_map(|slot| self.project.items.id(slot))
             .map(|id| Target::Timeline(TimelineId::Item(id)))
@@ -1706,10 +1743,12 @@ impl Editor {
             let at = FrameArg::Frame(timing.start + start);
             let outcome = self.add_item(
                 OverlayContent::Zoom(Zoom {
-                    amount,
-                    focus: Some(focus),
+                    amount: shape.amount,
+                    focus: (!shape.follow).then_some(focus),
                     mode: CameraMode::Auto,
                     spring: Spring::Focused,
+                    follow: shape.follow,
+                    motion_blur: shape.motion_blur,
                 }),
                 Some(&at),
                 None,
@@ -3048,6 +3087,17 @@ const TEMPLATES: &[Template] = &[
         )],
     },
 ];
+
+/// How `intent.autoZoom` shapes its zooms (defaults applied in `auto_zoom`).
+#[derive(Clone, Copy, Debug)]
+struct AutoZoomShape {
+    amount: f64,
+    lead: Option<Frame>,
+    tail: Option<Frame>,
+    window: [Option<Frame>; 2],
+    follow: bool,
+    motion_blur: f64,
+}
 
 /// Name that marks camera segments `intent.autoZoom` made (and replaces on a re-run).
 const AUTO_ZOOM: &str = "Auto zoom";

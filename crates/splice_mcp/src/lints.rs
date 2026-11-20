@@ -101,6 +101,19 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
                         ])])),
                     ));
                 }
+                // A following zoom needs a take with a recorded pointer under it (T46.2);
+                // anywhere else the camera holds whatever framing it had.
+                if zoom.follow && !follows_a_pointer(project, [from, to]) {
+                    lints.push(lint(
+                        "ZOOM_FOLLOWS_NOTHING",
+                        &format!(
+                            "{id} follows the cursor, but no screen take with recorded pointer events plays under it; the camera holds its framing."
+                        ),
+                        &[id.to_string()],
+                        "Move the zoom over a screen take, or give it a point: zoom.set {focus:{x, y}}.",
+                        None,
+                    ));
+                }
             }
             _ => {}
         }
@@ -219,6 +232,23 @@ pub(crate) fn mic_silent(peak_db: f64, media: MediaId) -> Json {
         "Check the microphone (record.start {dryRun:true} lists devices; pass mic:\"<id>\") and record again, or remove the mic component.",
         None,
     )
+}
+
+/// Whether a spine take with a recorded event log plays somewhere in `[from, to)`.
+fn follows_a_pointer(project: &Project, [from, to]: [Frame; 2]) -> bool {
+    project.clips.order().iter().any(|&slot| {
+        let (Some(timing), Some(data)) = (project.clips.timing(slot), project.clips.data(slot))
+        else {
+            return false;
+        };
+        timing.start < to
+            && timing.start + timing.length > from
+            && data
+                .media
+                .and_then(|id| project.media.iter().find(|m| m.id == id))
+                .and_then(|m| m.take.as_ref())
+                .is_some_and(|take| take.events.is_some())
+    })
 }
 
 fn lint(code: &str, message: &str, items: &[String], fix: &str, ops: Option<Json>) -> Json {
@@ -406,5 +436,38 @@ mod tests {
             splice_json::parse(r#"[{"cmd":"keys.set","clip":"clp_take","show":"none"}]"#).unwrap();
         edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
         assert!(!codes(&project).iter().any(|(c, _)| c == "KEYS_SHOW_TYPING"));
+    }
+
+    /// T46.2: a zoom that follows the cursor over a take without recorded pointer events (or
+    /// over no take) is flagged; over a take with an event log it is not.
+    #[test]
+    fn lints_flag_a_following_zoom_with_no_pointer_under_it() {
+        let follows = |project: &Project| {
+            check(project).0.iter().any(|lint| {
+                lint.field("code").and_then(Json::as_str) == Some("ZOOM_FOLLOWS_NOTHING")
+            })
+        };
+        let mut project = crate::tests::sample_project();
+        let ops =
+            splice_json::parse(r#"[{"cmd":"zoom.set","zoom":"ovl_detail","focus":"cursor"}]"#)
+                .unwrap();
+        edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+        // Over the sample's take, which declares an event log: fine.
+        assert!(!follows(&project));
+        // Over the opener (not a take): flagged.
+        let mut opener = project.clone();
+        let ops =
+            splice_json::parse(r#"[{"cmd":"zoom.add","at":10,"length":60,"focus":"cursor"}]"#)
+                .unwrap();
+        edit::apply(&mut opener, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+        assert!(follows(&opener));
+        // A take without an event log: flagged.
+        let take = project
+            .media
+            .iter_mut()
+            .find(|m| m.id == "med_screen".parse().unwrap())
+            .unwrap();
+        take.take.as_mut().unwrap().events = None;
+        assert!(follows(&project));
     }
 }

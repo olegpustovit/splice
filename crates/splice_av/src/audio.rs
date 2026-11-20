@@ -48,3 +48,62 @@ pub(crate) fn processed(
     }
     Ok((out, 0))
 }
+
+/// Seconds of the generated mouse click (`clickSound`, T46.2).
+pub(crate) const CLICK_SECONDS: f64 = 0.06;
+/// Sample rate of the generated click.
+const CLICK_RATE: u32 = 48_000;
+
+/// The click mixed in at each recorded press: a short, bright tick (a decaying 3.2 kHz partial
+/// over seeded noise), generated and written once to `<package>/cache/audio/` as 16-bit mono
+/// WAV. No asset ships with the app.
+pub(crate) fn click(package: &Path) -> Result<PathBuf, Error> {
+    let dir = package.join("cache").join("audio");
+    let out = dir.join("click-v1.wav");
+    if out.exists() {
+        return Ok(out);
+    }
+    let failed = |e: std::io::Error| Error::Input(format!("{}: {e}", dir.display()));
+    std::fs::create_dir_all(&dir).map_err(failed)?;
+    let partial = dir.join("click-v1.partial.wav");
+    std::fs::write(&partial, click_wav()).map_err(failed)?;
+    std::fs::rename(&partial, &out).map_err(failed)?;
+    Ok(out)
+}
+
+/// The click as WAV bytes (deterministic).
+pub(crate) fn click_wav() -> Vec<u8> {
+    let count = (CLICK_SECONDS * f64::from(CLICK_RATE)) as u32;
+    let mut seed = 0x2545_f491_u32;
+    let data = 2 * count;
+    let mut out = Vec::with_capacity(44 + data as usize);
+    for chunk in [
+        &b"RIFF"[..],
+        &(36 + data).to_le_bytes(),
+        b"WAVEfmt ",
+        &16u32.to_le_bytes(),
+        &1u16.to_le_bytes(),
+        &1u16.to_le_bytes(),
+        &CLICK_RATE.to_le_bytes(),
+        &(2 * CLICK_RATE).to_le_bytes(),
+        &2u16.to_le_bytes(),
+        &16u16.to_le_bytes(),
+        b"data",
+        &data.to_le_bytes(),
+    ] {
+        out.extend_from_slice(chunk);
+    }
+    for i in 0..count {
+        let t = f64::from(i) / f64::from(CLICK_RATE);
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        let noise = f64::from(seed) / f64::from(u32::MAX) * 2.0 - 1.0;
+        let tone = (std::f64::consts::TAU * 3200.0 * t).sin();
+        // A 0.3 ms attack, then a fast decay: a tick, not a beep.
+        let envelope = (t / 0.0003).min(1.0) * (-t / 0.006).exp();
+        let sample = (0.55 * tone + 0.45 * noise) * envelope * 0.7;
+        out.extend_from_slice(&((sample * f64::from(i16::MAX)) as i16).to_le_bytes());
+    }
+    out
+}

@@ -134,6 +134,8 @@ struct PreparedClip {
     interval: Interval,
     input: Option<Input>,
     take: bool,
+    /// The cursor effect's `clickSound` (T46.2).
+    click_sound: bool,
     visual: Option<Visual>,
     camera: Option<Camera>,
     keys: Option<Keys>,
@@ -339,14 +341,28 @@ impl Interval {
 
 impl Evaluator {
     /// Resolves anchors, source clocks, geometry, and effects. Call again after a project edit.
+    /// Zooms that follow the cursor hold their framing: pass the takes' pointers to
+    /// `prepare_with` wherever they are readable.
     pub fn prepare(project: &Project) -> Result<Self, EvalError> {
+        Self::prepare_with(project, &[])
+    }
+
+    /// `prepare` with the recorded pointers of takes (T46.2): zooms with `focus:"cursor"` follow
+    /// the cursor exactly as the renderer draws it from the same samples.
+    pub fn prepare_with(
+        project: &Project,
+        pointers: &[crate::cursor::Recorded],
+    ) -> Result<Self, EvalError> {
         match super::compound::flatten(project)? {
-            Some(flat) => Self::prepare_flat(&flat),
-            None => Self::prepare_flat(project),
+            Some(flat) => Self::prepare_flat(&flat, pointers),
+            None => Self::prepare_flat(project, pointers),
         }
     }
 
-    fn prepare_flat(project: &Project) -> Result<Self, EvalError> {
+    fn prepare_flat(
+        project: &Project,
+        pointers: &[crate::cursor::Recorded],
+    ) -> Result<Self, EvalError> {
         if project.fps == 0 || project.size.contains(&0) {
             return Err(EvalError::Canvas);
         }
@@ -417,7 +433,8 @@ impl Evaluator {
         let mut zooms = std::mem::take(&mut result.zooms);
         if !zooms.is_empty() {
             zooms.sort_by_key(|segment| segment.start);
-            result.camera = crate::camera::solve(&zooms, result.end, project.fps);
+            let cursor = result.follow_points(project, &zooms, pointers);
+            result.camera = crate::camera::solve(&zooms, result.end, project.fps, &cursor);
         }
         result.soloed = result
             .clips
@@ -626,6 +643,99 @@ impl Evaluator {
             TimelineId::Marker(_) => return None,
         };
         Some((interval, input))
+    }
+
+    /// The drawn cursor as a content point at each frame a following zoom covers (`None`
+    /// elsewhere, or where no take cursor shows): the table the renderer draws from, its loop,
+    /// mapped through the clip's keyed crop into the space `zoom.focus` uses.
+    fn follow_points(
+        &self,
+        p: &Project,
+        zooms: &[crate::camera::Segment],
+        pointers: &[crate::cursor::Recorded],
+    ) -> Vec<Option<[f64; 2]>> {
+        if pointers.is_empty() || !zooms.iter().any(|z| z.follow) {
+            return Vec::new();
+        }
+        let mut points = vec![None; usize::try_from(self.end).unwrap_or(0)];
+        // One table per take and treatment, as the renderer keeps them.
+        let mut tables: Vec<(MediaId, crate::cursor::Motion, crate::cursor::Track)> = Vec::new();
+        let size = self.size.map(f64::from);
+        for zoom in zooms.iter().filter(|z| z.follow) {
+            for frame in zoom.start.max(0)..zoom.end.min(self.end) {
+                let index = self.clips.partition_point(|c| c.interval.start <= frame);
+                let Some(clip) = index
+                    .checked_sub(1)
+                    .and_then(|i| self.clips.get(i))
+                    .filter(|c| c.take && c.interval.contains(frame))
+                else {
+                    continue;
+                };
+                let (Some(input), Some(visual)) = (&clip.input, &clip.visual) else {
+                    continue;
+                };
+                let Some(recorded) = pointers.iter().find(|r| r.media == input.id) else {
+                    continue;
+                };
+                let Ok(media) = media(p, input.id) else {
+                    continue;
+                };
+                let style = visual.picture.cursor;
+                let motion = style.map_or_else(crate::cursor::Motion::default, |c| c.motion);
+                let table = match tables
+                    .iter()
+                    .position(|(m, known, _)| *m == input.id && *known == motion)
+                {
+                    Some(i) => i,
+                    None => {
+                        let marks = media.take.as_ref().map_or(&[][..], |t| &t.pointer);
+                        let samples = crate::cursor::with_marks(&recorded.samples, marks);
+                        let track = crate::cursor::Track::build(&samples, recorded.size, motion);
+                        tables.push((input.id, motion, track));
+                        tables.len() - 1
+                    }
+                };
+                let track = &tables[table].2;
+                let fps = media.probe.fps.max(1.0);
+                let at = |frame: Frame| track.at(input.frame(frame - clip.interval.start) / fps);
+                let Some(mut point) = at(frame) else {
+                    continue;
+                };
+                if let (Some(style), Some(first)) = (style, at(clip.interval.start)) {
+                    let left = f64::from(clip.interval.end - 1 - frame);
+                    point = crate::cursor::looped(point, first, left, style.loop_frames);
+                }
+                let local = f64::from(frame - clip.interval.start);
+                let picture = Picture {
+                    look: clip.rig.look(local, size),
+                    ..visual.picture
+                };
+                let dims = [f64::from(media.probe.width), f64::from(media.probe.height)];
+                let [x, y, w, h] = picture.content(dims);
+                if w > 0.0 && h > 0.0 {
+                    points[frame as usize] = Some([
+                        ((point.x - x) / w).clamp(0.0, 1.0),
+                        ((point.y - y) / h).clamp(0.0, 1.0),
+                    ]);
+                }
+            }
+        }
+        points
+    }
+
+    /// The timeline camera at `at` (identity outside the timeline or without zooms). The
+    /// renderer reads the previous frame's view for motion blur.
+    pub fn view(&self, at: Frame) -> crate::View {
+        usize::try_from(at)
+            .ok()
+            .and_then(|i| self.camera.get(i))
+            .copied()
+            .unwrap_or(crate::View::IDENTITY)
+    }
+
+    /// Whether a take clip mixes a click into the audio at each press (`clickSound`).
+    pub fn click_sound(&self, clip: ClipId) -> bool {
+        self.clips.iter().any(|c| c.id == clip && c.click_sound)
     }
 
     /// The camera mode in effect at `at` (the zoom segment's, or `Auto` outside segments).
@@ -1411,14 +1521,21 @@ impl Evaluator {
                 {
                     return Err(EvalError::Range);
                 }
+                if !(0.0..=1.0).contains(&zoom.motion_blur) {
+                    return Err(EvalError::Range);
+                }
                 let focus = zoom.focus.map(|p| self.picture_point(p, interval.start));
                 self.zooms.push(crate::camera::Segment {
                     start: interval.start,
                     end: interval.end,
                     amount: zoom.amount,
-                    center: focus.map(|p| crate::View::center_on(p, zoom.amount)),
+                    center: focus
+                        .filter(|_| !zoom.follow)
+                        .map(|p| crate::View::center_on(p, zoom.amount)),
                     mode: zoom.mode,
                     spring: zoom.spring,
+                    follow: zoom.follow,
+                    blur: zoom.motion_blur,
                 });
             }
             ItemKind::Sound(sound) => {
@@ -1521,6 +1638,7 @@ fn prepare_clip(
         interval,
         input: None,
         take: false,
+        click_sound: false,
         visual: None,
         camera: None,
         keys: None,
@@ -1574,6 +1692,7 @@ fn prepare_clip(
         if clip.take && enabled.pointer == Some(true) {
             visual.picture.cursor = style::cursor(&scopes);
         }
+        clip.click_sound = clip.take && style::click_sound(&scopes);
         clip.visual = Some(visual);
     }
     if clip.take {

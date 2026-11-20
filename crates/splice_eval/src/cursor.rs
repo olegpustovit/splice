@@ -52,7 +52,24 @@ pub fn with_marks(samples: &[Sample], marks: &[splice_model::PointerMark]) -> Ve
     merged
 }
 
+/// A take's recorded pointer for the evaluator (T46.2): the camera follows the drawn cursor,
+/// so `Evaluator::prepare_with` builds the same table the renderer draws from these samples.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Recorded {
+    /// The take.
+    pub media: splice_model::MediaId,
+    /// Captured source width and height in screen points.
+    pub size: [f64; 2],
+    /// Samples on the take's clock, in time order (pointer marks are merged in at prepare).
+    pub samples: Vec<Sample>,
+}
+
 /// How a take's cursor moves and shows (the `cursor` effect).
+///
+/// `smoothing` blends the shake-filtered recorded path (0) with the mellow spring (1, which leads
+/// by its own lag so it never trails the hand). Against
+/// Recorder's presets on the same path, lag aside (`smoothing_matches_recorder_presets`): `none` is 0,
+/// `rapid` ≈ 0.1, `medium` ≈ 0.3 and `smooth` ≈ 0.75; 1 is softer than `smooth`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Motion {
     /// 0 draws the recorded path, 1 the full spring.
@@ -67,6 +84,8 @@ pub struct Motion {
     pub arc: f64,
     /// Seconds a synthesized path arrives before the press.
     pub arrive_before: f64,
+    /// Draw the system arrow whatever shape was recorded (the path is unchanged).
+    pub always_arrow: bool,
 }
 
 impl Default for Motion {
@@ -78,7 +97,26 @@ impl Default for Motion {
             synthesize: true,
             arc: 0.15,
             arrive_before: 0.15,
+            always_arrow: false,
         }
+    }
+}
+
+/// The cursor of a looping clip (the `loop` param, T46.2): over the clip's last `frames` it
+/// eases (minimum jerk) from where it is to `first`, where it is at the clip's first frame, so
+/// the last frame matches the first. `left` is how many frames remain after this one.
+pub fn looped(point: Point, first: Point, left: f64, frames: f64) -> Point {
+    if frames < 1.0 || left >= frames {
+        return point;
+    }
+    // 0 at `frames` left, 1 on the last frame.
+    let k = (1.0 - left.max(0.0) / (frames - 1.0).max(1.0)).clamp(0.0, 1.0);
+    let k = k * k * k * (10.0 + k * (6.0 * k - 15.0));
+    Point {
+        x: point.x * (1.0 - k) + first.x * k,
+        y: point.y * (1.0 - k) + first.y * k,
+        opacity: point.opacity * (1.0 - k) + first.opacity * k,
+        ..point
     }
 }
 
@@ -311,6 +349,74 @@ impl Track {
     pub fn points(&self) -> &[Point] {
         &self.points
     }
+}
+
+/// The arrow drawn for the cursor effect's `alwaysArrow` (T46.2), in screen points: the
+/// macOS arrow's outline, tip at the origin.
+const ARROW: [[f64; 2]; 7] = [
+    [0.0, 0.0],
+    [0.0, 16.0],
+    [3.8, 12.3],
+    [6.4, 18.2],
+    [8.9, 17.1],
+    [6.4, 11.4],
+    [11.4, 11.4],
+];
+/// White outline around the black arrow, in points.
+const ARROW_OUTLINE: f64 = 1.25;
+
+/// The always-arrow cursor image: straight-alpha RGBA at `scale` pixels per point (a black
+/// arrow with a white outline, 4×4 supersampled), its size, and its hotspot (the tip) in
+/// pixels. Generated, so headless renders never depend on the system cursor.
+pub fn arrow(scale: u32) -> (Vec<u8>, [u32; 2], [f64; 2]) {
+    let k = f64::from(scale.max(1));
+    let margin = ARROW_OUTLINE + 0.5;
+    let size = [
+        ((11.4 + 2.0 * margin) * k).ceil() as u32,
+        ((18.2 + 2.0 * margin) * k).ceil() as u32,
+    ];
+    let inside = |[x, y]: [f64; 2]| {
+        let mut odd = false;
+        for i in 0..ARROW.len() {
+            let ([ax, ay], [bx, by]) = (ARROW[i], ARROW[(i + 1) % ARROW.len()]);
+            if (ay > y) != (by > y) && x < ax + (y - ay) / (by - ay) * (bx - ax) {
+                odd = !odd;
+            }
+        }
+        odd
+    };
+    let near = |[x, y]: [f64; 2]| {
+        (0..ARROW.len()).any(|i| {
+            let ([ax, ay], [bx, by]) = (ARROW[i], ARROW[(i + 1) % ARROW.len()]);
+            let (dx, dy) = (bx - ax, by - ay);
+            let t = (((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+            (x - ax - t * dx).hypot(y - ay - t * dy) <= ARROW_OUTLINE
+        })
+    };
+    let mut rgba = Vec::with_capacity(size[0] as usize * size[1] as usize * 4);
+    for py in 0..size[1] {
+        for px in 0..size[0] {
+            let (mut black, mut white) = (0.0, 0.0);
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let p = [
+                        (f64::from(px) + (f64::from(sx) + 0.5) / 4.0) / k - margin,
+                        (f64::from(py) + (f64::from(sy) + 0.5) / 4.0) / k - margin,
+                    ];
+                    if inside(p) {
+                        black += 1.0 / 16.0;
+                    } else if near(p) {
+                        white += 1.0 / 16.0;
+                    }
+                }
+            }
+            let alpha = black + white;
+            let value = if alpha > 0.0 { white / alpha } else { 0.0 };
+            let byte = |v: f64| (v * 255.0).round() as u8;
+            rgba.extend_from_slice(&[byte(value), byte(value), byte(value), byte(alpha)]);
+        }
+    }
+    (rgba, size, [margin * k, margin * k])
 }
 
 /// Whether a recorded position is on the captured source.
@@ -651,6 +757,112 @@ mod tests {
         eprintln!("30 min, 1,000 clicks: built in {elapsed:?}");
         assert_eq!(track.clicks().len(), 1000);
         assert!(elapsed.as_millis() < 1500, "{elapsed:?}");
+    }
+
+    /// Documents `smoothing` against Recorder's cursor presets (rapid, medium, smooth: critically
+    /// damped springs with 0.12, 0.22 and 0.38 s responses, no lead): on the same hand-like
+    /// path, the smoothing whose drawn cursor is nearest (RMS) to each preset.
+    #[test]
+    fn smoothing_matches_recorder_presets() {
+        // Moves between targets with a little tremor, 120 Hz like the recorder.
+        let targets = [(0.2, 0.3), (0.7, 0.4), (0.6, 0.8), (0.25, 0.6), (0.5, 0.5)];
+        let mut samples = Vec::new();
+        for i in 0..(6 * 120) {
+            let t = f64::from(i) / 120.0;
+            let leg = ((t / 1.2) as usize).min(targets.len() - 2);
+            let k = ((t - leg as f64 * 1.2) / 0.4).clamp(0.0, 1.0);
+            let k = k * k * (3.0 - 2.0 * k);
+            let (a, b) = (targets[leg], targets[leg + 1]);
+            let tremor = 0.002 * (t * 37.0).sin();
+            samples.push(sample(
+                t,
+                a.0 + (b.0 - a.0) * k + tremor,
+                a.1 + (b.1 - a.1) * k,
+                false,
+            ));
+        }
+        let raw = |t: f64| {
+            let i = samples.partition_point(|s| s.t <= t).max(1) - 1;
+            [samples[i].x, samples[i].y]
+        };
+        // Recorder's CursorPath stage 2: semi-implicit Euler at 240 Hz toward the raw path.
+        let recorder = |response: f64| {
+            let omega = std::f64::consts::TAU / response;
+            let (mut p, mut v) = (raw(0.0), [0.0, 0.0]);
+            let mut out = Vec::new();
+            for step in 0..(6 * 240) {
+                let t = f64::from(step) / 240.0;
+                let target = raw(t);
+                for axis in 0..2 {
+                    let a = omega * omega * (target[axis] - p[axis]) - 2.0 * omega * v[axis];
+                    v[axis] += a / 240.0;
+                    p[axis] += v[axis] / 240.0;
+                }
+                if step % 4 == 0 {
+                    out.push((t, p));
+                }
+            }
+            out
+        };
+        let best = |response: f64| {
+            let reference = recorder(response);
+            (0..=20)
+                .map(|n| {
+                    let smoothing = f64::from(n) / 20.0;
+                    let track = Track::build(
+                        &samples,
+                        SIZE,
+                        Motion {
+                            smoothing,
+                            hide_idle: false,
+                            click_pulse: false,
+                            synthesize: false,
+                            ..Motion::default()
+                        },
+                    );
+                    // Splice's spring leads by its own lag and Recorder's trails: compare
+                    // shapes, aligned at the shift that fits best (Recorder's mean delay is
+                    // 2/ω, under 0.13 s for every preset).
+                    let error = (0..=12)
+                        .map(|shift| {
+                            let shift = f64::from(shift) / 60.0;
+                            reference
+                                .iter()
+                                .filter(|(t, _)| *t >= shift)
+                                .map(|&(t, [x, y])| {
+                                    let p = track.at(t - shift).unwrap();
+                                    (p.x - x).powi(2) + (p.y - y).powi(2)
+                                })
+                                .sum::<f64>()
+                        })
+                        .fold(f64::INFINITY, f64::min);
+                    (error, smoothing)
+                })
+                .fold((f64::INFINITY, 0.0), |a, b| if b.0 < a.0 { b } else { a })
+                .1
+        };
+        let mapped = [best(0.12), best(0.22), best(0.38)];
+        assert_eq!(mapped, [0.1, 0.3, 0.75], "rapid, medium, smooth");
+    }
+
+    /// The always-arrow image: black inside, a white rim, transparent around, tip at the hotspot.
+    #[test]
+    fn the_generated_arrow_is_outlined_and_tipped_at_its_hotspot() {
+        let (rgba, [w, h], [hx, hy]) = arrow(2);
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+        let at = |x: f64, y: f64| {
+            let i = ((y.floor() as u32 * w + x.floor() as u32) * 4) as usize;
+            [rgba[i], rgba[i + 3]]
+        };
+        // Inside the body (3 pt right, 8 pt down from the tip): opaque black.
+        assert_eq!(at(hx + 6.0, hy + 16.0), [0, 255]);
+        // Just left of the left edge: the white outline.
+        let rim = at(hx - 1.5, hy + 16.0);
+        assert!(rim[0] > 200 && rim[1] > 200, "{rim:?}");
+        // Far right of the stem: transparent.
+        assert_eq!(at(f64::from(w) - 1.0, hy + 2.0)[1], 0);
+        // Deterministic.
+        assert_eq!(arrow(2).0, rgba);
     }
 
     #[test]

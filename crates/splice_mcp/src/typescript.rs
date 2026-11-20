@@ -306,12 +306,15 @@ fn param_type(kind: &str, doc: &str) -> String {
         return "{ amount: number; attack?: number; release?: number } | null".into();
     }
     if kind.starts_with("{x,y}") {
-        let point = "{ x: number; y: number }";
-        return if kind.contains("null") {
-            format!("{point} | null")
-        } else {
-            point.into()
-        };
+        let mut point = "{ x: number; y: number }".to_string();
+        // A zoom can follow the cursor instead of a point (T46.2).
+        if kind.contains("\"cursor\"") {
+            point.push_str(" | \"cursor\"");
+        }
+        if kind.contains("null") {
+            point.push_str(" | null");
+        }
+        return point;
     }
     if kind.starts_with("{x,y,w,h}") {
         return "Rect | null".into();

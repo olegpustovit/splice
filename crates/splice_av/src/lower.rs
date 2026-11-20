@@ -146,6 +146,7 @@ pub(super) fn build(
     let mut backdrops: Vec<MediaId> = Vec::new();
     let mut tracks = Vec::new();
     let mut audio = Vec::new();
+    let clicks = state.click_track(project, package, evaluator)?;
     for pair in cuts.windows(2) {
         let [from, to] = [pair[0], pair[1]];
         let range = [from, to];
@@ -330,6 +331,12 @@ pub(super) fn build(
         for (&a, &b) in first.audio.iter().zip(&last.audio) {
             state.audio([a, b], range, &mut audio, project, package, evaluator)?;
         }
+        if let Some(track) = clicks {
+            audio.push(AudioRamp {
+                track,
+                gain: [CLICK_GAIN; 2],
+            });
+        }
         tracks.clear();
         tracks.extend(video.iter().map(|slot| slot.track));
         state.builder.range(range, &tracks, &audio)?;
@@ -343,7 +350,92 @@ pub(super) fn build(
     Ok((state.builder.finish()?, state.text, state.plan))
 }
 
+/// Gain of the generated click under the program audio.
+const CLICK_GAIN: f32 = 0.8;
+
 impl Lowering {
+    /// One audio track with the generated click at every recorded press of take clips whose
+    /// cursor effect sets `clickSound` (T46.2), on the timeline where each press plays (through
+    /// trims and speed). `None` when nothing clicks.
+    fn click_track(
+        &mut self,
+        project: &Project,
+        package: &Path,
+        evaluator: &Evaluator,
+    ) -> Result<Option<i32>, Error> {
+        let mut frames: Vec<Frame> = Vec::new();
+        for &slot in project.clips.order() {
+            let (Some(id), Some(data)) = (project.clips.id(slot), project.clips.data(slot)) else {
+                continue;
+            };
+            let (true, Some(media), Some(span)) = (
+                evaluator.click_sound(id),
+                data.media,
+                evaluator.source_span(TimelineId::Clip(id)),
+            ) else {
+                continue;
+            };
+            let fps = Self::media(project, media)?.probe.fps;
+            let marks = Self::media(project, media)?
+                .take
+                .as_ref()
+                .map_or(&[][..], |take| &take.pointer);
+            let Some(index) = self.take(project, package, media)? else {
+                continue;
+            };
+            let samples = self.takes[index]
+                .1
+                .as_ref()
+                .map_or(&[][..], |e| e.samples.as_slice());
+            let presses = samples
+                .iter()
+                .filter(|s| s.click)
+                .map(|s| s.t)
+                .chain(marks.iter().filter(|m| m.click).map(|m| m.t));
+            for t in presses {
+                let offset = t * fps - span.source;
+                let at = match evaluator.speed_map(id) {
+                    Some(map) => map.partition_point(|&m| m <= offset) as Frame - 1,
+                    None => (offset / span.step).round() as Frame,
+                };
+                let frame = span.start + at;
+                if offset >= 0.0 && (span.start..span.end).contains(&frame) {
+                    frames.push(frame);
+                }
+            }
+        }
+        if frames.is_empty() {
+            return Ok(None);
+        }
+        frames.sort_unstable();
+        frames.dedup();
+        let path = crate::audio::click(package)?;
+        let fps = f64::from(project.fps);
+        let length = (crate::audio::CLICK_SECONDS * fps).ceil().max(1.0) as Frame;
+        let mut track = None;
+        for (i, &from) in frames.iter().enumerate() {
+            // A press soon after another cuts the earlier click short (one track, no overlap).
+            let next = frames.get(i + 1).copied().unwrap_or(self.end);
+            let to = (from + length).min(next).min(self.end);
+            if to <= from {
+                continue;
+            }
+            let timing = Timing {
+                timeline: [from, to],
+                source_start: 0.0,
+                source_limit: crate::audio::CLICK_SECONDS,
+                speed: 1.0,
+                source_frame_duration: 1.0 / fps,
+            };
+            let source = Source::Audio(path.clone(), 0);
+            match track {
+                None => track = Some(self.builder.source(source, &timing)?),
+                Some(track) => self.builder.append(track, source, &timing)?,
+            }
+        }
+        Ok(track)
+    }
+
     /// Window corners and shadow, the cursor and click rings, and the click-zoom curve.
     /// The cursor table of a take picture whose cursor is drawn: one smoothed table per take
     /// and cursor treatment (T39), built on first use.
@@ -371,6 +463,11 @@ impl Lowering {
         };
         match &self.takes[index].1 {
             Some(events) if !events.samples.is_empty() => {
+                let images = if style.motion.always_arrow {
+                    vec![arrow(package)?]
+                } else {
+                    events.images.clone()
+                };
                 self.plan.cursors.push(CursorTable {
                     media: picture.media,
                     motion: style.motion,
@@ -382,7 +479,7 @@ impl Lowering {
                         events.size,
                         style.motion,
                     ),
-                    images: events.images.clone(),
+                    images,
                     points: events.size[0],
                     fps,
                 });
@@ -955,6 +1052,70 @@ impl Lowering {
         }
         self.insert(key, Source::Audio(path.to_path_buf(), index), timings)
     }
+}
+
+/// The recorded pointers of the project's takes, for zooms that follow the cursor (T46.2):
+/// empty when no zoom follows. A take whose event log is missing or offline is left out (its
+/// following zooms hold their framing).
+pub(super) fn pointers(project: &Project, package: &Path) -> Result<Vec<cursor::Recorded>, Error> {
+    let follows = project.items.order().iter().any(|&slot| {
+        matches!(
+            project.items.data(slot).map(|d| &d.kind),
+            Some(splice_model::ItemKind::Zoom(zoom)) if zoom.follow
+        )
+    });
+    let mut out = Vec::new();
+    for media in project
+        .media
+        .iter()
+        .filter(|m| follows && m.kind == MediaKind::Take)
+    {
+        // ponytail: lowering parses the log again for the drawn cursor; share the parse if
+        // composition builds of long takes with following zooms show it.
+        let Some(path) = media
+            .take
+            .as_ref()
+            .and_then(|take| take.events.as_deref())
+            .and_then(|file| media_path(package, media, Some(file)).ok())
+        else {
+            continue;
+        };
+        // With the cursor images, so image changes land in the samples exactly as they do for
+        // the drawn table.
+        let cursors = media
+            .take
+            .as_ref()
+            .and_then(|take| take.cursors.as_deref())
+            .and_then(|dir| media_path(package, media, Some(dir)).ok());
+        let events = takes::load(&path, cursors.as_deref())?;
+        out.push(cursor::Recorded {
+            media: media.id,
+            size: events.size,
+            samples: events.samples,
+        });
+    }
+    Ok(out)
+}
+
+/// The always-arrow image (the cursor effect's `alwaysArrow`), generated by splice_eval and
+/// written once into the package cache so the GPU loads it like a recorded cursor image.
+fn arrow(package: &Path) -> Result<CursorImage, Error> {
+    const SCALE: u32 = 2;
+    let dir = package.join("cache").join("cursors");
+    let path = dir.join("arrow-v1.png");
+    let (rgba, size, hot) = cursor::arrow(SCALE);
+    if !path.exists() {
+        let failed = |e: std::io::Error| Error::Input(format!("{}: {e}", dir.display()));
+        std::fs::create_dir_all(&dir).map_err(failed)?;
+        let partial = dir.join("arrow-v1.partial.png");
+        std::fs::write(&partial, apple_sys::image::png(&rgba, size, 0)?).map_err(failed)?;
+        std::fs::rename(&partial, &path).map_err(failed)?;
+    }
+    Ok(CursorImage {
+        path,
+        hot,
+        scale: f64::from(SCALE),
+    })
 }
 
 fn media_path(package: &Path, media: &Media, component: Option<&str>) -> Result<PathBuf, Error> {

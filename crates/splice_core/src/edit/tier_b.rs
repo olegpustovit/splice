@@ -158,9 +158,11 @@ impl Editor {
                 zoom,
                 amount,
                 focus,
+                follow,
                 mode,
                 spring,
-            } => self.set_zoom(&zoom, amount, focus, mode, spring),
+                motion_blur,
+            } => self.set_zoom(&zoom, amount, (focus, follow), mode, spring, motion_blur),
             Op::ZoomRemove { zoom } => {
                 let is_zoom = match self.timeline(&zoom)? {
                     TimelineId::Item(id) => matches!(
@@ -666,9 +668,10 @@ impl Editor {
         &mut self,
         zoom: &Target,
         amount: Option<f64>,
-        focus: Option<Option<[f64; 2]>>,
+        (focus, follow): (Option<Option<[f64; 2]>>, Option<bool>),
         mode: Option<CameraMode>,
         spring: Option<Spring>,
+        motion_blur: Option<f64>,
     ) -> Result<Outcome, CommandError> {
         let TimelineId::Item(id) = self.timeline(zoom)? else {
             return Err(wrong_kind(
@@ -688,11 +691,17 @@ impl Editor {
         if let Some(focus) = focus {
             zoom.focus = focus;
         }
+        if let Some(follow) = follow {
+            zoom.follow = follow;
+        }
         if let Some(mode) = mode {
             zoom.mode = mode;
         }
         if let Some(spring) = spring {
             zoom.spring = spring;
+        }
+        if let Some(blur) = motion_blur {
+            zoom.motion_blur = blur;
         }
         let amount = zoom.amount;
         self.say(format_args!("Zoom {id} at {amount}×"));

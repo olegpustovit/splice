@@ -90,7 +90,11 @@ Each recipe is a few batches; `commands.describe {query}` gives every command's 
 The capability sweep runs these exact ops, so they stay correct.
 
 - **Tutorial (screen take):** `cursor.set {size:2}`; `intent.autoZoom {item}` (clicks and typing
-  come from the take); `media.analyze {kinds:["text"]}` to find on-screen labels; `mask.add
+  come from the take; `lead`/`tail` in frames, `from`/`to` for a window, `focus:"cursor"` to
+  follow the cursor, `motionBlur:0.5` for blurred camera moves); a long demo with one zoom that
+  tracks the pointer is `zoom.add {at, length, amount:2, focus:"cursor"}`; `effect.add
+  {target:clip, type:"cursor", params:{clickSound:true, alwaysArrow:true, loop:30}}` for audible
+  clicks, a plain arrow and a seamless loop; `media.analyze {kinds:["text"]}` to find on-screen labels; `mask.add
   {item, mode:"blur", x, y, w, h}` over anything private; `template.add {name:"lower-third"}`;
   `marker.add` per chapter; `captions.generate`; export `variants:[{aspect:"16:9"},{aspect:"9:16"}]`.
 - **Podcast:** `audio.sync {item, to}` for a second mic; `transcript.get` lists `fillers` and

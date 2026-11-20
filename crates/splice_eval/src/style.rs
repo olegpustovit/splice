@@ -51,6 +51,10 @@ pub struct Cursor {
     pub click_rings: bool,
     /// Smoothing, idle hiding, click pulse and synthesized paths (T39).
     pub motion: crate::cursor::Motion,
+    /// Frames over which the cursor eases back to where the clip starts (0 off, T46.2).
+    pub loop_frames: f64,
+    /// Motion blur 0–1 along the cursor's own per-frame movement.
+    pub motion_blur: f64,
 }
 
 /// Camera bubble corner.
@@ -203,6 +207,8 @@ pub(super) fn cursor(scopes: &[&[Effect]]) -> Option<Cursor> {
                 synthesize: false,
                 ..crate::cursor::Motion::default()
             },
+            loop_frames: 0.0,
+            motion_blur: 0.0,
         });
     }
     if style.boolean("hidden", false) {
@@ -219,8 +225,18 @@ pub(super) fn cursor(scopes: &[&[Effect]]) -> Option<Cursor> {
             synthesize: style.text("path") != Some("recorded"),
             arc: style.number("arc", base.arc),
             arrive_before: style.number("arriveBefore", base.arrive_before),
+            always_arrow: style.boolean("alwaysArrow", false),
         },
+        loop_frames: style.number("loop", 0.0).clamp(0.0, 600.0).round(),
+        motion_blur: style.number("motionBlur", 0.0).clamp(0.0, 1.0),
     })
+}
+
+/// Whether a take clip mixes a click into the audio at each recorded press (the cursor effect's
+/// `clickSound`, T46.2). Independent of `hidden`: a hidden cursor still clicks.
+pub(super) fn click_sound(scopes: &[&[Effect]]) -> bool {
+    let style = Resolution::new(scopes, "cursor");
+    style.enabled.unwrap_or(false) && style.boolean("clickSound", false)
 }
 
 pub(super) fn camera(scopes: &[&[Effect]], shifts: &[Frame]) -> CameraStyle {
