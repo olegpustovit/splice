@@ -1406,15 +1406,14 @@ mod looks {
             assert_eq!(size, [96, 64], "{name}");
             report.push((name, worst(&decoded), bound, colr(&file)));
         }
-        // GIF and the poster are encoded from read_frame and decoded with ImageIO.
-        let gif = dir.0.join("still.gif");
-        apple_sys::image::gif(&gif, &rendered, [96, 64], 0.1).unwrap();
-        report.push((
-            "gif",
-            worst(&apple_sys::image::decode_rgba(&gif).unwrap().0),
-            1,
-            None,
-        ));
+        // GIFs draw through Composition::frames (the export's sequential decode) into Splice's
+        // GIF writer, which stores the values verbatim and ImageIO reads back exactly
+        // (splice_mcp::gif::tests::imageio_decodes_the_written_colors_exactly).
+        let mut frames = composition.frames([0, 1]).unwrap();
+        let mut drawn = vec![0; rendered.len()];
+        assert_eq!(frames.next(Some(&mut drawn)).unwrap(), Some(0));
+        report.push(("gif", worst(&drawn), 1, None));
+        // The poster is encoded from read_frame and decoded with ImageIO.
         let poster = dir.0.join("poster.png");
         fs::write(&poster, encode_png(&rendered, [96, 64], 0).unwrap()).unwrap();
         report.push((

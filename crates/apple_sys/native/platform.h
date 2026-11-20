@@ -223,7 +223,8 @@ int32_t splice_av_player_sources(void *player, void *device, uint32_t slot, Spli
                                  size_t capacity, size_t *count, int32_t *frame, char **error);
 
 // Export: a reader decodes through the broker; the caller draws each frame and a writer encodes it.
-void *splice_av_reader(void *raw, int32_t from, int32_t to, char **error);
+// `audio` adds the mix as a second output (a writer must drain it).
+void *splice_av_reader(void *raw, int32_t from, int32_t to, bool audio, char **error);
 // Next frame in order: 1 with *frame and sources (valid until the next call), 0 at the end, -1 on error.
 int32_t splice_av_reader_next(void *reader, void *device, SpliceAVFrameSource *sources, size_t capacity,
                               size_t *count, int32_t *frame, char **error);
@@ -241,7 +242,7 @@ typedef struct SpliceExportSettings {
     uint32_t codec;
     int32_t from;
     int32_t to;
-    uint32_t pad;
+    uint32_t fps;  // output frames per second; 0 for the composition's rate
     double bitrate;
     const char *chapters;
 } SpliceExportSettings;
@@ -333,9 +334,6 @@ char *splice_vision_track(const char *path, double from, double to, double x, do
 bool splice_vision_matte(const char *path, const char *output, char **error);
 // Translation (translate.swift): texts joined by U+001E.
 bool splice_translate(const char *joined, const char *source, const char *target, char **out, char **error);
-
-bool splice_image_gif(const char *path, const uint8_t *frames, size_t count, uint32_t width, uint32_t height,
-                      double delay, char **error);
 
 bool splice_free_space(const char *path, uint64_t *bytes);
 

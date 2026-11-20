@@ -411,9 +411,15 @@
         "type": "enum",
         "def": "bottom-left",
         "options": [
+          "top-left",
+          "top-center",
+          "top-right",
+          "middle-left",
+          "center",
+          "middle-right",
           "bottom-left",
           "bottom-center",
-          "top-left"
+          "bottom-right"
         ],
         "label": "Position"
       },
@@ -422,9 +428,30 @@
         "def": "all",
         "options": [
           "all",
-          "shortcuts"
+          "shortcuts",
+          "typing",
+          "shortcuts+typing",
+          "navigation",
+          "shortcuts+navigation",
+          "typing+navigation",
+          "shortcuts+typing+navigation",
+          "modifiers",
+          "shortcuts+modifiers",
+          "typing+modifiers",
+          "shortcuts+typing+modifiers",
+          "navigation+modifiers",
+          "shortcuts+navigation+modifiers",
+          "typing+navigation+modifiers"
         ],
         "label": "Show"
+      },
+      "hold": {
+        "type": "number",
+        "def": 1.2,
+        "min": 0.3,
+        "max": 5,
+        "step": 0.1,
+        "label": "Display duration"
       }
     },
     "applies": "take"

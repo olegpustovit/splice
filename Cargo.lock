@@ -248,6 +248,7 @@ name = "splice_mcp"
 version = "0.4.0"
 dependencies = [
  "apple_sys",
+ "mem_sys",
  "quickjs_sys",
  "splice_av",
  "splice_capture",

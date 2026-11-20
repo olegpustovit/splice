@@ -321,6 +321,23 @@ def helpers(project_path, work, seed_hash):
                     out.append(w["text"].lower())
         return out
 
+    def gif_seconds(name):
+        """Playing time of an exported GIF: its frame delays summed (hundredths of a second)."""
+        data = open(os.path.join(project_path, "exports", name), "rb").read()
+        at, total = 13 + (3 << ((data[10] & 7) + 1) if data[10] & 0x80 else 0), 0
+        while at < len(data) and data[at] != 0x3B:
+            if data[at] == 0x21:
+                if data[at + 1] == 0xF9:
+                    total += data[at + 4] | data[at + 5] << 8
+                at += 2
+            else:  # an image: descriptor, optional local table, LZW code size
+                packed = data[at + 9]
+                at += 10 + (3 << ((packed & 7) + 1) if packed & 0x80 else 0) + 1
+            while data[at]:
+                at += data[at] + 1
+            at += 1
+        return total / 100
+
     def agent_said(pattern):
         """Whether the agent's final answer matches a regex (case-insensitive)."""
         import re
@@ -341,6 +358,7 @@ def helpers(project_path, work, seed_hash):
         "media_kind": lambda mid: media.get(mid, {}).get("kind"),
         "markers": project.get("markers", []), "param_at": param_at, "look": look,
         "cursor_hidden": cursor_hidden, "camera_hidden": camera_hidden, "agent_said": agent_said,
+        "gif_seconds": gif_seconds,
         "takes": [m["id"] for m in project.get("media", []) if m.get("kind") == "take"],
         "seconds": lambda frames: frames / project["fps"],
         "take_clips": lambda: [c for c in clips if media.get(c.get("media"), {}).get("kind") == "take"],

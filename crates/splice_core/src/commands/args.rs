@@ -17,6 +17,17 @@ pub(super) fn caption_presets() -> &'static [Json] {
         .expect("checked caption schema")
 }
 
+/// The `keystrokes` effect's `options` for `param` (`position`, `show`).
+pub(super) fn keystroke_options(param: &str) -> &'static [Json] {
+    super::effect_schemas()
+        .field("keystrokes")
+        .and_then(|c| c.field("params"))
+        .and_then(|p| p.field(param))
+        .and_then(|p| p.field("options"))
+        .and_then(Json::as_array)
+        .expect("checked keystrokes schema")
+}
+
 pub(super) trait Args {
     fn required(&self, key: &str) -> Result<&Json, Error>;
     fn string(&self, key: &str) -> Result<&str, Error>;

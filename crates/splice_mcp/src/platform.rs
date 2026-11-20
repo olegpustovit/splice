@@ -219,7 +219,7 @@ fn export_in_session(
         for output in outputs {
             let store = projects.lookup_id(owner)?;
             match output.kind {
-                super::presets::Kind::Poster | super::presets::Kind::Gif => {
+                super::presets::Kind::Poster => {
                     let receipt = super::export::still(store, &output, path, overwrite)?;
                     receipts.push(projects.finish_export(owner, receipt));
                 }
@@ -359,7 +359,7 @@ fn job_once(projects: &mut Projects, name: &str, args: &Json) -> Result<Json, St
         }
         return job.status(ahead >= super::project::CONCURRENT_EXPORTS);
     }
-    // Instant exports (FCPXML, poster, GIF) are done jobs.
+    // Instant exports (FCPXML, poster) are done jobs.
     if let Some((_, owner, status)) = projects.finished.iter().find(|(job, ..)| *job == id) {
         if project.is_some_and(|project| project != owner) {
             return Err(missing_job(id));

@@ -122,8 +122,8 @@ fix, ops?}`, where `ops` is a batch that fixes it when one exists. Codes: `OUTSI
 `tiktok-2026`: top 8.4 %, bottom 18.75 %, left 8.4 %, right 11.2 % of the canvas),
 `TEXT_OVER_WINDOW` (a title covers over 30 % of itself with the recorded window), `ZOOM_OVERFLOW`
 (a frame-mode zoom past `fitSafeScale`), `LONG_STATIC` (over 8 s without a visual change on a
-vertical short), `KEYS_SHOW_TYPING` (a take's keystroke chips show every key, so typed text is in
-the export; `ops` keeps only shortcuts), `ZOOM_FOLLOWS_NOTHING` (a `focus:"cursor"` zoom with no screen take that has an
+vertical short), `KEYS_SHOW_TYPING` (a take's keystroke chips show the `typing` category, so typed
+text is in the export; `ops` keeps the other categories, or shortcuts when typing was all), `ZOOM_FOLLOWS_NOTHING` (a `focus:"cursor"` zoom with no screen take that has an
 event log under it: the camera holds its framing there). `pacing` is
 `{cutsPerMinute, longestStatic, safeZone}`. `record.stop` returns the same plus `TAKE_ASPECT` and
 `MIC_SILENT` (see Recording jobs).
@@ -293,12 +293,21 @@ instead of bumping to new lanes. `cut.range` refuses a negative `from`.
 the shape and the take), keeping the canvas's shorter edge. `fps` (24, 25, 30, 50 or 60) changes
 only on a project without clips, items or markers; otherwise it is `BAD_ARGS` with the rule,
 because every time is an integer frame at `fps` and a new rate would retime the edit. Set it
-right after `project.info {create:true}`. Exports always use the project's rate.
+right after `project.info {create:true}`. An export at another rate is `export.start {fps}`.
 
 Keystroke chips (A1, A11) can show typed text, so a new take starts with them off (the
 `keys` component is `false`; a 0.3 or earlier 0.4 project keeps what it has, nothing migrates).
-`keys.set {clip, show:"all"|"shortcuts"|"none", size?}` turns them on for every key, on for keys
-pressed with ⌘, ⌃ or ⌥ only (chips read `⌘S`), or off; `keys.hide` still hides single events.
+`keys.set {clip, show?, position?, hold?, size?}` (Recorder's overlay): `show` picks categories,
+`shortcuts` (keys pressed with ⌘, ⌃ or ⌥: chips read `⌘S`), `typing` (printable keys, Space and
+⇧+letter included: the typed text), `navigation` (arrows, ⌫ ⌦ ⏎ ⇥ ⎋, Home/End/Page Up/Down,
+F-keys, by key code: chips read `←`, `⇧⇥`) and `modifiers` (a modifier pressed and released
+alone: `⌘`), several joined by `+` (`"shortcuts+navigation"`, any order) or listed
+(`["shortcuts","navigation"]`); `all` is every category, `none` turns the component off. The
+effect stores one canonical spelling per set (`shortcuts+typing+navigation+modifiers` is `all`).
+`position` places the chips on a 3×3 grid (`top-left`, `top-center`, `top-right`, `middle-left`,
+`center`, `middle-right`, `bottom-left` (default), `bottom-center`, `bottom-right`; a left or
+right chip hugs its edge), and `hold` keeps each chip 0.3–5 s after its last key (default 1.2);
+keys in quick succession join one chip (`⌘C ⌘V`). `keys.hide` still hides single events.
 `view.frames` and `view.check` draw the same chips at the same place and time with every typed
 character as a dot (D19: the text stays human-only), so an agent sees where they land.
 
@@ -324,8 +333,10 @@ Agents cannot restore a revision that would change the project's access level.
 
 `takes.events {clip, from?, to?, kinds?, stride?}` reports timeline frame numbers and source
 frame numbers. Key events expose their indexes, visibility, categories (`shortcut` with ⌘, ⌃ or
-⌥, else `typing`) and `chip` (whether the export draws the key). Captured characters and raw key
-codes stay in the take. `caret` lists the text caret samples (`{frame, sourceFrame, x, y, w, h}`,
+⌥, `navigation`, else `typing`; a modifier pressed alone is a `modifier` entry with `index:null`,
+not hideable by index) and `chip` (whether the export draws the key). Captured characters and
+raw key codes stay in the take; a navigation or modifier entry's `text` is its glyph (`←`, `⌘`),
+which is not typed text. `caret` lists the text caret samples (`{frame, sourceFrame, x, y, w, h}`,
 from Accessibility when the recorder had that permission; empty otherwise). `kinds` picks lists
 from `cursor`, `clicks`, `keys`, `caret` (default all). Cursor samples are thinned to one per
 `stride` timeline frames (default half a second, `fps/2`; `stride:1` returns every sample), so a
@@ -499,13 +510,23 @@ By default, publishing a new filename uses a hard link on the destination volume
 
 `preset` is one of `social`, `social-hevc`, `social-h264`, `youtube-1080`, `youtube-4k`, `shorts`,
 `reels`, `tiktok`, `linkedin`, `prores-422`, `prores-4444`, `hevc-alpha`, `audio-m4a`, `audio-wav`,
-`gif` or `poster` (a PNG still). A `gif` has every second frame at 30 fps (about 15 fps; every
-frame at 24 or 25), at most 150 frames (10 s at 30 fps) and 480 px wide: a longer range is
-refused with `OUT_OF_RANGE` (`param:"to"`, the limit, and a `from`/`to` that fits in the fix),
-never cut short, and the result's `settings` report `width`, `height`, `fps`, `frames`, `from`
-and `to`. `from`/`to` (whole frames from 0 to the timeline's end; anything else is
-refused with the broken rule, never clamped) or `marker` export part of the timeline; `bitrate`
-overrides the preset (the frame rate is the project's). `resolution` (720, 1080, 1440 or 2160)
+`gif` or `poster` (a PNG still). A `gif` is a job like a video (`jobs.status`, `jobs.cancel`,
+the partial file removed) of any length: `fps` is 10, 15 or 24 (default: evenly spaced frames
+near 15, so 15 at 30 or 60 fps, every frame at 24 or 25, every second at 50) and `width` 16–960
+px (default 480; the height keeps the canvas shape; wider is `BAD_ARGS` with the 960 px limit in
+the fix). Frames stream through Splice's own GIF writer (one frame in memory: the rectangle that
+changed, unchanged pixels transparent, a repeated frame lengthening the one before, a 255-color
+median-cut palette per frame, delays in hundredths kept on time), so length costs only disk and
+time: the result's `settings` report `width`, `height`, `fps`, `frames`, `from`, `to` and
+`estimate {megabytes, seconds}` (rough: a busy picture is larger), a `warning` past 60 s that an
+MP4 is far smaller, and once done `bytes`. `fps` (24, 25, 30, 50 or 60) exports a video at that
+rate whatever the project's (a project with clips cannot change its own): output frame `n` shows
+the timeline frame on screen at `n / fps` s, `floor(n × projectFps / fps)` frames into the range
+(frame sampling: a lower rate drops frames, a higher one repeats them; nothing is blended), the
+movie lasts as long as the range, and `settings` report `fps`, `timelineFps` and the output
+`frames`. Audio presets and posters refuse `fps`. `from`/`to` (whole frames from 0 to the
+timeline's end; anything else is refused with the broken rule, never clamped) or `marker` export
+part of the timeline; `bitrate` overrides the preset. `resolution` (720, 1080, 1440 or 2160)
 scales the output so its shorter edge has that many pixels, keeping its shape (a preset's size
 or a variant's aspect); `quality` (`web`, `social`, `high`, `studio`: 4, 8, 16, 40 Mbps for
 H.264 at 1080p30, scaled by pixels and the square root of the frame rate, HEVC 0.6 of it) picks

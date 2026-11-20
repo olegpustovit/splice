@@ -525,9 +525,71 @@ mod native {
             people[0].abs_diff(agents[0]) <= 1 && people[1].abs_diff(agents[1]) <= 1,
             "chip for people {people:?}, for agents {agents:?}"
         );
+        // Recorder's overlay: categories, the 3×3 grid and the display duration. An arrow key
+        // is navigation (a glyph, drawn for agents too); a chip at top-right lands in that
+        // quadrant; `hold` ends it.
+        fs::write(
+            take.join("events.json"),
+            r#"{"t0":0,"source":{"kind":"display","rect":{"x":0,"y":0,"width":96,"height":64},"scale":1},"events":[
+                {"t":0.0,"k":"cursor","id":"c"},{"t":0.0,"k":"move","x":0.25,"y":0.25},
+                {"t":0.1,"k":"key","ch":"\u001c","keyCode":123,"mods":0}]}"#,
+        )
+        .unwrap();
+        let render = |project: &Project, params: Vec<(&str, EffectValue)>, at: Frame| {
+            let mut project = project.clone();
+            let slot = project.clips.order()[0];
+            let data = project.clips.data_mut(slot).unwrap();
+            data.enabled.keys = Some(true);
+            data.appearance.effects.retain(|e| e.kind != "keystrokes");
+            data.appearance
+                .effects
+                .push(effect(2, "keystrokes", params));
+            let composition = Composition::prepare(&project, &scratch.0).unwrap();
+            let [w, h] = composition.size().map(|n| n as usize);
+            let mut rgba = vec![0; w * h * 4];
+            composition.read_frame(at, &mut rgba).unwrap();
+            rgba
+        };
+        let text = |name: &str| EffectValue::Text(name.into());
+        let bare = |at: Frame| render(&project, vec![("show", text("shortcuts"))], at);
+        let plain = bare(5);
+        assert!(
+            render(&project, vec![("show", text("shortcuts+typing"))], 5) == plain,
+            "an arrow key is not typing or a shortcut"
+        );
+        let corner = changed(
+            &render(
+                &project,
+                vec![
+                    ("show", text("navigation")),
+                    ("position", text("top-right")),
+                ],
+                5,
+            ),
+            &plain,
+        )
+        .expect("a navigation chip draws");
+        let [w, h] = project.size.map(|n| n as usize);
+        assert!(
+            corner[0] > w / 3 && corner[3] < h / 2,
+            "top-right chip at {corner:?}"
+        );
+        let held = |hold: f64| {
+            let params = vec![
+                ("show", text("navigation")),
+                ("hold", EffectValue::Number(hold)),
+            ];
+            render(&project, params, 20) != bare(20)
+        };
+        assert!(
+            held(1.2),
+            "drawn 0.57 s after the key with the default hold"
+        );
+        assert!(!held(0.3), "gone 0.3 s after the key");
     }
 
-    /// T13.1: a sound item on an audio lane reaches the exported mix.
+    /// T13.1: a sound item on an audio lane reaches the exported mix; export.start {fps}
+    /// resamples the picture.
     pub(super) fn native_music_on_an_audio_lane_is_exported() {
         let mut project = Project {
             size: [96, 64],
@@ -616,6 +678,26 @@ mod native {
             exported.audio.first().and_then(|track| track.channels),
             Some(2)
         );
+        // export.start {fps}: the 30 fps timeline (9 frames, 0.3 s) at 60 and 24 fps keeps its
+        // length; frames repeat or drop (frame sampling, splice_eval::resample).
+        for fps in [60, 24] {
+            let file = scratch.0.join(format!("music-{fps}.mp4"));
+            let encoding = Encoding {
+                fps,
+                ..Encoding::new(Codec::H264)
+            };
+            let mut job = composition.start_export(&file, &encoding).unwrap();
+            while let ExportState::Running(_) = job.step(Duration::from_millis(16)).unwrap() {}
+            assert_eq!(job.status(), ExportState::Complete);
+            let exported = apple_sys::media::probe(&file).unwrap();
+            let rate = exported.video.and_then(|v| v.nominal_fps).unwrap();
+            assert!((rate - f64::from(fps)).abs() < 1.0, "{fps} fps: {rate}");
+            assert!(
+                (exported.duration_seconds - 0.3).abs() <= 1.0 / 24.0 + 1e-3,
+                "{fps} fps: {} s",
+                exported.duration_seconds
+            );
+        }
     }
     /// Agent and viewer renders draw a missing file as a hatched, labeled placeholder at the
     /// item's geometry and report it; delivery refuses it (an export never has placeholders).

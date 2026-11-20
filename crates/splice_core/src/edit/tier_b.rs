@@ -120,7 +120,13 @@ impl Editor {
                 Ok(outcome)
             }
             Op::CursorSet { clip, params } => self.clip_effect(&clip, "cursor", params, "Cursor"),
-            Op::KeysSet { clip, size, show } => self.set_keys(&clip, size, show),
+            Op::KeysSet {
+                clip,
+                size,
+                show,
+                position,
+                hold,
+            } => self.set_keys(&clip, size, show, position, hold),
             Op::KeysHide {
                 clip,
                 events,
@@ -576,13 +582,16 @@ impl Editor {
         })
     }
 
-    /// keys.set (A1, A11): `show` turns the keys component on or off and picks the category
-    /// (`shortcuts` keeps only chips pressed with ⌘, ⌃ or ⌥); `size` scales the chips.
+    /// keys.set (A1, A11): `show` turns the keys component on or off and picks the categories
+    /// (`shortcuts`, `typing`, `navigation`, `modifiers`, `all`); `position` places the chips on
+    /// the 3×3 grid, `hold` keeps each chip that many seconds, `size` scales them.
     fn set_keys(
         &mut self,
         clip: &Target,
         size: Option<f64>,
         show: Option<&'static str>,
+        position: Option<&'static str>,
+        hold: Option<f64>,
     ) -> Result<Outcome, CommandError> {
         let (id, slot) = self.take_clip(clip)?;
         let data = self.project.clips.data_mut(slot).expect("live clip");
@@ -596,11 +605,19 @@ impl Editor {
         if let Some(size) = size {
             params.push(number("size", size));
         }
-        if let Some(show @ ("all" | "shortcuts")) = show {
-            params.push(EffectParam {
-                name: "show".into(),
-                value: EffectValue::Text(show.into()),
-            });
+        if let Some(hold) = hold {
+            params.push(number("hold", hold));
+        }
+        for (name, value) in [
+            ("show", show.filter(|s| *s != "none")),
+            ("position", position),
+        ] {
+            if let Some(value) = value {
+                params.push(EffectParam {
+                    name: name.into(),
+                    value: EffectValue::Text(value.into()),
+                });
+            }
         }
         let mut created = Vec::new();
         if !params.is_empty() {
@@ -609,8 +626,10 @@ impl Editor {
         Ok(Outcome {
             summary: Summary::Text(match show {
                 Some("none") => format!("Keystroke chips off on {id}"),
-                Some("shortcuts") => format!("Keystroke chips on {id}: shortcuts only"),
-                Some(_) => format!("Keystroke chips on {id}: every key, typed text included"),
+                Some(show) if show == "all" || show.contains("typing") => {
+                    format!("Keystroke chips on {id}: {show}, typed text included")
+                }
+                Some(show) => format!("Keystroke chips on {id}: {show}"),
                 None => format!("Keystroke chips updated on {id}"),
             }),
             primary: Some(Target::Timeline(TimelineId::Clip(id))),

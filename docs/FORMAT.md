@@ -276,6 +276,16 @@ Rules:
   `keys.set {show}` (or `component.set`). Files already saved keep their `keys` state as written.
   The `keystrokes` effect gains `show`: `all` (default, every key) or `shortcuts` (only keys whose
   `mods` hold ⌘, ⌃ or ⌥; NSEvent bits 20, 18, 19). Files without it read as `all`.
+- **Keystroke categories, grid and duration (Recorder's overlay).** The `keystrokes` effect's
+  `show` also takes the categories `typing` (printable keys), `navigation` (arrows, ⌫ ⌦ ⏎ ⇥ ⎋,
+  Home/End/Page Up/Down and F-keys by `keyCode`; logs without codes by their control character)
+  and `modifiers` (a `flags` press and release with no key between), alone or several joined by
+  `+` in the order shortcuts, typing, navigation, modifiers (`shortcuts+navigation`); all four is
+  `all`. `position` takes the 3×3 grid (`top-left`, `top-center`, `top-right`, `middle-left`,
+  `center`, `middle-right`, `bottom-left`, `bottom-center`, `bottom-right`) and `hold` (0.3–5 s,
+  default 1.2) is how long a chip stays after its last key. Files without them read as before
+  (`all`, `bottom-left`, 1.2 s); older readers refuse the new values. `all` now draws navigation
+  glyphs and modifier taps too, and left and right chips align to their edge.
 
 - **Declared pointer marks (T39.4).** A take's `components` may carry
   `"pointer":[{"t":2.0,"x":0.6,"y":0.4,"click":true}]` (source seconds, positions normalized to the

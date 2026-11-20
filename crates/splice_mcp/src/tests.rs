@@ -983,6 +983,122 @@ fn typing_zooms_follow_the_text_caret() {
     assert!(format!("{error:?}").contains("BAD_PACKAGE"), "{error:?}");
 }
 
+/// Recorder's keystroke categories: takes.events names each key's category (a modifier pressed
+/// alone is a `modifier` tap with no index) and marks the chips the clip's `show` draws.
+/// Typed characters stay redacted; navigation glyphs are not typed text.
+#[test]
+fn takes_events_categorize_keys_and_mark_the_chips_each_show_draws() {
+    let root = TestDirectory::new("key-categories");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    let take = sample.join("takes/med_screen");
+    fs::create_dir_all(&take).unwrap();
+    fs::write(
+        take.join("events.json"),
+        r#"{"events":[
+            {"t":1.0,"k":"key","ch":"a","keyCode":0,"mods":0},
+            {"t":1.5,"k":"key","ch":"\u001c","keyCode":123,"mods":0},
+            {"t":2.0,"k":"flags","keyCode":55,"mods":1048576},
+            {"t":2.1,"k":"key","ch":"s","keyCode":1,"mods":1048576},
+            {"t":2.2,"k":"flags","keyCode":55,"mods":0},
+            {"t":3.0,"k":"flags","keyCode":56,"mods":131072},
+            {"t":3.2,"k":"flags","keyCode":56,"mods":0},
+            {"t":4.0,"k":"key","ch":"","keyCode":57,"mods":0}]}"#,
+    )
+    .unwrap();
+    let store = splice_core::history::Store::open(&sample).unwrap();
+    let listed = |project: &splice_model::Project| {
+        let args = splice_json::parse(r#"{"clip":"clp_take","kinds":["keys"]}"#).unwrap();
+        let listed = super::media::events(&sample, project, &args).unwrap();
+        listed
+            .field("keys")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| {
+                (
+                    key.field("index").and_then(Json::as_u64),
+                    key.field("category")
+                        .and_then(Json::as_str)
+                        .unwrap()
+                        .to_owned(),
+                    key.field("chip") == Some(&Json::Bool(true)),
+                    key.field("text").and_then(Json::as_str).map(str::to_owned),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut project = store.project().clone();
+    let show = |project: &mut splice_model::Project, show: &str| {
+        let ops = splice_json::parse(&format!(
+            r#"[{{"cmd":"keys.set","clip":"clp_take","show":"{show}"}}]"#
+        ))
+        .unwrap();
+        splice_core::edit::apply(
+            project,
+            ops.as_array().unwrap(),
+            splice_core::package::journal::Source::Agent,
+            false,
+        )
+        .unwrap();
+    };
+    show(&mut project, "all");
+    let all = listed(&project);
+    let expected = [
+        (Some(0), "typing", true, None),
+        (Some(1), "navigation", true, Some("←")),
+        (Some(2), "shortcut", true, None),
+        (None, "modifier", true, Some("⇧")),
+        // Caps lock types nothing: no chip, but it keeps its index.
+        (Some(3), "typing", false, None),
+    ];
+    assert_eq!(all.len(), expected.len(), "{all:?}");
+    for (got, want) in all.iter().zip(expected) {
+        assert_eq!(
+            (got.0, got.1.as_str(), got.2, got.3.as_deref()),
+            want,
+            "{all:?}"
+        );
+    }
+    show(&mut project, "shortcuts+navigation");
+    let chips: Vec<bool> = listed(&project).iter().map(|key| key.2).collect();
+    assert_eq!(chips, [false, true, true, false, false]);
+    show(&mut project, "modifiers");
+    let chips: Vec<bool> = listed(&project).iter().map(|key| key.2).collect();
+    assert_eq!(chips, [false, false, false, true, false]);
+    show(&mut project, "none");
+    assert!(listed(&project).iter().all(|key| !key.2));
+}
+
+/// The `keystrokes` effect's `show` options (effects.json, what apply validates) are exactly
+/// the canonical category sets the renderer parses.
+#[test]
+fn keystroke_show_options_match_the_renderers_category_sets() {
+    let options = splice_core::commands::effect_schemas()
+        .field("keystrokes")
+        .and_then(|e| e.field("params"))
+        .and_then(|p| p.field("show"))
+        .and_then(|s| s.field("options"))
+        .and_then(Json::as_array)
+        .unwrap();
+    let mut names: Vec<&str> = options.iter().filter_map(Json::as_str).collect();
+    names.sort_unstable();
+    let mut canonical = splice_eval::chips::SHOW[1..].to_vec();
+    canonical.sort_unstable();
+    assert_eq!(names, canonical);
+    let positions = splice_core::commands::effect_schemas()
+        .field("keystrokes")
+        .and_then(|e| e.field("params"))
+        .and_then(|p| p.field("position"))
+        .and_then(|s| s.field("options"))
+        .and_then(Json::as_array)
+        .unwrap();
+    let names: Vec<&str> = positions.iter().filter_map(Json::as_str).collect();
+    let grid: Vec<&str> = splice_eval::KEY_POSITIONS.iter().map(|p| p.0).collect();
+    assert_eq!(names, grid);
+}
+
 /// T41: on a silent take, edit.apply fills intent.steps, intent.speedTyping and the smart cuts'
 /// activity from the take's events; an `auto` basis with words on the timeline needs nothing.
 #[test]

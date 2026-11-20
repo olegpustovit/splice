@@ -443,7 +443,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "export.start",
-        description: "Export the timeline: presets for social (youtube-1080/4k, shorts, reels, tiktok, linkedin), masters (prores-422, prores-4444 and hevc-alpha keep transparency), audio (audio-m4a, audio-wav), gif (about 15 fps, at most 150 frames and 480 px wide; a longer range is refused with the limit) and poster (done at once). from/to or marker limit the range; markers become chapters; captions:\"srt\" writes a sidecar; variants:[{aspect, preset}] renders several aspects, each reframed to fill; resolution (720, 1080, 1440, 2160) sets the shorter edge keeping the shape; quality (web, social, high, studio) picks the bitrate for the size, rate and codec; format:\"fcpxml\" writes the cut for Final Cut Pro (every platform). Video and audio need macOS and run as jobs (two at a time). Without sessionId the export opens its own session.",
+        description: "Export the timeline: presets for social (youtube-1080/4k, shorts, reels, tiktok, linkedin), masters (prores-422, prores-4444 and hevc-alpha keep transparency), audio (audio-m4a, audio-wav), gif (any length; fps 10, 15 or 24, about 15 by default; width up to 960 px, 480 by default; settings report the frame count and the size and time it will take) and poster (done at once). fps (24, 25, 30, 50 or 60) resamples a video to that rate by frame sampling of the timeline clock. from/to or marker limit the range; markers become chapters; captions:\"srt\" writes a sidecar; variants:[{aspect, preset}] renders several aspects, each reframed to fill; resolution (720, 1080, 1440, 2160) sets the shorter edge keeping the shape; quality (web, social, high, studio) picks the bitrate for the size, rate and codec; format:\"fcpxml\" writes the cut for Final Cut Pro (every platform). Video, audio and GIF need macOS and run as jobs (two at a time). Without sessionId the export opens its own session.",
         read_only: false,
         input: &[
             ("projectId", "string"),
@@ -460,6 +460,8 @@ pub(super) const TOOLS: &[Tool] = &[
             ("bitrate", "number"),
             ("resolution", r#"{"enum":[720,1080,1440,2160]}"#),
             ("quality", r#"{"enum":["web","social","high","studio"]}"#),
+            ("fps", r#"{"enum":[10,15,24,25,30,50,60]}"#),
+            ("width", r#"{"type":"integer","minimum":16,"maximum":960}"#),
             ("captions", r#"{"enum":["srt","vtt"]}"#),
             ("chapters", "boolean"),
             (

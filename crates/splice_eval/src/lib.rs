@@ -5,6 +5,7 @@ use splice_model::{ClipId, Frame, ItemId, MediaId, Rect, ShapeKind, TimelineId, 
 
 pub mod activity;
 mod camera;
+pub mod chips;
 mod compound;
 mod cube;
 pub mod cursor;
@@ -12,6 +13,7 @@ mod eval;
 mod layout;
 mod look;
 mod particles;
+pub mod resample;
 mod style;
 mod text;
 
@@ -26,8 +28,8 @@ pub use look::{
     Transition, TransitionKind,
 };
 pub use style::{
-    Animate, Background, CaptionPreset, CaptionStyle, Cursor, KeyPosition, Keys, TextStyle,
-    WALLPAPERS, Window, resolve_effect,
+    Animate, Background, CaptionPreset, CaptionStyle, Cursor, KEY_POSITIONS, KeyPosition, Keys,
+    TextStyle, WALLPAPERS, Window, resolve_effect,
 };
 pub use text::{grapheme_len, ink_crop, text_units};
 

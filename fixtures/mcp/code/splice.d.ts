@@ -355,8 +355,12 @@ declare namespace Splice {
       cmd: "keys.set";
       /** clp_… screen take with recorded events */
       clip: string;
-      /** which keystrokes show as chips: every key (typed text included), only keys pressed with ⌘, ⌃ or ⌥, or none (the keys component off). New takes start with none */
-      show?: "all" | "shortcuts" | "none";
+      /** all|none|shortcuts|typing|navigation|modifiers, several joined by + or as a list · which keystrokes show as chips: shortcuts (⌘, ⌃ or ⌥ held), typing (printable keys: typed text), navigation (arrows, ⌫ ⌦ ⏎ ⇥ ⎋, Home/End/Page Up/Down, F-keys), modifiers (a modifier pressed alone); all is every category, none turns the keys component off. New takes start with none */
+      show?: string;
+      /** chip place on the canvas (default bottom-left) */
+      position?: "top-left" | "top-center" | "top-right" | "middle-left" | "center" | "middle-right" | "bottom-left" | "bottom-center" | "bottom-right";
+      /** 0.3–5 · seconds a chip stays after its last key (default 1.2) */
+      hold?: number;
       /** 0.5–3 · chip scale */
       size?: number;
     }
@@ -1239,9 +1243,11 @@ declare namespace Splice {
       /** Size · 0.5–3 · @default 1 */
       size?: number;
       /** Position · @default "bottom-left" */
-      position?: "bottom-left" | "bottom-center" | "top-left";
+      position?: "top-left" | "top-center" | "top-right" | "middle-left" | "center" | "middle-right" | "bottom-left" | "bottom-center" | "bottom-right";
       /** Show · @default "all" */
-      show?: "all" | "shortcuts";
+      show?: "all" | "shortcuts" | "typing" | "shortcuts+typing" | "navigation" | "shortcuts+navigation" | "typing+navigation" | "shortcuts+typing+navigation" | "modifiers" | "shortcuts+modifiers" | "typing+modifiers" | "shortcuts+typing+modifiers" | "navigation+modifiers" | "shortcuts+navigation+modifiers" | "typing+navigation+modifiers";
+      /** Display duration · 0.3–5 · @default 1.2 */
+      hold?: number;
     };
     /** Transform: spine clips, media overlays, titles, shapes and captions. */
     transform: {
@@ -1846,8 +1852,8 @@ declare const splice: {
     show(args?: { projectId?: string; at?: number | Record<string, unknown>; select?: string[]; range?: Record<string, unknown>; expand?: string; view?: string; viewer?: Record<string, unknown>; }): { applied: boolean; reason?: string; revision?: Splice.Revision; playhead?: number; selection?: string[]; };
   };
   export: {
-    /** Export the timeline: presets for social (youtube-1080/4k, shorts, reels, tiktok, linkedin), masters (prores-422, prores-4444 and hevc-alpha keep transparency), audio (audio-m4a, audio-wav), gif (about 15 fps, at most 150 frames and 480 px wide; a longer range is refused with the limit) and poster (done at once). from/to or marker limit the range; markers become chapters; captions:"srt" writes a sidecar; variants:[{aspect, preset}] renders several aspects, each reframed to fill; resolution (720, 1080, 1440, 2160) sets the shorter edge keeping the shape; quality (web, social, high, studio) picks the bitrate for the size, rate and codec; format:"fcpxml" writes the cut for Final Cut Pro (every platform). Video and audio need macOS and run as jobs (two at a time). Without sessionId the export opens its own session. */
-    start(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; preset?: "social" | "social-h264" | "social-hevc" | "youtube-1080" | "youtube-4k" | "shorts" | "reels" | "tiktok" | "linkedin" | "prores-422" | "prores-4444" | "hevc-alpha" | "audio-m4a" | "audio-wav" | "gif" | "poster"; format?: "video" | "fcpxml"; from?: number; to?: number; marker?: string; bitrate?: number; resolution?: 720 | 1080 | 1440 | 2160; quality?: "web" | "social" | "high" | "studio"; captions?: "srt" | "vtt"; chapters?: boolean; variants?: Record<string, unknown>[]; path?: string; overwrite?: boolean; }): { jobId: string; state: string; settings?: Record<string, unknown>; output?: string; jobs?: unknown[]; };
+    /** Export the timeline: presets for social (youtube-1080/4k, shorts, reels, tiktok, linkedin), masters (prores-422, prores-4444 and hevc-alpha keep transparency), audio (audio-m4a, audio-wav), gif (any length; fps 10, 15 or 24, about 15 by default; width up to 960 px, 480 by default; settings report the frame count and the size and time it will take) and poster (done at once). fps (24, 25, 30, 50 or 60) resamples a video to that rate by frame sampling of the timeline clock. from/to or marker limit the range; markers become chapters; captions:"srt" writes a sidecar; variants:[{aspect, preset}] renders several aspects, each reframed to fill; resolution (720, 1080, 1440, 2160) sets the shorter edge keeping the shape; quality (web, social, high, studio) picks the bitrate for the size, rate and codec; format:"fcpxml" writes the cut for Final Cut Pro (every platform). Video, audio and GIF need macOS and run as jobs (two at a time). Without sessionId the export opens its own session. */
+    start(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; preset?: "social" | "social-h264" | "social-hevc" | "youtube-1080" | "youtube-4k" | "shorts" | "reels" | "tiktok" | "linkedin" | "prores-422" | "prores-4444" | "hevc-alpha" | "audio-m4a" | "audio-wav" | "gif" | "poster"; format?: "video" | "fcpxml"; from?: number; to?: number; marker?: string; bitrate?: number; resolution?: 720 | 1080 | 1440 | 2160; quality?: "web" | "social" | "high" | "studio"; fps?: 10 | 15 | 24 | 25 | 30 | 50 | 60; width?: number; captions?: "srt" | "vtt"; chapters?: boolean; variants?: Record<string, unknown>[]; path?: string; overwrite?: boolean; }): { jobId: string; state: string; settings?: Record<string, unknown>; output?: string; jobs?: unknown[]; };
   };
   jobs: {
     /** Check the progress and result of an export, transcription or recording job. wait (seconds, up to 120) returns once the job stops running (a recording also when it pauses), so one call (or one code.run: waiting is not counted against its 2 s) sees it done; without wait, each call advances a running export by up to 50 ms. */

@@ -235,11 +235,27 @@ fn new_takes_start_without_keystroke_chips_and_keys_set_picks_the_category() {
     for (op, param) in [
         (
             format!(r#"{{"cmd":"keys.set","clip":"{id}"}}"#),
-            "show or size",
+            "show, position, hold or size",
         ),
         (
-            format!(r#"{{"cmd":"keys.set","clip":"{id}","show":"typing"}}"#),
+            format!(r#"{{"cmd":"keys.set","clip":"{id}","show":"keys"}}"#),
             "show",
+        ),
+        (
+            format!(r#"{{"cmd":"keys.set","clip":"{id}","show":"shortcuts+shortcuts"}}"#),
+            "show",
+        ),
+        (
+            format!(r#"{{"cmd":"keys.set","clip":"{id}","show":[]}}"#),
+            "show",
+        ),
+        (
+            format!(r#"{{"cmd":"keys.set","clip":"{id}","position":"left"}}"#),
+            "position",
+        ),
+        (
+            format!(r#"{{"cmd":"keys.set","clip":"{id}","hold":9}}"#),
+            "hold",
         ),
     ] {
         let error = run(&mut project, &format!("[{op}]")).unwrap_err();
@@ -252,6 +268,76 @@ fn new_takes_start_without_keystroke_chips_and_keys_set_picks_the_category() {
     )
     .unwrap_err();
     assert_eq!(error.error.code, "WRONG_KIND");
+}
+
+/// Recorder's keystroke overlay: four categories in any combination (stored as one canonical
+/// `show`), a 3×3 position grid and a display duration (`hold`) per chip.
+#[test]
+fn keys_set_picks_categories_a_grid_position_and_a_display_duration() {
+    let mut project = sample();
+    run(
+        &mut project,
+        r#"[{"cmd":"clip.insert","media":"med_screen"}]"#,
+    )
+    .unwrap();
+    let slot = project.clips.order().last().copied().unwrap();
+    let id = project.clips.id(slot).unwrap();
+    let param = |project: &Project, name: &str| {
+        project
+            .clips
+            .data(slot)
+            .unwrap()
+            .appearance
+            .effects
+            .iter()
+            .filter(|effect| effect.kind == "keystrokes")
+            .flat_map(|effect| &effect.params)
+            .find(|param| param.name == name)
+            .map(|param| param.value.clone())
+    };
+    for (show, stored) in [
+        (r#"["navigation","shortcuts"]"#, "shortcuts+navigation"),
+        (r#""modifiers+typing""#, "typing+modifiers"),
+        (r#"["shortcuts","typing","navigation","modifiers"]"#, "all"),
+        (r#""all""#, "all"),
+    ] {
+        run(
+            &mut project,
+            &format!(r#"[{{"cmd":"keys.set","clip":"{id}","show":{show}}}]"#),
+        )
+        .unwrap();
+        assert_eq!(
+            param(&project, "show"),
+            Some(EffectValue::Text(stored.into())),
+            "{show}"
+        );
+    }
+    run(
+        &mut project,
+        &format!(r#"[{{"cmd":"keys.set","clip":"{id}","position":"top-right","hold":2.5}}]"#),
+    )
+    .unwrap();
+    assert_eq!(
+        param(&project, "position"),
+        Some(EffectValue::Text("top-right".into()))
+    );
+    assert_eq!(param(&project, "hold"), Some(EffectValue::Number(2.5)));
+    // The generic path takes the same canonical values and refuses other spellings.
+    run(
+        &mut project,
+        &format!(
+            r#"[{{"cmd":"effect.set","target":"{id}","type":"keystrokes","params":{{"show":"shortcuts+modifiers","position":"center"}}}}]"#
+        ),
+    )
+    .unwrap();
+    let error = run(
+        &mut project,
+        &format!(
+            r#"[{{"cmd":"effect.set","target":"{id}","type":"keystrokes","params":{{"show":"modifiers+shortcuts"}}}}]"#
+        ),
+    )
+    .unwrap_err();
+    assert_eq!(error.error.code, "BAD_ARGS");
 }
 
 #[test]

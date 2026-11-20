@@ -1007,6 +1007,100 @@ return {state: job.state, polls};"#
     child.wait().unwrap();
 }
 
+/// Recorder's GIF and frame-rate exports: a GIF at 24 fps and 64 px is a job that streams its
+/// frames (settings report the frame count, the cost estimate and, done, the bytes written); a
+/// cancelled GIF leaves no file; a video resampled to 60 fps reports its output frames (the
+/// file's rate: splice_av's native_music_on_an_audio_lane_is_exported).
+#[cfg(target_os = "macos")]
+#[test]
+fn native_gif_and_resampled_exports_run_as_jobs() {
+    use std::io::{BufRead, BufReader};
+
+    let scratch = Scratch::new("native-gif-export");
+    let project = export_sample(&scratch);
+    let mut child = scratch
+        .command()
+        .args(["mcp", "--code"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let program = r#"const p = splice.project.info({path: \"native.splice\"});
+const s = splice.session.start({projectId: p.projectId, agent: \"gif-export\"});
+const at = {projectId: p.projectId, sessionId: s.sessionId, ifRevision: p.revision};
+const gif = splice.export.start({...at, preset: \"gif\", fps: 24, width: 64, path: \"clip.gif\"});
+const done = splice.jobs.status({jobId: gif.jobId, wait: 20});
+const movie = splice.export.start({...at, preset: \"social-h264\", fps: 60, path: \"sixty.mp4\"});
+const moved = splice.jobs.status({jobId: movie.jobId, wait: 20});
+const big = splice.export.start({...at, preset: \"gif\", width: 960, path: \"cancelled.gif\"});
+splice.jobs.cancel({jobId: big.jobId});
+const after = splice.jobs.status({jobId: big.jobId, wait: 5});
+return {gif, done, movie, moved, cancelled: after.state};"#
+        .replace('\n', "\\n");
+    writeln!(input, r#"{{"jsonrpc":"2.0","id":0,"method":"initialize","params":{{"protocolVersion":"2025-11-25","capabilities":{{}},"clientInfo":{{"name":"gif-export","version":"1"}}}}}}"#).unwrap();
+    writeln!(input, r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"code.run","arguments":{{"code":"{program}"}}}}}}"#).unwrap();
+    input.flush().unwrap();
+    let mut line = String::new();
+    assert!(output.read_line(&mut line).unwrap() > 0);
+    line.clear();
+    assert!(output.read_line(&mut line).unwrap() > 0);
+    let result = parse(&line).unwrap();
+    let content = result
+        .field("result")
+        .unwrap()
+        .field("structuredContent")
+        .unwrap();
+    let value = content
+        .field("result")
+        .unwrap_or_else(|| panic!("{content:?}"));
+    let field = |path: &[&str]| {
+        path.iter()
+            .try_fold(value, |json, key| json.field(key))
+            .unwrap_or_else(|| panic!("{path:?} in {value:?}"))
+            .clone()
+    };
+    assert_eq!(field(&["gif", "state"]).as_str(), Some("running"));
+    // The sample is 1 s at 30 fps on a 96×64 canvas: 24 frames, 64×42.
+    assert_eq!(field(&["gif", "settings", "frames"]).as_u64(), Some(24));
+    assert_eq!(field(&["gif", "settings", "width"]).as_u64(), Some(64));
+    assert_eq!(field(&["gif", "settings", "height"]).as_u64(), Some(42));
+    assert!(
+        field(&["gif", "settings", "estimate", "megabytes"])
+            .as_f64()
+            .is_some()
+    );
+    assert_eq!(
+        field(&["done", "state"]).as_str(),
+        Some("done"),
+        "{value:?}"
+    );
+    let gif = fs::read(project.join("clip.gif")).unwrap();
+    assert_eq!(&gif[..6], b"GIF89a");
+    assert_eq!(gif.last(), Some(&0x3b));
+    assert_eq!(
+        field(&["done", "settings", "bytes"]).as_u64(),
+        Some(gif.len() as u64)
+    );
+    assert_eq!(field(&["movie", "settings", "fps"]).as_u64(), Some(60));
+    assert_eq!(
+        field(&["movie", "settings", "timelineFps"]).as_u64(),
+        Some(30)
+    );
+    assert_eq!(field(&["movie", "settings", "frames"]).as_u64(), Some(60));
+    assert_eq!(
+        field(&["moved", "state"]).as_str(),
+        Some("done"),
+        "{value:?}"
+    );
+    assert_eq!(field(&["cancelled"]).as_str(), Some("cancelled"));
+    assert!(!project.join("cancelled.gif").exists());
+    drop(input);
+    child.wait().unwrap();
+}
+
 /// T24.4 chaos: `kill -9` at random points of `splice apply` never leaves a torn project. Every
 /// reopen is a whole revision, the journal and the content agree (one marker per committed
 /// batch), and work continues from there.

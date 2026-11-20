@@ -60,6 +60,8 @@ pub struct Encoding {
     pub range: [i32; 2],
     /// Video bits per second; `None` for the default rate.
     pub bitrate: Option<f64>,
+    /// Output frames per second; 0 for the composition's own rate.
+    pub fps: u32,
     /// Chapter starts (timeline frames) and names.
     pub chapters: Vec<(i32, String)>,
 }
@@ -71,6 +73,7 @@ impl Encoding {
             codec,
             range: [0, i32::MAX],
             bitrate: None,
+            fps: 0,
             chapters: Vec::new(),
         }
     }
@@ -81,7 +84,7 @@ struct RawExportSettings {
     codec: u32,
     from: i32,
     to: i32,
-    pad: u32,
+    fps: u32,
     bitrate: f64,
     chapters: *const c_char,
 }
@@ -354,6 +357,7 @@ unsafe extern "C" {
         composition: *mut c_void,
         from: i32,
         to: i32,
+        audio: bool,
         error: *mut *mut c_char,
     ) -> *mut c_void;
     fn splice_av_reader_next(
@@ -574,12 +578,13 @@ impl Composition {
         }
     }
 
-    /// Starts decoding the whole composition in order, for export.
-    pub fn reader(&self, range: Option<[i32; 2]>) -> Result<Reader, Error> {
+    /// Starts decoding the whole composition in order, for export; with `audio`, the mix too (a
+    /// writer must then take it, or the reader stalls).
+    pub fn reader(&self, range: Option<[i32; 2]>, audio: bool) -> Result<Reader, Error> {
         let mut error = ptr::null_mut();
         let [from, to] = range.unwrap_or([0, 0]);
         // SAFETY: the reader retains the composition; the diagnostic storage outlives the call.
-        let reader = unsafe { splice_av_reader(self.0.as_ptr(), from, to, &mut error) };
+        let reader = unsafe { splice_av_reader(self.0.as_ptr(), from, to, audio, &mut error) };
         NonNull::new(reader)
             .map(Reader)
             .ok_or_else(|| diagnostic(error))
@@ -718,7 +723,7 @@ impl Writer {
             codec: settings.codec as u32,
             from: settings.range[0],
             to: settings.range[1],
-            pad: 0,
+            fps: settings.fps,
             bitrate: settings.bitrate.unwrap_or(0.0),
             chapters: chapters.as_ptr(),
         };
@@ -744,7 +749,8 @@ impl Writer {
         }
     }
 
-    /// Appends the drawn target at `frame`, once the GPU has finished drawing it.
+    /// Appends the drawn target as output frame `frame` (counted from the export's start at the
+    /// output rate), once the GPU has finished drawing it.
     pub fn append(&mut self, frame: i32) -> Result<(), Error> {
         let mut error = ptr::null_mut();
         // SAFETY: the writer is retained by this handle.

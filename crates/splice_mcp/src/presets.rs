@@ -157,6 +157,11 @@ pub(super) struct Output {
     pub range: [Frame; 2],
     /// Video bits per second.
     pub bitrate: Option<f64>,
+    /// Output frames per second: the project's, or `fps` (frame sampling of the timeline
+    /// clock, `splice_eval::resample`).
+    pub fps: u32,
+    /// A GIF's width in pixels (its height keeps the canvas shape); `None` for other kinds.
+    pub gif_width: Option<u32>,
     /// Chapter starts and names (markers inside the range).
     pub chapters: Vec<(Frame, String)>,
     /// SRT or WebVTT sidecar.
@@ -297,6 +302,41 @@ pub(super) fn resolve(
             "quality or bitrate, not both (bitrate sets the rate itself)",
         ));
     }
+    let fps = match args.field("fps") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|fps| u32::try_from(fps).ok())
+                .filter(|fps| VIDEO_FPS.contains(fps) || GIF_FPS.contains(fps))
+                .ok_or_else(|| {
+                    bad(
+                        "fps",
+                        "24, 25, 30, 50 or 60 for a video; 10, 15 or 24 for a GIF",
+                    )
+                })?,
+        ),
+    };
+    let gif_width = match args.field("width") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|width| u32::try_from(width).ok())
+                .filter(|width| (GIF_MIN_WIDTH..=GIF_MAX_WIDTH).contains(width))
+                .ok_or_else(|| {
+                    CommandError::rule(
+                        "BAD_ARGS",
+                        "width",
+                        Some(value.clone()),
+                        &format!("a GIF width from {GIF_MIN_WIDTH} to {GIF_MAX_WIDTH} pixels"),
+                        &format!(
+                            "Pass width:{GIF_MAX_WIDTH} or less (a GIF is at most {GIF_MAX_WIDTH} px wide; export a video preset for a larger picture)."
+                        ),
+                    )
+                })?,
+        ),
+    };
     let sidecar = match args.optional_string("captions")? {
         None => None,
         Some("srt") => Some("srt"),
@@ -321,9 +361,30 @@ pub(super) fn resolve(
             size: fixed,
             mbps,
         } = preset(name)?;
-        if kind == Kind::Gif {
-            gif_fits(project.fps, range, end)?;
-        }
+        let fps = match (kind, fps) {
+            (Kind::Gif, None) => gif_rate(project.fps),
+            (Kind::Gif, Some(fps)) if GIF_FPS.contains(&fps) => fps,
+            (Kind::Gif, Some(_)) => return Err(bad("fps", "10, 15 or 24 for a GIF")),
+            (Kind::Aac | Kind::Wav | Kind::Poster, Some(_)) => {
+                return Err(bad(
+                    "fps",
+                    "omitted for audio presets and posters (they have no frame rate)",
+                ));
+            }
+            (_, None) => project.fps,
+            (_, Some(fps)) if VIDEO_FPS.contains(&fps) => fps,
+            (_, Some(_)) => return Err(bad("fps", "24, 25, 30, 50 or 60 for a video")),
+        };
+        let gif_width = match (kind, gif_width) {
+            (Kind::Gif, width) => Some(width.unwrap_or(GIF_WIDTH)),
+            (_, None) => None,
+            (_, Some(_)) => {
+                return Err(bad(
+                    "width",
+                    "omitted for presets other than gif (resolution sizes a video)",
+                ));
+            }
+        };
         let size = match (aspect, fixed) {
             (Some(aspect), _) => canvas(fixed.unwrap_or(project.size), aspect)?,
             (None, Some(size)) => size,
@@ -334,7 +395,7 @@ pub(super) fn resolve(
             Some(_) if matches!(kind, Kind::Aac | Kind::Wav | Kind::Gif) => {
                 return Err(bad(
                     "resolution",
-                    "omitted for audio and GIF presets (a GIF is at most 480 px wide)",
+                    "omitted for audio and GIF presets (a GIF takes width, at most 960 px)",
                 ));
             }
             Some(edge) => short_edge(size, edge),
@@ -347,7 +408,7 @@ pub(super) fn resolve(
                     "omitted for presets that are not H.264 or HEVC (ProRes, audio, GIF and poster set no bitrate)",
                 ));
             }
-            Some(mbps) => Some(quality_bitrate(mbps, size, project.fps, kind)),
+            Some(mbps) => Some(quality_bitrate(mbps, size, fps, kind)),
         };
         Ok(Output {
             preset,
@@ -356,6 +417,8 @@ pub(super) fn resolve(
             size,
             range,
             bitrate: bitrate.or(quality).or(mbps.map(|m| m * 1e6)),
+            fps,
+            gif_width,
             chapters: chapters.clone(),
             sidecar,
         })
@@ -399,41 +462,24 @@ pub(super) fn resolve(
     }
 }
 
-/// A GIF keeps every `gif_step`-th frame (about 15 fps), at most [`GIF_FRAMES`] of them, at most
-/// [`GIF_WIDTH`] pixels wide.
-pub(super) const GIF_FRAMES: usize = 150;
-/// Widest GIF in pixels; wider canvases scale down (reported in the result's settings).
+/// Frame rates a video export can resample to (`export.start {fps}`).
+const VIDEO_FPS: [u32; 5] = [24, 25, 30, 50, 60];
+/// GIF frame rates (Recorder's 10, 15 and 24).
+const GIF_FPS: [u32; 3] = [10, 15, 24];
+/// Default GIF width in pixels; `width` picks another up to [`GIF_MAX_WIDTH`].
 pub(super) const GIF_WIDTH: u32 = 480;
+/// Widest GIF (Recorder's limit): a GIF's palette and size make anything larger a video's job.
+pub(super) const GIF_MAX_WIDTH: u32 = 960;
+const GIF_MIN_WIDTH: u32 = 16;
 
-/// Timeline frames between two GIF frames.
-pub(super) fn gif_step(fps: u32) -> u32 {
-    (fps / 15).max(1)
-}
-
-/// A GIF longer than [`GIF_FRAMES`] is refused with the limit and a range that fits (A4): it
-/// is never cut short silently.
-fn gif_fits(fps: u32, range: [Frame; 2], end: Frame) -> Result<(), StoreError> {
-    let step = gif_step(fps);
-    let longest = Frame::try_from(GIF_FRAMES as u32 * step).unwrap_or(Frame::MAX);
-    if range[1] - range[0] <= longest {
-        return Ok(());
+/// A GIF's default rate keeps evenly spaced frames: 15 fps at 30 or 60, every frame at 24 or
+/// 25, every second at 50.
+fn gif_rate(fps: u32) -> u32 {
+    if fps.is_multiple_of(15) {
+        15
+    } else {
+        fps / (fps / 25).max(1)
     }
-    let to = (range[0] + longest).min(end);
-    let seconds = f64::from(longest) / f64::from(fps.max(1));
-    Err(CommandError::rule(
-        "OUT_OF_RANGE",
-        "to",
-        Some(Json::Signed(i64::from(range[1]))),
-        &format!(
-            "a GIF of at most {GIF_FRAMES} frames at {:.0} fps: {longest} timeline frames ({seconds:.1} s), at most {GIF_WIDTH} px wide",
-            f64::from(fps) / f64::from(step)
-        ),
-        &format!(
-            "Pass from/to at most {longest} frames apart (e.g. from:{} to:{to}), or export a video preset (social-h264) for the whole timeline.",
-            range[0]
-        ),
-    )
-    .into())
 }
 
 /// An export bound: a whole frame inside the timeline, never clamped or wrapped.
@@ -553,20 +599,75 @@ mod tests {
         );
     }
 
-    /// A4: a GIF past 150 frames at 15 fps (10 s at 30 fps) is refused with the limit and a
-    /// range that fits, never cut short.
+    /// Recorder's GIF limits: 10, 15 or 24 fps, up to 960 px wide, any length (A4: nothing is
+    /// cut short or refused for its length). Only what cannot be made is refused, with the
+    /// limit in the fix.
     #[test]
-    fn gifs_over_the_frame_limit_are_refused_with_a_range_that_fits() {
+    fn gifs_take_any_length_a_rate_and_a_width_up_to_960() {
         let project = Project::default();
-        let args = splice_json::parse(r#"{"preset":"gif","from":30}"#).unwrap();
-        let error = resolve(&project, 600, &args).unwrap_err();
-        assert_eq!(error.code, "OUT_OF_RANGE");
-        assert!(error.fix.contains("from:30 to:330"), "{}", error.fix);
-        let rule = error.rule.unwrap();
-        assert_eq!(rule.param, "to");
-        assert!(rule.expected.contains("10.0 s"), "{}", rule.expected);
-        let args = splice_json::parse(r#"{"preset":"gif","from":30,"to":330}"#).unwrap();
-        assert_eq!(resolve(&project, 600, &args).unwrap()[0].range, [30, 330]);
+        let resolved = |args: &str, end| resolve(&project, end, &splice_json::parse(args).unwrap());
+        // Ten minutes at 30 fps.
+        let out = resolved(r#"{"preset":"gif"}"#, 18_000).unwrap().remove(0);
+        assert_eq!(
+            (out.range, out.fps, out.gif_width),
+            ([0, 18_000], 15, Some(GIF_WIDTH))
+        );
+        let out = resolved(r#"{"preset":"gif","fps":24,"width":960}"#, 600)
+            .unwrap()
+            .remove(0);
+        assert_eq!((out.fps, out.gif_width), (24, Some(960)));
+        for fps in [24, 25, 30, 50, 60] {
+            let project = Project {
+                fps,
+                ..Project::default()
+            };
+            let rate = resolve(
+                &project,
+                600,
+                &splice_json::parse(r#"{"preset":"gif"}"#).unwrap(),
+            )
+            .unwrap()[0]
+                .fps;
+            assert_eq!(
+                fps % rate,
+                0,
+                "{fps} fps keeps evenly spaced frames ({rate})"
+            );
+        }
+        let error = resolved(r#"{"preset":"gif","width":1920}"#, 600).unwrap_err();
+        assert!(error.fix.contains("960"), "{}", error.fix);
+        assert_eq!(error.rule.unwrap().param, "width");
+        assert_eq!(refused(r#"{"preset":"gif","fps":30}"#).param, "fps");
+        assert_eq!(refused(r#"{"preset":"social","width":480}"#).param, "width");
+    }
+
+    /// `export.start {fps}` resamples a video to 24, 25, 30, 50 or 60 fps on a project that
+    /// already has clips; the bitrate follows the output rate. Audio and posters have no rate.
+    #[test]
+    fn video_exports_pick_an_output_frame_rate() {
+        let project = Project::default();
+        let out = |args: &str| {
+            resolve(&project, 120, &splice_json::parse(args).unwrap())
+                .unwrap()
+                .remove(0)
+        };
+        assert_eq!(out(r#"{}"#).fps, project.fps);
+        for fps in [24, 25, 30, 50, 60] {
+            assert_eq!(out(&format!(r#"{{"fps":{fps}}}"#)).fps, fps);
+        }
+        let at = |fps: u32| {
+            out(&format!(
+                r#"{{"preset":"social-h264","quality":"social","fps":{fps}}}"#
+            ))
+            .bitrate
+            .unwrap()
+        };
+        assert!((at(60) / at(30) - 2f64.sqrt()).abs() < 1e-9);
+        assert_eq!(refused(r#"{"fps":29.97}"#).param, "fps");
+        assert_eq!(refused(r#"{"fps":120}"#).param, "fps");
+        assert_eq!(refused(r#"{"fps":10}"#).param, "fps");
+        assert_eq!(refused(r#"{"preset":"audio-m4a","fps":30}"#).param, "fps");
+        assert_eq!(refused(r#"{"preset":"poster","fps":30}"#).param, "fps");
     }
 
     #[test]

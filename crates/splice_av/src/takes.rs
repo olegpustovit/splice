@@ -12,8 +12,22 @@ pub(crate) struct TakeEvents {
     pub size: [f64; 2],
     pub samples: Vec<Sample>,
     pub images: Vec<CursorImage>,
-    /// (source seconds, typed text, modifier flags as recorded).
-    pub keys: Vec<(f64, String, u64)>,
+    /// Keys that can make a chip, and modifier taps, in time order.
+    pub keys: Vec<Key>,
+}
+
+/// A recorded key (or a modifier pressed alone) on the source clock.
+pub(crate) struct Key {
+    /// Source seconds (a tap: when the modifier went down).
+    pub t: f64,
+    /// Index among the log's key events (`keys.hide`); `None` for a modifier tap.
+    pub index: Option<u32>,
+    /// Typed text as recorded.
+    pub text: String,
+    /// macOS virtual key code, when the log has it.
+    pub code: Option<u64>,
+    /// Modifier flags (a tap: the modifiers pressed).
+    pub mods: u64,
 }
 
 pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, Error> {
@@ -38,6 +52,8 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
     let mut ids: Vec<String> = Vec::new();
     let mut image = -1;
     let mut at: Option<[f64; 2]> = None;
+    let mut key_index = 0;
+    let mut taps = splice_eval::chips::ModifierTaps::default();
     for event in root.field("events").and_then(Json::as_array).unwrap_or(&[]) {
         let t = event.field("t").and_then(Json::as_f64).unwrap_or(-1.0);
         if !t.is_finite() || t < 0.0 {
@@ -92,11 +108,31 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
                 push(&mut out.samples, t, x, y, image, click);
             }
             Some("key") => {
-                if let Some(ch) = event.field("ch").and_then(Json::as_str)
-                    && !ch.trim().is_empty()
-                {
-                    let mods = event.field("mods").and_then(Json::as_u64).unwrap_or(0);
-                    out.keys.push((t, ch.to_owned(), mods));
+                let index = key_index;
+                key_index += 1;
+                taps.key();
+                let ch = event.field("ch").and_then(Json::as_str).unwrap_or_default();
+                let code = event.field("keyCode").and_then(Json::as_u64);
+                if splice_eval::chips::visible(code, ch) {
+                    out.keys.push(Key {
+                        t,
+                        index: Some(index),
+                        text: ch.to_owned(),
+                        code,
+                        mods: event.field("mods").and_then(Json::as_u64).unwrap_or(0),
+                    });
+                }
+            }
+            Some("flags") => {
+                let mods = event.field("mods").and_then(Json::as_u64).unwrap_or(0);
+                if let Some((pressed, mods)) = taps.flags(t, mods) {
+                    out.keys.push(Key {
+                        t: pressed,
+                        index: None,
+                        text: String::new(),
+                        code: None,
+                        mods,
+                    });
                 }
             }
             _ => {}

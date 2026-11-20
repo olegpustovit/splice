@@ -587,22 +587,81 @@ pub(super) fn cursor_set(a: &Json, scratch: &mut DecodeScratch) -> DecodedOp {
     })
 }
 
+/// Keystroke chip categories (`keys.set {show}`), in the bit order of the canonical names.
+const KEY_CATEGORIES: [&str; 4] = ["shortcuts", "typing", "navigation", "modifiers"];
+
+/// Category bits of `all` or names joined by `+`; `None` for anything else (or a repeat).
+fn key_categories(parts: &mut dyn Iterator<Item = Option<&str>>) -> Option<u8> {
+    let mut bits = 0;
+    for part in parts {
+        let part = part?;
+        let bit = if part == "all" {
+            15
+        } else {
+            1 << KEY_CATEGORIES.iter().position(|c| *c == part)?
+        };
+        if bits & bit != 0 {
+            return None;
+        }
+        bits |= bit;
+    }
+    (bits != 0).then_some(bits)
+}
+
 pub(super) fn keys_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
-    let show = match a.opt_string("show")?.as_deref() {
+    let refused = || {
+        Error::bad(
+            "show",
+            "all, none, shortcuts, typing, navigation or modifiers, several joined by + (\"shortcuts+navigation\") or as a list",
+        )
+    };
+    let show = match a.field("show") {
         None => None,
-        Some("all") => Some("all"),
-        Some("shortcuts") => Some("shortcuts"),
-        Some("none") => Some("none"),
-        Some(_) => return Err(Error::bad("show", "all, shortcuts or none")),
+        Some(Json::String(text)) if text == "none" => Some("none"),
+        Some(value) => {
+            let bits = match value {
+                Json::String(text) => key_categories(&mut text.split('+').map(Some)),
+                Json::Array(list) => key_categories(&mut list.iter().map(Json::as_str)),
+                _ => None,
+            }
+            .ok_or_else(refused)?;
+            // The canonical spelling the effect stores (effects.json lists one per set).
+            let canonical = keystroke_options("show").iter().find_map(|option| {
+                let name = option.as_str()?;
+                (key_categories(&mut name.split('+').map(Some)) == Some(bits)).then_some(name)
+            });
+            Some(canonical.ok_or_else(refused)?)
+        }
+    };
+    let position = match a.opt_string("position")? {
+        None => None,
+        Some(name) => Some(
+            keystroke_options("position")
+                .iter()
+                .filter_map(Json::as_str)
+                .find(|option| *option == name)
+                .ok_or_else(|| {
+                    Error::bad(
+                        "position",
+                        "top-left, top-center, top-right, middle-left, center, middle-right, bottom-left, bottom-center or bottom-right",
+                    )
+                })?,
+        ),
     };
     let size = a.opt_within("size", 0.5, 3.0)?;
-    if size.is_none() && show.is_none() {
-        return Err(Error::bad("show or size", "at least one change"));
+    let hold = a.opt_within("hold", 0.3, 5.0)?;
+    if size.is_none() && show.is_none() && position.is_none() && hold.is_none() {
+        return Err(Error::bad(
+            "show, position, hold or size",
+            "at least one change",
+        ));
     }
     Ok(Op::KeysSet {
         clip: a.target("clip")?,
         size,
         show,
+        position,
+        hold,
     })
 }
 

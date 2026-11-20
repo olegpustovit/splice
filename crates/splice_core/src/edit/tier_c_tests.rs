@@ -643,7 +643,10 @@ fn low_out_of_range_edits_are_refused() {
     let described = commands::describe(Some("keys.set"), None).unwrap();
     let mut text = String::new();
     splice_json::write(&described, &mut text).unwrap();
-    assert!(text.contains("all|shortcuts|none"), "{text}");
+    assert!(
+        text.contains("all|none|shortcuts|typing|navigation|modifiers"),
+        "{text}"
+    );
     // SRT with an absurd hour field is malformed, not an overflow.
     assert_eq!(
         parse_cues("1\n99999999999999999:00:00,000 --> 99999999999999999:00:01,000\nhi\n"),

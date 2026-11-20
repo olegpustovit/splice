@@ -21,6 +21,8 @@ mod fcpxml;
 mod frames;
 /// Persistent MCP friction records and their CLI commands.
 pub mod friction;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod gif;
 mod history;
 #[cfg(target_os = "macos")]
 mod ipc;

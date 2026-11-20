@@ -1,4 +1,4 @@
-use super::presets::{GIF_FRAMES, GIF_WIDTH, Kind, Output as Request, gif_step, reframed};
+use super::presets::{GIF_WIDTH, Kind, Output as Request, reframed};
 use super::{
     Json,
     export_file::{Output, path_error},
@@ -9,7 +9,8 @@ use splice_av::{Codec, Composition, Encoding, Export, ExportState};
 use splice_core::history::{Store, StoreError};
 use splice_model::{Frame, JobId, Project, SessionId};
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -32,6 +33,7 @@ pub(super) struct Job {
     path: PathBuf,
     output: Option<Output>,
     export: Option<Export>,
+    gif: Option<Box<GifEncode>>,
     state: State,
     started: Instant,
     frames: Frame,
@@ -52,7 +54,7 @@ pub fn export_project(
     let request = super::presets::resolve(store.project(), end, &Json::Object(args))?
         .pop()
         .expect("one output");
-    if matches!(request.kind, Kind::Poster | Kind::Gif) {
+    if request.kind == Kind::Poster {
         return still(&store, &request, path, overwrite);
     }
     let mut job = Job::start(
@@ -102,7 +104,7 @@ fn check_space(dir: &std::path::Path, bytes: f64) -> Result<(), StoreError> {
     Ok(())
 }
 
-/// Posters and GIFs render synchronously from the frame reader.
+/// Posters render synchronously from the frame reader.
 pub(super) fn still(
     store: &Store,
     request: &Request,
@@ -117,66 +119,16 @@ pub(super) fn still(
         }
         None => store.project(),
     };
-    // GIFs render at most GIF_WIDTH px wide (the settings report the size).
-    let gif = request.kind == Kind::Gif;
-    let shrunk;
-    let project = if gif && project.size[0] > GIF_WIDTH {
-        let mut small = project.clone();
-        small.size = [
-            GIF_WIDTH,
-            (project.size[1] * GIF_WIDTH / project.size[0]) & !1,
-        ];
-        shrunk = small;
-        &shrunk
-    } else {
-        project
-    };
     let composition = Composition::prepare(project, store.path())
         .map_err(|error| super::frames::prepare_error(&error, export_failure))?;
     let output = Output::prepare(destination(store, path, request)?, overwrite)?;
     let [w, h] = project.size;
-    let frame_bytes = (w * h * 4) as usize;
-    let mut rgba = vec![0u8; frame_bytes];
-    let mut settings = vec![
-        ("preset", text(request.preset)),
-        ("width", Json::Unsigned(u64::from(w))),
-        ("height", Json::Unsigned(u64::from(h))),
-    ];
-    if gif {
-        // About 15 fps; resolve refused a range over GIF_FRAMES, so nothing is cut short.
-        let step = gif_step(project.fps) as Frame;
-        let frames: Vec<Frame> = (request.range[0]..request.range[1])
-            .step_by(step as usize)
-            .collect();
-        debug_assert!(frames.len() <= GIF_FRAMES);
-        settings.extend([
-            ("fps", Json::Float(f64::from(project.fps) / f64::from(step))),
-            ("frames", Json::Unsigned(frames.len() as u64)),
-            ("from", Json::Signed(i64::from(request.range[0]))),
-            ("to", Json::Signed(i64::from(request.range[1]))),
-        ]);
-        let mut all = Vec::with_capacity(frames.len() * frame_bytes);
-        for at in frames {
-            composition
-                .read_frame(at, &mut rgba)
-                .map_err(|e| export_failure(&e))?;
-            all.extend_from_slice(&rgba);
-        }
-        apple_sys::image::gif(
-            output.staged(),
-            &all,
-            [w, h],
-            f64::from(step as u32) / f64::from(project.fps),
-        )
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    composition
+        .read_frame(request.range[0], &mut rgba)
         .map_err(|e| export_failure(&e))?;
-    } else {
-        let at = request.range[0];
-        composition
-            .read_frame(at, &mut rgba)
-            .map_err(|e| export_failure(&e))?;
-        let png = splice_av::encode_png(&rgba, [w, h], w.max(h)).map_err(|e| export_failure(&e))?;
-        fs::write(output.staged(), png).map_err(|e| path_error(output.staged(), &e))?;
-    }
+    let png = splice_av::encode_png(&rgba, [w, h], w.max(h)).map_err(|e| export_failure(&e))?;
+    fs::write(output.staged(), png).map_err(|e| path_error(output.staged(), &e))?;
     output.publish()?;
     Ok(object(vec![
         ("state", text("done")),
@@ -184,8 +136,66 @@ pub(super) fn still(
             "output",
             Json::String(output.file().to_string_lossy().into_owned()),
         ),
-        ("settings", object(settings)),
+        (
+            "settings",
+            object(vec![
+                ("preset", text(request.preset)),
+                ("width", Json::Unsigned(u64::from(w))),
+                ("height", Json::Unsigned(u64::from(h))),
+            ]),
+        ),
     ]))
+}
+
+/// GIF bytes per pixel per frame and seconds per megapixel frame (`settings.estimate`), measured
+/// on the Mac mini with a noisy test video: 0.06–0.12 bytes a pixel, 16–22 ms a megapixel at 960
+/// and 480 px. A screen recording's still stretches cost far less.
+const GIF_BYTES_PER_PIXEL: f64 = 0.08;
+const GIF_SECONDS_PER_MEGAPIXEL: f64 = 0.02;
+/// Past this length a GIF still exports, with a warning: an MP4 is far smaller (Recorder warns
+/// past 60 s too).
+const GIF_LONG_SECONDS: f64 = 60.0;
+
+/// A GIF in progress: timeline frames decoded in order and streamed through [`GifWriter`]
+/// (dropped or repeated to the GIF's rate), so memory stays one frame whatever the length.
+struct GifEncode {
+    frames: splice_av::Frames,
+    writer: super::gif::GifWriter,
+    file: io::BufWriter<fs::File>,
+    rgba: Vec<u8>,
+    range: [Frame; 2],
+    /// Timeline and GIF frames per second.
+    rates: [u32; 2],
+    /// Timeline frames done (progress).
+    done: Frame,
+}
+
+impl GifEncode {
+    /// Renders and writes frames until `budget` passes; true once the file is complete.
+    fn step(&mut self, budget: Duration, staged: &std::path::Path) -> Result<bool, StoreError> {
+        let started = Instant::now();
+        let io = |error: io::Error| path_error(staged, &error);
+        let [timeline, gif] = self.rates;
+        loop {
+            // The GIF frames that show the next timeline frame: none when a lower rate drops it.
+            let [first, last] = splice_eval::resample::outputs(self.done, timeline, gif);
+            let rgba = (last > first).then_some(self.rgba.as_mut_slice());
+            let Some(at) = self.frames.next(rgba).map_err(|e| export_failure(&e))? else {
+                break;
+            };
+            debug_assert_eq!(at, self.range[0] + self.done);
+            for _ in first..last {
+                self.writer.frame(&self.rgba, &mut self.file).map_err(io)?;
+            }
+            self.done += 1;
+            if started.elapsed() >= budget {
+                return Ok(false);
+            }
+        }
+        self.writer.finish(&mut self.file).map_err(io)?;
+        self.file.flush().map_err(io)?;
+        Ok(true)
+    }
 }
 
 impl Job {
@@ -206,18 +216,20 @@ impl Job {
                 "Add a clip or overlay before exporting.",
             ));
         }
+        if request.kind == Kind::Gif {
+            return Self::gif(store, id, owner, request, path, overwrite);
+        }
         let copy = rendered(store, request)?;
         let project = copy.as_ref().unwrap_or(store.project());
         let codec = codec(request.kind);
         let frames = request.range[1] - request.range[0];
         let seconds = f64::from(frames) / f64::from(project.fps);
         let pixels = f64::from(project.size[0]) * f64::from(project.size[1]);
+        let fps = f64::from(request.fps);
         let video_bits = match codec {
-            Codec::ProRes422 | Codec::ProRes4444 => pixels * f64::from(project.fps) * 4.0,
+            Codec::ProRes422 | Codec::ProRes4444 => pixels * fps * 4.0,
             Codec::Aac | Codec::Wav => 0.0,
-            _ => request
-                .bitrate
-                .unwrap_or(pixels * f64::from(project.fps) * 0.35),
+            _ => request.bitrate.unwrap_or(pixels * fps * 0.35),
         };
         let audio_bits = if codec == Codec::Wav {
             1_536_000.0
@@ -255,11 +267,27 @@ impl Job {
             }
             None => Json::Null,
         };
-        let settings = object(vec![
+        let mut settings = vec![
             ("preset", text(request.preset)),
             ("width", Json::Unsigned(u64::from(project.size[0]))),
             ("height", Json::Unsigned(u64::from(project.size[1]))),
-            ("fps", Json::Unsigned(u64::from(project.fps))),
+            ("fps", Json::Unsigned(u64::from(request.fps))),
+        ];
+        // Resampled (export.start {fps}): the output's own frame count and the timeline's rate.
+        if request.fps != project.fps && codec.video() {
+            settings.extend([
+                ("timelineFps", Json::Unsigned(u64::from(project.fps))),
+                (
+                    "frames",
+                    frame(splice_eval::resample::frames(
+                        frames,
+                        project.fps,
+                        request.fps,
+                    )),
+                ),
+            ]);
+        }
+        settings.extend([
             ("codec", text(codec.name())),
             ("container", text(&request.extension.to_uppercase())),
             ("encoder", text("AVFoundation")),
@@ -269,12 +297,14 @@ impl Job {
             ("chapters", Json::Unsigned(request.chapters.len() as u64)),
             ("credits", credits),
         ]);
+        let settings = object(settings);
         let composition = Composition::prepare(project, store.path())
             .map_err(|error| super::frames::prepare_error(&error, export_failure))?;
         let encoding = Encoding {
             codec,
             range: request.range,
             bitrate: request.bitrate,
+            fps: request.fps,
             chapters: request.chapters.clone(),
         };
         let export = composition
@@ -288,6 +318,101 @@ impl Job {
             path,
             output: Some(output),
             export: Some(export),
+            gif: None,
+            state: State::Running(0.0),
+            started: Instant::now(),
+            frames,
+        })
+    }
+
+    /// A GIF at `request.fps`, `request.gif_width` wide: any length, streamed frame by frame.
+    fn gif(
+        store: &Store,
+        id: JobId,
+        owner: Option<(String, SessionId)>,
+        request: &Request,
+        path: Option<&str>,
+        overwrite: bool,
+    ) -> Result<Self, StoreError> {
+        let mut project = rendered(store, request)?.unwrap_or_else(|| store.project().clone());
+        let width = request.gif_width.unwrap_or(GIF_WIDTH);
+        // The canvas scaled to the GIF's width (shape kept, even height); upscaling is allowed.
+        project.size = [
+            width,
+            ((u64::from(project.size[1]) * u64::from(width) / u64::from(project.size[0].max(1)))
+                as u32
+                & !1)
+                .max(2),
+        ];
+        let [w, h] = project.size;
+        let range = request.range;
+        let frames = range[1] - range[0];
+        let total = splice_eval::resample::frames(frames, project.fps, request.fps);
+        let seconds = f64::from(frames) / f64::from(project.fps);
+        let megapixels = f64::from(w) * f64::from(h) / 1e6;
+        let bytes = f64::from(total) * megapixels * 1e6 * GIF_BYTES_PER_PIXEL;
+        let target = destination(store, path, request)?;
+        check_space(target.parent().unwrap_or(store.path()), bytes)?;
+        let output = Output::prepare(target, overwrite)?;
+        let composition = Composition::prepare(&project, store.path())
+            .map_err(|error| super::frames::prepare_error(&error, export_failure))?;
+        let file = fs::File::create_new(output.staged())
+            .map_err(|error| path_error(output.staged(), &error))?;
+        let path = output.file().to_path_buf();
+        let mut settings = vec![
+            ("preset", text(request.preset)),
+            ("width", Json::Unsigned(u64::from(w))),
+            ("height", Json::Unsigned(u64::from(h))),
+            ("fps", Json::Unsigned(u64::from(request.fps))),
+            ("frames", frame(total)),
+            ("from", frame(range[0])),
+            ("to", frame(range[1])),
+            ("path", Json::String(path.to_string_lossy().into_owned())),
+            // Rough cost before it runs: a busier picture is larger and slower.
+            (
+                "estimate",
+                object(vec![
+                    ("megabytes", Json::Float((bytes / 1e5).round() / 10.0)),
+                    (
+                        "seconds",
+                        Json::Float(
+                            (f64::from(total) * megapixels * GIF_SECONDS_PER_MEGAPIXEL * 10.0)
+                                .round()
+                                / 10.0,
+                        ),
+                    ),
+                ]),
+            ),
+        ];
+        if seconds > GIF_LONG_SECONDS {
+            settings.push((
+                "warning",
+                text(&format!(
+                    "A {seconds:.0} s GIF is about {:.0} MB; an MP4 (preset social-h264) of the same range is a fraction of that.",
+                    bytes / 1e6
+                )),
+            ));
+        }
+        let gif = GifEncode {
+            frames: composition
+                .frames(range)
+                .map_err(|error| super::frames::prepare_error(&error, export_failure))?,
+            writer: super::gif::GifWriter::new([w, h], request.fps),
+            file: io::BufWriter::new(file),
+            rgba: vec![0; (w * h * 4) as usize],
+            range,
+            rates: [project.fps, request.fps],
+            done: 0,
+        };
+        Ok(Self {
+            id,
+            owner,
+            revision: store.project().rev,
+            settings: object(settings),
+            path,
+            output: Some(output),
+            export: None,
+            gif: Some(Box::new(gif)),
             state: State::Running(0.0),
             started: Instant::now(),
             frames,
@@ -323,6 +448,37 @@ impl Job {
 
     /// Encodes for up to `budget`; publishes the file when the export completes.
     pub(super) fn step(&mut self, budget: Duration) {
+        if let Some(gif) = self.gif.as_mut() {
+            let staged = self.output.as_ref().map(|o| o.staged().to_path_buf());
+            self.state = match (&self.state, staged) {
+                // Dropping the output removes the partial file.
+                (State::Cancelling(_), _) => State::Cancelled,
+                (_, None) => State::Failed(export_failure(&"The export output was already used.")),
+                (_, Some(staged)) => match gif.step(budget, &staged) {
+                    Ok(false) => State::Running(
+                        gif.done as f32 / (gif.range[1] - gif.range[0]).max(1) as f32,
+                    ),
+                    Ok(true) => match self.output.take().map(|output| output.publish()) {
+                        Some(Ok(())) => {
+                            if let Json::Object(fields) = &mut self.settings {
+                                fields.push(("bytes".into(), Json::Unsigned(gif.writer.written())));
+                            }
+                            State::Done
+                        }
+                        Some(Err(error)) => State::Failed(error),
+                        None => {
+                            State::Failed(export_failure(&"The export output was already used."))
+                        }
+                    },
+                    Err(error) => State::Failed(error),
+                },
+            };
+            if !self.active() {
+                self.gif = None;
+                self.output = None;
+            }
+            return;
+        }
         let Some(export) = self.export.as_mut() else {
             return;
         };

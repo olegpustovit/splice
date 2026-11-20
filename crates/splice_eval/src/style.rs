@@ -98,15 +98,51 @@ pub(super) struct CameraStyle {
     pub(super) layout: Num,
 }
 
-/// Keystroke-chip placement.
+/// Keystroke-chip placement on a 3×3 grid of the canvas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyPosition {
+    /// Top left.
+    TopLeft,
+    /// Top center.
+    TopCenter,
+    /// Top right.
+    TopRight,
+    /// Middle left.
+    MiddleLeft,
+    /// Center.
+    Center,
+    /// Middle right.
+    MiddleRight,
     /// Bottom left.
     BottomLeft,
     /// Bottom center.
     BottomCenter,
-    /// Top left.
-    TopLeft,
+    /// Bottom right.
+    BottomRight,
+}
+
+/// `position` names in grid order (`effects.json` lists the same).
+pub const KEY_POSITIONS: [(&str, KeyPosition); 9] = [
+    ("top-left", KeyPosition::TopLeft),
+    ("top-center", KeyPosition::TopCenter),
+    ("top-right", KeyPosition::TopRight),
+    ("middle-left", KeyPosition::MiddleLeft),
+    ("center", KeyPosition::Center),
+    ("middle-right", KeyPosition::MiddleRight),
+    ("bottom-left", KeyPosition::BottomLeft),
+    ("bottom-center", KeyPosition::BottomCenter),
+    ("bottom-right", KeyPosition::BottomRight),
+];
+
+impl KeyPosition {
+    /// Column and row on the grid: 0 left/top, 1 center/middle, 2 right/bottom.
+    pub fn cell(self) -> [u8; 2] {
+        let index = KEY_POSITIONS
+            .iter()
+            .position(|(_, p)| *p == self)
+            .unwrap_or(6) as u8;
+        [index % 3, index / 3]
+    }
 }
 
 /// Style for an active recorded keystroke chip.
@@ -116,8 +152,10 @@ pub struct Keys {
     pub scale: f64,
     /// Overlay placement.
     pub position: KeyPosition,
-    /// Only keys pressed with ⌘, ⌃ or ⌥ show (`keys.set {show:"shortcuts"}`).
-    pub shortcuts_only: bool,
+    /// Categories that draw (`crate::chips` bits; `keys.set {show}`).
+    pub show: u8,
+    /// Seconds a chip stays after its last key (`keys.set {hold}`).
+    pub hold: f64,
 }
 
 /// Preset used to lay out and highlight caption words.
@@ -298,15 +336,18 @@ pub(super) fn keys(scopes: &[&[Effect]]) -> Option<Keys> {
     if style.enabled == Some(false) {
         return None;
     }
-    let position = match style.text("position") {
-        Some("bottom-center") => KeyPosition::BottomCenter,
-        Some("top-left") => KeyPosition::TopLeft,
-        _ => KeyPosition::BottomLeft,
-    };
+    let position = style
+        .text("position")
+        .and_then(|name| KEY_POSITIONS.iter().find(|(n, _)| *n == name))
+        .map_or(KeyPosition::BottomLeft, |(_, p)| *p);
     Some(Keys {
         scale: style.number("size", 1.0).clamp(0.5, 3.0),
         position,
-        shortcuts_only: style.text("show") == Some("shortcuts"),
+        show: style
+            .text("show")
+            .and_then(crate::chips::parse_show)
+            .unwrap_or(crate::chips::ALL),
+        hold: style.number("hold", 1.2).clamp(0.3, 5.0),
     })
 }
 

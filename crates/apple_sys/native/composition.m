@@ -1190,7 +1190,7 @@ uint8_t *splice_image_rgba(const char *path, uint32_t *width, uint32_t *height, 
 @implementation SpliceAVReader
 @end
 
-void *splice_av_reader(void *raw, int32_t from, int32_t to, char **error) {
+void *splice_av_reader(void *raw, int32_t from, int32_t to, bool with_audio, char **error) {
     @autoreleasepool {
         SpliceAVAssembly *assembly = (__bridge SpliceAVAssembly *)raw;
         NSError *failure = nil;
@@ -1214,7 +1214,7 @@ void *splice_av_reader(void *raw, int32_t from, int32_t to, char **error) {
         }
         [reader addOutput:video];
         AVAssetReaderAudioMixOutput *audio = nil;
-        NSArray *audioTracks = [assembly.asset tracksWithMediaType:AVMediaTypeAudio];
+        NSArray *audioTracks = with_audio ? [assembly.asset tracksWithMediaType:AVMediaTypeAudio] : @[];
         if (audioTracks.count > 0) {
             audio = [AVAssetReaderAudioMixOutput assetReaderAudioMixOutputWithAudioTracks:audioTracks audioSettings:@{
                 AVFormatIDKey: @(kAudioFormatLinearPCM), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2,
@@ -1289,7 +1289,7 @@ void splice_av_reader_release(void *raw) {
 @property(nonatomic, strong) NSMutableDictionary *surfaces;
 @property(nonatomic, strong) NSURL *url;
 @property(nonatomic) CVPixelBufferRef pending;
-@property(nonatomic) int32_t origin;
+@property(nonatomic) int32_t fps;
 @end
 @implementation SpliceAVWriter
 - (void)dealloc {
@@ -1359,6 +1359,8 @@ void *splice_av_writer(void *reader_raw, const char *file, const SpliceExportSet
         }
         AVAssetWriterInput *video = nil;
         AVAssetWriterInputPixelBufferAdaptor *adaptor = nil;
+        // export.start {fps}: frames are appended at the output rate (the caller samples them).
+        int32_t fps = settings->fps > 0 ? (int32_t)settings->fps : assembly.fps;
         if (video_out) {
             double pixels = assembly.size.width * assembly.size.height;
             bool hevc = codec == SpliceCodecHEVC || codec == SpliceCodecHEVCAlpha;
@@ -1374,9 +1376,9 @@ void *splice_av_writer(void *reader_raw, const char *file, const SpliceExportSet
             } mutableCopy];
             if (codec <= SpliceCodecHEVC || codec == SpliceCodecHEVCAlpha) {
                 // About the "highest quality" export preset's rate: 22 Mbps H.264, 16 Mbps HEVC at 1080p30.
-                double rate = settings->bitrate > 0 ? settings->bitrate : pixels * assembly.fps * (hevc ? 0.25 : 0.35);
+                double rate = settings->bitrate > 0 ? settings->bitrate : pixels * fps * (hevc ? 0.25 : 0.35);
                 output[AVVideoCompressionPropertiesKey] = @{AVVideoAverageBitRateKey: @((long long)rate),
-                                                            AVVideoExpectedSourceFrameRateKey: @(assembly.fps)};
+                                                            AVVideoExpectedSourceFrameRateKey: @(fps)};
             }
             video = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:output];
             video.expectsMediaDataInRealTime = NO;
@@ -1478,7 +1480,7 @@ void *splice_av_writer(void *reader_raw, const char *file, const SpliceExportSet
         out.adaptor = adaptor;
         out.audio = audio;
         out.url = url;
-        out.origin = settings->from;
+        out.fps = fps;
         out.surfaces = [NSMutableDictionary dictionary];
         out.audioDone = dispatch_semaphore_create(0);
         out.queue = dispatch_queue_create("splice.export.audio", DISPATCH_QUEUE_SERIAL);
@@ -1565,7 +1567,7 @@ bool splice_av_writer_append(void *raw, int32_t frame, char **error) {
             }
             usleep(1000);
         }
-        CMTime at = CMTimeMake(frame - writer.origin, writer.reader.assembly.fps);
+        CMTime at = CMTimeMake(frame, writer.fps);
         if (![writer.adaptor appendPixelBuffer:writer.pending withPresentationTime:at]) {
             fail(error, writer.writer.error, "The encoder rejected a frame.");
             return false;

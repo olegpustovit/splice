@@ -37,8 +37,8 @@
       "expr": "len(exports('.mp4')) >= 1"
     },
     {
-      "name": "GIF limit reported",
-      "expr": "agent_said(r'10[ -]?(s\\b|sec)|150 frames|limit')"
+      "name": "the GIF is the 15 seconds asked (GIFs take any length)",
+      "expr": "any(abs(gif_seconds(name) - 15) <= 0.5 for name in exports('.gif'))"
     }
   ]
 }

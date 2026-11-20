@@ -125,7 +125,7 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
             _ => {}
         }
     }
-    // A1: chips that show every key put typed text (passwords, private notes) in the export;
+    // A1: chips that show typing put typed text (passwords, private notes) in the export;
     // renders an agent sees redact them, so only this says so.
     for &slot in project.clips.order() {
         let (Some(id), Some(data)) = (project.clips.id(slot), project.clips.data(slot)) else {
@@ -139,26 +139,27 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
             &project.spine.effects,
             &data.appearance.effects,
         ];
-        let shortcuts =
-            splice_eval::resolve_effect(&scopes, "keystrokes").is_some_and(|(enabled, params)| {
-                !enabled
-                    || params.iter().any(|param| {
-                        param.name == "show"
-                            && param.value == splice_model::EffectValue::Text("shortcuts".into())
-                    })
-            });
-        if !shortcuts {
+        let shown = splice_eval::chips::shown(&scopes);
+        if shown & splice_eval::chips::TYPING != 0 {
+            // Keep every other category: shortcuts alone when typing was all there was.
+            let rest = match shown & !splice_eval::chips::TYPING {
+                0 => splice_eval::chips::SHORTCUTS,
+                rest => rest,
+            };
+            let keep = splice_eval::chips::SHOW[usize::from(rest)];
             lints.push(lint(
                 "KEYS_SHOW_TYPING",
                 &format!(
-                    "{id}'s keystroke chips show every key, so typed text appears in the export (agent renders show it as dots)."
+                    "{id}'s keystroke chips show typing, so typed text appears in the export (agent renders show it as dots)."
                 ),
                 &[id.to_string()],
-                "Show only shortcuts (keys.set {show:\"shortcuts\"}), hide the private keys (keys.hide), or turn the chips off (keys.set {show:\"none\"}).",
+                &format!(
+                    "Drop typing (keys.set {{show:\"{keep}\"}}), hide the private keys (keys.hide), or turn the chips off (keys.set {{show:\"none\"}})."
+                ),
                 Some(Json::Array(vec![object(vec![
                     ("cmd", text("keys.set")),
                     ("clip", text(&id.to_string())),
-                    ("show", text("shortcuts")),
+                    ("show", text(keep)),
                 ])])),
             ));
         }
@@ -821,6 +822,35 @@ mod tests {
             splice_json::parse(r#"[{"cmd":"keys.set","clip":"clp_take","show":"none"}]"#).unwrap();
         edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
         assert!(!codes(&project).iter().any(|(c, _)| c == "KEYS_SHOW_TYPING"));
+        // Categories: typing anywhere in the set is flagged, and the fix keeps the rest.
+        for (show, keep) in [
+            ("all", Some("shortcuts+navigation+modifiers")),
+            ("typing+navigation", Some("navigation")),
+            ("typing", Some("shortcuts")),
+            ("shortcuts+navigation+modifiers", None),
+        ] {
+            let ops = splice_json::parse(&format!(
+                r#"[{{"cmd":"keys.set","clip":"clp_take","show":"{show}"}}]"#
+            ))
+            .unwrap();
+            edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+            let found = codes(&project);
+            let fix = found
+                .iter()
+                .find(|(code, _)| code == "KEYS_SHOW_TYPING")
+                .map(|(_, lint)| lint.field("ops").unwrap().as_array().unwrap()[0].clone());
+            assert_eq!(
+                fix.as_ref()
+                    .and_then(|op| op.field("show"))
+                    .and_then(Json::as_str),
+                keep,
+                "{show}"
+            );
+            if let Some(op) = fix {
+                edit::apply(&mut project, &[op], Source::Agent, false).unwrap();
+                assert!(!codes(&project).iter().any(|(c, _)| c == "KEYS_SHOW_TYPING"));
+            }
+        }
     }
 
     /// T46.2: a zoom that follows the cursor over a take without recorded pointer events (or

@@ -9,7 +9,7 @@ mod lower;
 mod lut;
 mod takes;
 
-pub use export::{Export, ExportState};
+pub use export::{Export, ExportState, Frames};
 pub use gpu::GpuProgram;
 
 use apple_sys::composition;
@@ -28,6 +28,8 @@ pub struct Composition {
     native: composition::Composition,
     evaluator: std::sync::Arc<Evaluator>,
     size: [u32; 2],
+    /// Timeline frames per second.
+    fps: u32,
     end: Frame,
     text: Vec<TimedText>,
     plan: lower::Plan,
@@ -203,6 +205,7 @@ impl Composition {
             native,
             evaluator,
             size: project.size,
+            fps: project.fps,
             end,
             text,
             plan,
@@ -321,6 +324,18 @@ impl Composition {
         self.timings.get()
     }
 
+    /// Renders `range` (clamped to the timeline) in order into RGBA buffers with the export's
+    /// sequential decode (a GIF), instead of a seek per `read_frame`. Offline media is refused
+    /// as for an export. Advance it with `Frames::next` on the main thread.
+    pub fn frames(&self, range: [Frame; 2]) -> Result<Frames, Error> {
+        if let Some((_, path)) = self.offline.first() {
+            return Err(Error::Offline(path.clone()));
+        }
+        let range = [range[0].clamp(0, self.end), range[1].clamp(0, self.end)];
+        let reader = self.native.reader(Some(range), false)?;
+        Frames::start(reader, self.plan.clone(), &self.text, self.size)
+    }
+
     /// Starts encoding the composition and its audio mix with `encoding` (its range clamped to
     /// the timeline). Advance the returned export with `step` on the main thread.
     pub fn start_export(
@@ -339,14 +354,17 @@ impl Composition {
         if encoding.range[1] <= encoding.range[0] {
             encoding.range = [0, self.end];
         }
-        let reader = self.native.reader(Some(encoding.range))?;
+        if encoding.fps == 0 {
+            encoding.fps = self.fps;
+        }
+        let reader = self.native.reader(Some(encoding.range), true)?;
         let writer = composition::Writer::new(&reader, file, &encoding)?;
         Export::start(
             reader,
             writer,
             self.plan.clone(),
             &self.text,
-            self.size,
+            [self.size, [self.fps, encoding.fps]],
             &encoding,
         )
     }

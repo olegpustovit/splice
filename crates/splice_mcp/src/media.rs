@@ -524,7 +524,7 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
                 )
             })?,
     };
-    // Some(shortcuts only) when the clip draws keystroke chips (A1), None when they are off.
+    // The categories the clip draws as keystroke chips (A1; 0 when they are off).
     let chips = {
         let data = p.clips.data(slot).unwrap();
         let scopes = [
@@ -532,15 +532,13 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
             &p.spine.effects,
             &data.appearance.effects,
         ];
-        match splice_eval::resolve_effect(&scopes, "keystrokes") {
-            _ if data.enabled.keys != Some(true) => None,
-            Some((false, _)) => None,
-            Some((true, params)) => Some(params.iter().any(|param| {
-                param.name == "show" && param.value == EffectValue::Text("shortcuts".into())
-            })),
-            None => Some(false),
+        if data.enabled.keys == Some(true) {
+            splice_eval::chips::shown(&scopes)
+        } else {
+            0
         }
     };
+    let mut taps = splice_eval::chips::ModifierTaps::default();
     let mut counts = [0u64; 4];
     let mut last_cursor: Option<Frame> = None;
     let mut cursor = Vec::new();
@@ -563,8 +561,40 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
             let source = at * media.probe.fps;
             let shown = clock.has(source) && (from..to).contains(&clock.start(source));
             let index = key_index;
-            if kind == "key" {
-                key_index += 1;
+            let mods = event.field("mods").and_then(Json::as_u64).unwrap_or(0);
+            match kind {
+                "key" => {
+                    key_index += 1;
+                    taps.key();
+                }
+                // A modifier pressed alone: a `modifiers` chip at its press, never hideable by
+                // index (keys.hide counts key events only).
+                "flags" if wanted[2] => {
+                    if let Some((pressed, tap)) = taps.flags(at, mods) {
+                        let source = pressed * media.probe.fps;
+                        if clock.has(source) && (from..to).contains(&clock.start(source)) {
+                            keys.push(object(vec![
+                                ("kind", text("key")),
+                                ("frame", frame(clock.start(source))),
+                                ("sourceFrame", Json::Signed(source.round() as i64)),
+                                ("index", Json::Null),
+                                ("category", text("modifier")),
+                                (
+                                    "chip",
+                                    Json::Bool(chips & splice_eval::chips::MODIFIERS != 0),
+                                ),
+                                ("hidden", Json::Bool(false)),
+                                ("redacted", Json::Bool(false)),
+                                (
+                                    "text",
+                                    text(&splice_eval::chips::chip_text("", None, tap, true, true)),
+                                ),
+                            ]));
+                        }
+                    }
+                    return Ok(());
+                }
+                _ => {}
             }
             if !shown {
                 return Ok(());
@@ -610,28 +640,28 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
                 }
                 "key" => {
                     let data = p.clips.data(slot).unwrap();
-                    let mods = event.field("mods").and_then(Json::as_u64).unwrap_or(0);
-                    let category = if mods & splice_eval::activity::SHORTCUT_MODIFIERS != 0 {
-                        "shortcut"
-                    } else {
-                        "typing"
-                    };
+                    let ch = event.field("ch").and_then(Json::as_str).unwrap_or_default();
+                    let code = event.field("keyCode").and_then(Json::as_u64);
+                    let bit = splice_eval::chips::category(code, mods, ch);
+                    let category = splice_eval::chips::CATEGORIES
+                        .iter()
+                        .find(|c| c.2 == bit)
+                        .map_or("typing", |c| c.1);
                     let hidden = data.hidden_keys.contains(&(index as u32));
-                    let typed = event
-                        .field("ch")
-                        .and_then(Json::as_str)
-                        .is_some_and(|ch| !ch.trim().is_empty());
-                    // Whether the export draws this key as a chip (agent renders: as dots).
-                    let chip = typed
-                        && !hidden
-                        && chips.is_some_and(|shortcuts| !shortcuts || category == "shortcut");
+                    // Whether the export draws this key as a chip (agent renders: typed
+                    // characters as dots).
+                    let chip = splice_eval::chips::visible(code, ch) && !hidden && chips & bit != 0;
+                    // Navigation glyphs are not typed text: they are shown; the rest is
+                    // redacted by policy (D19).
+                    let glyph = (bit == splice_eval::chips::NAVIGATION)
+                        .then(|| splice_eval::chips::chip_text(ch, code, mods, false, true));
                     fields.extend([
                         ("index", count(index)),
                         ("category", text(category)),
                         ("chip", Json::Bool(chip)),
                         ("hidden", Json::Bool(hidden)),
-                        ("redacted", Json::Bool(true)),
-                        ("text", Json::Null),
+                        ("redacted", Json::Bool(glyph.is_none())),
+                        ("text", glyph.map_or(Json::Null, |g| text(&g))),
                     ]);
                     keys.push(object(fields));
                 }
