@@ -56,7 +56,7 @@ result, is logged to the friction log, and the server keeps serving.
 | --- | --- | --- | --- |
 | 1 | `project.info` | read | Open by `path` (`create:true` makes a new project) or by `projectId`: fps, size, duration, lanes, offline media, revision |
 | 2 | `timeline.snapshot` | read | Whole timeline with resolved frames and labels |
-| 3 | `items.inspect` | read | Full properties of IDs (`ids`, or `items`), including effects and their resolved values; an `fx_` ID returns that effect with its `owner` |
+| 3 | `items.inspect` | read | Full properties of IDs (`ids`, or `items`), including effects and their resolved values (`effectsResolved`; a type no scope sets shows what draws anyway with `implicit:true`, and take effects carry their `component` state); an `fx_` ID returns that effect with its `owner` |
 | 4 | `timeline.find` | read | Query by kind, text, lane, range, word |
 | 5 | `takes.events` | read | Cursor, clicks, keys and caret of a take, in timeline frames, x/y in source space (keys redacted by policy); `kinds`, `stride` (cursor thinning) and `counts` |
 | 6 | `transcript.get` | read | Words with IDs and timing; `captions: json\|srt\|vtt` |

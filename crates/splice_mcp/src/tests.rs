@@ -1748,3 +1748,45 @@ fn auto_zoom_on_a_cropped_clip_lands_on_the_clicked_source_point() {
         );
     }
 }
+
+/// A10: items.inspect on a fresh take lists what draws without any effect: the recorded cursor
+/// as captured, the camera bubble and chips with their defaults, and each one's component.
+#[test]
+fn inspect_shows_the_implicit_look_of_a_fresh_take() {
+    let mut project = sample_project();
+    let ops = splice_json::parse(
+        r#"[{"cmd":"effect.remove","effects":["fx_projcur"]},
+            {"cmd":"clip.insert","media":"med_screen"}]"#,
+    )
+    .unwrap();
+    splice_core::edit::apply(
+        &mut project,
+        ops.as_array().unwrap(),
+        splice_core::history::Source::Agent,
+        false,
+    )
+    .unwrap();
+    let slot = *project.clips.order().last().unwrap();
+    let id = project.clips.id(slot).unwrap().to_string();
+    let args = splice_json::parse(&format!(r#"{{"ids":["{id}"]}}"#)).unwrap();
+    let reply = super::timeline::inspect(&project, &args).unwrap();
+    let look = reply.field("items").unwrap().as_array().unwrap()[0]
+        .field("effectsResolved")
+        .unwrap()
+        .clone();
+    let field = |kind: &str, key: &str| look.field(kind).and_then(|e| e.field(key)).cloned();
+    // The project still has its window: resolved, not implicit.
+    assert_eq!(field("window", "implicit"), None);
+    // No cursor effect anywhere: the recorded cursor at size 1 without rings.
+    assert_eq!(field("cursor", "implicit"), Some(Json::Bool(true)));
+    let cursor = field("cursor", "params").unwrap();
+    assert_eq!(cursor.field("size").and_then(Json::as_f64), Some(1.0));
+    assert_eq!(cursor.field("clickRings"), Some(&Json::Bool(false)));
+    assert_eq!(field("cursor", "component"), Some(Json::Bool(true)));
+    // Chips: the effect's defaults, drawn only once keys.set turns the component on (A1).
+    assert_eq!(field("keystrokes", "implicit"), Some(Json::Bool(true)));
+    assert_eq!(field("keystrokes", "component"), Some(Json::Bool(false)));
+    let chips = field("keystrokes", "params").unwrap();
+    assert_eq!(chips.field("show").and_then(Json::as_str), Some("all"));
+    assert_eq!(field("camera", "component"), Some(Json::Bool(true)));
+}

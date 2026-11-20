@@ -496,16 +496,34 @@ fn effects(p: &Project, id: TimelineId, schemas: &Json) -> Json {
         TimelineId::Marker(_) => return object(Vec::new()),
     };
     let layers = [chain[0].1, chain[1].1, chain[2].1];
+    // The take component each effect draws on (A10): an effect on an off component draws nothing.
+    let component = |kind: &str| match id {
+        TimelineId::Clip(clip) => {
+            let states = &p.clips.data(p.clips.find(clip).unwrap()).unwrap().enabled;
+            match kind {
+                "cursor" => states.pointer,
+                "camera" => states.camera,
+                "keystrokes" => states.keys,
+                _ => None,
+            }
+        }
+        _ => None,
+    };
     let mut resolved = Vec::new();
     for &kind in types {
-        let Some((enabled, overrides)) = resolve_effect(&layers, kind) else {
-            continue;
-        };
         let schema = schemas
             .field(kind)
             .and_then(|value| value.field("params"))
             .and_then(Json::as_object)
             .unwrap();
+        let Some((enabled, overrides)) = resolve_effect(&layers, kind) else {
+            // A10: no effect anywhere still has a look. Say what draws, so a fresh take's look
+            // is never a guess.
+            if let Some(entry) = implicit(kind, component(kind), schema) {
+                resolved.push((kind, entry));
+            }
+            continue;
+        };
         let mut params = Vec::new();
         let mut sources = Vec::new();
         for (key, definition) in schema {
@@ -540,17 +558,73 @@ fn effects(p: &Project, id: TimelineId, schemas: &Json) -> Json {
             .filter(|(_, entries)| entries.iter().any(|effect| effect.kind == kind))
             .map(|(name, _)| text(name))
             .collect();
-        resolved.push((
-            kind,
-            object(vec![
-                ("enabled", Json::Bool(enabled)),
-                ("params", Json::Object(params)),
-                ("scopes", Json::Array(scopes)),
-                ("from", Json::Object(sources)),
-            ]),
-        ));
+        let mut entry = vec![
+            ("enabled", Json::Bool(enabled)),
+            ("params", Json::Object(params)),
+            ("scopes", Json::Array(scopes)),
+            ("from", Json::Object(sources)),
+        ];
+        if let Some(on) = component(kind) {
+            entry.push(("component", Json::Bool(on)));
+        }
+        resolved.push((kind, object(entry)));
     }
     object(resolved)
+}
+
+/// What draws for an effect type no scope sets (A10), marked `implicit:true`: no window; the
+/// recorded cursor as captured (not the cursor effect's defaults); camera bubble and keystroke
+/// chips with the schema defaults while their take component is on.
+fn implicit(kind: &str, component: Option<bool>, schema: &[(String, Json)]) -> Option<Json> {
+    let defaults = || {
+        schema
+            .iter()
+            .filter_map(|(key, definition)| Some((key.clone(), definition.field("def")?.clone())))
+            .collect::<Vec<_>>()
+    };
+    let (enabled, params, note) = match kind {
+        "window" => (
+            false,
+            Vec::new(),
+            "No window effect: the picture sits on the canvas without a card, padding or backdrop.",
+        ),
+        "cursor" => (
+            true,
+            [
+                ("size", Json::Float(1.0)),
+                ("clickRings", Json::Bool(false)),
+                ("smoothing", Json::Float(0.0)),
+                ("hideWhenIdle", Json::Bool(false)),
+                ("clickPulse", Json::Bool(false)),
+                ("path", text("recorded")),
+            ]
+            .map(|(key, value)| (key.to_owned(), value))
+            .to_vec(),
+            "No cursor effect: the recorded cursor as captured. cursor.set or effect.add switches to the effect's own defaults (size 1.5, click rings, smoothing).",
+        ),
+        "camera" => (
+            true,
+            defaults(),
+            "No camera effect: the camera bubble draws with these defaults while the camera component is on.",
+        ),
+        "keystrokes" => (
+            true,
+            defaults(),
+            "No keystrokes effect: chips draw with these defaults while the keys component is on (keys.set {show}).",
+        ),
+        _ => return None,
+    };
+    let mut entry = vec![
+        ("enabled", Json::Bool(enabled)),
+        ("implicit", Json::Bool(true)),
+        ("params", Json::Object(params)),
+        ("scopes", Json::Array(Vec::new())),
+        ("note", text(note)),
+    ];
+    if let Some(on) = component {
+        entry.push(("component", Json::Bool(on)));
+    }
+    Some(object(entry))
 }
 
 pub(super) fn tokens(p: &Project, slot: Slot) -> Result<Vec<CaptionWord>, StoreError> {

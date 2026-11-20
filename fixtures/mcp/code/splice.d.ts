@@ -1742,7 +1742,7 @@ declare const splice: {
     find(args?: { projectId?: string; text?: string; kind?: string; lane?: string; color?: string; from?: number; to?: number; limit?: number; }): { revision: Splice.Revision; matches: unknown[]; total: number; };
   };
   items: {
-    /** Inspect up to 50 objects by ID, including anchors, resolved frames, children and inherited effects. */
+    /** Inspect up to 50 objects by ID, including anchors, resolved frames, children and inherited effects (effectsResolved also lists what draws with no effect set, implicit:true, e.g. a fresh take's recorded cursor). */
     inspect(args?: { projectId?: string; ids?: string[]; items?: string[]; }): { revision: Splice.Revision; items: unknown[]; };
   };
   takes: {

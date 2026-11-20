@@ -112,7 +112,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "items.inspect",
-        description: "Inspect up to 50 objects by ID, including anchors, resolved frames, children and inherited effects.",
+        description: "Inspect up to 50 objects by ID, including anchors, resolved frames, children and inherited effects (effectsResolved also lists what draws with no effect set, implicit:true, e.g. a fresh take's recorded cursor).",
         read_only: true,
         input: &[
             ("projectId", "string"),
