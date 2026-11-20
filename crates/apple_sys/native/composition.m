@@ -16,6 +16,15 @@
 
 enum { SourceVideo, SourceAudio, SourceStill, SourceColor };
 
+// The one SDR working space, as Recorder's: sRGB values (BT.709 primaries, sRGB transfer) and a
+// BT.709 YCbCr matrix. Sources convert into it on decode, program frames hold it, and every movie
+// export and picture track is tagged with it, so view.frames, PNG, GIF and the movies agree.
+NSDictionary *splice_video_color(void) {
+    return @{AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+             AVVideoTransferFunctionKey: AVVideoTransferFunction_IEC_sRGB,
+             AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2};
+}
+
 @interface SpliceAVTrack : NSObject
 @property(nonatomic, strong) AVMutableCompositionTrack *track;
 // A solid or gradient fill: the compositor draws it instead of decoding its still movie.
@@ -184,6 +193,7 @@ static bool write_frames(NSURL *url, size_t count, SpliceFrameAt frame_at, const
     }
     AVAssetWriterInput *input = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:@{
         AVVideoCodecKey: AVVideoCodecTypeAppleProRes4444,
+        AVVideoColorPropertiesKey: splice_video_color(),
         AVVideoWidthKey: @(CVPixelBufferGetWidth(first)),
         AVVideoHeightKey: @(CVPixelBufferGetHeight(first)),
     }];
@@ -962,11 +972,13 @@ bool splice_av_finish(void *raw, char **error) {
         video.customVideoCompositorClass = [SpliceCompositor class];
         video.renderSize = assembly.size;
         video.frameDuration = time_for(assembly, 1);
-        // Work in Rec. 709 (what export tags): wide-color sources such as P3 phone video are
-        // converted on decode instead of passing their values through (PLAN.md T15.2).
-        video.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2;
-        video.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2;
-        video.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2;
+        // Work in the sRGB working space (what export tags): Rec. 709 and wide-color sources
+        // such as P3 phone video convert on decode instead of passing their values through
+        // (PLAN.md T15.2).
+        NSDictionary *color = splice_video_color();
+        video.colorPrimaries = color[AVVideoColorPrimariesKey];
+        video.colorTransferFunction = color[AVVideoTransferFunctionKey];
+        video.colorYCbCrMatrix = color[AVVideoYCbCrMatrixKey];
         video.instructions = assembly.instructions;
         assembly.video = video;
         NSMutableArray *audio = [NSMutableArray array];
@@ -1357,9 +1369,7 @@ void *splice_av_writer(void *reader_raw, const char *file, const SpliceExportSet
                                   : AVVideoCodecTypeH264;
             NSMutableDictionary *output = [@{
                 AVVideoCodecKey: name,
-                AVVideoColorPropertiesKey: @{AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
-                                             AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-                                             AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2},
+                AVVideoColorPropertiesKey: splice_video_color(),
                 AVVideoWidthKey: @(assembly.size.width), AVVideoHeightKey: @(assembly.size.height),
             } mutableCopy];
             if (codec <= SpliceCodecHEVC || codec == SpliceCodecHEVCAlpha) {

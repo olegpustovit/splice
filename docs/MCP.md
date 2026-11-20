@@ -523,6 +523,12 @@ Cut Pro instead of encoding. Two exports encode at once and later ones queue (`q
 `jobs.status`, with `fps` and `eta` while running). A full disk fails early with `DISK_FULL`, and
 cancelling removes the partial file.
 
+Colour: the composition works in sRGB (BT.709 primaries and YCbCr matrix, sRGB transfer, SDR).
+Sources convert into it on decode; movies are tagged with it (`colr` primaries 1, transfer 13,
+matrix 1), and `view.frames`, `poster` and `gif` declare sRGB, so a decoded export matches the
+frame the agent saw: exact for ProRes, GIF and PNG on flat colours, within 1 level for HEVC and
+3 for H.264 at the default rate (`splice_av::looks_exports_decode_to_the_rendered_colors`).
+
 Clients that pass `_meta.progressToken` on `export.start` receive `notifications/progress`
 (`progress` 0–1, `total` 1) as frames encode. `notifications/cancelled` with the request's ID
 cancels the job that request started (never one a `jobs.status` or `jobs.cancel` call only names).

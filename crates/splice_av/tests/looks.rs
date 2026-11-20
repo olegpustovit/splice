@@ -595,8 +595,16 @@ mod looks {
         }
     }
 
+    /// A Rec. 709-tagged value in the sRGB working space: Apple decodes BT.709 with a 1.961
+    /// display gamma.
+    fn rec709_to_srgb(value: u8) -> u8 {
+        let linear = (f64::from(value) / 255.0).powf(1.961);
+        (255.0 * (1.055 * linear.powf(1.0 / 2.4) - 0.055)).round() as u8
+    }
+
     /// T15.2: phone and camera footage. A portrait clip renders upright, variable frame rate
-    /// sources land on integer project frames by time, and Display P3 converts to Rec. 709.
+    /// sources land on integer project frames by time, and Rec. 709 and Display P3 footage
+    /// convert to the sRGB working space.
     pub(super) fn portrait_vfr_and_p3_footage_render_correctly() {
         let dir = scratch("footage");
         // Portrait: stored landscape (left red, right blue) with a 90° transform.
@@ -631,18 +639,22 @@ mod looks {
             let shown = starts.iter().rposition(|&s| s <= t + 1e-6).unwrap();
             let near_next = starts.get(shown + 1).is_some_and(|&s| s - t < 0.001);
             let [grey, ..] = pixel(&composition, frame, [16, 9]);
-            let matches = |n: usize| grey.abs_diff(20 + 8 * n as u8) <= 4;
+            let matches = |n: usize| grey.abs_diff(rec709_to_srgb(20 + 8 * n as u8)) <= 4;
             assert!(
                 matches(shown) || (near_next && matches(shown + 1)),
                 "frame {frame}: grey {grey}, want source frame {shown}"
             );
         }
-        // P3: (200, 120, 60) in P3 is about (212, 115, 46) in Rec. 709.
+        // P3: (200, 120, 60) with P3 primaries and the BT.709 transfer is about (219, 127, 54)
+        // in sRGB; converting only the transfer (primaries passed through) gives (205, 129, 69).
         let mut p3 = project(vec![footage(&dir.0, 3, "p3.mov")], vec![(3, 10, vec![])]);
         p3.size = [32, 18];
         let [r, g, b] = pixel(&Composition::prepare(&p3, &dir.0).unwrap(), 3, [16, 9]);
         eprintln!("P3 (200, 120, 60) rendered as ({r}, {g}, {b})");
-        assert!(r >= 205 && b <= 54, "P3 not converted: ({r}, {g}, {b})");
+        assert!(
+            near([r, g, b], [219, 127, 54], 3),
+            "P3 not converted: ({r}, {g}, {b})"
+        );
     }
 
     /// H8, T36.5: a thick caption stroke outlines the glyphs instead of covering them, two
@@ -1314,6 +1326,121 @@ mod looks {
         assert!((chapters[1].0 - 35.0 / 30.0).abs() < 0.05, "{chapters:?}");
     }
 
+    /// AC-ED-2: what the agent sees is what export makes. Flat patches read back with
+    /// `read_frame` (view.frames) and decoded from every export format with the system
+    /// decoders agree within each codec's bound, and the movies are tagged with the sRGB
+    /// working space (BT.709 primaries and matrix, sRGB transfer) so players show the same.
+    pub(super) fn exports_decode_to_the_rendered_colors() {
+        const PATCHES: [[u8; 3]; 8] = [
+            [255, 0, 0],
+            [0, 255, 0],
+            [0, 0, 255],
+            [220, 60, 30],
+            [128, 128, 128],
+            [16, 16, 16],
+            [40, 180, 80],
+            [255, 255, 255],
+        ];
+        let dir = scratch("colors");
+        let picture: Vec<u8> = (0..64)
+            .flat_map(|y| {
+                (0..96).flat_map(move |x| {
+                    let [r, g, b] = PATCHES[y / 32 * 4 + x / 24];
+                    [r, g, b, 255]
+                })
+            })
+            .collect();
+        let media = still(&dir.0, 1, [0, 0, 0]);
+        let png = apple_sys::image::png(&picture, [96, 64], 0).unwrap();
+        fs::write(dir.0.join(&media.path), png).unwrap();
+        let composition =
+            Composition::prepare(&project(vec![media], vec![(1, 2, vec![])]), &dir.0).unwrap();
+        let mut rendered = vec![0; 96 * 64 * 4];
+        composition.read_frame(0, &mut rendered).unwrap();
+        // Largest channel difference over each patch's middle (away from chroma edges).
+        let worst = |decoded: &[u8]| {
+            let mut worst = (0, [0; 3], [0; 3]);
+            for patch in 0..PATCHES.len() {
+                let (x0, y0) = (patch % 4 * 24 + 8, patch / 4 * 32 + 12);
+                for at in (y0..y0 + 8).flat_map(|y| (x0..x0 + 8).map(move |x| (y * 96 + x) * 4)) {
+                    let a: [u8; 3] = rendered[at..at + 3].try_into().unwrap();
+                    let b: [u8; 3] = decoded[at..at + 3].try_into().unwrap();
+                    let delta = a.iter().zip(b).map(|(x, y)| x.abs_diff(y)).max().unwrap();
+                    if delta > worst.0 {
+                        worst = (delta, a, b);
+                    }
+                }
+            }
+            worst
+        };
+        // The render itself keeps the still's sRGB values.
+        let (delta, a, b) = worst(&picture);
+        assert!(delta <= 1, "render {a:?} vs still {b:?}");
+        // (primaries, transfer, matrix) from the movie's colr atom: nclx in MP4, nclc in QuickTime.
+        let colr = |path: &std::path::Path| {
+            let bytes = fs::read(path).unwrap();
+            let at = bytes.windows(4).position(|w| w == b"colr")?;
+            let field =
+                |i: usize| u16::from_be_bytes([bytes[at + 8 + i * 2], bytes[at + 9 + i * 2]]);
+            Some((field(0), field(1), field(2)))
+        };
+        // Bounds per format, measured on the Mini (docs/RECORDER-PARITY.md AC-ED-2): ProRes,
+        // GIF and PNG round-trip exactly (0); HEVC is off by 1; H.264 at the default rate is off
+        // by 3 on the 220,60,30 patch (1 at 20 Mbps: its quantizer, not the color path). Before the
+        // sRGB working space every movie and the PNG were 11-12 levels off (128 came back 139).
+        let mut report = Vec::new();
+        for (name, codec, bound) in [
+            ("prores4444.mov", Codec::ProRes4444, 1),
+            ("prores422.mov", Codec::ProRes422, 1),
+            ("h264.mp4", Codec::H264, 3),
+            ("hevc.mp4", Codec::Hevc, 2),
+            ("hevc-alpha.mov", Codec::HevcAlpha, 2),
+        ] {
+            let file = dir.0.join(name);
+            let mut job = composition
+                .start_export(&file, &Encoding::new(codec))
+                .unwrap();
+            while let ExportState::Running(_) = job.step(Duration::from_millis(16)).unwrap() {}
+            assert_eq!(job.status(), ExportState::Complete, "{name}");
+            let (decoded, size) = apple_sys::media::first_frame(&file).unwrap();
+            assert_eq!(size, [96, 64], "{name}");
+            report.push((name, worst(&decoded), bound, colr(&file)));
+        }
+        // GIF and the poster are encoded from read_frame and decoded with ImageIO.
+        let gif = dir.0.join("still.gif");
+        apple_sys::image::gif(&gif, &rendered, [96, 64], 0.1).unwrap();
+        report.push((
+            "gif",
+            worst(&apple_sys::image::decode_rgba(&gif).unwrap().0),
+            1,
+            None,
+        ));
+        let poster = dir.0.join("poster.png");
+        fs::write(&poster, encode_png(&rendered, [96, 64], 0).unwrap()).unwrap();
+        report.push((
+            "poster",
+            worst(&apple_sys::image::decode_rgba(&poster).unwrap().0),
+            0,
+            None,
+        ));
+        for (name, (delta, a, b), _, tags) in &report {
+            eprintln!("{name}: max delta {delta} (rendered {a:?}, decoded {b:?}), colr {tags:?}");
+        }
+        for (name, (delta, a, b), bound, tags) in report {
+            assert!(
+                delta <= bound,
+                "{name}: rendered {a:?} decoded {b:?}, over {bound}"
+            );
+            if name.contains('.') {
+                assert_eq!(
+                    tags,
+                    Some((1, 13, 1)),
+                    "{name}: BT.709 primaries, sRGB transfer, BT.709 matrix"
+                );
+            }
+        }
+    }
+
     pub(super) fn cutout_uses_the_person_matte() {
         let dir = scratch("cutout");
         let fixture =
@@ -1658,6 +1785,10 @@ fn main() {
         (
             "looks_exports_alpha_audio_ranges_and_chapters",
             looks::exports_alpha_audio_ranges_and_chapters,
+        ),
+        (
+            "looks_exports_decode_to_the_rendered_colors",
+            looks::exports_decode_to_the_rendered_colors,
         ),
         (
             "looks_cutout_uses_the_person_matte",

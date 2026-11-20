@@ -302,7 +302,7 @@ fn pixel_issues(
         return Ok((None, offline));
     }
     let (sheet, sheet_size) = super::sheet::tile(&flagged, size, 360);
-    let png = splice_av::encode_frame_png(&sheet, sheet_size, 0).map_err(|e| render(&e))?;
+    let png = splice_av::encode_png(&sheet, sheet_size, 0).map_err(|e| render(&e))?;
     let file = store
         .path()
         .join("cache")

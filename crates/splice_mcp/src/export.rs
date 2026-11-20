@@ -174,8 +174,7 @@ pub(super) fn still(
         composition
             .read_frame(at, &mut rgba)
             .map_err(|e| export_failure(&e))?;
-        let png =
-            splice_av::encode_frame_png(&rgba, [w, h], w.max(h)).map_err(|e| export_failure(&e))?;
+        let png = splice_av::encode_png(&rgba, [w, h], w.max(h)).map_err(|e| export_failure(&e))?;
         fs::write(output.staged(), png).map_err(|e| path_error(output.staged(), &e))?;
     }
     output.publish()?;

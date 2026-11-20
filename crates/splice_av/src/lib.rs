@@ -20,7 +20,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use apple_sys::image::{png as encode_png, png_video as encode_frame_png};
+pub use apple_sys::image::png as encode_png;
 pub use composition::{Codec, Encoding, Player};
 
 /// A prepared timeline and its native composition for playback and delivery.

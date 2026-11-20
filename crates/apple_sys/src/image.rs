@@ -11,7 +11,6 @@ unsafe extern "C" {
         width: u32,
         height: u32,
         max_edge: u32,
-        video: bool,
         data: *mut *const u8,
         size: *mut usize,
         error: *mut *mut c_char,
@@ -116,22 +115,9 @@ pub fn decode_rgba(path: &std::path::Path) -> Result<(Vec<u8>, [u32; 2]), Error>
     Ok((bytes, [width, height]))
 }
 
-/// Encodes premultiplied sRGB RGBA8. A nonzero limit bounds the longest edge.
-pub fn png(pixels: &[u8], size: [u32; 2], max_edge: u32) -> Result<Vec<u8>, Error> {
-    encode(pixels, size, max_edge, false)
-}
-
-/// Encodes a program frame: opaque RGBA8 in video values, tagged Rec. 709 like the exported movie.
-pub fn png_video(pixels: &[u8], size: [u32; 2], max_edge: u32) -> Result<Vec<u8>, Error> {
-    encode(pixels, size, max_edge, true)
-}
-
-fn encode(
-    pixels: &[u8],
-    [width, height]: [u32; 2],
-    max_edge: u32,
-    video: bool,
-) -> Result<Vec<u8>, Error> {
+/// Encodes premultiplied sRGB RGBA8 (program frames too: the working space is sRGB, like the
+/// exported movie). A nonzero limit bounds the longest edge.
+pub fn png(pixels: &[u8], [width, height]: [u32; 2], max_edge: u32) -> Result<Vec<u8>, Error> {
     let mut data = ptr::null();
     let mut length = 0;
     let mut error = ptr::null_mut();
@@ -143,7 +129,6 @@ fn encode(
             width,
             height,
             max_edge,
-            video,
             &mut data,
             &mut length,
             &mut error,

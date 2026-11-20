@@ -12,6 +12,12 @@ void splice_string_free(char *value);
 // Internal helper for the shims. Accepts a null error output.
 void splice_set_error(char **error, const char *message);
 
+#ifdef __OBJC__
+@class NSDictionary;
+// The working space's AVVideoColorPropertiesKey value (composition.m).
+NSDictionary *splice_video_color(void);
+#endif
+
 // Cancels the attached project picker on the application thread.
 void splice_app_cancel_open_panel(void);
 bool splice_app_start_accessory(void);
@@ -274,7 +280,7 @@ uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, dou
                           int64_t active_from, int64_t active_to, uint32_t active_color, char **error);
 
 void *splice_image_png(const uint8_t *pixels, size_t length, uint32_t width, uint32_t height,
-                       uint32_t max_edge, bool video, const uint8_t **data, size_t *size, char **error);
+                       uint32_t max_edge, const uint8_t **data, size_t *size, char **error);
 void splice_image_release(void *data);
 
 typedef struct {

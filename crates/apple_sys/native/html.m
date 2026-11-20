@@ -168,6 +168,7 @@ bool splice_html_render(const char *html, const char *base, uint32_t width, uint
             assetWriterInputWithMediaType:AVMediaTypeVideo
                            outputSettings:@{
                                AVVideoCodecKey: AVVideoCodecTypeAppleProRes4444,
+                               AVVideoColorPropertiesKey: splice_video_color(),
                                AVVideoWidthKey: @(width),
                                AVVideoHeightKey: @(height),
                            }];
