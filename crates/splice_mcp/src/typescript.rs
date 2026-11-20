@@ -519,8 +519,11 @@ fn json_type(schema: &Json) -> String {
     if let Some(values) = schema.field("enum").and_then(Json::as_array) {
         return values
             .iter()
-            .filter_map(Json::as_str)
-            .map(|value| format!("\"{value}\""))
+            .filter_map(|value| match value {
+                Json::String(text) => Some(format!("\"{text}\"")),
+                // Numeric choices (export.start resolution).
+                value => value.as_u64().map(|n| n.to_string()),
+            })
             .collect::<Vec<_>>()
             .join(" | ");
     }

@@ -836,6 +836,82 @@ mod tests {
         assert!(receipt.clip.is_some());
     }
 
+    /// Where a take lands (Recorder's voiceover at the playhead, retake, resume marker and
+    /// camera-only recording): a voice-over on a new audio lane at `at`, a retake right after
+    /// the clip it redoes and named after it, resume markers at their recorded second from the
+    /// take's start, and a camera-only take with its screen off.
+    #[test]
+    fn capture_agent_placement_puts_voiceovers_retakes_markers_and_camera_only_takes() {
+        let project = crate::tests::sample_project();
+        let cmds = |ops: &[Json]| -> Vec<String> {
+            ops.iter()
+                .map(|op| op.field("cmd").and_then(Json::as_str).unwrap().to_owned())
+                .collect()
+        };
+        let field = |fields: &[(&'static str, Json)], key: &str| {
+            fields
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.clone())
+        };
+        let markers = [(2.0, "Step 2".to_owned())];
+        let voiceover = Placement {
+            voiceover: Some(90),
+            ..Placement::default()
+        };
+        let (before, insert, after) = voiceover.ops(&project, &markers, [1920, 1080]);
+        assert_eq!(cmds(&before), ["lane.create"]);
+        assert_eq!(
+            before[0].field("kind").and_then(Json::as_str),
+            Some("audio")
+        );
+        assert_eq!(field(&insert, "lane"), Some(text("$vo")));
+        assert_eq!(field(&insert, "at"), Some(Json::Signed(90)));
+        assert_eq!(cmds(&after), ["marker.add"]);
+        assert_eq!(after[0].field("at"), Some(&Json::Signed(90 + 60)));
+
+        let retake = Placement {
+            retake_of: Some("clp_take".parse().unwrap()),
+            ..Placement::default()
+        };
+        let (before, insert, after) = retake.ops(&project, &markers, [1920, 1080]);
+        assert!(before.is_empty());
+        // clp_take covers 120..540.
+        assert_eq!(field(&insert, "at"), Some(Json::Signed(540)));
+        assert_eq!(cmds(&after), ["item.set", "marker.add"]);
+        assert_eq!(
+            after[0].field("name").and_then(Json::as_str),
+            Some("Retake of clp_take")
+        );
+        assert_eq!(after[1].field("at"), Some(&Json::Signed(540 + 60)));
+
+        let camera = Placement {
+            no_screen: true,
+            ..Placement::default()
+        };
+        let (_, insert, after) = camera.ops(&project, &[], [1920, 1080]);
+        // Appended at the spine's end (660).
+        assert_eq!(field(&insert, "at"), None);
+        assert_eq!(cmds(&after), ["component.set"]);
+        assert_eq!(
+            after[0].field("component").and_then(Json::as_str),
+            Some("screen")
+        );
+        assert_eq!(after[0].field("enabled"), Some(&Json::Bool(false)));
+        // camera-only needs camera:true; a voice-over never records the screen.
+        assert!(Placement::parse(&splice_json::parse(r#"{"screen":false}"#).unwrap()).is_err());
+        assert!(
+            Placement::parse(&splice_json::parse(r#"{"screen":false,"camera":true}"#).unwrap())
+                .is_ok()
+        );
+        assert_eq!(
+            Placement::parse(&splice_json::parse(r#"{"voiceover":true,"at":45}"#).unwrap())
+                .unwrap()
+                .voiceover,
+            Some(45)
+        );
+    }
+
     /// A staged multi-window take (T46.6) as the capture agent leaves it: the screen, two more
     /// windows and events with every window's bounds. Live capture needs the installed app, so
     /// the movies are the probe fixture.

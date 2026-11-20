@@ -86,6 +86,9 @@ pub struct Motion {
     pub arrive_before: f64,
     /// Draw the system arrow whatever shape was recorded (the path is unchanged).
     pub always_arrow: bool,
+    /// Remove hand shake (the rope filter); off keeps every small movement (Recorder's
+    /// "Remove cursor shakes" toggle).
+    pub remove_shakes: bool,
 }
 
 impl Default for Motion {
@@ -98,6 +101,7 @@ impl Default for Motion {
             arc: 0.15,
             arrive_before: 0.15,
             always_arrow: false,
+            remove_shakes: true,
         }
     }
 }
@@ -149,6 +153,11 @@ pub const RATE: f64 = 60.0;
 const HOLD_GAP: f64 = 0.067;
 /// Hand shake below this many UV is removed.
 const SHAKE: f64 = 0.0035;
+/// Seconds within SHAKE after which the hand is resting (Recorder: excursions that return
+/// within 80 ms are shake).
+const REST: f64 = 0.08;
+/// Time constant (seconds) of a resting cursor's ease onto the recorded point.
+const SETTLE: f64 = 0.1;
 /// Mellow spring (stiffness, damping, mass): lead = damping / stiffness seconds.
 const MELLOW: [f64; 3] = [470.0, 70.0, 3.0];
 /// Click spring, used within `CLICK_WINDOW` of a press.
@@ -208,20 +217,38 @@ impl Track {
             raw.push((p, a.image, synthetic));
         }
         let mut rope = raw[0].0;
-        let filtered: Vec<[f64; 2]> = raw
-            .iter()
-            .map(|&(p, _, synthetic)| {
-                let (dx, dy) = (p[0] - rope[0], p[1] - rope[1]);
-                let d = dx.hypot(dy);
-                if synthetic {
-                    rope = p;
-                } else if d > SHAKE {
-                    let k = (d - SHAKE) / d;
-                    rope = [rope[0] + dx * k, rope[1] + dy * k];
-                }
-                rope
-            })
-            .collect();
+        // A hand that stays within SHAKE for REST is resting, not shaking: the rope eases onto
+        // the recorded point, so a resting cursor sits where the hand stopped (Recorder
+        // AC-CUR-1) instead of a shake radius short of it.
+        let settle = 1.0 - (-1.0 / (RATE * SETTLE)).exp();
+        let (mut anchor, mut still) = (raw[0].0, 0.0);
+        let mut filtered: Vec<[f64; 2]> = Vec::with_capacity(count);
+        // Whether the hand moved the rope at each point (the settle is not movement): idle
+        // hiding reads this, so a resting cursor still fades after 2 s.
+        let mut moved: Vec<bool> = Vec::with_capacity(count);
+        for &(p, _, synthetic) in &raw {
+            if (p[0] - anchor[0]).hypot(p[1] - anchor[1]) > SHAKE {
+                (anchor, still) = (p, 0.0);
+            } else {
+                still += 1.0 / RATE;
+            }
+            let before = rope;
+            let (dx, dy) = (p[0] - rope[0], p[1] - rope[1]);
+            let d = dx.hypot(dy);
+            if synthetic || !motion.remove_shakes {
+                rope = p;
+            } else if still >= REST {
+                rope = [rope[0] + dx * settle, rope[1] + dy * settle];
+                filtered.push(rope);
+                moved.push(false);
+                continue;
+            } else if d > SHAKE {
+                let k = (d - SHAKE) / d;
+                rope = [rope[0] + dx * k, rope[1] + dy * k];
+            }
+            filtered.push(rope);
+            moved.push((rope[0] - before[0]).hypot(rope[1] - before[1]) > 1e-6);
+        }
         // The spring, sampled ahead by its own lag; synthesized stretches are already smooth.
         let lead = MELLOW[1] / MELLOW[0];
         // Clicks are in time order and every click effect is local: a moving window of the
@@ -308,7 +335,7 @@ impl Track {
             });
         }
         if motion.hide_idle {
-            fade_idle(&mut points, &filtered, start, &clicks);
+            fade_idle(&mut points, &moved, start, &clicks);
         }
         Self {
             start,
@@ -431,11 +458,9 @@ fn smoothstep(x: f64) -> f64 {
 
 /// Hides the cursor after `IDLE_AFTER` seconds without movement or clicks (fading over
 /// `FADE_OUT`) and shows it again `FADE_IN` before it next moves.
-fn fade_idle(points: &mut [Point], path: &[[f64; 2]], start: f64, clicks: &[[f64; 3]]) {
+fn fade_idle(points: &mut [Point], moved: &[bool], start: f64, clicks: &[[f64; 3]]) {
     let n = points.len();
-    let mut moving: Vec<bool> = (0..n)
-        .map(|i| i > 0 && (path[i][0] - path[i - 1][0]).hypot(path[i][1] - path[i - 1][1]) > 1e-6)
-        .collect();
+    let mut moving: Vec<bool> = (0..n).map(|i| i > 0 && moved[i]).collect();
     // A press counts as activity at its nearest table point.
     for c in clicks {
         let i = ((c[0] - start) * RATE).round();
@@ -625,6 +650,64 @@ mod tests {
             .collect();
         let moved = Track::build(&slow, SIZE, Motion::default());
         assert!(moved.at(2.0).unwrap().x > 0.29, "slow drag kept");
+    }
+
+    /// Recorder's "Remove cursor shakes" toggle: `removeShakes:false` draws every small hand
+    /// movement (on, the default, holds still). Unsmoothed, so only the filter differs.
+    #[test]
+    fn remove_shakes_off_keeps_every_small_movement() {
+        // A 0.004 UV wobble that flips every 1/30 s, so consecutive table points see it.
+        let samples: Vec<Sample> = (0..240)
+            .map(|i| {
+                let wobble = if (i / 4) % 2 == 0 { 0.002 } else { -0.002 };
+                sample(i as f64 / 120.0, 0.5 + wobble, 0.5, false)
+            })
+            .collect();
+        let jitter = |remove_shakes: bool| {
+            let track = Track::build(
+                &samples,
+                SIZE,
+                Motion {
+                    smoothing: 0.0,
+                    remove_shakes,
+                    ..Motion::default()
+                },
+            );
+            track
+                .points()
+                .windows(2)
+                .map(|w| (w[1].x - w[0].x).abs())
+                .fold(0.0, f64::max)
+        };
+        assert!(jitter(true) < 0.001, "removed: {}", jitter(true));
+        assert!(jitter(false) > 0.0035, "kept: {}", jitter(false));
+    }
+
+    /// Recorder AC-CUR-1: one second after the hand stops, the drawn cursor rests within half a
+    /// pixel of the recorded point (2880 px wide source), at every smoothing.
+    #[test]
+    fn ac_cur_1_the_cursor_rests_on_the_recorded_point() {
+        let samples: Vec<Sample> = (0..=60)
+            .map(|i| {
+                let k = (i as f64 / 60.0).min(1.0);
+                sample(i as f64 / 60.0, 0.2 + 0.5 * k, 0.3 + 0.3 * k, false)
+            })
+            .chain([sample(2.5, 0.7, 0.6, false)])
+            .collect();
+        for smoothing in [0.0, 0.1, 0.3, 0.75, 1.0] {
+            let track = Track::build(
+                &samples,
+                SIZE,
+                Motion {
+                    smoothing,
+                    hide_idle: false,
+                    ..Motion::default()
+                },
+            );
+            let rest = track.at(2.0).unwrap();
+            let error = ((rest.x - 0.7) * 2880.0).hypot((rest.y - 0.6) * 1800.0);
+            assert!(error < 0.5, "smoothing {smoothing}: {error} px");
+        }
     }
 
     #[test]

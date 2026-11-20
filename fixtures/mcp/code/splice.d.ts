@@ -339,6 +339,8 @@ declare namespace Splice {
       arriveBefore?: number;
       /** draw the arrow whatever shape was recorded */
       alwaysArrow?: boolean;
+      /** remove small hand shakes; false keeps every small movement · @default true */
+      removeShakes?: boolean;
       /** frames 0–600 · ease back to the clip's first position over its last N frames (0 off) */
       loop?: number;
       /** a click sound in the export at every press */
@@ -1173,6 +1175,8 @@ declare namespace Splice {
       arriveBefore?: number;
       /** Always use arrow · @default false */
       alwaysArrow?: boolean;
+      /** Remove cursor shakes (off draws every small hand movement) · @default true */
+      removeShakes?: boolean;
       /** Loop: frames to ease back to the start position (0 off) · 0–600 · @default 0 */
       loop?: number;
       /** Click sound · @default false */
@@ -1836,8 +1840,8 @@ declare const splice: {
     show(args?: { projectId?: string; at?: number | Record<string, unknown>; select?: string[]; range?: Record<string, unknown>; expand?: string; view?: string; viewer?: Record<string, unknown>; }): { applied: boolean; reason?: string; revision?: Splice.Revision; playhead?: number; selection?: string[]; };
   };
   export: {
-    /** Export the timeline: presets for social (youtube-1080/4k, shorts, reels, tiktok, linkedin), masters (prores-422, prores-4444 and hevc-alpha keep transparency), audio (audio-m4a, audio-wav), gif (about 15 fps, at most 150 frames and 480 px wide; a longer range is refused with the limit) and poster (done at once). from/to or marker limit the range; markers become chapters; captions:"srt" writes a sidecar; variants:[{aspect, preset}] renders several aspects, each reframed to fill; format:"fcpxml" writes the cut for Final Cut Pro (every platform). Video and audio need macOS and run as jobs (two at a time). Without sessionId the export opens its own session. */
-    start(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; preset?: "social" | "social-h264" | "social-hevc" | "youtube-1080" | "youtube-4k" | "shorts" | "reels" | "tiktok" | "linkedin" | "prores-422" | "prores-4444" | "hevc-alpha" | "audio-m4a" | "audio-wav" | "gif" | "poster"; format?: "video" | "fcpxml"; from?: number; to?: number; marker?: string; bitrate?: number; captions?: "srt" | "vtt"; chapters?: boolean; variants?: Record<string, unknown>[]; path?: string; overwrite?: boolean; }): { jobId: string; state: string; settings?: Record<string, unknown>; output?: string; jobs?: unknown[]; };
+    /** Export the timeline: presets for social (youtube-1080/4k, shorts, reels, tiktok, linkedin), masters (prores-422, prores-4444 and hevc-alpha keep transparency), audio (audio-m4a, audio-wav), gif (about 15 fps, at most 150 frames and 480 px wide; a longer range is refused with the limit) and poster (done at once). from/to or marker limit the range; markers become chapters; captions:"srt" writes a sidecar; variants:[{aspect, preset}] renders several aspects, each reframed to fill; resolution (720, 1080, 1440, 2160) sets the shorter edge keeping the shape; quality (web, social, high, studio) picks the bitrate for the size, rate and codec; format:"fcpxml" writes the cut for Final Cut Pro (every platform). Video and audio need macOS and run as jobs (two at a time). Without sessionId the export opens its own session. */
+    start(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; preset?: "social" | "social-h264" | "social-hevc" | "youtube-1080" | "youtube-4k" | "shorts" | "reels" | "tiktok" | "linkedin" | "prores-422" | "prores-4444" | "hevc-alpha" | "audio-m4a" | "audio-wav" | "gif" | "poster"; format?: "video" | "fcpxml"; from?: number; to?: number; marker?: string; bitrate?: number; resolution?: 720 | 1080 | 1440 | 2160; quality?: "web" | "social" | "high" | "studio"; captions?: "srt" | "vtt"; chapters?: boolean; variants?: Record<string, unknown>[]; path?: string; overwrite?: boolean; }): { jobId: string; state: string; settings?: Record<string, unknown>; output?: string; jobs?: unknown[]; };
   };
   jobs: {
     /** Check the progress and result of an export, transcription or recording job. wait (seconds, up to 120) returns once the job stops running (a recording also when it pauses), so one call (or one code.run: waiting is not counted against its 2 s) sees it done; without wait, each call advances a running export by up to 50 ms. */

@@ -226,6 +226,7 @@ pub(super) fn cursor(scopes: &[&[Effect]]) -> Option<Cursor> {
             arc: style.number("arc", base.arc),
             arrive_before: style.number("arriveBefore", base.arrive_before),
             always_arrow: style.boolean("alwaysArrow", false),
+            remove_shakes: style.boolean("removeShakes", base.remove_shakes),
         },
         loop_frames: style.number("loop", 0.0).clamp(0.0, 600.0).round(),
         motion_blur: style.number("motionBlur", 0.0).clamp(0.0, 1.0),

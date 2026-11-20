@@ -162,6 +162,11 @@
         "def": false,
         "label": "Always use arrow"
       },
+      "removeShakes": {
+        "type": "bool",
+        "def": true,
+        "label": "Remove cursor shakes (off draws every small hand movement)"
+      },
       "loop": {
         "type": "number",
         "def": 0,

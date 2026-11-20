@@ -907,3 +907,52 @@ fn auto_zoom_takes_lead_tail_a_window_and_cursor_focus() {
         assert!(!error.error.fix.is_empty(), "{ops:?}: {error:?}");
     }
 }
+
+/// Recorder AC-TL-2: split, remove a piece, restore the cut: the spine plays the original
+/// source frames again, at the original times. Speeds outside Recorder's 0.25–16× are refused.
+#[test]
+fn ac_tl_2_split_remove_and_restore_return_the_original_cut() {
+    let spine = |project: &Project| -> Vec<(Option<MediaId>, Frame, Frame, Frame)> {
+        let mut runs: Vec<(Option<MediaId>, Frame, Frame, Frame)> = Vec::new();
+        for &slot in project.clips.order() {
+            let t = project.clips.timing(slot).unwrap();
+            let media = project.clips.data(slot).unwrap().media;
+            // Neighbours that continue the same media at the same rate play as one run.
+            match runs.last_mut() {
+                Some(run)
+                    if run.0 == media && run.1 + run.3 == t.start && run.2 + run.3 == t.source =>
+                {
+                    run.3 += t.length
+                }
+                _ => runs.push((media, t.start, t.source, t.length)),
+            }
+        }
+        runs
+    };
+    let original = sample();
+    let mut project = original.clone();
+    let run = |project: &mut Project, ops: &str| {
+        let ops = splice_json::parse(ops).unwrap();
+        apply(project, ops.as_array().unwrap(), Source::Agent, false)
+    };
+    run(
+        &mut project,
+        r#"[{"cmd":"item.split","item":"clp_take","at":300,"ref":"cut"},
+            {"cmd":"item.split","item":"$cut.right","at":360,"ref":"tail"},
+            {"cmd":"item.delete","items":["$cut.right"],"ripple":true}]"#,
+    )
+    .unwrap();
+    assert_ne!(spine(&project), spine(&original));
+    run(&mut project, r#"[{"cmd":"clip.restore"}]"#).unwrap();
+    assert_eq!(spine(&project), spine(&original));
+    for speed in [0.25, 16.0] {
+        let mut copy = original.clone();
+        let ops = format!(r#"[{{"cmd":"clip.speed","items":["clp_take"],"speed":{speed}}}]"#);
+        run(&mut copy, &ops).unwrap();
+    }
+    for speed in [0.2, 17.0] {
+        let mut copy = original.clone();
+        let ops = format!(r#"[{{"cmd":"clip.speed","items":["clp_take"],"speed":{speed}}}]"#);
+        assert!(run(&mut copy, &ops).is_err(), "{speed}");
+    }
+}

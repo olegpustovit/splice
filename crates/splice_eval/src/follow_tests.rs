@@ -102,8 +102,8 @@ fn a_following_zoom_keeps_the_cursor_in_its_dead_zone() {
         "{still:?} {drifted:?}"
     );
     // After the move the cursor sits on the dead zone's edge (0.3 of the view from center),
-    // not in the middle: the camera moved just enough. The drawn cursor rests a shake radius
-    // (0.0035 of the source, 0.02 of this view) short of the raw sample the test measures.
+    // not in the middle: the camera moved just enough (the drawn cursor eases onto the raw
+    // sample once the hand rests, so the edge holds within a few hundredths).
     let (moved, offset) = framing(&evaluator, 120 + 260, b);
     assert!(moved.center != still.center);
     for axis in offset {
@@ -113,6 +113,33 @@ fn a_following_zoom_keeps_the_cursor_in_its_dead_zone() {
     let again = Evaluator::prepare_with(&project, &pointer(a, b)).unwrap();
     for at in [150, 210, 300, 380] {
         assert_eq!(evaluator.view(at), again.view(at));
+    }
+}
+
+/// Recorder AC-ZM-3: the camera at a frame is the same whatever was sampled before it and in
+/// which order (seeking backwards, scrubbing, skipping), for following and point zooms.
+#[test]
+fn ac_zm_3_the_camera_at_a_frame_ignores_the_order_of_earlier_samples() {
+    let project = applied(
+        r#"[{"cmd":"zoom.set","zoom":"ovl_detail","amount":2.5,"focus":"cursor","spring":"smooth"},
+            {"cmd":"item.trim","item":"ovl_detail","edge":"out","delta":150}]"#,
+    );
+    let evaluator = Evaluator::prepare_with(&project, &pointer([0.5, 0.5], [0.78, 0.82])).unwrap();
+    let frames: Vec<Frame> = (100..420).step_by(7).collect();
+    let forward: Vec<View> = frames.iter().map(|&at| evaluator.view(at)).collect();
+    let mut seed = 0x2545_f491_u32;
+    let mut order: Vec<usize> = (0..frames.len()).collect();
+    for i in (1..order.len()).rev() {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        order.swap(i, seed as usize % (i + 1));
+    }
+    for &i in &order {
+        assert_eq!(evaluator.view(frames[i]), forward[i], "frame {}", frames[i]);
+        // A render in between (plan, cursor, layers) changes nothing either.
+        let mut plan = evaluator.buffer();
+        evaluator.frame(frames[order[0]], &mut plan);
     }
 }
 

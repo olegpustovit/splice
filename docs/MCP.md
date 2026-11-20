@@ -159,6 +159,9 @@ event log under it: the camera holds its framing there). `pacing` is
   speed (export and preview; also when the cursor is hidden); `smoothing` 0–1 blends the
   shake-filtered path (0) with the leading spring (1). Against Recorder's presets on the same path,
   lag aside: `none` 0, `rapid` ≈ 0.1, `medium` ≈ 0.3, `smooth` ≈ 0.75 (1 is softer still).
+  `removeShakes` (default on) drops hand shake under 0.35 % of the source; once the hand rests
+  80 ms the cursor eases onto the recorded point, so it rests where the hand stopped. Off draws
+  every small movement.
 
 ## Command descriptions
 
@@ -480,7 +483,12 @@ refused with `OUT_OF_RANGE` (`param:"to"`, the limit, and a `from`/`to` that fit
 never cut short, and the result's `settings` report `width`, `height`, `fps`, `frames`, `from`
 and `to`. `from`/`to` (whole frames from 0 to the timeline's end; anything else is
 refused with the broken rule, never clamped) or `marker` export part of the timeline; `bitrate`
-overrides the preset (the frame rate is the project's). `variants:[{aspect, preset?}]` exports
+overrides the preset (the frame rate is the project's). `resolution` (720, 1080, 1440 or 2160)
+scales the output so its shorter edge has that many pixels, keeping its shape (a preset's size
+or a variant's aspect); `quality` (`web`, `social`, `high`, `studio`: 4, 8, 16, 40 Mbps for
+H.264 at 1080p30, scaled by pixels and the square root of the frame rate, HEVC 0.6 of it) picks
+the bitrate. Either is refused where it cannot apply (audio, GIF; `quality` also ProRes and
+poster, or with `bitrate`). `variants:[{aspect, preset?}]` exports
 reframed copies, one job each; variants that would write the same file (same size and container)
 are refused, and if one variant cannot start, the ones already started are cancelled. Markers
 become a chapter track; `captions:"srt"|"vtt"` writes a sidecar with the cues inside the exported
@@ -684,3 +692,7 @@ The tool tests bind `$sample` and `$new` in request paths to disposable packages
 friction repro can name a sibling `<fixture-stem>.splice` seed, whose copy becomes `$project`.
 `tools/list` is checked against its own golden. `fixtures/mcp/code/code.run.jsonl` runs against the code
 profile; its `$sample` is replaced as text because the path sits inside the JavaScript.
+
+Recorder parity: [RECORDER-PARITY.md](RECORDER-PARITY.md) maps every Recorder capability to the call
+and the test that proves it; `cargo t -p splice_mcp recorder_parity` fails when a named test or
+eval is gone.

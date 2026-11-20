@@ -260,6 +260,33 @@ fn a_timed_mask_shows_only_from_to() {
     assert_eq!(get("end"), Some(splice_model::EffectValue::Number(80.0)));
 }
 
+/// Recorder's highlight mask (and "Highlight this zoom"): `spotlight` darkens everything
+/// outside its rect over the mask's own range, and an `amount` key fades it in.
+#[test]
+fn a_spotlight_mask_highlights_its_rect_over_its_range_and_fades_with_keys() {
+    let project = applied(
+        r#"[{"cmd":"mask.add","item":"clp_take","mode":"spotlight","x":0.2,"y":0.3,"w":0.4,"h":0.2,"from":180,"to":330,"ref":"m"},
+            {"cmd":"param.keys","target":"clp_take","path":"mask.amount","keys":[{"at":60,"value":0},{"at":75,"value":0.8}]}]"#,
+    );
+    let mask = |at| {
+        frame(&project, at)
+            .layers
+            .iter()
+            .find_map(|layer| match layer {
+                Layer::Picture(p) if p.item == TimelineId::Clip("clp_take".parse().unwrap()) => {
+                    p.look.masks.iter().flatten().next().copied()
+                }
+                _ => None,
+            })
+    };
+    assert!(mask(179).is_none() && mask(330).is_none());
+    let lit = mask(250).unwrap();
+    assert_eq!(lit.mode, MaskMode::Spotlight);
+    assert!((lit.amount - 0.8).abs() < 1e-9, "{lit:?}");
+    let fading = mask(187).unwrap().amount;
+    assert!(fading > 0.0 && fading < 0.8, "{fading}");
+}
+
 #[test]
 fn camera_and_backdrop_frames_allocate_nothing() {
     let project = applied(

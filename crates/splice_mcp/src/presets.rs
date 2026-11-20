@@ -180,6 +180,33 @@ fn preset(name: &str) -> Result<Preset, StoreError> {
         })
 }
 
+/// `resolution` choices: the output's shorter edge in pixels (Recorder's 720p, 1080p, 4K).
+const RESOLUTIONS: [u32; 4] = [720, 1080, 1440, 2160];
+
+/// `quality` levels: H.264 Mbps at 1080p30 (Recorder's export sheet).
+const QUALITY: [(&str, f64); 4] = [
+    ("web", 4.0),
+    ("social", 8.0),
+    ("high", 16.0),
+    ("studio", 40.0),
+];
+
+/// `size` scaled so its shorter edge is `edge` pixels, keeping its shape (even sizes; upscaling
+/// is allowed).
+fn short_edge(size: [u32; 2], edge: u32) -> [u32; 2] {
+    let short = f64::from(size[0].min(size[1]).max(1));
+    let even = |v: u32| ((f64::from(v) * f64::from(edge) / short / 2.0).round() as u32 * 2).max(2);
+    [even(size[0]), even(size[1])]
+}
+
+/// Bits per second for a `quality` level: its 1080p30 H.264 rate scaled by pixels and by the
+/// square root of the frame rate; HEVC needs 0.6 of it.
+fn quality_bitrate(mbps: f64, size: [u32; 2], fps: u32, kind: Kind) -> f64 {
+    let pixels = f64::from(size[0]) * f64::from(size[1]) / (1920.0 * 1080.0);
+    let codec = if kind == Kind::Hevc { 0.6 } else { 1.0 };
+    mbps * 1e6 * pixels * (f64::from(fps) / 30.0).sqrt() * codec
+}
+
 /// The canvas for an aspect, keeping the project's longer edge.
 pub(super) fn canvas(size: [u32; 2], aspect: &str) -> Result<[u32; 2], StoreError> {
     let (w, h) = match aspect {
@@ -239,6 +266,37 @@ pub(super) fn resolve(
                 * 1e6,
         ),
     };
+    let resolution = match args.field("resolution") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|edge| RESOLUTIONS.iter().find(|&&r| u64::from(r) == edge))
+                .copied()
+                .ok_or_else(|| {
+                    bad(
+                        "resolution",
+                        "720, 1080, 1440 or 2160 (the shorter edge in pixels)",
+                    )
+                })?,
+        ),
+    };
+    let quality = match args.optional_string("quality")? {
+        None => None,
+        Some(name) => Some(
+            QUALITY
+                .iter()
+                .find(|(q, _)| *q == name)
+                .map(|&(_, mbps)| mbps)
+                .ok_or_else(|| bad("quality", "web, social, high or studio"))?,
+        ),
+    };
+    if quality.is_some() && bitrate.is_some() {
+        return Err(bad(
+            "quality",
+            "quality or bitrate, not both (bitrate sets the rate itself)",
+        ));
+    }
     let sidecar = match args.optional_string("captions")? {
         None => None,
         Some("srt") => Some("srt"),
@@ -271,13 +329,33 @@ pub(super) fn resolve(
             (None, Some(size)) => size,
             (None, None) => project.size,
         };
+        let size = match resolution {
+            None => size,
+            Some(_) if matches!(kind, Kind::Aac | Kind::Wav | Kind::Gif) => {
+                return Err(bad(
+                    "resolution",
+                    "omitted for audio and GIF presets (a GIF is at most 480 px wide)",
+                ));
+            }
+            Some(edge) => short_edge(size, edge),
+        };
+        let quality = match quality {
+            None => None,
+            Some(_) if !matches!(kind, Kind::H264 | Kind::Hevc) => {
+                return Err(bad(
+                    "quality",
+                    "omitted for presets that are not H.264 or HEVC (ProRes, audio, GIF and poster set no bitrate)",
+                ));
+            }
+            Some(mbps) => Some(quality_bitrate(mbps, size, project.fps, kind)),
+        };
         Ok(Output {
             preset,
             kind,
             extension,
             size,
             range,
-            bitrate: bitrate.or(mbps.map(|m| m * 1e6)),
+            bitrate: bitrate.or(quality).or(mbps.map(|m| m * 1e6)),
             chapters: chapters.clone(),
             sidecar,
         })
@@ -539,6 +617,61 @@ mod tests {
             .is_err()
         );
         assert_eq!(canvas([1080, 1920], "4:5").unwrap(), [1536, 1920]);
+    }
+
+    /// Recorder's export sheet: resolution is the shorter edge and keeps the output's shape;
+    /// quality picks a bitrate for the size, rate and codec. Conflicts are refused, never ignored.
+    #[test]
+    fn resolution_keeps_the_shape_and_quality_scales_the_bitrate() {
+        let project = Project {
+            size: [1080, 1920],
+            fps: 60,
+            ..Project::default()
+        };
+        let resolved = |args: &str| resolve(&project, 120, &splice_json::parse(args).unwrap());
+        let out = |args: &str| resolved(args).unwrap().remove(0);
+        assert_eq!(out(r#"{"resolution":720}"#).size, [720, 1280]);
+        assert_eq!(out(r#"{"resolution":2160}"#).size, [2160, 3840]);
+        assert_eq!(
+            out(r#"{"preset":"youtube-1080","resolution":720}"#).size,
+            [1280, 720]
+        );
+        let sizes: Vec<_> =
+            resolved(r#"{"resolution":1080,"variants":[{"aspect":"1:1"},{"aspect":"16:9"}]}"#)
+                .unwrap()
+                .iter()
+                .map(|o| o.size)
+                .collect();
+        assert_eq!(sizes, [[1080, 1080], [1920, 1080]]);
+        // 1080x1920 at 60 fps: 8 Mbps x 1 x sqrt(2); HEVC x 0.6.
+        let h264 = out(r#"{"preset":"social-h264","quality":"social"}"#)
+            .bitrate
+            .unwrap();
+        assert!((h264 - 8e6 * 2f64.sqrt()).abs() < 1.0, "{h264}");
+        let hevc = out(r#"{"quality":"studio","resolution":720}"#)
+            .bitrate
+            .unwrap();
+        let pixels = 720.0 * 1280.0 / (1920.0 * 1080.0);
+        assert!(
+            (hevc - 40e6 * pixels * 2f64.sqrt() * 0.6).abs() < 1.0,
+            "{hevc}"
+        );
+        assert_eq!(refused(r#"{"resolution":1000}"#).param, "resolution");
+        assert_eq!(refused(r#"{"resolution":"1080p"}"#).param, "resolution");
+        assert_eq!(
+            refused(r#"{"preset":"audio-wav","resolution":720}"#).param,
+            "resolution"
+        );
+        assert_eq!(
+            refused(r#"{"preset":"gif","resolution":720}"#).param,
+            "resolution"
+        );
+        assert_eq!(refused(r#"{"quality":"best"}"#).param, "quality");
+        assert_eq!(refused(r#"{"quality":"web","bitrate":4}"#).param, "quality");
+        assert_eq!(
+            refused(r#"{"preset":"prores-422","quality":"high"}"#).param,
+            "quality"
+        );
     }
 
     #[test]

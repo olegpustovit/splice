@@ -2077,3 +2077,98 @@ fn tools_default_the_only_project_and_its_session() {
         "{reply:?}"
     );
 }
+
+/// docs/RECORDER-PARITY.md stays true: every row has four cells and a known status, a
+/// verified row names its evidence, and every test (`crate::module::test` as `cargo t` prints
+/// it) and eval (`eval:<id>`) it names exists.
+#[test]
+fn recorder_parity_evidence_exists() {
+    use std::{fs, path::Path};
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // `fn name(` with `#[test]` on one of the three lines above it.
+    let has_test = |text: &str, name: &str| {
+        let lines: Vec<&str> = text.lines().collect();
+        let head = format!("fn {name}(");
+        lines.iter().enumerate().any(|(i, line)| {
+            line.trim_start().starts_with(&head)
+                && lines[i.saturating_sub(3)..i]
+                    .iter()
+                    .any(|l| l.trim() == "#[test]")
+        })
+    };
+    let test_exists = |name: &str| -> bool {
+        let parts: Vec<&str> = name.split("::").collect();
+        let (krate, modules, test) = (parts[0], &parts[1..parts.len() - 1], parts[parts.len() - 1]);
+        let dir = root.join("crates").join(krate);
+        // Integration targets print as `crate::test`: a #[test] fn, or a case a harness lists
+        // by name.
+        if modules.is_empty()
+            && fs::read_dir(dir.join("tests")).is_ok_and(|entries| {
+                entries.flatten().any(|entry| {
+                    fs::read_to_string(entry.path()).is_ok_and(|text| {
+                        has_test(&text, test) || text.contains(&format!("\"{test}\""))
+                    })
+                })
+            })
+        {
+            return true;
+        }
+        // The longest module prefix that is a file; the rest are inline `mod name {` blocks.
+        (0..=modules.len()).rev().any(|split| {
+            let base = dir.join("src").join(modules[..split].join("/"));
+            let files = if split == 0 {
+                vec![dir.join("src/lib.rs")]
+            } else {
+                vec![base.with_extension("rs"), base.join("mod.rs")]
+            };
+            files.iter().any(|file| {
+                fs::read_to_string(file).is_ok_and(|text| {
+                    modules[split..]
+                        .iter()
+                        .all(|m| text.contains(&format!("mod {m} {{")))
+                        && has_test(&text, test)
+                })
+            })
+        })
+    };
+    let doc = fs::read_to_string(root.join("docs/RECORDER-PARITY.md")).unwrap();
+    let mut problems = Vec::new();
+    let mut rows = 0;
+    for line in doc.lines().filter(|l| {
+        l.starts_with("| ") && !l.starts_with("| ---") && !l.starts_with("| Recorder capability")
+    }) {
+        rows += 1;
+        let cells: Vec<&str> = line.trim_matches('|').split(" | ").map(str::trim).collect();
+        let [capability, call, evidence, status] = cells[..] else {
+            problems.push(format!("not four cells: {line}"));
+            continue;
+        };
+        if capability.is_empty() || call.is_empty() {
+            problems.push(format!("empty capability or call: {line}"));
+        }
+        let spans: Vec<&str> = evidence.split('`').skip(1).step_by(2).collect();
+        let verified = status.starts_with("verified");
+        if !verified && !status.starts_with("UI-only") && !status.starts_with("GAP") {
+            problems.push(format!(
+                "status is not verified, UI-only or GAP: {capability}"
+            ));
+        }
+        if verified && spans.is_empty() && !evidence.contains("live:") {
+            problems.push(format!("verified without evidence: {capability}"));
+        }
+        for span in spans {
+            let found = match span.strip_prefix("eval:") {
+                Some(id) => root
+                    .join("evals/tasks")
+                    .join(format!("{id}.json"))
+                    .is_file(),
+                None => span.contains("::") && test_exists(span),
+            };
+            if !found {
+                problems.push(format!("{capability}: no {span}"));
+            }
+        }
+    }
+    assert!(rows > 80, "{rows} rows");
+    assert!(problems.is_empty(), "{problems:#?}");
+}

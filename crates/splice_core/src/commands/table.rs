@@ -294,6 +294,7 @@ pub const COMMANDS: &[Command] = &[
             ("arc", "0–0.5 · curve of synthesized paths"),
             ("arriveBefore", "0–1 s · synthesized paths arrive this early before a click"),
             ("alwaysArrow", "bool · draw the arrow whatever shape was recorded"),
+            ("removeShakes", "bool = true · remove small hand shakes; false keeps every small movement"),
             ("loop", "frames 0–600 · ease back to the clip's first position over its last N frames (0 off)"),
             ("clickSound", "bool · a click sound in the export at every press"),
             ("motionBlur", "0–1 · blur along the cursor's motion")],
