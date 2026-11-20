@@ -252,6 +252,13 @@ static SCContentFilter *capture_filter(const SpliceCaptureTarget *target, SCShar
     configuration.width = (size_t)width;
     configuration.height = (size_t)height;
     configuration.showsCursor = NO;
+    // A take without a picture ("*"): the menu bar's status items are not apps, so excluding
+    // every app still showed them (a calendar entry, found live). Capture a 2-point patch of
+    // the wallpaper's bottom-right corner at full size instead: a flat colour, no content.
+    if (target->kind != SPLICE_CAPTURE_WINDOW && [excluded_apps containsObject:@"*"] &&
+        bounds.width > 4 && bounds.height > 4) {
+        configuration.sourceRect = CGRectMake(bounds.width - 3, bounds.height - 3, 2, 2);
+    }
     // The working space (composition.m splice_video_color): sRGB with the 709 matrix, as
     // Recorder captures, so a take decodes to what was on screen and to what export makes.
     configuration.colorSpaceName = kCGColorSpaceSRGB;
