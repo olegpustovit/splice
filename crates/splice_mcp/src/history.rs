@@ -25,6 +25,7 @@ pub(super) fn start(store: &mut Store, args: &Json) -> Result<Json, StoreError> 
 
 pub(super) fn apply(store: &mut Store, args: &Json) -> Result<Json, StoreError> {
     let options = write_options(args)?;
+    let profile = super::lints::profile_arg(args)?;
     let ops = args
         .field("ops")
         .and_then(Json::as_array)
@@ -37,8 +38,11 @@ pub(super) fn apply(store: &mut Store, args: &Json) -> Result<Json, StoreError> 
         })?;
     let mut result = apply_batch(store, ops, &options)?;
     // Lints read the project the batch leads to (D18): the staged one for a dry run.
-    let (lints, pacing) =
-        super::lints::check(result.staged.take().as_deref().unwrap_or(store.project()));
+    let (lints, pacing) = super::lints::check_profiled(
+        result.staged.take().as_deref().unwrap_or(store.project()),
+        store.path(),
+        profile,
+    );
     let mut reply = edit_result_json(result);
     if let Json::Object(fields) = &mut reply {
         fields.push(("lints".into(), Json::Array(lints)));

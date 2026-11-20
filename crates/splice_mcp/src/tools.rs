@@ -263,7 +263,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "view.check",
-        description: "Check a range for problems a few frames would miss. Camera jumps and pictures pushed off the canvas come from the evaluated timeline on every platform; on macOS, black or frozen spans and transitions that disturb the backdrop come from frames rendered at 5 per second, with a contact sheet of the flagged frames. Each issue has its span and a fix.",
+        description: "Check a range for problems a few frames would miss. Camera jumps and pictures pushed off the canvas come from the evaluated timeline on every platform; on macOS, black or frozen spans and transitions that disturb the backdrop come from frames rendered at 5 per second, with a contact sheet of the flagged frames. profile (reel, demo, tutorial) adds pacing checks over the whole edit (hook, still stretches, average shot length, tiny shots, duration) and returns pacing. Each issue has its span and a fix.",
         read_only: true,
         input: &[
             ("projectId", "string"),
@@ -273,11 +273,13 @@ pub(super) const TOOLS: &[Tool] = &[
                 "checks",
                 r#"{"type":"array","items":{"enum":["camera","offCanvas","black","frozen","bleed"]}}"#,
             ),
+            ("profile", r#"{"enum":["reel","demo","tutorial"]}"#),
         ],
         required: &["projectId"],
         output: &[
             ("revision", REVISION),
             ("issues", "array"),
+            ("pacing", "object"),
             ("pixels", "boolean"),
             ("sheet", "string"),
         ],
@@ -344,7 +346,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "edit.apply",
-        description: "Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry. The result carries lints (warnings with a fix and a suggested ops batch: text outside the safe zone or over the window, zooms past the canvas, long static stretches) and pacing stats.",
+        description: "Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry. The result carries lints (warnings with a fix and a suggested ops batch: text outside the safe zone or over the window, zooms past the canvas, long static stretches) and pacing stats; profile (reel, demo, tutorial) adds pacing rules: hook, still stretches, average shot length, tiny shots, duration.",
         read_only: false,
         input: &[
             ("projectId", "string"),
@@ -357,6 +359,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ("summary", "string"),
             ("dryRun", "boolean"),
             ("idempotencyKey", "string"),
+            ("profile", r#"{"enum":["reel","demo","tutorial"]}"#),
         ],
         required: &["projectId", "sessionId", "ifRevision", "ops"],
         output: &[

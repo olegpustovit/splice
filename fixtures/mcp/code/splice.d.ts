@@ -1816,8 +1816,8 @@ declare const splice: {
   view: {
     /** Render PNG frames from the export composition. Pass explicit frame numbers or a filmstrip count; sheet:true returns one contact-sheet image of them all, and strip:true adds a heatmap of what changed between each consecutive pair after them. macOS builds only; elsewhere it fails with UNSUPPORTED_PLATFORM. */
     frames(args?: { projectId?: string; at?: number[]; count?: number; sheet?: boolean; strip?: boolean; }): { revision: Splice.Revision; frames: unknown[]; sheet?: string; };
-    /** Check a range for problems a few frames would miss. Camera jumps and pictures pushed off the canvas come from the evaluated timeline on every platform; on macOS, black or frozen spans and transitions that disturb the backdrop come from frames rendered at 5 per second, with a contact sheet of the flagged frames. Each issue has its span and a fix. */
-    check(args?: { projectId?: string; from?: number; to?: number; checks?: ("camera" | "offCanvas" | "black" | "frozen" | "bleed")[]; }): { revision: Splice.Revision; issues: unknown[]; pixels: boolean; sheet?: string; };
+    /** Check a range for problems a few frames would miss. Camera jumps and pictures pushed off the canvas come from the evaluated timeline on every platform; on macOS, black or frozen spans and transitions that disturb the backdrop come from frames rendered at 5 per second, with a contact sheet of the flagged frames. profile (reel, demo, tutorial) adds pacing checks over the whole edit (hook, still stretches, average shot length, tiny shots, duration) and returns pacing. Each issue has its span and a fix. */
+    check(args?: { projectId?: string; from?: number; to?: number; checks?: ("camera" | "offCanvas" | "black" | "frozen" | "bleed")[]; profile?: "reel" | "demo" | "tutorial"; }): { revision: Splice.Revision; issues: unknown[]; pacing?: Record<string, unknown>; pixels: boolean; sheet?: string; };
   };
   commands: {
     /** Search the command registry. Pass an exact ID to see parameters, release tier and an example. music:{query, mood, bpm, minLength, maxLength, limit} searches the music library instead (tracks for music.add, with license, length in seconds, BPM, loudness). */
@@ -1828,8 +1828,8 @@ declare const splice: {
     start(args?: { projectId?: string; agent?: string; }): { sessionId: string; checkpoint: Splice.Revision; revision: Splice.Revision; access?: string; resumed?: boolean; };
   };
   edit: {
-    /** Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry. The result carries lints (warnings with a fix and a suggested ops batch: text outside the safe zone or over the window, zooms past the canvas, long static stretches) and pacing stats. */
-    apply(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; ops: Splice.Op[]; summary?: string; dryRun?: boolean; idempotencyKey?: string; }): { revision: Splice.Revision; dryRun?: boolean; replayed?: boolean; changes: unknown[]; sideEffects: unknown[]; diff: unknown[]; lints?: unknown[]; pacing?: Record<string, unknown>; };
+    /** Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry. The result carries lints (warnings with a fix and a suggested ops batch: text outside the safe zone or over the window, zooms past the canvas, long static stretches) and pacing stats; profile (reel, demo, tutorial) adds pacing rules: hook, still stretches, average shot length, tiny shots, duration. */
+    apply(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; ops: Splice.Op[]; summary?: string; dryRun?: boolean; idempotencyKey?: string; profile?: "reel" | "demo" | "tutorial"; }): { revision: Splice.Revision; dryRun?: boolean; replayed?: boolean; changes: unknown[]; sideEffects: unknown[]; diff: unknown[]; lints?: unknown[]; pacing?: Record<string, unknown>; };
   };
   history: {
     /** List revision labels, sources and affected IDs. Filter by session to inspect its batch history. */

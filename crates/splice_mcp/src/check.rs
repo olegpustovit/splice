@@ -44,6 +44,7 @@ pub(super) fn view_check(
             names
         }
     };
+    let profile = super::lints::profile_arg(args)?;
     let wants = |name: &str| wanted.iter().any(|w| w == name);
     // Zooms that follow the cursor are checked on the path the renderer draws (T46.2).
     let pointers = super::media::pointers(store.path(), project);
@@ -54,13 +55,26 @@ pub(super) fn view_check(
             "Fix the project with edit.apply first.",
         )
     })?;
-    let issues = model_issues(
+    let mut issues = model_issues(
         project,
         &evaluator,
         [from, to],
         wants("camera"),
         wants("offCanvas"),
     );
+    // A delivery profile judges the whole edit (its pacing has no meaning for a range).
+    let pacing = profile.map(|profile| {
+        let actions = super::lints::actions(store.path(), project);
+        let (findings, measures) = super::lints::measure(project, &profile, &actions);
+        for finding in findings {
+            let mut found = issue(finding.check, finding.span, &finding.message, &finding.fix);
+            if let (Json::Object(fields), Some(ops)) = (&mut found, finding.ops) {
+                fields.push(("ops".into(), ops));
+            }
+            issues.push(found);
+        }
+        object(measures)
+    });
     let pixels = wants("black") || wants("frozen") || wants("bleed");
     #[cfg(target_os = "macos")]
     let (issues, sheet, offline) = {
@@ -82,6 +96,9 @@ pub(super) fn view_check(
         ("issues", Json::Array(issues)),
         ("pixels", Json::Bool(pixels && cfg!(target_os = "macos"))),
     ];
+    if let Some(pacing) = pacing {
+        fields.push(("pacing", pacing));
+    }
     if let Some(sheet) = sheet {
         fields.push(("sheet", text(&sheet)));
     }

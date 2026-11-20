@@ -62,7 +62,7 @@ result, is logged to the friction log, and the server keeps serving.
 | 6 | `transcript.get` | read | Words with IDs and timing; `captions: json\|srt\|vtt` |
 | 7 | `media.analyze` | read | Per clip or media, by `kinds`: loudness, pauses, activity, peaks, beats, sounds, shots, text, faces, people, matte. Cached by file stamp; long media runs as a job. `audio.summary` stays an alias |
 | 8 | `view.frames` | read | PNG frames at frames N from the export composition (what the agent sees = what export makes); `sheet:true` returns one contact sheet; `strip:true` adds a heatmap of what changed between consecutive frames |
-| 9 | `view.check` | read | Problems a few frames miss, with spans and fixes: camera jumps and off-canvas pictures (every platform), black or frozen spans and backdrop bleed in transitions (macOS, rendered at 5/s, with a contact sheet) |
+| 9 | `view.check` | read | Problems a few frames miss, with spans and fixes: camera jumps and off-canvas pictures (every platform), black or frozen spans and backdrop bleed in transitions (macOS, rendered at 5/s, with a contact sheet); `profile` adds a reel, demo or tutorial pacing check (Lints) |
 | 10 | `commands.describe` | read | The command registry: params, examples, status (built or planned). `music:{…}` searches the music library instead |
 | 11 | `session.start` | edit | A session id and a checkpoint revision |
 | 12 | `edit.apply` | edit | One atomic batch of registry commands; `dryRun`, `ifRevision`, `idempotencyKey` |
@@ -127,6 +127,25 @@ the export; `ops` keeps only shortcuts), `ZOOM_FOLLOWS_NOTHING` (a `focus:"curso
 event log under it: the camera holds its framing there). `pacing` is
 `{cutsPerMinute, longestStatic, safeZone}`. `record.stop` returns the same plus `TAKE_ASPECT` and
 `MIC_SILENT` (see Recording jobs).
+
+**Delivery profiles (Recorder's lint profiles).** `edit.apply {profile}` and `view.check {profile}`
+take `reel`, `demo` or `tutorial` and judge the whole edit against that piece's pacing. Something
+*happens* at a cut, at a title, overlay or zoom edge, and while a spine take records a click,
+typing or scrolling (from its `events.json`; a pointer move alone is not action). *Shots* are the
+stretches between cuts and zoom edges. `edit.apply` adds these lints (and drops `LONG_STATIC`,
+which `LONG_STILL` replaces); `view.check` returns them as issues named by the check in brackets,
+with their spans and the same `ops`:
+
+| Lint (check) | Rule | reel | demo | tutorial | `ops` |
+| --- | --- | --- | --- | --- | --- |
+| `HOOK_LATE` (`hook`) | first thing that happens at most | 1.0 s | 2.0 s | 3.0 s | `cut.range` of the lead-in, keeping 0.3 s |
+| `LONG_STILL` (`still`) | no stretch with nothing happening over | 1.2 s | 2.5 s | 4.0 s | `cut.range` each stretch to the limit, latest first |
+| `SHOT_LENGTH` (`shotLength`) | average shot length within | 0.8–2 s | 1.5–5 s | 2–8 s | none |
+| `TINY_SHOT` (`tinyShot`) | no cut-to-cut clip shorter than | 0.25 s | 0.3 s | 0.4 s | none (`items` lists the clips) |
+| `DURATION` (`duration`) | length within | 15–45 s | 20–120 s | 30–300 s | `intent.fitDuration {seconds}` when too long |
+
+`pacing` then adds `{profile, seconds, hookSec, aslSec, shots, longestStill}` (`view.check` returns
+it as `pacing`). Without `profile` neither tool reads event logs or changes its reply.
 
 ## Camera and cursor motion (T46.2)
 
