@@ -333,7 +333,8 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "project.set", title: "Output Shape", group: "Markers, project, cutting",
         risk: "edit", shortcut: "", tier: Tier::First,
-        params: &[("aspect", "9:16|4:5|1:1|4:3|16:9"),
+        params: &[("aspect", "9:16|4:5|1:1|4:3|16:9|16:10|auto · keeps the canvas's shorter edge; auto takes the shape nearest the first spine take's (the summary names it)"),
+            ("fps", "24|25|30|50|60 · only on a project without clips, items or markers (every time is integer frames at fps, so a later change would retime the edit); exports use the project's rate"),
             ("access", "off|read|live")],
         ui: &["Canvas inspector ▸ Output shape",
             "Canvas inspector ▸ Agent access"],

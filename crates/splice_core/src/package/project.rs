@@ -18,16 +18,7 @@ pub(crate) fn encode(p: &Project) -> Json {
                     .collect(),
             ),
         ),
-        (
-            "aspect",
-            text(match p.aspect {
-                Aspect::Portrait => "9:16",
-                Aspect::Social => "4:5",
-                Aspect::Square => "1:1",
-                Aspect::Standard => "4:3",
-                Aspect::Landscape => "16:9",
-            }),
-        ),
+        ("aspect", text(p.aspect.label())),
         (
             "access",
             text(match p.access {
@@ -189,13 +180,13 @@ pub(crate) fn decode(value: &Json) -> Result<Project, PackageError> {
         serial: u64_field(value, "serial")?,
         fps: u32_field(value, "fps")?,
         size: [dimension(width)?, dimension(height)?],
-        aspect: match value.string("aspect")? {
-            "9:16" => Aspect::Portrait,
-            "4:5" => Aspect::Social,
-            "1:1" => Aspect::Square,
-            "4:3" => Aspect::Standard,
-            "16:9" => Aspect::Landscape,
-            _ => return Err(bad("aspect", "9:16, 4:5, 1:1, 4:3, or 16:9")),
+        aspect: {
+            let label = value.string("aspect")?;
+            Aspect::ALL
+                .iter()
+                .find(|(_, known)| *known == label)
+                .map(|(aspect, _)| *aspect)
+                .ok_or_else(|| bad("aspect", "9:16, 4:5, 1:1, 4:3, 16:9 or 16:10"))?
         },
         access: match value.string("access")? {
             "off" => Access::Off,

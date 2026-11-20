@@ -432,6 +432,48 @@ pub(super) fn with_music(project: &mut Project) {
     });
 }
 
+/// G1: project.set {fps} changes the rate of a project without timed content and refuses it
+/// otherwise (it would retime every edit); aspect 16:10 and auto (the first spine take's shape,
+/// named in the summary).
+#[test]
+fn project_set_fps_on_empty_projects_and_aspect_auto_from_the_take() {
+    let mut empty = Project::default();
+    run(&mut empty, r#"[{"cmd":"project.set","fps":60}]"#).unwrap();
+    assert_eq!(empty.fps, 60);
+    for (ops, param) in [
+        (r#"[{"cmd":"project.set","fps":29}]"#, "fps"),
+        (r#"[{"cmd":"project.set"}]"#, "aspect, fps or access"),
+        (r#"[{"cmd":"project.set","aspect":"auto"}]"#, "aspect"),
+    ] {
+        let error = run(&mut empty, ops).unwrap_err();
+        assert_eq!(error.error.code, "BAD_ARGS", "{ops}");
+        assert_eq!(error.error.rule.unwrap().param, param, "{ops}");
+    }
+    let mut project = sample();
+    let error = run(&mut project, r#"[{"cmd":"project.set","fps":24}]"#).unwrap_err();
+    let rule = error.error.rule.unwrap();
+    assert_eq!((rule.param.as_str(), project.fps), ("fps", 30));
+    assert!(rule.expected.contains("without clips"), "{}", rule.expected);
+    // The same rate is no change.
+    run(&mut project, r#"[{"cmd":"project.set","fps":30}]"#).unwrap();
+    // The sample's screen take is 640×400: 16:10, keeping the 1080 px short edge.
+    let report = run(&mut project, r#"[{"cmd":"project.set","aspect":"auto"}]"#).unwrap();
+    assert_eq!((project.aspect, project.size), (Aspect::Wide, [1728, 1080]));
+    let summary = &report.changes[0].summary;
+    assert!(
+        summary.contains("16:10 from med_screen (640×400)"),
+        "{summary}"
+    );
+    run(&mut project, r#"[{"cmd":"project.set","aspect":"9:16"}]"#).unwrap();
+    assert_eq!(project.size, [1080, 1920]);
+    // 16:10 survives a save.
+    run(&mut project, r#"[{"cmd":"project.set","aspect":"16:10"}]"#).unwrap();
+    let saved = crate::package::project::encode(&project);
+    let mut text = String::new();
+    splice_json::write(&saved, &mut text).unwrap();
+    assert!(text.contains(r#""aspect":"16:10""#), "{text}");
+}
+
 /// A3: audio.set refuses what it would ignore (duck or normalize on a take component) and a
 /// normalize target past the 2× gain ceiling, naming the loudest target that works.
 #[test]

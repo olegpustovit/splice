@@ -13,6 +13,28 @@ pub enum Aspect {
     Standard,
     /// 16:9.
     Landscape,
+    /// 16:10 (most Mac displays; T46.4).
+    Wide,
+}
+
+impl Aspect {
+    /// Every shape with its file and wire label.
+    pub const ALL: [(Self, &'static str); 6] = [
+        (Self::Portrait, "9:16"),
+        (Self::Social, "4:5"),
+        (Self::Square, "1:1"),
+        (Self::Standard, "4:3"),
+        (Self::Landscape, "16:9"),
+        (Self::Wide, "16:10"),
+    ];
+
+    /// The `w:h` label written in project.json and accepted by project.set.
+    pub fn label(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(aspect, _)| *aspect == self)
+            .map_or("9:16", |(_, label)| label)
+    }
 }
 
 /// Agent permissions stored in the project.

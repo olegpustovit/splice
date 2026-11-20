@@ -3,7 +3,7 @@ use splice_core::{
     history::{Store, StoreError},
     package,
 };
-use splice_model::{Access, Aspect, JobId, LaneKind, Media, MediaId, MediaKind, Project};
+use splice_model::{Access, JobId, LaneKind, Media, MediaId, MediaKind, Project};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -571,16 +571,7 @@ fn info(store: &Store, id: &str) -> Result<Json, StoreError> {
                     .to_vec(),
             ),
         ),
-        (
-            "aspect",
-            text(match p.aspect {
-                Aspect::Portrait => "9:16",
-                Aspect::Landscape => "16:9",
-                Aspect::Square => "1:1",
-                Aspect::Social => "4:5",
-                Aspect::Standard => "4:3",
-            }),
-        ),
+        ("aspect", text(p.aspect.label())),
         ("durationFrames", frame(timeline::duration(p)?)),
         ("access", access(p.access)),
         ("lanes", Json::Array(lanes)),

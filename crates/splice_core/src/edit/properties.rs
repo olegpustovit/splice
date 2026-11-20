@@ -201,9 +201,43 @@ impl Editor {
 
     pub(super) fn set_project(
         &mut self,
-        aspect: Option<Aspect>,
+        aspect: Option<Option<Aspect>>,
         access: Option<Access>,
+        fps: Option<u32>,
     ) -> Result<Outcome, CommandError> {
+        let mut said = Vec::new();
+        if let Some(fps) = fps.filter(|&fps| fps != self.project.fps) {
+            // Every time in the file is an integer frame at fps: a rate change on an edited
+            // project would retime (and round) every cut, key and anchor. Only an empty
+            // timeline changes rate (T46.4 G1).
+            // ponytail: no retime:true yet; add one (scale every frame, refuse rounding) when
+            // an agent needs to change the rate of an edited project.
+            let timed = self.project.clips.order().len()
+                + self.project.items.order().len()
+                + self.project.markers.len();
+            if timed > 0 {
+                return Err(CommandError::rule(
+                    "BAD_ARGS",
+                    "fps",
+                    Some(Json::Unsigned(u64::from(fps))),
+                    &format!(
+                        "a project without clips, items or markers (this one has {timed}; its times are frames at {} fps)",
+                        self.project.fps
+                    ),
+                    "Set fps before adding clips (project.info {create:true}, then project.set {fps}), or keep this rate.",
+                ));
+            }
+            said.push(format!("{} fps", fps));
+            self.project.fps = fps;
+        }
+        let aspect = match aspect {
+            Some(None) => {
+                let (aspect, take) = self.take_aspect()?;
+                said.push(format!("aspect auto: {} from {take}", aspect.label()));
+                Some(aspect)
+            }
+            other => other.flatten(),
+        };
         if let Some(access) = access {
             if self.source == Source::Agent {
                 return Err(error(
@@ -234,13 +268,59 @@ impl Editor {
                     Aspect::Square => [short, short],
                     Aspect::Standard => [scaled(4, 3)?, short],
                     Aspect::Landscape => [scaled(16, 9)?, short],
+                    Aspect::Wide => [scaled(16, 10)?, short],
                 };
             }
             self.project.aspect = aspect;
+            let [width, height] = self.project.size;
+            said.push(format!("canvas {width}×{height}"));
         }
         Ok(Outcome::edit(
-            "Updated project settings".into(),
+            if said.is_empty() {
+                "Updated project settings".into()
+            } else {
+                format!("Project: {}", said.join(", "))
+            },
             Target::Project,
+        ))
+    }
+
+    /// `aspect:"auto"`: the supported shape nearest the first spine take's picture, and that
+    /// take's description for the summary (the shape is a choice, so it is said).
+    fn take_aspect(&self) -> Result<(Aspect, String), CommandError> {
+        let take = self
+            .project
+            .clips
+            .order()
+            .iter()
+            .filter_map(|&slot| self.project.clips.data(slot)?.media)
+            .filter_map(|id| self.project.media.iter().find(|m| m.id == id))
+            .find(|m| m.kind == MediaKind::Take && m.probe.width > 0 && m.probe.height > 0)
+            .ok_or_else(|| {
+                CommandError::rule(
+                    "BAD_ARGS",
+                    "aspect",
+                    Some(Json::String("auto".into())),
+                    "a screen take on the spine to take the shape from (auto)",
+                    "Record or insert a take first, or pass the aspect: 16:9, 16:10, 9:16, 4:5, 1:1 or 4:3.",
+                )
+            })?;
+        let ratio = f64::from(take.probe.width) / f64::from(take.probe.height);
+        let (aspect, _) = [
+            (Aspect::Portrait, 9.0 / 16.0),
+            (Aspect::Social, 4.0 / 5.0),
+            (Aspect::Square, 1.0),
+            (Aspect::Standard, 4.0 / 3.0),
+            (Aspect::Landscape, 16.0 / 9.0),
+            (Aspect::Wide, 16.0 / 10.0),
+        ]
+        .into_iter()
+        .map(|(aspect, shape)| (aspect, (ratio / shape).ln().abs()))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .expect("shapes");
+        Ok((
+            aspect,
+            format!("{} ({}×{})", take.id, take.probe.width, take.probe.height),
         ))
     }
 

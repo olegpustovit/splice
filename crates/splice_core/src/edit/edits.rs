@@ -141,7 +141,11 @@ impl Editor {
             } => self.set_overlay(&item, placement, behind_presenter, muted),
             Op::TitleSet { item, text, look } => self.edit_title(&item, text, look.as_deref()),
             Op::MarkerSet { marker, name, at } => self.set_marker(&marker, name, at.as_ref()),
-            Op::ProjectSet { aspect, access } => self.set_project(aspect, access),
+            Op::ProjectSet {
+                aspect,
+                access,
+                fps,
+            } => self.set_project(aspect, access, fps),
             op => self.run_tier_b(op),
         }
     }

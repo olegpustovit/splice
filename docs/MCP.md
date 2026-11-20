@@ -217,6 +217,13 @@ whole takes its items with it (`cause:"cascade"`). `delete` removes the items on
 A ripple cut also shortens any item that runs into the cut, so the items after it close up
 instead of bumping to new lanes. `cut.range` refuses a negative `from`.
 
+`project.set {aspect?, fps?, access?}` (G1): `aspect` is `9:16`, `4:5`, `1:1`, `4:3`, `16:9`,
+`16:10` or `auto` (the shape nearest the first spine take's picture; the change summary names
+the shape and the take), keeping the canvas's shorter edge. `fps` (24, 25, 30, 50 or 60) changes
+only on a project without clips, items or markers; otherwise it is `BAD_ARGS` with the rule,
+because every time is an integer frame at `fps` and a new rate would retime the edit. Set it
+right after `project.info {create:true}`. Exports always use the project's rate.
+
 Keystroke chips (A1, A11) can show typed text, so a new take starts with them off (the
 `keys` component is `false`; a 0.3 or earlier 0.4 project keeps what it has, nothing migrates).
 `keys.set {clip, show:"all"|"shortcuts"|"none", size?}` turns them on for every key, on for keys

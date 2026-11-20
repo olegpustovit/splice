@@ -135,7 +135,9 @@ Rules:
 - Effects carry `{id, type, params}`; params are the effect type's schema, and unset params inherit
   through project › lane › item. Parameter keys are written in lexical order.
 - Markers may carry an optional `color` swatch. `project.set` keeps the canvas's shorter edge
-  when it changes the aspect.
+  when it changes the aspect. `aspect` is `9:16`, `4:5`, `1:1`, `4:3`, `16:9` or `16:10` (T46.4;
+  older readers refuse `16:10`). `fps` is 24, 25, 30, 50 or 60 and changes only while the project
+  has no clips, items or markers: every time is an integer frame at `fps`, so nothing is retimed.
 
 ### 0.3 additions (additive within `splice/1`)
 

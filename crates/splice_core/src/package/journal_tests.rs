@@ -28,13 +28,7 @@ impl Drop for Temp {
 }
 
 fn change_aspect(aspect: Aspect) -> Batch {
-    let name = match aspect {
-        Aspect::Portrait => "9:16",
-        Aspect::Social => "4:5",
-        Aspect::Square => "1:1",
-        Aspect::Standard => "4:3",
-        Aspect::Landscape => "16:9",
-    };
+    let name = aspect.label();
     Batch {
         time: 12,
         source: Source::Human,

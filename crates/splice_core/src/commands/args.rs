@@ -586,14 +586,11 @@ pub(super) fn crop(value: &Json) -> Result<Option<Option<Rect>>, Error> {
 }
 
 pub(super) fn aspect(value: &str) -> Result<Aspect, Error> {
-    match value {
-        "9:16" => Ok(Aspect::Portrait),
-        "4:5" => Ok(Aspect::Social),
-        "1:1" => Ok(Aspect::Square),
-        "4:3" => Ok(Aspect::Standard),
-        "16:9" => Ok(Aspect::Landscape),
-        _ => Err(Error::bad("aspect", "9:16, 4:5, 1:1, 4:3, or 16:9")),
-    }
+    Aspect::ALL
+        .iter()
+        .find(|(_, label)| *label == value)
+        .map(|(aspect, _)| *aspect)
+        .ok_or_else(|| Error::bad("aspect", "9:16, 4:5, 1:1, 4:3, 16:9, 16:10 or auto"))
 }
 
 pub(super) fn access(value: &str) -> Result<Access, Error> {

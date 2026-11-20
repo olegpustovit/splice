@@ -293,10 +293,12 @@ pub enum Op {
     },
     /// Output Shape.
     ProjectSet {
-        /// New output aspect.
-        aspect: Option<Aspect>,
+        /// New output aspect; `Some(None)` is `auto` (the first spine take's shape).
+        aspect: Option<Option<Aspect>>,
         /// New agent access level.
         access: Option<Access>,
+        /// New frame rate (24, 25, 30, 50 or 60), only on a project without timed content.
+        fps: Option<u32>,
     },
     /// Crop.
     ClipCrop {

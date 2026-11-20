@@ -356,7 +356,10 @@ declare namespace Splice {
     /** Output Shape (edit, 0.1). */
     interface ProjectSet extends Base {
       cmd: "project.set";
-      aspect?: "9:16" | "4:5" | "1:1" | "4:3" | "16:9";
+      /** keeps the canvas's shorter edge; auto takes the shape nearest the first spine take's (the summary names it) */
+      aspect?: "9:16" | "4:5" | "1:1" | "4:3" | "16:9" | "16:10" | "auto";
+      /** only on a project without clips, items or markers (every time is integer frames at fps, so a later change would retime the edit); exports use the project's rate */
+      fps?: "24" | "25" | "30" | "50" | "60";
       access?: "off" | "read" | "live";
     }
     /** Crop (edit, 0.2). */

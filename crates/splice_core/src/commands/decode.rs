@@ -609,9 +609,37 @@ pub(super) fn marker_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
 }
 
 pub(super) fn project_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let fps = match a.field("fps") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|fps| u32::try_from(fps).ok())
+                .filter(|fps| [24, 25, 30, 50, 60].contains(fps))
+                .ok_or_else(|| {
+                    Error::rule(
+                        "BAD_ARGS",
+                        "fps",
+                        Some(value.clone()),
+                        "24, 25, 30, 50 or 60",
+                        "Pass fps as one of 24, 25, 30, 50 or 60.",
+                    )
+                })?,
+        ),
+    };
+    let aspect = match a.opt_string("aspect")?.as_deref() {
+        None => None,
+        Some("auto") => Some(None),
+        Some(shape) => Some(Some(aspect(shape)?)),
+    };
+    let access = a.opt_string("access")?.as_deref().map(access).transpose()?;
+    if aspect.is_none() && access.is_none() && fps.is_none() {
+        return Err(Error::bad("aspect, fps or access", "at least one change"));
+    }
     Ok(Op::ProjectSet {
-        aspect: a.opt_string("aspect")?.as_deref().map(aspect).transpose()?,
-        access: a.opt_string("access")?.as_deref().map(access).transpose()?,
+        aspect,
+        access,
+        fps,
     })
 }
 
