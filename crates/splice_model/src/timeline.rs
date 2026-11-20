@@ -35,6 +35,33 @@ impl Aspect {
             .find(|(aspect, _)| *aspect == self)
             .map_or("9:16", |(_, label)| label)
     }
+
+    /// Width over height.
+    pub fn ratio(self) -> f64 {
+        match self {
+            Self::Portrait => 9.0 / 16.0,
+            Self::Social => 4.0 / 5.0,
+            Self::Square => 1.0,
+            Self::Standard => 4.0 / 3.0,
+            Self::Landscape => 16.0 / 9.0,
+            Self::Wide => 16.0 / 10.0,
+        }
+    }
+
+    /// The shape nearest a `width` × `height` picture, by ratio on a log scale (2:1 and 1:2 are
+    /// equally far from square).
+    pub fn nearest(width: u32, height: u32) -> Self {
+        let ratio = (f64::from(width.max(1)) / f64::from(height.max(1))).ln();
+        Self::ALL
+            .iter()
+            .map(|&(aspect, _)| aspect)
+            .min_by(|a, b| {
+                (a.ratio().ln() - ratio)
+                    .abs()
+                    .total_cmp(&(b.ratio().ln() - ratio).abs())
+            })
+            .unwrap_or(Self::Landscape)
+    }
 }
 
 /// Agent permissions stored in the project.

@@ -486,9 +486,9 @@ change), `mic`/`camera` (`false` or `{id, name, default}`), `systemAudio` (`fals
 `{apps:[{bundleId, name}]}`), `events`, `countdown`, `duration`, `then`, `exclude`, and `canvas`:
 `{decision:"auto"|"explicit"|"kept", aspect, size?}`. A project created by this recording
 (`create:true`, still empty) takes the canvas shape nearest the recorded picture (`aspect:"auto"`,
-from 9:16, 4:5, 1:1, 4:3 and 16:9, decided from the take's pixels at stop and applied in the same
-undo step) unless `aspect` is given; `aspect` on an existing project is refused (use
-`project.set`). A screen at 16:10 gets 16:9 and a `TAKE_ASPECT` lint until 16:10 exists.
+from 9:16, 4:5, 1:1, 4:3, 16:9 and 16:10, decided from the take's pixels at stop and applied in
+the same undo step, by the same rule as `project.set {aspect:"auto"}`) unless `aspect` is given;
+`aspect` on an existing project is refused (use `project.set`).
 
 `jobs.status {jobId}` reports elapsed seconds, bytes, dropped frames, and whether the capture is
 pending, recording, paused, ready, done, or cancelled. A timed capture stops automatically and

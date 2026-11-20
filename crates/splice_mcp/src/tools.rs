@@ -459,7 +459,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ("chapters", "boolean"),
             (
                 "variants",
-                r#"{"type":"array","items":{"type":"object","properties":{"aspect":{"enum":["9:16","4:5","1:1","4:3","16:9"]},"preset":{"type":"string"}},"required":["aspect"]},"minItems":1,"maxItems":6}"#,
+                r#"{"type":"array","items":{"type":"object","properties":{"aspect":{"enum":["9:16","4:5","1:1","4:3","16:9","16:10"]},"preset":{"type":"string"}},"required":["aspect"]},"minItems":1,"maxItems":6}"#,
             ),
             ("path", "string"),
             ("overwrite", "boolean"),
@@ -555,7 +555,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ),
             (
                 "aspect",
-                r#"{"enum":["auto","9:16","4:5","1:1","4:3","16:9"]}"#,
+                r#"{"enum":["auto","9:16","4:5","1:1","4:3","16:9","16:10"]}"#,
             ),
             ("voiceover", "boolean"),
             ("at", FRAME),

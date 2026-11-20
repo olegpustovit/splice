@@ -305,21 +305,8 @@ impl Editor {
                     "Record or insert a take first, or pass the aspect: 16:9, 16:10, 9:16, 4:5, 1:1 or 4:3.",
                 )
             })?;
-        let ratio = f64::from(take.probe.width) / f64::from(take.probe.height);
-        let (aspect, _) = [
-            (Aspect::Portrait, 9.0 / 16.0),
-            (Aspect::Social, 4.0 / 5.0),
-            (Aspect::Square, 1.0),
-            (Aspect::Standard, 4.0 / 3.0),
-            (Aspect::Landscape, 16.0 / 9.0),
-            (Aspect::Wide, 16.0 / 10.0),
-        ]
-        .into_iter()
-        .map(|(aspect, shape)| (aspect, (ratio / shape).ln().abs()))
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .expect("shapes");
         Ok((
-            aspect,
+            Aspect::nearest(take.probe.width, take.probe.height),
             format!("{} ({}×{})", take.id, take.probe.width, take.probe.height),
         ))
     }

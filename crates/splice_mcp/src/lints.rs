@@ -159,29 +159,11 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
     (lints, pacing)
 }
 
-/// Canvas shapes, as `project.set` names them, and width / height.
-/// ponytail: 16:10 joins when project.set gains it (T46.4); add it here then.
-pub(crate) const ASPECTS: [(&str, f64); 5] = [
-    ("9:16", 9.0 / 16.0),
-    ("4:5", 4.0 / 5.0),
-    ("1:1", 1.0),
-    ("4:3", 4.0 / 3.0),
-    ("16:9", 16.0 / 9.0),
-];
-
-/// The canvas shape nearest a `width` × `height` picture, by ratio on a log scale (2:1 and 1:2
-/// are equally far from square).
+/// The canvas shape nearest a `width` × `height` picture, as `project.set` names it
+/// (`Aspect::nearest`, the same rule as `project.set {aspect:"auto"}`).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn nearest_aspect(width: u32, height: u32) -> &'static str {
-    let ratio = (f64::from(width.max(1)) / f64::from(height.max(1))).ln();
-    ASPECTS
-        .iter()
-        .min_by(|a, b| {
-            (a.1.ln() - ratio)
-                .abs()
-                .total_cmp(&(b.1.ln() - ratio).abs())
-        })
-        .map_or("16:9", |aspect| aspect.0)
+    splice_model::Aspect::nearest(width, height).label()
 }
 
 /// `TAKE_ASPECT` (A6): a recorded picture whose shape is not the canvas's does not fill it.

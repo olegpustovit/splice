@@ -454,28 +454,35 @@ mod tests {
             .find(|l| l.field("code").and_then(Json::as_str) == Some("TAKE_ASPECT"))
             .unwrap();
         let op = &fit.field("ops").unwrap().as_array().unwrap()[0];
-        assert_eq!(op.field("aspect").and_then(Json::as_str), Some("16:9"));
+        assert_eq!(op.field("aspect").and_then(Json::as_str), Some("16:10"));
         // The canvas a recording picks (record.start create:true) silences the fit warning.
         let mut options = write.clone();
         options.if_revision = Some(store.project().rev);
         store
             .apply(
-                &[splice_json::parse(r#"{"cmd":"project.set","aspect":"16:9"}"#).unwrap()],
+                &[splice_json::parse(r#"{"cmd":"project.set","aspect":"16:10"}"#).unwrap()],
                 &options,
             )
             .unwrap();
-        assert_eq!(store.project().size, [1920, 1080]);
+        assert_eq!(store.project().size, [1728, 1080]);
         let (_, lints, _) = summary(&store, &published, [178, 2], Some(0.5));
         assert!(
             lints
                 .iter()
                 .all(|l| l.field("code").and_then(Json::as_str) != Some("MIC_SILENT")),
         );
-        // 16:10 against 16:9 still does not fill: the fix crops to the canvas.
-        let fit = lints
-            .iter()
-            .find(|l| l.field("code").and_then(Json::as_str) == Some("TAKE_ASPECT"))
-            .unwrap();
+        // 16:10 on a 16:10 canvas fills it (T46.4 added the shape).
+        assert!(
+            lints
+                .iter()
+                .all(|l| l.field("code").and_then(Json::as_str) != Some("TAKE_ASPECT")),
+        );
+        // A 2880×1864 MacBook screen is nearest 16:10 but 3.5% off it: the fix crops to the canvas.
+        let mut macbook = store.project().media[0].clone();
+        macbook.probe.width = 2880;
+        macbook.probe.height = 1864;
+        let fit = crate::lints::take_fit(store.project(), &macbook, Some(ClipId::from_serial(1)))
+            .expect("does not fill");
         let op = &fit.field("ops").unwrap().as_array().unwrap()[0];
         assert_eq!(op.field("cmd").and_then(Json::as_str), Some("clip.crop"));
     }

@@ -158,11 +158,11 @@ pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreE
     let aspect = args.optional_string("aspect")?;
     if let Some(aspect) = aspect
         && aspect != "auto"
-        && !crate::lints::ASPECTS
+        && !splice_model::Aspect::ALL
             .iter()
-            .any(|(name, _)| *name == aspect)
+            .any(|(_, name)| *name == aspect)
     {
-        return Err(bad("aspect", "auto, 9:16, 4:5, 1:1, 4:3 or 16:9"));
+        return Err(bad("aspect", "auto, 9:16, 4:5, 1:1, 4:3, 16:9 or 16:10"));
     }
     capture_agent::request("take.check", args)?;
     let project = projects.info(args)?.string("projectId")?.to_owned();

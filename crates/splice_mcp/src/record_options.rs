@@ -618,7 +618,7 @@ mod tests {
     fn recording_canvas_takes_the_nearest_project_aspect() {
         for (size, aspect) in [
             ([3840, 2160], "16:9"),
-            ([2880, 1800], "16:9"),
+            ([2880, 1800], "16:10"),
             ([1440, 1080], "4:3"),
             ([1080, 1920], "9:16"),
             ([1000, 1000], "1:1"),
