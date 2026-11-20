@@ -460,3 +460,12 @@ date	commit	agent	task	result	checks	calls	errors	recoveries	wall_s	tokens
 2026-11-20	f03f0bb1a	claude+code	record-two-windows	pass	3/3	3	0	0	22.3	134771
 2026-11-20	f03f0bb1a	claude+code	record-two-windows	pass	3/3	2	0	0	20.7	106154
 2026-11-20	f03f0bb1a	claude+code	record-two-windows	pass	3/3	2	0	0	21.9	106254
+2026-11-20	904b0c5c1	claude+code	cursor-range-hide	pass	3/3	7	2	2	26.2	252254
+2026-11-20	904b0c5c1	claude+code	cursor-range-hide	pass	3/3	8	3	2	29.3	284020
+2026-11-20	904b0c5c1	claude+code	cursor-range-hide	pass	3/3	6	2	2	28.0	226550
+2026-11-20	904b0c5c1	claude+code	record-app-landscape	pass	5/5	8	2	2	40.0	293405
+2026-11-20	904b0c5c1	claude+code	record-app-landscape	pass	5/5	7	2	2	35.8	254450
+2026-11-20	904b0c5c1	claude+code	record-app-landscape	pass	5/5	7	0	0	32.8	264502
+2026-11-20	904b0c5c1	claude+code	record-two-windows	pass	3/3	2	0	0	20.7	106234
+2026-11-20	904b0c5c1	claude+code	record-two-windows	pass	3/3	2	0	0	20.2	106226
+2026-11-20	904b0c5c1	claude+code	record-two-windows	pass	3/3	2	0	0	19.3	106023
