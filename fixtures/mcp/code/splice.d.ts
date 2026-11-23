@@ -222,7 +222,7 @@ declare namespace Splice {
       amount?: number;
       /** crop space: 0–1 of the spine clip's crop (the whole source when uncropped) to center, or "cursor" to follow the drawn cursor (the camera pans only when it leaves the central 60 % of the view); the viewport never leaves the picture */
       focus?: { x: number; y: number } | "cursor";
-      /** content zooms inside a fixed window frame (portrait default), frame zooms the whole card */
+      /** frame (auto) zooms the whole picture like a camera: backdrop, window and cursor together, never past the canvas; content zooms inside the fixed window frame */
       mode?: "auto" | "content" | "frame";
       /** @default focused */
       spring?: "focused" | "smooth" | "snappy" | "instant";
@@ -1838,8 +1838,8 @@ declare const splice: {
     start(args?: { projectId?: string; agent?: string; }): { sessionId: string; checkpoint: Splice.Revision; revision: Splice.Revision; access?: string; resumed?: boolean; };
   };
   edit: {
-    /** Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry. The result carries lints (warnings with a fix and a suggested ops batch: text outside the safe zone or over the window, zooms past the canvas, long static stretches) and pacing stats; profile (reel, demo, tutorial) adds pacing rules: hook, still stretches, average shot length, tiny shots, duration. */
-    apply(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; ops: Splice.Op[]; summary?: string; dryRun?: boolean; idempotencyKey?: string; profile?: "reel" | "demo" | "tutorial"; }): { revision: Splice.Revision; dryRun?: boolean; replayed?: boolean; changes: unknown[]; sideEffects: unknown[]; diff: unknown[]; lints?: unknown[]; pacing?: Record<string, unknown>; };
+    /** Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry. The result carries the lints the batch introduced (lintsStanding counts the ones already there; warnings with a fix and a suggested ops batch: text outside the safe zone or over the window, long static stretches) and pacing stats; profile (reel, demo, tutorial) adds pacing rules: hook, still stretches, average shot length, tiny shots, duration. */
+    apply(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; ops: Splice.Op[]; summary?: string; dryRun?: boolean; idempotencyKey?: string; profile?: "reel" | "demo" | "tutorial"; }): { revision: Splice.Revision; dryRun?: boolean; replayed?: boolean; changes: unknown[]; sideEffects: unknown[]; diff: unknown[]; lints?: unknown[]; lintsStanding?: number; pacing?: Record<string, unknown>; };
   };
   history: {
     /** List revision labels, sources and affected IDs. Filter by session to inspect its batch history. */

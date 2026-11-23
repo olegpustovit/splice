@@ -49,8 +49,8 @@ fn pointer(a: [f64; 2], b: [f64; 2]) -> Vec<Recorded> {
     }]
 }
 
-/// The take picture at `at`: its view and where the cursor (source point `p`) sits in it as a
-/// content point and relative to the viewport center, in viewports.
+/// The take picture at `at`: its view and where the cursor (source point `p`) sits relative to
+/// the viewport center, in viewports (in the space the view frames).
 fn framing(evaluator: &Evaluator, at: Frame, p: [f64; 2]) -> (View, [f64; 2]) {
     let mut plan = evaluator.buffer();
     evaluator.frame(at, &mut plan);
@@ -65,7 +65,13 @@ fn framing(evaluator: &Evaluator, at: Frame, p: [f64; 2]) -> (View, [f64; 2]) {
         })
         .unwrap();
     let [x, y, w, h] = picture.content([640.0, 400.0]);
-    let point = [(p[0] - x) / w, (p[1] - y) / h];
+    let mut point = [(p[0] - x) / w, (p[1] - y) / h];
+    // A whole-picture camera frames the canvas: the content point where it sits on it.
+    if !picture.view.mode.zooms_content() {
+        let d = picture.destination;
+        let [cw, ch] = plan.size.map(f64::from);
+        point = [(d.x + point[0] * d.w) / cw, (d.y + point[1] * d.h) / ch];
+    }
     let [vx, vy, vw, vh] = picture.view.viewport();
     (
         picture.view,

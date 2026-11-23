@@ -90,37 +90,18 @@ pub(crate) fn check(project: &Project) -> (Vec<Json>, Json) {
                     }
                 }
             }
-            ItemKind::Zoom(zoom) => {
-                let safe = super::timeline::fit_safe_scale(&evaluator, from);
-                if zoom.amount > safe + 1e-6 {
-                    lints.push(lint(
-                        "ZOOM_OVERFLOW",
-                        &format!(
-                            "{id} zooms to {:.2}×, past {safe:.2}× where the card leaves the canvas.",
-                            zoom.amount
-                        ),
-                        &[id.to_string()],
-                        "Lower the amount to fitSafeScale, or use mode content (zoom inside the frame).",
-                        Some(Json::Array(vec![object(vec![
-                            ("cmd", text("zoom.set")),
-                            ("zoom", text(&id.to_string())),
-                            ("amount", Json::Float(safe)),
-                        ])])),
-                    ));
-                }
-                // A following zoom needs a take with a recorded pointer under it (T46.2);
-                // anywhere else the camera holds whatever framing it had.
-                if zoom.follow && !follows_a_pointer(project, [from, to]) {
-                    lints.push(lint(
-                        "ZOOM_FOLLOWS_NOTHING",
-                        &format!(
-                            "{id} follows the cursor, but no screen take with recorded pointer events plays under it; the camera holds its framing."
-                        ),
-                        &[id.to_string()],
-                        "Move the zoom over a screen take, or give it a point: zoom.set {focus:{x, y}}.",
-                        None,
-                    ));
-                }
+            // A following zoom needs a take with a recorded pointer under it (T46.2); anywhere
+            // else the camera holds whatever framing it had.
+            ItemKind::Zoom(zoom) if zoom.follow && !follows_a_pointer(project, [from, to]) => {
+                lints.push(lint(
+                    "ZOOM_FOLLOWS_NOTHING",
+                    &format!(
+                        "{id} follows the cursor, but no screen take with recorded pointer events plays under it; the camera holds its framing."
+                    ),
+                    &[id.to_string()],
+                    "Move the zoom over a screen take, or give it a point: zoom.set {focus:{x, y}}.",
+                    None,
+                ));
             }
             _ => {}
         }
@@ -733,11 +714,11 @@ mod tests {
             .collect()
     }
 
-    /// T43.1: titles outside the safe zone and zooms past the canvas come back as lints with a
-    /// fix and a ready batch. (Items past the end cannot happen: every edit ends them with
-    /// the spine, T37.2.)
+    /// T43.1: titles outside the safe zone come back as lints with a fix. (Items past the end
+    /// cannot happen: every edit ends them with the spine, T37.2. Zooms cannot overflow: the
+    /// camera's viewport stays inside the canvas.)
     #[test]
-    fn lints_flag_safe_zone_and_overflowing_zooms() {
+    fn lints_flag_titles_outside_the_safe_zone() {
         let mut project = crate::tests::sample_project();
         // The sample's hook title sits 134 px from the top of a 1920 px short.
         let found = codes(&project);
@@ -745,17 +726,15 @@ mod tests {
             && lint.field("items").and_then(Json::as_array).unwrap()[0].as_str()
                 == Some("ovl_hook")));
         let ops = splice_json::parse(
-            r#"[{"cmd":"zoom.set","zoom":"ovl_detail","mode":"frame","amount":2}]"#,
+            r#"[{"cmd":"zoom.set","zoom":"ovl_detail","mode":"frame","amount":5}]"#,
         )
         .unwrap();
         edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
-        let found = codes(&project);
-        let zoom = found
-            .iter()
-            .find(|(code, _)| code == "ZOOM_OVERFLOW")
-            .expect("overflow");
-        let fix = &zoom.1.field("ops").and_then(Json::as_array).unwrap()[0];
-        assert_eq!(fix.field("amount").and_then(Json::as_f64), Some(1.11));
+        assert!(
+            !codes(&project)
+                .iter()
+                .any(|(code, _)| code.starts_with("ZOOM_"))
+        );
         let (_, pacing) = check(&project);
         assert!(
             pacing

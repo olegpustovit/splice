@@ -35,7 +35,7 @@ caption ovl_cap1 2 1.000 Bold w:screen:1:126-137:TODAY w:screen:2:140-145:WE w:s
 audio clp_take Mic 30.000 1.000
 audio clp_take System 30.000 0.800
 frame 240 clp_take
-background 0.000,0.000,1080.000,1920.000 6b5a7d/1e1a26 1.000
+background -86.400,-153.600,1252.800,2227.200 6b5a7d/1e1a26 1.000
 picture clp_take med_screen 120.000 0.360,0.100,0.460,0.800 54.000,431.739,972.000,1056.522 1.160 1.000 0.050/0.030 1.500/true
 camera clp_take 120.000 766.800,1491.600,259.200,259.200 25.920 0.500
 keys clp_take 120.000 1.000 BottomLeft

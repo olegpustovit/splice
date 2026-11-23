@@ -111,6 +111,13 @@ pub(super) fn render_tool(
     content: &mut Vec<Json>,
 ) -> Result<Json, StoreError> {
     let requested = selection.resolve(timeline::duration(store.project())?)?;
+    // A sheet's name covers what it shows: two sheets of one revision must not overwrite each
+    // other (an agent reading an earlier sheet's path would see the later frames).
+    let shown = requested
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64 ^ u64::from(strip), |h, &at| {
+            (h ^ at as u64).wrapping_mul(0x0100_0000_01b3)
+        });
     let revision = store.project().rev;
     let cache = store.path().join("cache");
     directory(&cache)?;
@@ -172,7 +179,7 @@ pub(super) fn render_tool(
         let png = encode_png(&pixels, sheet_size, 0).map_err(|error| render_error(&error))?;
         let output = Output::prepare(
             directory_path.join(format!(
-                "r{revision}-{:016x}-sheet.png",
+                "r{revision}-{:016x}-sheet-{shown:016x}.png",
                 store.project().hash
             )),
             true,

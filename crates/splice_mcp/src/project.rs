@@ -25,8 +25,10 @@ pub(super) struct Projects {
     pub(super) background: Vec<super::background::Background>,
 }
 
+/// A project this server has open: its own store, or (macOS) one a viewer owns.
 enum OpenProject {
-    Local(Store),
+    // Boxed: a store is far larger than a remote's path and token.
+    Local(Box<Store>),
     #[cfg(target_os = "macos")]
     Remote(PathBuf, String),
 }
@@ -58,7 +60,7 @@ impl OpenProject {
 
     fn into_local(self) -> Option<Store> {
         match self {
-            Self::Local(store) => Some(store),
+            Self::Local(store) => Some(*store),
             #[cfg(target_os = "macos")]
             Self::Remote(..) => None,
         }
@@ -113,7 +115,7 @@ impl Projects {
     #[cfg(any(target_os = "macos", test))]
     pub(super) fn viewer(store: Store) -> Self {
         Self {
-            open: vec![OpenProject::Local(store)],
+            open: vec![OpenProject::Local(Box::new(store))],
             viewer_only: true,
             finished: Vec::new(),
             export_serial: 0,
@@ -330,10 +332,10 @@ impl Projects {
                 };
                 read_access(&store)?;
                 if let Some(index) = existing {
-                    self.open[index] = OpenProject::Local(store);
+                    self.open[index] = OpenProject::Local(Box::new(store));
                     index
                 } else {
-                    self.open.push(OpenProject::Local(store));
+                    self.open.push(OpenProject::Local(Box::new(store)));
                     self.open.len() - 1
                 }
             };

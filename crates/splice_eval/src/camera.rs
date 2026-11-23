@@ -3,7 +3,8 @@
 //! playback read the same values and a frame costs one lookup.
 use splice_model::{CameraMode, Frame, Spring};
 
-/// The camera at one frame: magnification and center in travel space.
+/// The camera at one frame: magnification and center in travel space. Content mode frames
+/// the spine picture's content; the other modes frame the canvas.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct View {
     /// Magnification, at least 1.
@@ -36,6 +37,19 @@ impl View {
             size,
             size,
         ]
+    }
+
+    /// Where a canvas rectangle (pixels) lands under a whole-picture camera on a `size` canvas:
+    /// the viewport scaled up to fill the canvas.
+    pub fn canvas(&self, r: splice_model::Rect, [w, h]: [f64; 2]) -> splice_model::Rect {
+        let s = self.amount.max(1.0);
+        let [vx, vy, ..] = self.viewport();
+        splice_model::Rect {
+            x: (r.x - vx * w) * s,
+            y: (r.y - vy * h) * s,
+            w: r.w * s,
+            h: r.h * s,
+        }
     }
 
     /// The travel-space center that puts content point `p` (normalized) in the middle of the

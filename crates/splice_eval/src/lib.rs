@@ -254,6 +254,23 @@ impl Picture {
     }
 }
 
+impl Picture {
+    /// The content point (normalized like `zoom.focus`) at the middle of the camera's view on a
+    /// `size` canvas, in either camera mode.
+    pub fn framed_point(&self, size: [f64; 2]) -> [f64; 2] {
+        let [vx, vy, vw, vh] = self.view.viewport();
+        let center = [vx + vw / 2.0, vy + vh / 2.0];
+        if self.view.mode.zooms_content() {
+            return center;
+        }
+        let d = self.destination;
+        [
+            (center[0] * size[0] - d.x) / d.w,
+            (center[1] * size[1] - d.y) / d.h,
+        ]
+    }
+}
+
 /// Audio track identity within a descriptor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Track {

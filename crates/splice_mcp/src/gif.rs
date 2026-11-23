@@ -704,7 +704,7 @@ mod tests {
                 })
             })
             .collect();
-        let gif = write(&[picture.clone()], [96, 64], 15);
+        let gif = write(std::slice::from_ref(&picture), [96, 64], 15);
         let dir = std::env::temp_dir().join(format!("splice-gif-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("patches.gif");

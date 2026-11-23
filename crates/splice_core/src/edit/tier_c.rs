@@ -1562,12 +1562,13 @@ impl Editor {
         let timing = self.project.clips.timing(slot).expect("live clip");
         let fps = f64::from(self.project.fps);
         let frames = |seconds: f64| (seconds * fps).round() as Frame;
-        let (lead, tail, merge, settle, gap) = (
+        let (lead, tail, merge, settle, gap, dwell) = (
             shape.lead.unwrap_or(frames(0.3)),
             shape.tail.unwrap_or(frames(2.5)),
             frames(2.5),
             frames(0.5),
             frames(0.6),
+            frames(DWELL_SECONDS),
         );
         // The window on the clip's clock (timeline frames minus the clip start).
         let window = [
@@ -1632,8 +1633,8 @@ impl Editor {
             })
         };
         let mut outside = 0;
-        // Clusters: first and last click frame, coordinate sums and count.
-        let mut clusters: Vec<(Frame, Frame, [f64; 2], f64)> = Vec::new();
+        // Clusters: first and last click frame and the bounds of their points.
+        let mut clusters: Vec<(Frame, Frame, [f64; 4])> = Vec::new();
         for &(source, x, y) in clicks {
             let at = local(source)?;
             if at < window[0].max(0) || at >= window[1].min(timing.length) {
@@ -1645,17 +1646,16 @@ impl Editor {
                 outside += 1;
                 continue;
             }
-            let joins = clusters.last().is_some_and(|&(_, last, sum, n)| {
-                let c = [sum[0] / n, sum[1] / n];
+            let joins = clusters.last().is_some_and(|&(_, last, b)| {
+                let c = [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0];
                 at - last <= merge && ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)).sqrt() < 0.25
             });
             match clusters.last_mut() {
                 Some(cluster) if joins => {
                     cluster.1 = at;
-                    cluster.2 = [cluster.2[0] + p[0], cluster.2[1] + p[1]];
-                    cluster.3 += 1.0;
+                    cluster.2 = grow(cluster.2, p);
                 }
-                _ => clusters.push((at, at, p, 1.0)),
+                _ => clusters.push((at, at, [p[0], p[1], p[0], p[1]])),
             }
         }
         if clusters.is_empty() {
@@ -1668,11 +1668,29 @@ impl Editor {
                 },
             ));
         }
+        // The camera dwells on a target: a cluster that starts sooner than `dwell` after the one
+        // before joins it, so far-apart clicks in quick succession frame both instead of whipping
+        // the camera between them (a sped-up take puts clicks frames apart).
+        let mut framed: Vec<(Frame, Frame, [f64; 4])> = Vec::with_capacity(clusters.len());
+        for cluster in clusters {
+            match framed.last_mut() {
+                Some(previous) if cluster.0 - previous.0 < dwell => {
+                    previous.1 = cluster.1;
+                    previous.2 = grow(
+                        grow(previous.2, [cluster.2[0], cluster.2[1]]),
+                        [cluster.2[2], cluster.2[3]],
+                    );
+                }
+                _ => framed.push(cluster),
+            }
+        }
         let typing: Vec<(Frame, Frame)> = typing
             .iter()
             .map(|&(from, to)| Ok((local(from)?, local(to)?)))
             .collect::<Result<_, CommandError>>()?;
-        // Segments [start, end) on the clip's clock, focus snapped to edges within 0.25.
+        // Segments [start, end) on the clip's clock with their magnification and focus (snapped
+        // to edges within 0.25). A segment zooms only as far as keeps all its clicks in view with
+        // a margin, and not at all when that is barely a zoom.
         let snap = |v: f64| {
             if v < 0.25 {
                 0.0
@@ -1682,8 +1700,13 @@ impl Editor {
                 v
             }
         };
-        let mut segments: Vec<(Frame, Frame, Frame, [f64; 2])> = Vec::new();
-        for &(first, last, sum, n) in &clusters {
+        let mut segments: Vec<(Frame, Frame, Frame, f64, [f64; 2])> = Vec::new();
+        for &(first, last, [x0, y0, x1, y1]) in &framed {
+            let fits = 1.0 / ((x1 - x0).max(y1 - y0) + FRAMING_MARGIN);
+            let amount = shape.amount.min(fits);
+            if amount < MIN_AMOUNT {
+                continue;
+            }
             let mut end = last + tail;
             for &(from, to) in &typing {
                 if from < end && to > first - lead {
@@ -1698,7 +1721,8 @@ impl Editor {
                 // Zoom out between far-apart clicks when there is room; otherwise pan.
                 previous.1 = (start - gap).max(previous.2 + settle).min(start);
             }
-            segments.push((start, end, last, [snap(sum[0] / n), snap(sum[1] / n)]));
+            let focus = [snap((x0 + x1) / 2.0), snap((y0 + y1) / 2.0)];
+            segments.push((start, end, last, amount, focus));
         }
         // Replace this clip's earlier auto zooms.
         let clip = id;
@@ -1736,14 +1760,14 @@ impl Editor {
             self.delete(&stale, false, false, None)?;
         }
         let mut created = Vec::with_capacity(segments.len());
-        for &(start, end, _, focus) in &segments {
+        for &(start, end, _, amount, focus) in &segments {
             if end - start < MIN_LENGTH {
                 continue;
             }
             let at = FrameArg::Frame(timing.start + start);
             let outcome = self.add_item(
                 OverlayContent::Zoom(Zoom {
-                    amount: shape.amount,
+                    amount,
                     focus: (!shape.follow).then_some(focus),
                     mode: CameraMode::Auto,
                     spring: Spring::Focused,
@@ -3087,6 +3111,18 @@ const TEMPLATES: &[Template] = &[
         )],
     },
 ];
+
+/// Shortest time the auto-zoom camera holds one target before moving to the next.
+const DWELL_SECONDS: f64 = 1.2;
+/// Room around a segment's clicks inside the viewport, as a fraction of the content.
+const FRAMING_MARGIN: f64 = 0.2;
+/// A zoom below this magnification reads as a wobble, not a zoom: the segment is dropped.
+const MIN_AMOUNT: f64 = 1.15;
+
+/// `bounds` grown to include point `p`.
+fn grow([x0, y0, x1, y1]: [f64; 4], [x, y]: [f64; 2]) -> [f64; 4] {
+    [x0.min(x), y0.min(y), x1.max(x), y1.max(y)]
+}
 
 /// How `intent.autoZoom` shapes its zooms (defaults applied in `auto_zoom`).
 #[derive(Clone, Copy, Debug)]

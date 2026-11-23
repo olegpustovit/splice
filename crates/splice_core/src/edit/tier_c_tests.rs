@@ -911,6 +911,50 @@ fn auto_zoom_takes_lead_tail_a_window_and_cursor_focus() {
     }
 }
 
+/// Far-apart clicks in quick succession share one framing instead of whipping the camera
+/// between them (the camera dwells 1.2 s on a target); a framing that cannot hold its clicks at
+/// a real magnification is not a zoom at all.
+#[test]
+fn auto_zoom_dwells_instead_of_whipping_between_quick_clicks() {
+    let zooms = |project: &Project| -> Vec<Zoom> {
+        project
+            .items
+            .order()
+            .iter()
+            .filter_map(|&slot| {
+                let data = project.items.data(slot)?;
+                let ItemKind::Zoom(zoom) = data.kind else {
+                    return None;
+                };
+                (data.appearance.name.as_deref() == Some("Auto zoom")).then_some(zoom)
+            })
+            .collect()
+    };
+    let mut project = sample();
+    // clp_take crops x 0.36 + 0.46·p, y 0.1 + 0.8·p: these are crop points (0.2, 0.3),
+    // (0.75, 0.3) and (0.2, 0.6).
+    let ops = splice_json::parse(
+        r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.452,"y":0.34},{"at":100,"x":0.705,"y":0.34},{"at":110,"x":0.452,"y":0.58}]}]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    let made = zooms(&project);
+    assert_eq!(made.len(), 1, "{made:?}");
+    // Bounds 0.55 × 0.3 plus a 0.2 margin: 1 / 0.75, under the default 1.5×.
+    let [fx, fy] = made[0].focus.unwrap();
+    assert!((made[0].amount - 1.0 / 0.75).abs() < 1e-6, "{made:?}");
+    assert!(
+        (fx - 0.475).abs() < 1e-6 && (fy - 0.45).abs() < 1e-6,
+        "{made:?}"
+    );
+    let ops = splice_json::parse(
+        r#"[{"cmd":"intent.autoZoom","item":"clp_take","clicks":[{"at":90,"x":0.383,"y":0.14},{"at":100,"x":0.797,"y":0.86}]}]"#,
+    )
+    .unwrap();
+    apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    assert!(zooms(&project).is_empty());
+}
+
 /// Recorder AC-TL-2: split, remove a piece, restore the cut: the spine plays the original
 /// source frames again, at the original times. Speeds outside Recorder's 0.25–16× are refused.
 #[test]

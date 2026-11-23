@@ -544,6 +544,7 @@ impl Lowering {
 
     /// Keystroke chips as timed text: keys in quick succession merge into one chip, shown for
     /// the style's `hold` after the last of them, at its place on the 3×3 grid.
+    #[allow(clippy::too_many_arguments)]
     fn chips(
         &mut self,
         clip: ClipId,
@@ -700,6 +701,17 @@ impl Lowering {
                 layer: layer.clone(),
                 item: Some(item),
                 reveal: None,
+            });
+        }
+        if style.boxed != 0 && style.animate != Animate::Highlight {
+            // Units never draw the box; one box-only raster (empty visible range) sits under them.
+            let mut backing = layer.clone();
+            backing.visible = Some([0, 0]);
+            self.text.push(TimedText {
+                range,
+                layer: backing,
+                item: Some(item),
+                reveal: Some((range[0], style.duration, style.animate)),
             });
         }
         // Characters are grapheme clusters, so emoji sequences animate whole (T42.3).
@@ -1081,7 +1093,7 @@ impl Lowering {
         let origin = [(size[0] - band[0]) / 2, (size[1] - band[1]) / 2];
         let stripe = (size[0].max(size[1]) / 24).max(8);
         let mut fill = |_: usize, rgba: &mut [u8]| {
-            for (index, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+            for (index, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let [x, y] = [index as u32 % size[0], index as u32 / size[0]];
                 let base: [f32; 3] = if (x + y) % stripe < stripe / 4 {
                     [60.0, 60.0, 66.0]

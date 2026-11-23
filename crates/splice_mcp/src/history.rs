@@ -36,16 +36,27 @@ pub(super) fn apply(store: &mut Store, args: &Json) -> Result<Json, StoreError> 
                 "a nonempty array of operations from commands.describe",
             )
         })?;
+    // Lints read the project the batch leads to (D18): the staged one for a dry run. A batch
+    // reports the lints it introduced; the ones already standing before it are only counted
+    // (view.check lists them all), so a long session does not repeat every warning per call.
+    // A delivery profile asks for the whole review, so it gets every lint.
+    let before = match profile {
+        Some(_) => Vec::new(),
+        None => super::lints::check(store.project()).0,
+    };
     let mut result = apply_batch(store, ops, &options)?;
-    // Lints read the project the batch leads to (D18): the staged one for a dry run.
-    let (lints, pacing) = super::lints::check_profiled(
+    let (mut lints, pacing) = super::lints::check_profiled(
         result.staged.take().as_deref().unwrap_or(store.project()),
         store.path(),
         profile,
     );
+    let total = lints.len();
+    lints.retain(|lint| !before.contains(lint));
+    let standing = total - lints.len();
     let mut reply = edit_result_json(result);
     if let Json::Object(fields) = &mut reply {
         fields.push(("lints".into(), Json::Array(lints)));
+        fields.push(("lintsStanding".into(), Json::Unsigned(standing as u64)));
         fields.push(("pacing".into(), pacing));
     }
     Ok(reply)

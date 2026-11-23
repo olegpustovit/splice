@@ -235,7 +235,7 @@ impl EventLog {
         }
         let mut hash = [0u8; 64];
         let digits = b"0123456789abcdef";
-        for (pair, byte) in hash.chunks_exact_mut(2).zip(metadata.hash) {
+        for (pair, byte) in hash.as_chunks_mut::<2>().0.iter_mut().zip(metadata.hash) {
             pair[0] = digits[(byte >> 4) as usize];
             pair[1] = digits[(byte & 15) as usize];
         }
@@ -356,7 +356,12 @@ mod tests {
         };
         let text = [0x22_u16, 0x5c, 0x1f, 0xd83d, 0xde42];
         key.payload[44..48].copy_from_slice(&(text.len() as u32).to_ne_bytes());
-        for (slot, character) in key.payload[48..].chunks_exact_mut(2).zip(text) {
+        for (slot, character) in key.payload[48..]
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip(text)
+        {
             slot.copy_from_slice(&character.to_ne_bytes());
         }
         log.append(&[key]).unwrap();

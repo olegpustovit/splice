@@ -117,11 +117,12 @@ Stay under 20 tools in the default profile: new capabilities become `edit.apply`
 ## Lints (0.4, D18)
 
 Every `edit.apply` result, dry run or committed, carries `lints` and `pacing` for the project the
-batch leads to. A lint is a warning, never a refusal: `{code, severity:"warning", message, items,
+batch leads to. `lints` lists only what the batch introduced; `lintsStanding` counts the lints that
+were already there before it (`view.check` lists them all), so a session does not repeat every
+warning on every call. With a delivery `profile` the result lists every lint. A lint is a warning, never a refusal: `{code, severity:"warning", message, items,
 fix, ops?}`, where `ops` is a batch that fixes it when one exists. Codes: `OUTSIDE_SAFE_ZONE` (a title's box leaves the versioned 9:16 safe zone
 `tiktok-2026`: top 8.4 %, bottom 18.75 %, left 8.4 %, right 11.2 % of the canvas),
-`TEXT_OVER_WINDOW` (a title covers over 30 % of itself with the recorded window), `ZOOM_OVERFLOW`
-(a frame-mode zoom past `fitSafeScale`), `LONG_STATIC` (over 8 s without a visual change on a
+`TEXT_OVER_WINDOW` (a title covers over 30 % of itself with the recorded window), `LONG_STATIC` (over 8 s without a visual change on a
 vertical short), `KEYS_SHOW_TYPING` (a take's keystroke chips show the `typing` category, so typed
 text is in the export; `ops` keeps the other categories, or shortcuts when typing was all), `ZOOM_FOLLOWS_NOTHING` (a `focus:"cursor"` zoom with no screen take that has an
 event log under it: the camera holds its framing there). `pacing` is

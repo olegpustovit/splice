@@ -219,6 +219,10 @@ fn spans(samples: &[(Frame, bool)], stride: Frame, min: Frame) -> Vec<[Frame; 2]
     out
 }
 
+/// What `pixel_issues` renders: the contact sheet's path and the offline-media fields.
+#[cfg(target_os = "macos")]
+type Rendered = (Option<String>, Vec<(&'static str, Json)>);
+
 /// Black and frozen spans and backdrop bleed from rendered frames at 5 per second, with the
 /// contact sheet and the offline media drawn as placeholders.
 #[cfg(target_os = "macos")]
@@ -229,7 +233,7 @@ fn pixel_issues(
     wants: &dyn Fn(&str) -> bool,
     issues: &mut Vec<Json>,
     content: &mut Vec<Json>,
-) -> Result<(Option<String>, Vec<(&'static str, Json)>), StoreError> {
+) -> Result<Rendered, StoreError> {
     use splice_av::Composition;
     let project = store.project();
     let render = |error: &dyn std::fmt::Display| {
@@ -392,7 +396,7 @@ fn corner(pixels: &[u8], [w, _]: [u32; 2]) -> [f64; 3] {
 #[cfg(target_os = "macos")]
 fn mean_luma(pixels: &[u8]) -> f64 {
     let mut sum = 0u64;
-    for p in pixels.chunks_exact(4).step_by(7) {
+    for p in pixels.as_chunks::<4>().0.iter().step_by(7) {
         sum += u64::from(p[0]) * 54 + u64::from(p[1]) * 183 + u64::from(p[2]) * 19;
     }
     sum as f64 / (pixels.len() / 4 / 7).max(1) as f64 / 256.0 / 255.0
@@ -402,7 +406,13 @@ fn mean_luma(pixels: &[u8]) -> f64 {
 fn mean_difference(a: &[u8], b: &[u8]) -> f64 {
     let mut sum = 0u64;
     let mut count = 0u64;
-    for (x, y) in a.chunks_exact(4).zip(b.chunks_exact(4)).step_by(5) {
+    for (x, y) in a
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
+        .step_by(5)
+    {
         for c in 0..3 {
             sum += u64::from(x[c].abs_diff(y[c]));
         }

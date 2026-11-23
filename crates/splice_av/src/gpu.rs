@@ -377,6 +377,7 @@ impl GpuProgram {
 
     /// Builds the GPU layer(s) for one slot from its evaluated layer: every value is this
     /// frame's, so nothing is interpolated between interval ends.
+    #[allow(clippy::too_many_arguments)]
     fn layer(
         &mut self,
         plan: &Plan,
@@ -515,12 +516,11 @@ impl GpuProgram {
         let [bx, by, bw, bh] = p.content([w, h]);
         let region = [bx * w, by * h, bw * w, bh * h];
         // The timeline camera (D12, D13): content mode narrows the crop to the viewport inside
-        // a fixed frame; frame mode scales the card so the viewport fills the card's place.
-        let portrait = ch > cw;
+        // a fixed frame; the whole-picture camera places the card where its canvas viewport
+        // puts it (the evaluator moves the backdrop the same way).
         let framed = |view: splice_eval::View| {
-            let scale = view.amount.max(1.0);
             let [vx, vy, vw, vh] = view.viewport();
-            if view.mode.zooms_content(portrait) || scale <= 1.0 {
+            if view.mode.zooms_content() {
                 (
                     [
                         region[0] + vx * region[2],
@@ -531,21 +531,14 @@ impl GpuProgram {
                     [dx, dy, dw, dh],
                 )
             } else {
-                (
-                    region,
-                    [
-                        dx - vx * scale * dw,
-                        dy - vy * scale * dh,
-                        dw * scale,
-                        dh * scale,
-                    ],
-                )
+                let r = view.canvas(d, [cw, ch]);
+                (region, [r.x, r.y, r.w, r.h])
             }
         };
         let view = p.view;
         let scale = view.amount.max(1.0);
         let [vx, vy, vw, vh] = view.viewport();
-        let content = view.mode.zooms_content(portrait);
+        let content = view.mode.zooms_content();
         let ([cx, cy, cwid, chei], zoomed) = framed(view);
         let card = if content { 1.0 } else { scale };
         let (dest, pivot) = transform(zoomed, look);

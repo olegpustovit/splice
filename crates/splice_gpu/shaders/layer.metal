@@ -283,9 +283,13 @@ static inline float4 layer_body(Out in, constant Layer &l, texture2d<float> sour
                 if (k.params.y == 0.0) {
                     // 16-tap golden-angle disk blur, radius up to 3% of the picture.
                     float radius = amount * 0.03;
+                    // Per-pixel disk rotation (interleaved gradient noise): a fixed pattern leaves
+                    // 16 ghost copies of sharp text; rotated, they average into fine grain.
+                    float spin = 6.2831853 * fract(52.9829189 * fract(dot(in.px, float2(0.06711056, 0.00583715))));
+                    float2x2 turn = float2x2(cos(spin), sin(spin), -sin(spin), cos(spin));
                     float4 sum = 0.0;
                     for (int j = 0; j < 16; j++) {
-                        sum += fetch(source, linear, in.uv + DISK[j] * radius * float2(1.0, l.dest.z / l.dest.w), l);
+                        sum += fetch(source, linear, in.uv + (turn * DISK[j]) * radius * float2(1.0, l.dest.z / l.dest.w), l);
                     }
                     treated = sum / 16.0;
                 } else if (k.params.y == 1.0) {

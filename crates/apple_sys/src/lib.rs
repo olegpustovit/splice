@@ -1,6 +1,9 @@
 //! Safe Rust interfaces to Splice's native Apple services.
 #![cfg(target_os = "macos")]
 #![allow(unsafe_code)]
+// `*mut c_void` parameters here are opaque `id<MTL…>`/CoreFoundation handles passed through to
+// native code, which validates them; Rust never dereferences them.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 #![deny(missing_docs)]
 
 mod error;

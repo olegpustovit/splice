@@ -440,24 +440,20 @@ impl Zoom {
 /// What a camera segment zooms (D13).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CameraMode {
-    /// Content on portrait canvases, frame otherwise.
+    /// `frame`, on every canvas.
     #[default]
     Auto,
-    /// The frame stays put; the content zooms inside it.
+    /// The window frame stays put; the content zooms inside it.
     Content,
-    /// The framed card zooms and may overflow the canvas.
+    /// A camera over the whole picture: backdrop, window and cursor zoom together, and the
+    /// viewport never leaves the canvas.
     Frame,
 }
 
 impl CameraMode {
-    /// Whether the zoom happens inside a fixed frame (content) rather than scaling the card:
-    /// `auto` is content on a portrait canvas (D13).
-    pub fn zooms_content(self, portrait: bool) -> bool {
-        match self {
-            Self::Content => true,
-            Self::Frame => false,
-            Self::Auto => portrait,
-        }
+    /// Whether the zoom happens inside a fixed frame rather than over the whole picture.
+    pub fn zooms_content(self) -> bool {
+        self == Self::Content
     }
 
     /// Wire names, in order.

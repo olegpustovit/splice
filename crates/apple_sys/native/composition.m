@@ -873,7 +873,8 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
     NSAttributedString *fill = styled_text(text, font, paragraph, style, color, stroke, clear, NO, visible, active,
                                            active_color);
     CTFramesetterRef setter = CTFramesetterCreateWithAttributedString((__bridge CFAttributedStringRef)fill);
-    if (style->boxed && visible.location == NSNotFound) {
+    // Units of an animated title skip the box; an empty visible range draws the box alone under them.
+    if (style->boxed && (visible.location == NSNotFound || visible.length == 0)) {
         CGSize fit = CTFramesetterSuggestFrameSizeWithConstraints(setter, CFRangeMake(0, 0), NULL,
                                                                   CGSizeMake(width - 2 * pad, height), NULL);
         CGFloat x = style->align == 0 ? 0 : style->align == 2 ? width - fit.width - 2 * pad : (width - fit.width) / 2 - pad;

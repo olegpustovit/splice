@@ -713,10 +713,21 @@ impl Evaluator {
                 let dims = [f64::from(media.probe.width), f64::from(media.probe.height)];
                 let [x, y, w, h] = picture.content(dims);
                 if w > 0.0 && h > 0.0 {
-                    points[frame as usize] = Some([
+                    let content = [
                         ((point.x - x) / w).clamp(0.0, 1.0),
                         ((point.y - y) / h).clamp(0.0, 1.0),
-                    ]);
+                    ];
+                    // In the space the segment's camera frames (see `canvas_point`).
+                    points[frame as usize] = Some(if zoom.mode.zooms_content() {
+                        content
+                    } else {
+                        let d = picture.destination;
+                        [
+                            (d.x + content[0] * d.w) / size[0],
+                            (d.y + content[1] * d.h) / size[1],
+                        ]
+                        .map(|v| v.clamp(0.0, 1.0))
+                    });
                 }
             }
         }
@@ -1112,15 +1123,23 @@ impl Evaluator {
         let local = f64::from(frame - clip.interval.start);
         let source = input.frame(frame - clip.interval.start);
         let opacity = clip.interval.alpha(frame);
-        let mut look = clip.rig.look(local, self.size.map(f64::from));
+        let size = self.size.map(f64::from);
+        let mut look = clip.rig.look(local, size);
         let picture_source = source.clamp(0.0, (input.frames - 1.0).max(0.0));
+        let view = self.view(frame);
         if let Some(visual) = &clip.visual {
             look = self.parented(look, None, frame, visual.picture.destination);
+            let mark = out.layers.len();
             visual.draw(picture_source, 1.0, look, false, out);
-            if let Some(Layer::Picture(picture)) = out.layers.last_mut()
-                && let Some(view) = usize::try_from(frame).ok().and_then(|f| self.camera.get(f))
+            // A whole-picture camera zooms the backdrop with the window (the renderer places
+            // the picture from its view); content mode leaves the backdrop alone.
+            if !view.mode.zooms_content()
+                && let Some(Layer::Background { bounds, .. }) = out.layers.get_mut(mark)
             {
-                picture.view = *view;
+                *bounds = view.canvas(*bounds, size);
+            }
+            if let Some(Layer::Picture(picture)) = out.layers.last_mut() {
+                picture.view = view;
             }
         }
         let (gain, pan) = self.mix(clip.mix.as_ref(), local);
@@ -1129,12 +1148,9 @@ impl Evaluator {
             self.draw_overlays(frame, true, true, out);
         }
         if let Some(camera) = &clip.camera {
-            let amount = usize::try_from(frame)
-                .ok()
-                .and_then(|f| self.camera.get(f))
-                .map_or(1.0, |view| view.amount);
+            let amount = view.amount;
             let bubble = layout::camera(
-                self.size.map(f64::from),
+                size,
                 &camera.style,
                 camera.screen,
                 camera.keys,
@@ -1431,6 +1447,21 @@ impl Evaluator {
         })
     }
 
+    /// A content point of the spine picture at `at` as a point of the canvas (normalized).
+    fn canvas_point(&self, [x, y]: [f64; 2], at: Frame) -> [f64; 2] {
+        let Some(d) = self
+            .clips
+            .iter()
+            .find(|clip| clip.interval.contains(at))
+            .and_then(|clip| clip.visual.as_ref())
+            .map(|visual| visual.picture.destination)
+        else {
+            return [x, y];
+        };
+        let [w, h] = self.size.map(f64::from);
+        [(d.x + x * d.w) / w, (d.y + y * d.h) / h].map(|v| v.clamp(0.0, 1.0))
+    }
+
     fn prepare_item(
         &mut self,
         p: &Project,
@@ -1524,7 +1555,16 @@ impl Evaluator {
                 if !(0.0..=1.0).contains(&zoom.motion_blur) {
                     return Err(EvalError::Range);
                 }
-                let focus = zoom.focus.map(|p| self.picture_point(p, interval.start));
+                // Content mode frames the picture's content; a whole-picture camera frames the
+                // canvas, so its focus is where that content point sits on the canvas.
+                let focus = zoom.focus.map(|p| {
+                    let point = self.picture_point(p, interval.start);
+                    if zoom.mode.zooms_content() {
+                        point
+                    } else {
+                        self.canvas_point(point, interval.start)
+                    }
+                });
                 self.zooms.push(crate::camera::Segment {
                     start: interval.start,
                     end: interval.end,

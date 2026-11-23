@@ -346,7 +346,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "edit.apply",
-        description: "Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry. The result carries lints (warnings with a fix and a suggested ops batch: text outside the safe zone or over the window, zooms past the canvas, long static stretches) and pacing stats; profile (reel, demo, tutorial) adds pacing rules: hook, still stretches, average shot length, tiny shots, duration.",
+        description: "Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry. The result carries the lints the batch introduced (lintsStanding counts the ones already there; warnings with a fix and a suggested ops batch: text outside the safe zone or over the window, long static stretches) and pacing stats; profile (reel, demo, tutorial) adds pacing rules: hook, still stretches, average shot length, tiny shots, duration.",
         read_only: false,
         input: &[
             ("projectId", "string"),
@@ -370,6 +370,7 @@ pub(super) const TOOLS: &[Tool] = &[
             ("sideEffects", "array"),
             ("diff", "array"),
             ("lints", "array"),
+            ("lintsStanding", "integer"),
             ("pacing", "object"),
         ],
         success: &[&["revision", "changes", "sideEffects", "diff"]],

@@ -1781,49 +1781,6 @@ fn transcript_get_reads_a_sound_items_words() {
     );
 }
 
-/// T38.6: a zoom item reports the largest amount whose card stays on the canvas. On the
-/// portrait sample `auto` zooms the content (never overflows, 5×); in `frame` mode the
-/// 972×1057 card on a 1080×1920 canvas fits up to 1080/972.
-#[test]
-fn zoom_items_report_their_fit_safe_scale() {
-    let mut project = sample_project();
-    let safe = |project: &splice_model::Project| {
-        let args = splice_json::parse(r#"{"ids":["ovl_detail"]}"#).unwrap();
-        let reply = super::timeline::inspect(project, &args).unwrap();
-        reply.field("items").unwrap().as_array().unwrap()[0]
-            .field("fitSafeScale")
-            .and_then(Json::as_f64)
-            .unwrap()
-    };
-    assert_eq!(safe(&project), 5.0);
-    let ops =
-        splice_json::parse(r#"[{"cmd":"zoom.set","zoom":"ovl_detail","mode":"frame"}]"#).unwrap();
-    splice_core::edit::apply(
-        &mut project,
-        ops.as_array().unwrap(),
-        splice_core::package::journal::Source::Agent,
-        false,
-    )
-    .unwrap();
-    // 1080 / 972 = 1.111…, floored to a hundredth.
-    assert_eq!(safe(&project), 1.11);
-    // A card that fills the canvas (no window, fill) never overflows: no limit (review #2).
-    let ops = splice_json::parse(
-        r#"[{"cmd":"effect.set","effect":"fx_projwin","enabled":false},
-            {"cmd":"effect.set","effect":"fx_takewin","enabled":false},
-            {"cmd":"clip.crop","items":["clp_take"],"rect":null,"fit":"fill"}]"#,
-    )
-    .unwrap();
-    splice_core::edit::apply(
-        &mut project,
-        ops.as_array().unwrap(),
-        splice_core::package::journal::Source::Agent,
-        false,
-    )
-    .unwrap();
-    assert_eq!(safe(&project), 5.0);
-}
-
 /// Eval record-pause-marker: record.start in an open session needs no ifRevision (it writes
 /// nothing until record.stop, which publishes against the revision current then).
 #[test]
@@ -1886,9 +1843,9 @@ fn auto_zoom_on_a_cropped_clip_lands_on_the_clicked_source_point() {
                 _ => None,
             })
             .expect("the take's picture");
-        let [vx, vy, vw, vh] = picture.view.viewport();
+        let [cx, cy] = picture.framed_point(plan.size.map(f64::from));
         let s = picture.source;
-        [s.x + (vx + vw / 2.0) * s.w, s.y + (vy + vh / 2.0) * s.h]
+        [s.x + cx * s.w, s.y + cy * s.h]
     };
     let click = [0.55, 0.42];
     for fit in ["fit", "fill"] {
@@ -1936,28 +1893,31 @@ fn re_cropping_keeps_masks_and_zoom_focus_on_the_same_source_content() {
             false,
         )
     };
+    // The picture and the canvas size.
     let picture = |project: &splice_model::Project, item: &str, at: splice_model::Frame| {
         let evaluator = splice_eval::Evaluator::prepare(project).unwrap();
         let mut plan = evaluator.buffer();
         evaluator.frame(at, &mut plan);
-        plan.layers
+        let p = plan
+            .layers
             .iter()
             .find_map(|layer| match layer {
                 splice_eval::Layer::Picture(p) if p.item.to_string() == item => Some(*p),
                 _ => None,
             })
-            .expect("the picture")
+            .expect("the picture");
+        (p, plan.size.map(f64::from))
     };
     // The source rectangle under the mask, and the source point at the camera's center, with
     // the zoom settled (ovl_detail runs 180..330).
     let seen = |project: &splice_model::Project| {
-        let p = picture(project, "clp_take", 320);
+        let (p, size) = picture(project, "clp_take", 320);
         let s = p.source;
         let [x, y, w, h] = p.look.masks[0].expect("the mask").rect;
-        let [vx, vy, vw, vh] = p.view.viewport();
+        let [cx, cy] = p.framed_point(size);
         (
             [s.x + x * s.w, s.y + y * s.h, w * s.w, h * s.h],
-            [s.x + (vx + vw / 2.0) * s.w, s.y + (vy + vh / 2.0) * s.h],
+            [s.x + cx * s.w, s.y + cy * s.h],
         )
     };
     let close = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 2e-3);
@@ -2047,7 +2007,7 @@ fn re_cropping_keeps_masks_and_zoom_focus_on_the_same_source_content() {
     // A media overlay's masks follow its crop the same way (ovl_broll: a fill card, 420..495).
     let mut project = sample_project();
     let masked = |project: &splice_model::Project| {
-        let p = picture(project, "ovl_broll", 450);
+        let (p, _) = picture(project, "ovl_broll", 450);
         let (s, [x, y, w, h]) = (p.source, p.look.masks[0].expect("the mask").rect);
         [s.x + x * s.w, s.y + y * s.h, w * s.w, h * s.h]
     };

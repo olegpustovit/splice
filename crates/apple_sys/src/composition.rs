@@ -218,7 +218,8 @@ pub struct TextLayer {
     pub color: u32,
     /// Font family, weight and decoration.
     pub style: TextStyle,
-    /// UTF-16 range that draws; the rest keeps its layout but is transparent (word animators).
+    /// UTF-16 range that draws; the rest keeps its layout but is transparent (word animators);
+    /// a set range skips the backing box, an empty one draws only the box.
     pub visible: Option<[usize; 2]>,
     /// UTF-16 range of the spoken caption word and its RGB.
     pub active: Option<([usize; 2], u32)>,
@@ -521,10 +522,6 @@ impl Builder {
         };
         if ok { Ok(()) } else { Err(diagnostic(error)) }
     }
-
-    /// Adds an offline Core Animation text layer.
-
-    /// Publishes the native composition after all ranges have been added.
 
     /// Completes the composition.
     pub fn finish(self) -> Result<Composition, Error> {

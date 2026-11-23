@@ -205,8 +205,9 @@ Rules:
   uncropped; T46.4 A5) the viewport centers on. With `fit:"fill"` the renderer converts it to the
   trimmed picture, so the same source point stays centered. It is clamped so the viewport never
   leaves the content (omit to keep the current framing);
-  `mode` is `auto` (content on portrait canvases, else frame), `content` (zoom inside a fixed
-  frame) or `frame` (the card scales); `spring` is `focused`, `smooth`, `snappy` or `instant`.
+  `mode` is `auto` (frame), `frame` (a camera over the whole picture: backdrop, window and cursor
+  zoom together and the viewport never leaves the canvas; the focus content point is centered as
+  far as that allows) or `content` (zoom inside the fixed window frame); `spring` is `focused`, `smooth`, `snappy` or `instant`.
   One camera per timeline: the evaluator solves an analytic spring per channel from these
   segments, holding the center outside them. `"focus":"cursor"` (T46.2) follows the drawn cursor
   of the take under the segment with a dead zone (the central 60 % of the view) instead of a

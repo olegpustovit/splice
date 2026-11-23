@@ -45,10 +45,7 @@ pub(super) fn socket_path(directory: &Path, name: &str, create: bool) -> io::Res
             Ok(()) => (),
             Err(error)
                 if error.kind() == io::ErrorKind::AlreadyExists
-                    && fs::read_link(&directory)? == actual =>
-            {
-                ()
-            }
+                    && fs::read_link(&directory)? == actual => {}
             Err(error) => return Err(error),
         }
     }

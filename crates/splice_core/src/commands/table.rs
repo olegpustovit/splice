@@ -180,7 +180,7 @@ pub const COMMANDS: &[Command] = &[
             ("length", "frames = 90 · the camera holds the framing this long, then eases back to 1×"),
             ("amount", "1–5 = 1.5 · magnification"),
             ("focus", "{x,y} | \"cursor\" · crop space: 0–1 of the spine clip's crop (the whole source when uncropped) to center, or \"cursor\" to follow the drawn cursor (the camera pans only when it leaves the central 60 % of the view); the viewport never leaves the picture"),
-            ("mode", "auto | content | frame · content zooms inside a fixed window frame (portrait default), frame zooms the whole card"),
+            ("mode", "auto | content | frame · frame (auto) zooms the whole picture like a camera: backdrop, window and cursor together, never past the canvas; content zooms inside the fixed window frame"),
             ("spring", "focused | smooth | snappy | instant = focused"),
             ("motionBlur", "0–1 = 0 · blur along the camera's movement while this zoom drives it"),
             ("lane", "lan_… camera lane")],

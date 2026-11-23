@@ -394,8 +394,12 @@ eight places; the board below already carries the changes.
   (amount, center) chases step targets. Outside segments: amount 1, center held. Pre-aim while
   amount ≤ 1.0005; bounce-out guard (amount ≥ 1). Center in travel space [0,1]². Invariant:
   **viewport ⊂ content and focus visible**; `frame` mode lets the card overflow the canvas.
-- **D13** Camera mode `content` (fixed frame, UV zoom inside; default for portrait windowed takes)
-  | `frame` (the card zooms, may overflow).
+- **D13** Camera mode `frame` (default, `auto`): a camera over the whole picture; backdrop, window
+  and cursor zoom together and the viewport stays inside the canvas, so nothing overflows and
+  nothing is clipped to the window frame. `content` (fixed frame, UV zoom inside) on request.
+  (Was: `content` by default on portrait, and `frame` scaled only the card over a fixed backdrop,
+  which clipped zooms to the window or let the card overflow; fitSafeScale and ZOOM_OVERFLOW went
+  with it.)
 - **D14 One backdrop.** The background is drawn once per frame; every opacity-based transition
   composites the incoming side as one flattened group (research: always, not only when frames
   differ). Transitions consume handles and never change length; `NO_HANDLES` names the fix.

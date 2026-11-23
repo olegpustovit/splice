@@ -279,6 +279,68 @@ mod native {
         assert!(brightest > 120, "brightest title pixel was {brightest}");
     }
 
+    /// An animated title still draws its backing box: units skip the box, so lowering adds one
+    /// box-only raster under them (the box once vanished for every animator but highlight).
+    pub(super) fn animated_title_keeps_its_box() {
+        let lane = LaneId::from_serial(1);
+        let param = |name: &str, value: &str| EffectParam {
+            name: name.into(),
+            value: EffectValue::Text(value.into()),
+        };
+        let effect = |serial, kind: &str, params| Effect {
+            id: EffectId::from_serial(serial),
+            kind: kind.into(),
+            enabled: None,
+            params,
+        };
+        let mut project = Project {
+            size: [320, 192],
+            lanes: vec![Lane {
+                id: lane,
+                name: "Titles".into(),
+                kind: LaneKind::Graphics,
+                effects: Vec::new(),
+            }],
+            ..Project::default()
+        };
+        project
+            .items
+            .insert(Item {
+                id: ItemId::from_serial(1),
+                timing: ItemTiming {
+                    anchor: Anchor::Pinned(0),
+                    length: 30,
+                },
+                data: ItemData {
+                    lane,
+                    kind: ItemKind::Title {
+                        text: "Boxed words".into(),
+                    },
+                    appearance: Appearance {
+                        effects: vec![
+                            effect(
+                                1,
+                                "text",
+                                vec![param("box", "solid"), param("boxColor", "#ff0000")],
+                            ),
+                            effect(2, "animate", vec![param("preset", "pop")]),
+                        ],
+                        ..Appearance::default()
+                    },
+                },
+            })
+            .unwrap();
+        let composition = Composition::prepare(&project, &fixture()).unwrap();
+        let [w, h] = composition.size().map(|n| n as usize);
+        let mut rgba = vec![0; w * h * 4];
+        composition.read_frame(25, &mut rgba).unwrap();
+        let red = rgba
+            .chunks_exact(4)
+            .filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60)
+            .count();
+        assert!(red > 200, "animated title box drew {red} red pixels");
+    }
+
     /// T12.2–T12.3 on a take with recorded events: the cursor draws where the events put it, scaled
     /// by the Cursor effect, and a camera segment on the click zooms the picture in toward it.
     pub(super) fn native_take_draws_the_recorded_cursor_and_zooms_on_click() {
@@ -822,6 +884,10 @@ fn main() {
         (
             "native_composition_covers_a_title_and_audio_without_spine_video",
             native::native_composition_covers_a_title_and_audio_without_spine_video,
+        ),
+        (
+            "animated_title_keeps_its_box",
+            native::animated_title_keeps_its_box,
         ),
         (
             "native_take_draws_the_recorded_cursor_and_zooms_on_click",
