@@ -26,7 +26,7 @@ use std::{
 pub(super) const POLL: Duration = Duration::from_millis(12);
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 /// The most screen frames per second a take records (ScreenCaptureKit delivers on change).
-pub(super) const CAPTURE_FPS: u32 = 60;
+pub(crate) const CAPTURE_FPS: u32 = 60;
 
 /// What `take.begin` resolved before the countdown: the exact source and devices the take
 /// records, echoed back so an agent sees what it will get.

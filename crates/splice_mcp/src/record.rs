@@ -1,5 +1,7 @@
 use crate::{
-    Json, capture_agent, object,
+    Json,
+    capture_agent::{self, CAPTURE_FPS},
+    object,
     platform::record_write_options,
     project::Projects,
     record_publish::{publish, recoverable, retry_stop, stage_path, storage, summary},
@@ -45,6 +47,7 @@ struct Placement {
     /// A project this recording created: its canvas shape (`auto` picks the nearest to the
     /// recorded picture at publish).
     canvas: Option<String>,
+    fresh: bool,
     /// A multi-window take shows only the window clicked last (Recorder's focus shots).
     focus: bool,
 }
@@ -84,6 +87,7 @@ impl Placement {
             retake_of,
             no_screen,
             canvas: None,
+            fresh: false,
             focus,
         })
     }
@@ -96,15 +100,19 @@ impl Placement {
         [width, height]: [u32; 2],
     ) -> (Vec<Json>, Vec<(&'static str, Json)>, Vec<Json>) {
         let mut before = Vec::new();
+        let mut settings = vec![("cmd", text("project.set"))];
         if let Some(canvas) = &self.canvas {
             let aspect = match canvas.as_str() {
                 "auto" => crate::lints::nearest_aspect(width, height),
                 aspect => aspect,
             };
-            before.push(object(vec![
-                ("cmd", text("project.set")),
-                ("aspect", text(aspect)),
-            ]));
+            settings.push(("aspect", text(aspect)));
+        }
+        if self.fresh {
+            settings.push(("fps", Json::Unsigned(u64::from(CAPTURE_FPS))));
+        }
+        if settings.len() > 1 {
+            before.push(object(settings));
         }
         let mut insert = vec![("ref", text("take"))];
         let mut after = Vec::new();
@@ -147,7 +155,7 @@ impl Placement {
                 ("enabled", Json::Bool(false)),
             ]));
         }
-        let fps = f64::from(project.fps);
+        let fps = f64::from(if self.fresh { CAPTURE_FPS } else { project.fps });
         for (seconds, name) in markers {
             let at = start + (seconds * fps).round() as Frame;
             if !project.markers.iter().any(|m| m.at == at) {
@@ -200,6 +208,8 @@ pub(super) fn start(projects: &mut Projects, args: &Json) -> Result<Json, StoreE
         ));
     }
     let untouched = args.flag("create")? || store.project().rev == 0;
+    // create:true also opens an existing package, whose chosen rate should be kept.
+    placement.fresh = empty && store.project().rev == 0;
     placement.canvas = match aspect {
         Some(aspect) => Some(aspect.to_owned()),
         None => (empty && untouched).then(|| "auto".to_owned()),
@@ -363,7 +373,7 @@ pub(super) fn command(
         .field("insert")
         .map_or(Ok(job.insert), |_| args.flag("insert"))?;
     let still = job.still;
-    let placement = job.placement.clone();
+    let mut placement = job.placement.clone();
     let terminal = job.terminal.clone();
     let stopped = job.stopped.clone().filter(|_| method == "take.stop");
     let store = projects.lookup_id(&owner)?;
@@ -420,12 +430,17 @@ pub(super) fn command(
             .and_then(Json::as_u64)
             .ok_or_else(|| bad("bytes", "capture output size"))?;
         let stage = stage_path(store.path(), id);
-        let descriptor = describe(&stage, store.project().fps, still, size).map_err(retry_stop)?;
+        placement.fresh &= store.project().rev == 0;
+        let fps = if placement.fresh {
+            CAPTURE_FPS
+        } else {
+            store.project().fps
+        };
+        let descriptor = describe(&stage, fps, still, size).map_err(retry_stop)?;
         let source = reply
             .field("settings")
             .and_then(|settings| settings.field("source")?.field("windows"));
-        let (layers, windows) =
-            windows(&stage, store.project().fps, &descriptor, source).map_err(retry_stop)?;
+        let (layers, windows) = windows(&stage, fps, &descriptor, source).map_err(retry_stop)?;
         let silent = descriptor
             .take
             .as_ref()
@@ -469,8 +484,7 @@ pub(super) fn command(
             (record_windows::focus(plan, &layers, canvas, shots), canvas)
         });
         if let Some((plan, _)) = &arranged {
-            ops.2
-                .extend(record_windows::ops(&layers, plan, store.project().fps));
+            ops.2.extend(record_windows::ops(&layers, plan, fps));
         }
         let sealed =
             publish(store, id, insert, descriptor, windows, &options, ops).map_err(retry_stop)?;
@@ -889,6 +903,35 @@ mod tests {
                 .is_file()
         );
         assert!(receipt.clip.is_some());
+    }
+
+    #[test]
+    fn capture_agent_placement_sets_only_fresh_projects_to_the_capture_rate() {
+        for (rev, expected_fps) in [(0, 60), (1, 30)] {
+            let mut project = Project {
+                rev,
+                ..Project::default()
+            };
+            let placement = Placement {
+                fresh: rev == 0,
+                canvas: Some("16:10".into()),
+                ..Placement::default()
+            };
+            let markers = [(0.5, "Step".into())];
+            let (before, _, after) = placement.ops(&project, &markers, [1920, 1200]);
+            assert_eq!(before.len(), 1);
+            assert_eq!(
+                before[0].field("fps").and_then(Json::as_u64),
+                (rev == 0).then_some(60)
+            );
+            splice_core::edit::apply(&mut project, &before, Source::Agent, false).unwrap();
+            assert_eq!(project.fps, expected_fps);
+            assert_eq!(project.aspect, splice_model::Aspect::Wide);
+            assert_eq!(
+                after[0].field("at").and_then(Json::as_i64),
+                Some(i64::from(expected_fps / 2))
+            );
+        }
     }
 
     /// Where a take lands (Recorder's voiceover at the playhead, retake, resume marker and

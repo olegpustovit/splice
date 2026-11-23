@@ -37,6 +37,7 @@ const REPLY_LIMIT: u64 = 16 * 1024 * 1024;
 const REQUIREMENT: &str = include_str!("../../../packaging/designated-requirement.txt");
 
 mod jobs;
+pub(crate) use jobs::CAPTURE_FPS;
 mod permissions;
 mod sources;
 

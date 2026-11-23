@@ -629,7 +629,8 @@ points), scale, size [w,h] pixels, resized?}`, `fps` (60, the capture rate; fram
 change), `mic`/`camera` (`false` or `{id, name, default}`), `systemAudio` (`false`, `"all"` or
 `{apps:[{bundleId, name}]}`), `events`, `countdown`, `duration`, `then`, `exclude`, and `canvas`:
 `{decision:"auto"|"explicit"|"kept", aspect, size?}`. A project created by this recording
-(`create:true`, still empty) takes the canvas shape nearest the recorded picture (`aspect:"auto"`,
+(`create:true`, still empty) takes the capture rate (60 fps) when the take is published. Its canvas
+uses the shape nearest the recorded picture (`aspect:"auto"`,
 from 9:16, 4:5, 1:1, 4:3, 16:9 and 16:10, decided from the take's pixels at stop and applied in
 the same undo step, by the same rule as `project.set {aspect:"auto"}`) unless `aspect` is given;
 `aspect` on an existing project is refused (use `project.set`).
