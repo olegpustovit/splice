@@ -582,6 +582,14 @@ fn fade_idle(points: &mut [Point], moved: &[bool], start: f64, clicks: &[[f64; 3
     }
 }
 
+/// Returns the source times of synthesized cursor glide samples.
+pub fn glide_times(samples: &[Sample], size: [f64; 2], motion: Motion) -> Vec<f64> {
+    synthesize(samples, size, motion)
+        .into_iter()
+        .filter_map(|(sample, synthesized)| synthesized.then_some(sample.t))
+        .collect()
+}
+
 /// Splits warps into synthesized human paths; marks the synthesized samples.
 fn synthesize(samples: &[Sample], size: [f64; 2], motion: Motion) -> Vec<(Sample, bool)> {
     let mut out: Vec<(Sample, bool)> = Vec::with_capacity(samples.len());

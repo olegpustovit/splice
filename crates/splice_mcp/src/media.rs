@@ -8,6 +8,7 @@ use splice_core::{
     edit::span,
     history::{Store, StoreError},
 };
+use splice_eval::cursor::{self, Motion, Recorded, Sample};
 use splice_model::{timing, *};
 use std::{fs, path::Path};
 
@@ -732,101 +733,89 @@ fn events_format() -> StoreError {
     )
 }
 
-/// Streams a take's event log (T15.3): each event of the `events` array is parsed and visited
-/// on its own, so memory stays flat however long the take is.
 /// The recorded pointers of the project's takes for zooms that follow the cursor (T46.2), read
 /// the way the renderer reads them (splice_av `takes::load`): moves, drags and presses, plus a
 /// sample wherever the cursor image changes to one whose PNG exists. Empty when no zoom follows;
 /// a take whose log is missing or unreadable is left out (its following zooms hold).
-pub(super) fn pointers(dir: &Path, p: &Project) -> Vec<splice_eval::cursor::Recorded> {
-    use splice_eval::cursor::{Recorded, Sample};
+pub(super) fn pointers(dir: &Path, p: &Project) -> Vec<Recorded> {
     let follows = p.items.order().iter().any(
         |&slot| matches!(p.items.data(slot).map(|d| &d.kind), Some(ItemKind::Zoom(z)) if z.follow),
     );
-    let mut out = Vec::new();
-    for media in p
-        .media
+    p.media
         .iter()
         .filter(|m| follows && m.kind == MediaKind::Take)
-    {
-        let Some(take) = media.take.as_ref() else {
-            continue;
-        };
-        let Some(events) = take.events.as_deref() else {
-            continue;
-        };
-        let base = dir.join("takes").join(media.id.to_string());
-        let Some(root) = fs::read_to_string(base.join(events))
-            .ok()
-            .and_then(|text| splice_json::parse(&text).ok())
-        else {
-            continue;
-        };
-        let rect = |key| {
-            root.field("source")
-                .and_then(|s| s.field("rect"))
-                .and_then(|r| r.field(key))
-                .and_then(Json::as_f64)
-                .filter(|v| *v > 0.0)
-        };
-        let Some(width) = rect("width") else {
-            continue;
-        };
-        let cursors = take.cursors.as_deref().map(|c| base.join(c));
-        let mut samples: Vec<Sample> = Vec::new();
-        let mut at: Option<[f64; 2]> = None;
-        let mut push = |t: f64, [x, y]: [f64; 2], click: bool| {
-            let t = samples.last().map_or(t, |last| t.max(last.t));
-            samples.push(Sample {
-                t,
-                x,
-                y,
-                image: 0,
-                click,
-            });
-        };
-        for event in root.field("events").and_then(Json::as_array).unwrap_or(&[]) {
-            let t = event.field("t").and_then(Json::as_f64).unwrap_or(-1.0);
-            if !t.is_finite() || t < 0.0 {
-                continue;
-            }
-            let number = |key| {
-                event
-                    .field(key)
-                    .and_then(Json::as_f64)
-                    .filter(|v| v.is_finite())
-            };
-            match event.field("k").and_then(Json::as_str) {
-                Some("cursor") => {
-                    let shown = event
-                        .field("id")
-                        .and_then(Json::as_str)
-                        .zip(cursors.as_ref());
-                    if let (Some((id, dir)), Some(p)) = (shown, at)
-                        && dir.join(format!("{id}.png")).is_file()
-                    {
-                        push(t, p, false);
-                    }
-                }
-                Some(kind @ ("move" | "drag" | "down" | "up")) => {
-                    if let (Some(x), Some(y)) = (number("x"), number("y")) {
-                        at = Some([x, y]);
-                        push(t, [x, y], kind == "down");
-                    }
-                }
-                _ => {}
-            }
-        }
-        out.push(Recorded {
-            media: media.id,
-            // Older logs carry only the width; assume a 16:10 display, as the renderer does.
-            size: [width, rect("height").unwrap_or(width / 1.6)],
-            samples,
-        });
-    }
-    out
+        .filter_map(|media| pointer_log(dir, media))
+        .collect()
 }
 
+fn pointer_log(dir: &Path, media: &Media) -> Option<Recorded> {
+    let take = media.take.as_ref()?;
+    let events = take.events.as_deref()?;
+    let base = dir.join("takes").join(media.id.to_string());
+    let root = splice_json::parse(&fs::read_to_string(base.join(events)).ok()?).ok()?;
+    let rect = |key| {
+        root.field("source")
+            .and_then(|s| s.field("rect"))
+            .and_then(|r| r.field(key))
+            .and_then(Json::as_f64)
+            .filter(|v| *v > 0.0)
+    };
+    let width = rect("width")?;
+    let cursors = take.cursors.as_deref().map(|c| base.join(c));
+    let mut samples: Vec<Sample> = Vec::new();
+    let mut at: Option<[f64; 2]> = None;
+    let mut push = |t: f64, [x, y]: [f64; 2], click: bool| {
+        let t = samples.last().map_or(t, |last| t.max(last.t));
+        samples.push(Sample {
+            t,
+            x,
+            y,
+            image: 0,
+            click,
+        });
+    };
+    for event in root.field("events").and_then(Json::as_array).unwrap_or(&[]) {
+        let t = event.field("t").and_then(Json::as_f64).unwrap_or(-1.0);
+        if !t.is_finite() || t < 0.0 {
+            continue;
+        }
+        let number = |key| {
+            event
+                .field(key)
+                .and_then(Json::as_f64)
+                .filter(|v| v.is_finite())
+        };
+        match event.field("k").and_then(Json::as_str) {
+            Some("cursor") => {
+                let shown = event
+                    .field("id")
+                    .and_then(Json::as_str)
+                    .zip(cursors.as_ref());
+                if let (Some((id, dir)), Some(p)) = (shown, at)
+                    && dir.join(format!("{id}.png")).is_file()
+                {
+                    push(t, p, false);
+                }
+            }
+            Some(kind @ ("move" | "drag" | "down" | "up")) => {
+                if let (Some(x), Some(y)) = (number("x"), number("y")) {
+                    at = Some([x, y]);
+                    push(t, [x, y], kind == "down");
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(Recorded {
+        media: media.id,
+        // Older logs carry only the width; assume a 16:10 display, as the renderer does.
+        size: [width, rect("height").unwrap_or(width / 1.6)],
+        samples,
+    })
+}
+
+/// Streams a take's event log (T15.3): each event of the `events` array is parsed and visited
+/// on its own, so memory stays flat however long the take is.
 fn for_each_event(
     dir: &Path,
     name: &str,
@@ -943,7 +932,7 @@ fn for_each_event(
 }
 
 /// A take's activity over `window` (media seconds), from its event log and transcript words
-/// (T41.1). Only event kinds, times and modifier flags are read; typed characters never are.
+/// (T41.1), including cursor glides synthesized from the recorded pointer positions.
 pub(super) fn activity(
     dir: &Path,
     p: &Project,
@@ -987,6 +976,17 @@ pub(super) fn activity(
             events.push(Event { t, input });
             Ok(())
         })?;
+    }
+    if let Some(log) = pointer_log(dir, media) {
+        // ponytail: assumes default motion; read the clip's cursor effect if custom arc or arriveBefore ever cuts a glide.
+        events.extend(
+            cursor::glide_times(&log.samples, log.size, Motion::default())
+                .into_iter()
+                .map(|t| Event {
+                    t,
+                    input: Input::Pointer,
+                }),
+        );
     }
     let fps = media.probe.fps.max(1.0);
     let speech: Vec<[f64; 2]> = p
@@ -1036,5 +1036,69 @@ mod tests {
             .unwrap();
             assert!(seen >= 1, "{name}");
         }
+    }
+
+    #[test]
+    fn activity_keeps_synthesized_cursor_glides() {
+        use splice_eval::activity::{Event, Input, PAD};
+
+        let dir = crate::tests::TestDirectory::new("cursor-glide-activity");
+        let mut project = crate::tests::sample_project();
+        project.transcripts.clear();
+        let media = project
+            .media
+            .iter()
+            .find(|m| m.id.to_string() == "med_screen")
+            .unwrap();
+        let take = dir.0.join("takes").join(media.id.to_string());
+        fs::create_dir_all(&take).unwrap();
+        let window = [0.0, 8.0];
+        let write_log = |moves: &str| {
+            fs::write(
+                take.join("events.json"),
+                format!(
+                    r#"{{"source":{{"rect":{{"width":7680,"height":4320}}}},"events":[
+                        {moves}{{"t":6,"k":"down","x":0.9,"y":0.9}},
+                        {{"t":6.1,"k":"up","x":0.9,"y":0.9}}]}}"#
+                ),
+            )
+            .unwrap();
+        };
+        let mut moves = String::from(r#"{"t":1,"k":"move","x":0.1,"y":0.1},"#);
+        write_log(&moves);
+        let found = activity(&dir.0, &project, media, window).unwrap();
+        let [start, end] = found.busy[1];
+        assert!(start <= 6.0 - 0.9 && end >= 6.1, "{found:?}");
+        assert_eq!(found.idle[0][1], start - PAD);
+
+        let mut recorded = vec![Event {
+            t: 1.0,
+            input: Input::Pointer,
+        }];
+        for i in 0..30 {
+            use std::fmt::Write;
+            let t = 5.5 + f64::from(i) / 60.0;
+            let pos = 0.1 + 0.8 * f64::from(i) / 30.0;
+            write!(moves, r#"{{"t":{t},"k":"move","x":{pos},"y":{pos}}},"#).unwrap();
+            recorded.push(Event {
+                t,
+                input: Input::Pointer,
+            });
+        }
+        recorded.extend([
+            Event {
+                t: 6.0,
+                input: Input::Press,
+            },
+            Event {
+                t: 6.1,
+                input: Input::Release,
+            },
+        ]);
+        write_log(&moves);
+        assert_eq!(
+            activity(&dir.0, &project, media, window).unwrap().busy,
+            splice_eval::activity::activity(&recorded, &[], window).busy,
+        );
     }
 }
