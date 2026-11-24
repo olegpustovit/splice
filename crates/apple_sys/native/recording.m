@@ -30,7 +30,8 @@ static NSDictionary *video_settings(NSInteger width, NSInteger height, NSNumber 
         AVVideoCodecKey: AVVideoCodecTypeHEVC, AVVideoWidthKey: @(width), AVVideoHeightKey: @(height),
         AVVideoColorPropertiesKey: splice_video_color(),
         AVVideoCompressionPropertiesKey: @{
-            AVVideoAverageBitRateKey: @(MIN(width * height * 4, 60000000)),
+            // ~0.17 bit/px at 60 fps: at 4 a moving 1x window (1280x832 → 4 Mbps) came out visibly soft.
+            AVVideoAverageBitRateKey: @(MIN(width * height * 10, 60000000)),
             AVVideoExpectedSourceFrameRateKey: frame_rate, AVVideoAllowFrameReorderingKey: @NO,
         },
     };
