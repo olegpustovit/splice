@@ -15,17 +15,20 @@ pub enum Aspect {
     Landscape,
     /// 16:10 (most Mac displays; T46.4).
     Wide,
+    /// 3:2 (classic photo shape; dev demos framed around one app window).
+    Photo,
 }
 
 impl Aspect {
     /// Every shape with its file and wire label.
-    pub const ALL: [(Self, &'static str); 6] = [
+    pub const ALL: [(Self, &'static str); 7] = [
         (Self::Portrait, "9:16"),
         (Self::Social, "4:5"),
         (Self::Square, "1:1"),
         (Self::Standard, "4:3"),
         (Self::Landscape, "16:9"),
         (Self::Wide, "16:10"),
+        (Self::Photo, "3:2"),
     ];
 
     /// The `w:h` label written in project.json and accepted by project.set.
@@ -45,16 +48,19 @@ impl Aspect {
             Self::Standard => 4.0 / 3.0,
             Self::Landscape => 16.0 / 9.0,
             Self::Wide => 16.0 / 10.0,
+            Self::Photo => 3.0 / 2.0,
         }
     }
 
     /// The shape nearest a `width` × `height` picture, by ratio on a log scale (2:1 and 1:2 are
-    /// equally far from square).
+    /// equally far from square). 3:2 is only ever chosen explicitly: MacBook screens (2880×1864)
+    /// sit nearer it than 16:10, and auto must keep giving them the usual 16:10 canvas.
     pub fn nearest(width: u32, height: u32) -> Self {
         let ratio = (f64::from(width.max(1)) / f64::from(height.max(1))).ln();
         Self::ALL
             .iter()
             .map(|&(aspect, _)| aspect)
+            .filter(|&aspect| aspect != Self::Photo)
             .min_by(|a, b| {
                 (a.ratio().ln() - ratio)
                     .abs()

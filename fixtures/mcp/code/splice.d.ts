@@ -185,7 +185,7 @@ declare namespace Splice {
       /** the text box in normalized canvas coordinates (layout effect), inside the canvas; fit shrink (default) keeps the style size and shrinks to fit, fill grows to the box; wrap true by default */
       box?: { x?: number; y?: number; w?: number; h?: number; fit?: "shrink" | "fill"; wrap?: boolean };
       /** text effect parameters */
-      style?: { font?: string; weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black"; size?: number; color?: string; stroke?: string; strokeWidth?: number; shadow?: number; box?: "none" | "solid" | "rounded"; boxColor?: string; align?: "left" | "center" | "right"; lineHeight?: number; position?: "top" | "middle" | "bottom" | "lowerThird" };
+      style?: { font?: string; weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black" | "light" | "thin"; size?: number; color?: string; stroke?: string; strokeWidth?: number; shadow?: number; box?: "none" | "solid" | "rounded"; boxColor?: string; boxOpacity?: number; align?: "left" | "center" | "right"; lineHeight?: number; position?: "top" | "middle" | "bottom" | "lowerThird" };
       /** animate effect: how units come in; character units are grapheme clusters (emoji stay whole) */
       in?: { preset?: "none" | "fade" | "rise" | "pop" | "typewriter" | "highlight" | "bounce" | "slide"; unit?: "word" | "character" | "line"; duration?: number; stagger?: number };
       /** preset fade, sink, shrink or slide over the last duration frames (1–120, default 8); transform keys */
@@ -203,7 +203,7 @@ declare namespace Splice {
       /** merged into the text box */
       box?: { x?: number; y?: number; w?: number; h?: number; fit?: "shrink" | "fill"; wrap?: boolean };
       /** text effect parameters, merged */
-      style?: { font?: string; weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black"; size?: number; color?: string; stroke?: string; strokeWidth?: number; shadow?: number; box?: "none" | "solid" | "rounded"; boxColor?: string; align?: "left" | "center" | "right"; lineHeight?: number; position?: "top" | "middle" | "bottom" | "lowerThird" };
+      style?: { font?: string; weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black" | "light" | "thin"; size?: number; color?: string; stroke?: string; strokeWidth?: number; shadow?: number; box?: "none" | "solid" | "rounded"; boxColor?: string; boxOpacity?: number; align?: "left" | "center" | "right"; lineHeight?: number; position?: "top" | "middle" | "bottom" | "lowerThird" };
       /** animate effect, merged */
       in?: { preset?: "none" | "fade" | "rise" | "pop" | "typewriter" | "highlight" | "bounce" | "slide"; unit?: "word" | "character" | "line"; duration?: number; stagger?: number };
       /** replaces the exit keys */
@@ -392,7 +392,7 @@ declare namespace Splice {
     interface ProjectSet extends Base {
       cmd: "project.set";
       /** keeps the canvas's shorter edge; auto takes the shape nearest the first spine take's (the summary names it) */
-      aspect?: "9:16" | "4:5" | "1:1" | "4:3" | "16:9" | "16:10" | "auto";
+      aspect?: "9:16" | "4:5" | "1:1" | "4:3" | "16:9" | "16:10" | "3:2" | "auto";
       /** only on a project without clips, items or markers (every time is integer frames at fps, so a later change would retime the edit); exports use the project's rate */
       fps?: "24" | "25" | "30" | "50" | "60";
       access?: "off" | "read" | "live";
@@ -707,7 +707,7 @@ declare namespace Splice {
     /** Tighten Pace (edit, 0.3). */
     interface IntentPace extends Base {
       cmd: "intent.pace";
-      /** longest pause left · @default 0.4 s (activity: 1 s) */
+      /** longest pause left, as a frame count (0.4 s is 24 at 60 fps) · @default 0.4 s (activity: 1 s) */
       maxPause?: number;
       /** auto measures against transcript words when the timeline has any, else the takes' recorded activity · @default auto */
       basis?: "auto" | "transcript" | "activity";
@@ -1066,7 +1066,7 @@ declare namespace Splice {
       /** text box, as title.add */
       box?: { x?: number; y?: number; w?: number; h?: number; fit?: "shrink" | "fill"; wrap?: boolean };
       /** text effect parameters, as title.add */
-      style?: { font?: string; weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black"; size?: number; color?: string; stroke?: string; strokeWidth?: number; shadow?: number; box?: "none" | "solid" | "rounded"; boxColor?: string; align?: "left" | "center" | "right"; lineHeight?: number; position?: "top" | "middle" | "bottom" | "lowerThird" };
+      style?: { font?: string; weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black" | "light" | "thin"; size?: number; color?: string; stroke?: string; strokeWidth?: number; shadow?: number; box?: "none" | "solid" | "rounded"; boxColor?: string; boxOpacity?: number; align?: "left" | "center" | "right"; lineHeight?: number; position?: "top" | "middle" | "bottom" | "lowerThird" };
     }
     /** Add Progress (edit, 0.3). */
     interface ProgressAdd extends Base {
@@ -1413,7 +1413,7 @@ declare namespace Splice {
       /** Font · @default "SF Pro Display" */
       font?: string;
       /** Weight · @default "bold" */
-      weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black";
+      weight?: "regular" | "medium" | "semibold" | "bold" | "heavy" | "black" | "light" | "thin";
       /** Size · 0.02–0.3 · @default 0.06 */
       size?: number;
       /** Color · #rrggbb · @default "#ffffff" */
@@ -1428,9 +1428,11 @@ declare namespace Splice {
       box?: "none" | "solid" | "rounded";
       /** Box color · #rrggbb · @default "#000000" */
       boxColor?: string;
+      /** Box opacity · 0–1 · @default 1 */
+      boxOpacity?: number;
       /** Align · @default "center" */
       align?: "left" | "center" | "right";
-      /** Line height · 0.8–2 · @default 1.15 */
+      /** Line height · 0.5–2 · @default 1.15 */
       lineHeight?: number;
       /** Position · @default "top" */
       position?: "top" | "middle" | "bottom" | "lowerThird";
@@ -1863,7 +1865,7 @@ declare const splice: {
   };
   record: {
     /** Start headless capture of a display, window or area. To record an app, pass source:{window:{app:"Safari"}} (app name or bundle ID; add title when it has several windows); size:[w,h] resizes that window (points) first. source:{windows:[{app:"Code"},{app:"Safari"}]} records 2–4 windows in one take: the first becomes the spine clip (cursor and click zooms follow it), the others overlays in their on-screen positions; focus:true shows only the window clicked last instead (each fitted, eased switches). dryRun lists sources, microphones and cameras (stable device IDs) and permissions; window titles only with titles:true. mic and camera take true (default device) or a device ID. systemAudio: true, false or {apps:[…]} (only those apps' sound). Never sleep to time a take: duration (seconds of recorded time) ends it by itself, then:"pause" pauses there instead, and resume:jobId with duration records exactly that much more; record.stop {wait} or jobs.status {wait} returns once it ends. countdown is seconds. The receipt's settings echo what will be recorded (source size, fps, devices, canvas). create:true sets the new project to the capture rate (60 fps) on publish and sizes its canvas to the source (aspect:auto) unless aspect is given. sessionId alone joins an open session (ifRevision optional). voiceover:true records the mic onto a new audio lane at frame at; camera:true with screen:false is a camera-only take; retakeOf places the take after an earlier one; exclude hides apps, "desktop" hides desktop icons. resume with marker drops a marker. recover:true publishes takes a crash left staged. */
-    start(args?: { projectId?: string; path?: string; create?: boolean; sessionId?: string; ifRevision?: Splice.Revision; source?: Record<string, unknown>; display?: string | number; window?: string | number | Record<string, unknown>; area?: Record<string, unknown>; mic?: boolean | string; systemAudio?: boolean | Record<string, unknown>; camera?: boolean | string; events?: boolean; insert?: boolean; still?: boolean; focus?: boolean; countdown?: number; dryRun?: boolean; duration?: number; then?: "stop" | "pause"; size?: number[]; aspect?: "auto" | "9:16" | "4:5" | "1:1" | "4:3" | "16:9" | "16:10"; voiceover?: boolean; at?: number; screen?: boolean; retakeOf?: string; exclude?: string[]; resume?: string; marker?: string; recover?: boolean; titles?: boolean; }): { jobId: string; state: string; projectId?: string; sessionId?: string; settings?: Record<string, unknown>; sources?: Record<string, unknown>; devices?: unknown[]; recovered?: unknown[]; markers?: unknown[]; permissions?: Record<string, unknown>; identity?: Record<string, unknown>; };
+    start(args?: { projectId?: string; path?: string; create?: boolean; sessionId?: string; ifRevision?: Splice.Revision; source?: Record<string, unknown>; display?: string | number; window?: string | number | Record<string, unknown>; area?: Record<string, unknown>; mic?: boolean | string; systemAudio?: boolean | Record<string, unknown>; camera?: boolean | string; events?: boolean; insert?: boolean; still?: boolean; focus?: boolean; countdown?: number; dryRun?: boolean; duration?: number; then?: "stop" | "pause"; size?: number[]; aspect?: "auto" | "9:16" | "4:5" | "1:1" | "4:3" | "16:9" | "16:10" | "3:2"; voiceover?: boolean; at?: number; screen?: boolean; retakeOf?: string; exclude?: string[]; resume?: string; marker?: string; recover?: boolean; titles?: boolean; }): { jobId: string; state: string; projectId?: string; sessionId?: string; settings?: Record<string, unknown>; sources?: Record<string, unknown>; devices?: unknown[]; recovered?: unknown[]; markers?: unknown[]; permissions?: Record<string, unknown>; identity?: Record<string, unknown>; };
     /** Finish a recording (started with record.start, e.g. source:{window:{app}}) and insert the take as one undoable edit. Returns a take summary (frames, seconds, size, fps, tracks, clicks, keys, micPeakDb or silent, droppedFrames; layers with each window's item and canvas box for a multi-window take) and the lints an edit returns, including TAKE_ASPECT when the take does not fill the canvas. wait (seconds, up to 120) first lets a timed take (duration) end by itself. Use insert:false to keep it in media only; pause:true pauses instead (resume with record.start {resume}). */
     stop(args: { projectId?: string; jobId: string; sessionId?: string; ifRevision?: Splice.Revision; insert?: boolean; pause?: boolean; wait?: number; }): { jobId: string; id?: string; state: string; revision?: Splice.Revision; mediaId?: string; clipId?: string | null; output?: string; take?: Record<string, unknown>; lints?: unknown[]; pacing?: Record<string, unknown>; settings?: Record<string, unknown>; warning?: string; };
   };

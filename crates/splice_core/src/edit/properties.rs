@@ -269,6 +269,7 @@ impl Editor {
                     Aspect::Standard => [scaled(4, 3)?, short],
                     Aspect::Landscape => [scaled(16, 9)?, short],
                     Aspect::Wide => [scaled(16, 10)?, short],
+                    Aspect::Photo => [scaled(3, 2)?, short],
                 };
             }
             self.project.aspect = aspect;

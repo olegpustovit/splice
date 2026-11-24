@@ -230,7 +230,7 @@ pub struct TextLayer {
 pub struct TextStyle {
     /// Family; empty or "SF Pro…" uses the system font.
     pub font: String,
-    /// 0 regular … 5 black.
+    /// 0 regular … 5 black, 6 light, 7 thin.
     pub weight: u32,
     /// Stroke RGB.
     pub stroke: u32,
@@ -240,7 +240,7 @@ pub struct TextStyle {
     pub shadow: f64,
     /// Backing box: 0 none, 1 solid, 2 rounded.
     pub boxed: u32,
-    /// Backing RGB.
+    /// Backing RGB; the high byte is transparency (0 opaque).
     pub box_color: u32,
     /// 0 left, 1 center, 2 right.
     pub align: u32,

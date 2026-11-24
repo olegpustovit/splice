@@ -558,6 +558,18 @@ fn project_set_fps_on_empty_projects_and_aspect_auto_from_the_take() {
     let mut text = String::new();
     splice_json::write(&saved, &mut text).unwrap();
     assert!(text.contains(r#""aspect":"16:10""#), "{text}");
+    // 3:2 is explicit only (it keeps the short edge and survives a save); auto never picks it,
+    // so a MacBook screen (2880×1864, nearer 3:2) still gets 16:10.
+    run(&mut project, r#"[{"cmd":"project.set","aspect":"3:2"}]"#).unwrap();
+    assert_eq!(
+        (project.aspect, project.size),
+        (Aspect::Photo, [1620, 1080])
+    );
+    let saved = crate::package::project::encode(&project);
+    let mut text = String::new();
+    splice_json::write(&saved, &mut text).unwrap();
+    assert!(text.contains(r#""aspect":"3:2""#), "{text}");
+    assert_eq!(Aspect::nearest(2880, 1864), Aspect::Wide);
 }
 
 /// A3: audio.set refuses what it would ignore (duck or normalize on a take component) and a

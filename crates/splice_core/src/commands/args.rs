@@ -145,8 +145,9 @@ fn integer(value: &Json, key: &str) -> Result<Frame, Error> {
                 Some(value.clone()),
                 "an integer frame count",
                 &format!(
-                    "{key} counts frames, not seconds: {n} s is {} frames at 30 fps (project.info gives fps).",
-                    (n * 30.0).round()
+                    "{key} counts frames, not seconds: {n} s is {} frames at 30 fps, {} at 60 fps (project.info gives fps).",
+                    (n * 30.0).round(),
+                    (n * 60.0).round()
                 ),
             ),
             _ => Error::bad(key, "an integer frame in the signed 32-bit range"),
@@ -256,6 +257,8 @@ fn target(value: &Json, key: &str) -> Result<Target, Error> {
             && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.');
         let fix = if bare {
             format!("Refs are written with $: did you mean \"${id}\"? Otherwise pass a Splice ID (clp_…, ovl_…).")
+        } else if id.starts_with('/') || id.starts_with('~') {
+            "That is a file path: pass it as path (e.g. clip.insert {path}); media takes a med_… ID.".to_owned()
         } else {
             "Pass a Splice ID (clp_…, ovl_…, lan_…) or a $ref.".to_owned()
         };

@@ -775,8 +775,8 @@ bool splice_av_range(void *raw, int32_t from, int32_t to, const int32_t *tracks,
 
 static CTFontRef styled_font(const SpliceTextStyle *style, double size) {
     NSString *name = style->font == NULL ? @"" : [NSString stringWithUTF8String:style->font];
-    static const CGFloat weights[6] = {0.0, 0.23, 0.3, 0.4, 0.56, 0.62};
-    CGFloat weight = weights[MIN(style->weight, 5u)];
+    static const CGFloat weights[8] = {0.0, 0.23, 0.3, 0.4, 0.56, 0.62, -0.4, -0.6};
+    CGFloat weight = weights[MIN(style->weight, 7u)];
     NSFont *font = nil;
     if (name.length == 0 || [name hasPrefix:@"SF Pro"] || [name isEqualToString:@"System"]) {
         font = [NSFont systemFontOfSize:size weight:weight];
@@ -855,6 +855,9 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
     CGSize room = CGSizeMake(MAX(width - 2 * pad - 2 * inset, 1), MAX(height - pad - 2 * inset, 1));
     // Shrink to fit instead of dropping lines that do not fit (T36.5, T42.3).
     CTFontRef font = styled_font(style, font_size);
+    // A line height under 1 pulls every baseline up, the first line's glyphs past the frame's top
+    // (clipped): keep that much room above it. The initial font bounds it (fitting only shrinks).
+    if (multiple < 1) room.height = MAX(room.height - (1 - multiple) * CTFontGetAscent(font), 1);
     for (int attempt = 0; attempt < 8; attempt++) {
         NSAttributedString *probe = styled_text(text, font, paragraph, style, color, stroke, clear, NO,
                                                 NSMakeRange(NSNotFound, 0), NSMakeRange(NSNotFound, 0), color);
@@ -883,7 +886,8 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
         CGFloat radius = style->boxed == 2 ? MIN(box.size.height / 2, font_size * 0.4) : 0;
         CGPathRef rounded = CGPathCreateWithRoundedRect(box, radius, radius, NULL);
         rgb(style->box_color, components);
-        CGContextSetRGBFillColor(context, components[0], components[1], components[2], 1);
+        CGFloat box_alpha = 1.0 - ((style->box_color >> 24) & 255) / 255.0;
+        CGContextSetRGBFillColor(context, components[0], components[1], components[2], box_alpha);
         CGContextAddPath(context, rounded);
         CGContextFillPath(context);
         CGPathRelease(rounded);

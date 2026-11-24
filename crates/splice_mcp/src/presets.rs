@@ -221,7 +221,8 @@ pub(super) fn canvas(size: [u32; 2], aspect: &str) -> Result<[u32; 2], StoreErro
         "4:3" => (4.0, 3.0),
         "16:9" => (16.0, 9.0),
         "16:10" => (16.0, 10.0),
-        _ => return Err(bad("aspect", "9:16, 4:5, 1:1, 4:3, 16:9 or 16:10")),
+        "3:2" => (3.0, 2.0),
+        _ => return Err(bad("aspect", "9:16, 4:5, 1:1, 4:3, 16:9, 16:10 or 3:2")),
     };
     let long = f64::from(size[0].max(size[1]));
     let even = |v: f64| (v / 2.0).round() as u32 * 2;

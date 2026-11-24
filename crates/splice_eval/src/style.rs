@@ -706,7 +706,7 @@ pub enum Animate {
 pub struct TextStyle {
     /// Font family.
     pub font: String,
-    /// Weight: 0 regular … 5 black.
+    /// Weight: 0 regular … 5 black, then 6 light, 7 thin (appended so stored indices keep their meaning).
     pub weight: u8,
     /// Size as a fraction of the canvas's shorter side.
     pub size: f64,
@@ -720,7 +720,7 @@ pub struct TextStyle {
     pub shadow: f64,
     /// Backing box: 0 none, 1 solid, 2 rounded.
     pub boxed: u8,
-    /// Backing RGB.
+    /// Backing RGB; the high byte is transparency (0 opaque).
     pub box_color: u32,
     /// 0 left, 1 center, 2 right.
     pub align: u8,
@@ -767,7 +767,9 @@ pub(super) fn text(scopes: &[&[Effect]]) -> Option<TextStyle> {
     Some(TextStyle {
         font: style.text("font").unwrap_or("SF Pro Display").to_owned(),
         weight: index(
-            &["regular", "medium", "semibold", "bold", "heavy", "black"],
+            &[
+                "regular", "medium", "semibold", "bold", "heavy", "black", "light", "thin",
+            ],
             style.text("weight"),
             3,
         ),
@@ -777,9 +779,13 @@ pub(super) fn text(scopes: &[&[Effect]]) -> Option<TextStyle> {
         stroke_width: style.number("strokeWidth", 0.0).clamp(0.0, 0.3),
         shadow: style.number("shadow", 0.3).clamp(0.0, 1.0),
         boxed: index(&["none", "solid", "rounded"], style.text("box"), 0),
-        box_color: style.color("boxColor", 0),
+        // High byte is transparency, so a plain 0x00RRGGBB stays opaque.
+        box_color: style.color("boxColor", 0)
+            | ((((1.0 - style.number("boxOpacity", 1.0).clamp(0.0, 1.0)) * 255.0).round() as u32)
+                << 24),
         align: index(&["left", "center", "right"], style.text("align"), 1),
-        line_height: style.number("lineHeight", 1.15).clamp(0.8, 2.0),
+        // Down to 0.5 for stacked vertical CJK (the renderer keeps the first line inside the box).
+        line_height: style.number("lineHeight", 1.15).clamp(0.5, 2.0),
         position: index(
             &["top", "middle", "bottom", "lowerThird"],
             style.text("position"),
