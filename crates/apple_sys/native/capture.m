@@ -295,9 +295,15 @@ bool splice_capture_geometry(const SpliceCaptureTarget *target, SpliceCaptureFra
     }
 }
 
+// `apps` nil: every app's sound (the stream's excludesCurrentProcessAudio leaves Splice out).
 SCContentFilter *splice_capture_audio_filter(NSArray<NSString *> *apps, bool *denied, char **error) {
     SCShareableContent *content = shareable_content(false, denied, error);
     if (content == nil) return nil;
+    if (apps == nil) {
+        SCDisplay *display = content.displays.firstObject;
+        if (display == nil) splice_set_error(error, "No display to capture sound from.");
+        return display == nil ? nil : [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+    }
     NSMutableArray<SCRunningApplication *> *included = [NSMutableArray array];
     for (SCRunningApplication *app in content.applications) {
         if (!is_splice(app) && ([apps containsObject:app.bundleIdentifier] || [apps containsObject:app.applicationName])) {

@@ -640,6 +640,11 @@ void *splice_recording_start(const SpliceCaptureTarget *target, const SpliceCapt
             }
             audio_filter = splice_capture_audio_filter(apps, denied, error);
             if (audio_filter == nil) return NULL;
+        } else if (system_audio && (target->kind == SPLICE_CAPTURE_WINDOW || target->kind == SPLICE_CAPTURE_APPLICATION)) {
+            // A window or app filter carries no sound from other processes (Chrome plays from a
+            // helper), so "every app's sound" needs its own display-wide audio stream.
+            audio_filter = splice_capture_audio_filter(nil, denied, error);
+            if (audio_filter == nil) return NULL;
         }
         NSURL *root = [NSURL fileURLWithFileSystemRepresentation:directory isDirectory:YES relativeToURL:nil];
         SCStreamConfiguration *configuration = [SCStreamConfiguration new];
