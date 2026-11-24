@@ -815,14 +815,17 @@ impl Evaluator {
         } else if let Some(clip) = clip {
             let mark = out.layers.len();
             self.draw_clip(clip, at, true, out);
-            // A fading clip fades as one image over its backdrop (not through black).
+            // A fading clip fades as one image over its backdrop (not through black), except at
+            // the timeline's edges, where there is nothing behind it: the backdrop fades too.
             let opacity = clip.interval.alpha(at);
             if opacity < 1.0 {
+                let i = clip.interval;
+                let edge = (i.start == 0 && at - i.start < i.fade_in)
+                    || (i.end == self.end && i.end - at <= i.fade_out);
                 let start = mark
-                    + usize::from(matches!(
-                        out.layers.get(mark),
-                        Some(Layer::Background { .. })
-                    ));
+                    + usize::from(
+                        !edge && matches!(out.layers.get(mark), Some(Layer::Background { .. })),
+                    );
                 out.group = Some(Group {
                     layers: [start, out.layers.len()],
                     opacity,

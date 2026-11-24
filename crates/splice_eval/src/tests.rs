@@ -293,6 +293,21 @@ fn m15_take_fade_is_one_group_and_behind_overlays_draw_once() {
 }
 
 #[test]
+fn a_fade_at_the_timeline_edge_takes_the_backdrop_with_it() {
+    // clp_open starts at 0 with a 15-frame fade in: nothing is behind it, so it fades from black.
+    let mut project = sample();
+    let slot = project.clips.find("clp_open".parse().unwrap()).unwrap();
+    project.clips.data_mut(slot).unwrap().appearance.effects[0].enabled = Some(true);
+    let plan = Evaluator::prepare(&project).unwrap();
+    let mut output = plan.buffer();
+    plan.frame(5, &mut output);
+    let group = output.group.expect("fade group");
+    assert!(group.opacity < 1.0);
+    assert_eq!(group.layers[0], 0);
+    assert!(matches!(output.layers[0], Layer::Background { .. }));
+}
+
+#[test]
 fn composition_breakpoints_partition_the_sample_render_plan() {
     let evaluator = Evaluator::prepare(&sample()).unwrap();
     let cuts = evaluator.breakpoints();
