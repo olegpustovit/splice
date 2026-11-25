@@ -8,6 +8,7 @@ mod export;
 mod gpu;
 mod lower;
 mod lut;
+mod serial;
 mod takes;
 
 pub use export::{Export, ExportState, Frames};
@@ -16,6 +17,7 @@ pub use splice_eval::{Evaluator, SourceSpan, caption_tokens};
 pub use takes::{TimelineEvents, TimelineKey, load_timeline_events, timeline_event_visibility};
 
 use apple_sys::composition;
+use serial::{SerialCommands, gpu_error};
 use splice_eval::EvalError;
 use splice_model::{Frame, Project};
 use std::{
@@ -45,12 +47,12 @@ pub struct Composition {
 }
 
 struct Offscreen {
-    /// Keeps the device that owns these resources alive.
-    _device: ogpu_core::backend::Device,
-    queue: ogpu_core::backend::Queue,
+    target: ogpu_core::backend::PreparedRenderTarget,
     program: GpuProgram,
     texture: ogpu_core::backend::Texture,
-    target: ogpu_core::backend::PreparedRenderTarget,
+    commands: SerialCommands,
+    /// Keeps the device alive until targets and commands drop.
+    _device: ogpu_core::backend::Device,
 }
 
 /// A headless OGPU device for frame grabs and export (the viewer shares its window's).
@@ -264,8 +266,6 @@ impl Composition {
 
     fn read(&self, at: Frame, rgba: &mut [u8], repeats: u32) -> Result<(), Error> {
         use ogpu_core::backend as b;
-        let gpu =
-            |error: ogpu_core::error::Error| Error::Input(ogpu_core::error::to_string(&error));
         let [width, height] = self.size.map(|n| n as usize);
         if !(0..self.end).contains(&at) || rgba.len() != width * height * 4 {
             return Err(Error::Input(
@@ -277,14 +277,15 @@ impl Composition {
             let device = offscreen_device()?;
             let (texture, target) = offscreen_target(&device, self.size, 1.0)?;
             *slot = Some(Offscreen {
-                queue: b::create_queue(&device).map_err(gpu)?,
-                program: GpuProgram::with_plan(&device, &self.plan, &self.text)?,
-                _device: device,
-                texture,
                 target,
+                program: GpuProgram::with_plan(&device, &self.plan, &self.text)?,
+                texture,
+                commands: SerialCommands::new(b::create_queue(&device).map_err(gpu_error)?),
+                _device: device,
             });
         }
         let offscreen = slot.as_mut().expect("offscreen renderer");
+        offscreen.commands.check()?;
         let device_ptr = offscreen.program.mtl_device();
         let started = std::time::Instant::now();
         let count = self
@@ -294,29 +295,23 @@ impl Composition {
         let mut compose = std::time::Duration::MAX;
         for _ in 0..=repeats {
             let began = std::time::Instant::now();
-            let commands = b::begin_commands(&offscreen.queue).map_err(gpu)?;
-            let native = b::native_commands(&commands)
-                .map_err(gpu)?
-                .mtl_command_buffer;
-            if let Err(error) = offscreen.program.draw(
-                &self.plan,
-                self.size,
-                at,
-                count,
-                native,
-                &commands,
-                &mut offscreen.target,
-                false,
-            ) {
-                let _ = b::abandon(&commands);
-                return Err(error);
-            }
-            let receipt = b::commit(&commands).map_err(gpu)?;
-            b::complete_through(&offscreen.queue, receipt.epoch).map_err(gpu)?;
+            offscreen.commands.run(&mut |commands, native| {
+                offscreen.program.draw(
+                    &self.plan,
+                    self.size,
+                    at,
+                    count,
+                    native,
+                    commands,
+                    &mut offscreen.target,
+                    false,
+                )?;
+                Ok(())
+            })?;
             compose = compose.min(began.elapsed());
         }
         let composed = std::time::Instant::now();
-        b::read_texture_into(&offscreen.texture, (width * 4) as i64, rgba).map_err(gpu)?;
+        b::read_texture_into(&offscreen.texture, (width * 4) as i64, rgba).map_err(gpu_error)?;
         self.timings
             .set([decoded - started, compose, composed.elapsed()]);
         Ok(())

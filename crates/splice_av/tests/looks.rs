@@ -9,6 +9,13 @@ mod harness;
 fn release_keepalive() {}
 
 #[cfg(target_os = "macos")]
+use splice_av::Error;
+
+#[cfg(target_os = "macos")]
+#[path = "../src/serial.rs"]
+mod serial;
+
+#[cfg(target_os = "macos")]
 mod looks {
     use splice_av::*;
     use splice_model::*;
@@ -1788,6 +1795,136 @@ mod looks {
         }
     }
 
+    pub(super) fn offscreen_commands_complete_and_recover_recording_errors() {
+        use crate::serial::{SerialCommands, gpu_error};
+        use ogpu_core::backend as b;
+
+        ogpu_core::impl_::select(ogpu_metal::impl_::implementation());
+        let device = b::create_device(ogpu_core::impl_::create_driver().unwrap()).unwrap();
+        let queue = b::create_queue(&device).unwrap();
+        let mut serial = SerialCommands::new(queue.clone());
+        let submitted = b::submits();
+        let mut first = None;
+        serial
+            .run(&mut |commands, _| {
+                first = Some(commands.clone());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(b::completed_epoch(&queue), 1);
+        let first = first.unwrap();
+        assert!(b::native_commands(&first).is_err());
+
+        let error = serial
+            .run(&mut |_, native| {
+                assert_eq!(
+                    b::native_commands(&first).unwrap().mtl_command_buffer,
+                    native
+                );
+                Err(Error::Input("recording rejected".into()))
+            })
+            .unwrap_err();
+        assert_eq!(error.to_string(), "recording rejected");
+        assert!(b::native_commands(&first).is_err());
+
+        let mut open = None;
+        let error = serial
+            .run(&mut |commands, _| {
+                open = Some(b::blit_encoder(commands).map_err(gpu_error)?);
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Backend.commit: an encoder is still open"
+        );
+        assert!(b::end_blit(open.as_ref().unwrap()).is_err());
+        assert_eq!(b::submits(), submitted + 1);
+        assert_eq!(b::completed_epoch(&queue), 1);
+        drop(open);
+        drop(first);
+
+        serial.run(&mut |_, _| Ok(())).unwrap();
+        assert_eq!(b::submits(), submitted + 2);
+        assert_eq!(b::completed_epoch(&queue), 2);
+        drop(serial);
+        b::destroy_queue(&queue).unwrap();
+        b::destroy_device(&device).unwrap();
+    }
+
+    pub(super) fn offscreen_commands_preserve_serial_read_and_export_pixels() {
+        let dir = scratch("offscreen-commands");
+        let colors = [[220, 30, 40], [20, 70, 230]];
+        let project = project(
+            vec![still(&dir.0, 1, colors[0]), still(&dir.0, 2, colors[1])],
+            vec![(1, 2, vec![]), (2, 2, vec![])],
+        );
+        let composition = Composition::prepare(&project, &dir.0).unwrap();
+        let center = 4 * (32 * 96 + 48);
+        let expected = [0, 2].map(|at| {
+            let mut rgba = vec![0; 96 * 64 * 4];
+            composition.read_frame(at, &mut rgba).unwrap();
+            rgba
+        });
+        for (rgba, color) in expected.iter().zip(colors) {
+            assert!(near(rgba[center..center + 3].try_into().unwrap(), color, 3));
+        }
+        let mut rgba = vec![0; 96 * 64 * 4];
+        for at in [2, 0, 3, 1] {
+            composition.read_frame_warm(at, &mut rgba, 2).unwrap();
+            assert_eq!(rgba, expected[at as usize / 2]);
+        }
+
+        let mut frames = composition.frames([0, 4]).unwrap();
+        assert_eq!(frames.next(Some(&mut rgba)).unwrap(), Some(0));
+        assert_eq!(rgba, expected[0]);
+        assert_eq!(frames.next(None).unwrap(), Some(1));
+        for at in [2, 3] {
+            assert_eq!(frames.next(Some(&mut rgba)).unwrap(), Some(at));
+            assert_eq!(rgba, expected[1]);
+        }
+        assert_eq!(frames.next(Some(&mut rgba)).unwrap(), None);
+        drop(frames);
+
+        let encoding = Encoding {
+            fps: 60,
+            ..Encoding::new(Codec::H264)
+        };
+        let path = dir.0.join("doubled.mp4");
+        let mut job = composition.start_export(&path, &encoding).unwrap();
+        for _ in 0..4 {
+            assert!(matches!(
+                job.step(Duration::ZERO).unwrap(),
+                ExportState::Running(_)
+            ));
+        }
+        assert_eq!(job.step(Duration::ZERO).unwrap(), ExportState::Complete);
+        drop(job);
+        let probe = apple_sys::media::probe(&path).unwrap();
+        assert!((probe.video.unwrap().nominal_fps.unwrap() - 60.0).abs() < 1.0);
+        assert!((probe.duration_seconds - 8.0 / 60.0).abs() < 1.0 / 60.0);
+        for frame in 0..8 {
+            let (decoded, size) =
+                apple_sys::media::frame_at(&path, f64::from(frame) / 60.0).unwrap();
+            assert_eq!(size, [96, 64]);
+            let pixel = decoded[center..center + 3].try_into().unwrap();
+            assert!(
+                near(pixel, colors[frame as usize / 4], 8),
+                "{frame}: {pixel:?}"
+            );
+        }
+
+        let path = dir.0.join("cancelled.mp4");
+        let mut job = composition.start_export(&path, &encoding).unwrap();
+        assert!(matches!(
+            job.step(Duration::ZERO).unwrap(),
+            ExportState::Running(_)
+        ));
+        job.cancel();
+        assert_eq!(job.step(Duration::ZERO).unwrap(), ExportState::Cancelled);
+        assert!(!path.exists());
+    }
+
     pub(super) fn cutout_uses_the_person_matte() {
         let dir = scratch("cutout");
         let fixture =
@@ -2068,6 +2205,14 @@ mod looks {
 #[cfg(target_os = "macos")]
 fn main() {
     harness::run(&[
+        (
+            "gpu_offscreen_commands_complete_and_recover_recording_errors",
+            looks::offscreen_commands_complete_and_recover_recording_errors,
+        ),
+        (
+            "looks_offscreen_commands_preserve_serial_read_and_export_pixels",
+            looks::offscreen_commands_preserve_serial_read_and_export_pixels,
+        ),
         (
             "gpu_full_stack_4k_frame_composes_under_16_ms",
             looks::full_stack_4k_frame_composes_under_16_ms,
