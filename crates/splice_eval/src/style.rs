@@ -180,6 +180,8 @@ pub enum CaptionPreset {
 pub struct CaptionStyle {
     /// Word highlight and reveal behavior.
     pub preset: CaptionPreset,
+    /// Whether this is one of the six standard presets rather than a named variation.
+    pub standard: bool,
     /// Font size as a fraction of canvas width.
     pub size: f64,
     /// Vertical center as a fraction of canvas height.
@@ -370,6 +372,10 @@ pub(super) fn caption(scopes: &[&[Effect]]) -> Option<CaptionStyle> {
     };
     Some(CaptionStyle {
         preset,
+        standard: matches!(
+            base.0,
+            "bold" | "clean" | "karaoke" | "pop" | "box" | "typewriter"
+        ),
         size: style.number("size", base.6).clamp(0.03, 0.14),
         position: style.number("position", 0.68).clamp(0.1, 0.9),
         color: style.color("color", base.2),

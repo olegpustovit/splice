@@ -214,7 +214,7 @@ int32_t splice_av_grab(void *composition, void *device, int32_t frame, SpliceAVF
                        size_t capacity, size_t *count, char **error);
 
 void *splice_av_player(void *composition, char **error);
-void splice_av_player_play(void *player, bool playing);
+void splice_av_player_set_rate(void *player, int8_t rate);
 bool splice_av_player_ended(void *player);
 bool splice_av_player_seek(void *player, int32_t frame);
 // Takes the player's newest displayed frame for the compositor. Returns 1 with *frame and *count
@@ -261,10 +261,13 @@ bool splice_av_blit(void *command_buffer, void *const *sources, void *const *des
 // lines in seconds; free it with free(). On failure *error is set.
 bool splice_speech_transcribe(const char *path, const char *locale, char **out, char **error);
 // Decodes an image file to straight RGBA8. Free the pixels with free().
-uint8_t *splice_image_rgba(const char *path, uint32_t *width, uint32_t *height, char **error);
+uint8_t *splice_image_rgba(const char *path, uint32_t max_edge, uint32_t *width, uint32_t *height, char **error);
 // Rasterizes centered bold text to straight RGBA8. Free the pixels with free().
 typedef struct SpliceTextStyle {
     const char *font;
+    const uint8_t *bundled_font; // static embedded face bytes
+    size_t bundled_length;
+    uint32_t bundled_face;
     uint32_t weight;
     uint32_t color;
     uint32_t stroke;
@@ -276,9 +279,25 @@ typedef struct SpliceTextStyle {
     double shadow;
     double line_height;
 } SpliceTextStyle;
+typedef struct SpliceCaptionSpan {
+    size_t from;
+    size_t to;
+    size_t visible_to;
+    double scale;
+    double reserve;
+    double opacity;
+    uint32_t highlight;
+} SpliceCaptionSpan;
 uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, double font,
                           const SpliceTextStyle *style, int64_t visible_from, int64_t visible_to,
-                          int64_t active_from, int64_t active_to, uint32_t active_color, char **error);
+                          int64_t active_from, int64_t active_to, uint32_t active_color,
+                          const SpliceCaptionSpan *spans, size_t span_count, bool center_lines,
+                          const double *caption_box, double font_scale, bool clean, uint32_t rect[4], char **error);
+
+// Rasterizes the default Program title to straight RGBA8. The face points to static font bytes.
+uint8_t *splice_program_title_rgba(const char *text, uint32_t width, uint32_t height,
+                                  const double geometry[3], const uint8_t *face, size_t face_size,
+                                  char **error);
 
 void *splice_image_png(const uint8_t *pixels, size_t length, uint32_t width, uint32_t height,
                        uint32_t max_edge, const uint8_t **data, size_t *size, char **error);
@@ -325,6 +344,8 @@ typedef struct SpliceAudioChain {
 bool splice_audio_render(const char *input, uint32_t track, const char *output, const SpliceAudioChain *chain,
                          char **error);
 float *splice_audio_envelope(const char *input, uint32_t track, double rate, size_t *count, char **error);
+// The Rust caller validates the duration and provides space for `buckets` floats.
+bool splice_audio_waveform(const char *input, uint32_t track, double seconds, size_t buckets, float *out, char **error);
 char *splice_audio_classify(const char *input, uint32_t track, const char *scratch, char **error);
 
 // Vision (analysis.m): kinds bit 1 feature prints, 2 text, 4 faces, 8 people.
@@ -337,7 +358,7 @@ bool splice_translate(const char *joined, const char *source, const char *target
 
 bool splice_free_space(const char *path, uint64_t *bytes);
 
-uint8_t *splice_media_first_frame(const char *path, uint32_t *width, uint32_t *height, char **error);
+uint8_t *splice_media_frame_at(const char *path, double seconds, bool oriented, uint32_t *width, uint32_t *height, char **error);
 char *splice_media_chapters(const char *path, char **error);
 
 void splice_capture_exclude(const char *names, bool desktop);

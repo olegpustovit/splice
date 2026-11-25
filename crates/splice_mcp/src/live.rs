@@ -29,7 +29,7 @@ const HANDOFF_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) mod proxy;
 mod viewer;
-pub use viewer::{ViewCommand, Viewer};
+pub use viewer::{ViewCommand, ViewSelection, ViewTab, Viewer, ViewerZoom};
 
 pub(super) fn disconnected(reason: &dyn std::fmt::Display) -> splice_core::history::StoreError {
     splice_core::history::StoreError::new(

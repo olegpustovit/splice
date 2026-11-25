@@ -5,7 +5,7 @@ use super::{
 };
 use splice_model::timing::{self, TimingError};
 use splice_model::*;
-use std::fmt;
+use std::{cmp::Reverse, collections::BinaryHeap, fmt};
 
 /// A project lacks valid geometry or timeline references for playback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +50,8 @@ pub struct Evaluator {
     zooms: Vec<crate::camera::Segment>,
     /// The timeline camera, one view per frame (D12).
     camera: Vec<crate::View>,
+    /// The winning linear animations in sorted, non-overlapping timeline spans.
+    motion: Vec<MotionSpan>,
     sounds: Vec<PreparedSound>,
     shapes: Vec<PreparedShape>,
     /// Timeline spans of speech, sorted and merged, for ducking.
@@ -127,6 +129,49 @@ pub struct SourceSpan {
     pub source: f64,
     /// Source frames consumed per timeline frame.
     pub step: f64,
+}
+
+impl SourceSpan {
+    /// Source frame at an absolute timeline frame, clamped to the clip's boundaries.
+    /// Pass this clip's prepared speed map, or an empty slice for a constant rate.
+    pub fn source_at(self, frame: f64, map: &[f64]) -> f64 {
+        let start = f64::from(self.start);
+        let local = frame.clamp(start, f64::from(self.end).max(start)) - start;
+        let index = local as usize;
+        let consumed = if let Some(&before) = map.get(index) {
+            let after = map.get(index + 1).copied().unwrap_or(before);
+            before + (after - before) * (local - index as f64)
+        } else {
+            local * self.step
+        };
+        self.source + consumed
+    }
+
+    /// Absolute timeline frame for a source frame in the half-open trim interval.
+    /// When the source is held at a boundary, returns its first encounter.
+    pub fn frame_at(self, source: f64, map: &[f64]) -> Option<f64> {
+        let start = f64::from(self.start);
+        let first = self.source;
+        if !(first <= source && source < self.source_at(f64::from(self.end), map)) {
+            return None;
+        }
+        if map.is_empty() {
+            return Some(start + (source - first) / self.step);
+        }
+        let index = map.partition_point(|&offset| first + offset < source);
+        if index == 0 {
+            return Some(start);
+        }
+        let before = first + map[index - 1];
+        let after = first + *map.get(index)?;
+        Some(start + (index - 1) as f64 + (source - before) / (after - before))
+    }
+
+    /// Nearest timeline seek frame, inside the clip's trim.
+    pub fn seek_at(self, source: f64, map: &[f64]) -> Option<Frame> {
+        let frame = self.frame_at(source, map)?;
+        Some((frame.round() as Frame).clamp(self.start, self.end - 1))
+    }
 }
 
 struct PreparedClip {
@@ -277,6 +322,77 @@ struct PreparedCaption {
 }
 
 #[derive(Clone, Copy)]
+struct MotionSegment {
+    start: Frame,
+    end: Frame,
+    lane: usize,
+    value: ScaleMotion,
+}
+
+impl MotionSegment {
+    fn scale_at(self, at: Frame) -> f64 {
+        let ScaleMotion { from, to } = self.value;
+        if at == self.start {
+            return from;
+        }
+        if at == self.end - 1 {
+            return to;
+        }
+        let progress = f64::from(at - self.start) / f64::from(self.end - self.start - 1);
+        let delta = to - from;
+        if delta.is_finite() {
+            from + delta * progress
+        } else {
+            from * (1.0 - progress) + to * progress
+        }
+    }
+}
+
+struct MotionSpan {
+    start: Frame,
+    end: Frame,
+    segment: MotionSegment,
+}
+
+/// Advance at segment starts or at the end of the current winner. The first item on the
+/// topmost lane wins; the item's unsplit bounds still determine its interpolation.
+fn motion_spans(items: &[MotionSegment]) -> Vec<MotionSpan> {
+    let mut starts: Vec<_> = (0..items.len()).collect();
+    starts.sort_unstable_by_key(|&i| items[i].start);
+    let mut active = BinaryHeap::new();
+    let mut spans = Vec::new();
+    let mut next = 0;
+    let mut at = starts.first().map_or(0, |&i| items[i].start);
+    loop {
+        while let Some(&i) = starts.get(next).filter(|&&i| items[i].start == at) {
+            active.push(Reverse((items[i].lane, i)));
+            next += 1;
+        }
+        while let Some(&Reverse((_, i))) = active.peek() {
+            if items[i].end > at {
+                break;
+            }
+            active.pop();
+        }
+        let start = starts.get(next).map(|&i| items[i].start);
+        if let Some(&Reverse((_, i))) = active.peek() {
+            let segment = items[i];
+            let end = start.map_or(segment.end, |start| start.min(segment.end));
+            spans.push(MotionSpan {
+                start: at,
+                end,
+                segment,
+            });
+            at = end;
+        } else if let Some(start) = start {
+            at = start;
+        } else {
+            return spans;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct Interval {
     start: Frame,
     end: Frame,
@@ -376,6 +492,7 @@ impl Evaluator {
             captions: Vec::new(),
             zooms: Vec::new(),
             camera: Vec::new(),
+            motion: Vec::new(),
             sounds: Vec::new(),
             shapes: Vec::new(),
             speech: Vec::new(),
@@ -413,9 +530,11 @@ impl Evaluator {
             ordered.push((rank, slot));
         }
         ordered.sort_by_key(|&(rank, _)| std::cmp::Reverse(rank));
+        let mut motions = Vec::new();
         for (rank, slot) in ordered {
-            result.prepare_item(project, rank, slot, size)?;
+            result.prepare_item(project, rank, slot, size, &mut motions)?;
         }
+        result.motion = motion_spans(&motions);
         let places = [
             result.overlays.iter().map(|o| o.place).collect::<Vec<_>>(),
             result.shapes.iter().map(|o| o.place).collect(),
@@ -603,6 +722,27 @@ impl Evaluator {
             .and_then(|prepared| prepared.input.as_ref()?.map.as_deref())
     }
 
+    /// Borrows the prepared source clock of a spine clip at its current timeline start.
+    pub fn clip_clock(&self, clip: ClipId, start: Frame) -> Option<(SourceSpan, &[f64])> {
+        let index = self
+            .clips
+            .partition_point(|clip| clip.interval.start < start);
+        let prepared = self
+            .clips
+            .get(index)
+            .filter(|prepared| prepared.id == clip && prepared.interval.start == start)?;
+        let input = prepared.input.as_ref()?;
+        Some((
+            SourceSpan {
+                start,
+                end: prepared.interval.end,
+                source: input.source,
+                step: input.step,
+            },
+            input.map.as_deref().unwrap_or_default(),
+        ))
+    }
+
     /// Returns the prepared source clock for a clip or a media overlay.
     pub fn source_span(&self, item: TimelineId) -> Option<SourceSpan> {
         let (interval, input) = self.source(item)?;
@@ -744,6 +884,24 @@ impl Evaluator {
             .unwrap_or(crate::View::IDENTITY)
     }
 
+    /// Linear scale of the spine picture about the canvas center, independent of the camera.
+    /// Background, presenter and overlays keep their own framing. A gap has scale 1.
+    pub fn motion_scale(&self, at: Frame) -> f64 {
+        let index = self.motion.partition_point(|span| span.start <= at);
+        let Some(span) = index
+            .checked_sub(1)
+            .and_then(|i| self.motion.get(i))
+            .filter(|span| at < span.end)
+        else {
+            return 1.0;
+        };
+        if self.clip_at(at).is_some_and(|clip| clip.input.is_some()) {
+            span.segment.scale_at(at)
+        } else {
+            1.0
+        }
+    }
+
     /// Whether a take clip mixes a click into the audio at each press (`clickSound`).
     pub fn click_sound(&self, clip: ClipId) -> bool {
         self.clips.iter().any(|c| c.id == clip && c.click_sound)
@@ -784,6 +942,14 @@ impl Evaluator {
         }
     }
 
+    fn clip_at(&self, at: Frame) -> Option<&PreparedClip> {
+        let index = self.clips.partition_point(|clip| clip.interval.start <= at);
+        index
+            .checked_sub(1)
+            .and_then(|i| self.clips.get(i))
+            .filter(|clip| clip.interval.contains(at))
+    }
+
     /// Fills a reusable render plan. A buffer from this evaluator allocates nothing here.
     pub fn frame(&self, at: Frame, out: &mut FramePlan) {
         out.frame = at;
@@ -792,11 +958,7 @@ impl Evaluator {
         out.audio.clear();
         out.group = None;
         out.shift = None;
-        let index = self.clips.partition_point(|clip| clip.interval.start <= at);
-        let clip = index
-            .checked_sub(1)
-            .and_then(|i| self.clips.get(i))
-            .filter(|clip| clip.interval.contains(at));
+        let clip = self.clip_at(at);
         out.clip = clip.map(|clip| clip.id);
         if let Some((from, to, progress, transition)) = self.transition_at(at) {
             let (mark, audio_mark) = (out.layers.len(), out.audio.len());
@@ -1008,8 +1170,8 @@ impl Evaluator {
                 };
                 (
                     layout::rect(w * 0.06, y, w * 0.88, height),
-                    height * 0.6,
-                    true,
+                    height * if title.style.is_some() { 0.6 } else { 0.56 },
+                    title.style.is_some(),
                 )
             }
         };
@@ -1089,6 +1251,13 @@ impl Evaluator {
             .iter()
             .find(|title| title.id == id)
             .map_or(&[], |title| title.runs.as_slice())
+    }
+
+    /// Whether this title uses the Program's default plate and single-line text.
+    pub fn is_unstyled_title(&self, id: ItemId) -> bool {
+        self.titles
+            .iter()
+            .any(|title| title.id == id && title.style.is_none() && title.text_box.is_none())
     }
 
     /// Resolved text style of a title or caption, when one is set.
@@ -1471,6 +1640,7 @@ impl Evaluator {
         rank: usize,
         slot: Slot,
         size: [f64; 2],
+        motions: &mut Vec<MotionSegment>,
     ) -> Result<(), EvalError> {
         let id = p.items.id(slot).ok_or(EvalError::Range)?;
         let data = p.items.data(slot).ok_or(EvalError::Range)?;
@@ -1544,6 +1714,17 @@ impl Evaluator {
                     rig,
                     progress,
                     particles,
+                });
+            }
+            ItemKind::Motion(value) => {
+                if !value.from.is_finite() || !value.to.is_finite() {
+                    return Err(EvalError::Range);
+                }
+                motions.push(MotionSegment {
+                    start: interval.start,
+                    end: interval.end,
+                    lane: rank,
+                    value: *value,
                 });
             }
             ItemKind::Zoom(zoom) => {
@@ -1642,8 +1823,13 @@ impl Evaluator {
                     let free = text
                         .as_deref()
                         .map(|text| (text, interval.start, interval.end));
-                    let words =
-                        caption_tokens(p, timing.anchor, words, edits, free, style.uppercase)?;
+                    let text = style::text(&[&p.effects, lane, local]);
+                    let standard = style.standard && text.is_none();
+                    let uppercase = style.uppercase
+                        && !(standard && style.preset == style::CaptionPreset::Clean);
+                    let mut words =
+                        caption_tokens(p, timing.anchor, words, edits, free, uppercase)?;
+                    words.retain(|word| !word.hidden);
                     if !words.is_empty() {
                         self.captions.push(PreparedCaption {
                             place,
@@ -1652,7 +1838,7 @@ impl Evaluator {
                             style,
                             words,
                             rig,
-                            text: style::text(&[&p.effects, lane, local]),
+                            text,
                         });
                     }
                 }
@@ -1984,6 +2170,7 @@ pub fn caption_tokens(
             },
             emoji: None,
             emph: false,
+            hidden: false,
             start,
             end,
         }]);
@@ -2028,6 +2215,7 @@ pub fn caption_tokens(
         let edit = edits.iter().find(|edit| edit.word == id);
         let text = edit
             .and_then(|edit| edit.text.as_deref())
+            .filter(|text| !text.is_empty())
             .unwrap_or(&word.text);
         let text = if uppercase {
             text.to_uppercase()
@@ -2039,6 +2227,7 @@ pub fn caption_tokens(
             text,
             emoji: edit.and_then(|edit| edit.emoji.clone()),
             emph: edit.is_some_and(|edit| edit.emph),
+            hidden: edit.is_some_and(CaptionEdit::is_hidden),
             start: span.start,
             end: span.end,
         });

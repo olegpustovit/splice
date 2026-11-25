@@ -63,6 +63,13 @@ pub use export::export_project;
 pub use frames::{grab_frame, offline_fields, write_png};
 pub use history::{apply_batch, checkpoint_edit, edit_result_json};
 pub use rpc::{VERSION, serve};
+pub use tools::Tool;
+
+/// Tools exposed by the default MCP profile, in discovery order.
+pub fn tool_catalog() -> &'static [Tool] {
+    tools::TOOLS
+}
+
 pub use wire::error_payload;
 
 /// Runs the same capture preflight as `record.start {dryRun:true}`.

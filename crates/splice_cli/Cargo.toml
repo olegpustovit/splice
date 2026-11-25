@@ -17,6 +17,7 @@ splice_mcp = { path = "../splice_mcp" }
 splice_app = { path = "../splice_app" }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
+apple_sys = { path = "../apple_sys" }
 splice_testkit = { path = "../splice_testkit" }
 
 [[test]]

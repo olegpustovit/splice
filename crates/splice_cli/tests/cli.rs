@@ -289,15 +289,17 @@ fn cli_dispatches_mcp_friction_and_native_commands() {
     assert!(output.status.success());
     let wire = std::str::from_utf8(&output.stdout).unwrap();
     let catalog = parse(wire.lines().nth(1).unwrap()).unwrap();
-    assert_eq!(
-        catalog
-            .field("result")
-            .unwrap()
-            .field("tools")
-            .and_then(Json::as_array)
-            .unwrap()
-            .len(),
-        20
+    let tools = catalog
+        .field("result")
+        .unwrap()
+        .field("tools")
+        .and_then(Json::as_array)
+        .unwrap();
+    assert_eq!(tools.len(), 21);
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.field("name").and_then(Json::as_str) == Some("session.end"))
     );
     assert!(
         scratch
@@ -1046,7 +1048,15 @@ return {gif, done, movie, moved, cancelled: after.state};"#
     let mut line = String::new();
     assert!(output.read_line(&mut line).unwrap() > 0);
     line.clear();
-    assert!(output.read_line(&mut line).unwrap() > 0);
+    if output.read_line(&mut line).unwrap() == 0 {
+        drop(input);
+        let exit = child.wait_with_output().unwrap();
+        panic!(
+            "Export MCP process exited before its reply with {}\n{}",
+            exit.status,
+            String::from_utf8_lossy(&exit.stderr)
+        );
+    }
     let result = parse(&line).unwrap();
     let content = result
         .field("result")
@@ -1125,7 +1135,8 @@ fn kill_dash_nine_during_apply_leaves_a_whole_revision() {
     .unwrap();
     let started = std::time::Instant::now();
     success(scratch.run(&["apply", "ops.json", timed.to_str().unwrap()]));
-    let span = (started.elapsed().as_micros() as u32).max(1_000) * 3 / 2;
+    let mut span = (started.elapsed().as_micros() as u32).max(1_000) * 3 / 2;
+    let max_span = span.saturating_mul(8);
     let mut seed = 0x9e37_79b9_u32;
     let mut last_rev = 0;
     let mut killed = 0;
@@ -1149,6 +1160,11 @@ fn kill_dash_nine_during_apply_leaves_a_whole_revision() {
         if child.try_wait().unwrap().is_none() {
             child.kill().unwrap();
             killed += 1;
+            // The journal grows throughout the test, and scheduler load can change after the
+            // initial sample. Keep probing both sides of the current commit time.
+            span = span.saturating_add(span / 4).min(max_span);
+        } else {
+            span = (span - span / 6).max(1_000);
         }
         child.wait().unwrap();
         let snapshot = success(scratch.run(&["snapshot", "p.splice"]));

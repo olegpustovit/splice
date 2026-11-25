@@ -56,6 +56,14 @@ unsafe extern "C" {
         count: *mut usize,
         error: *mut *mut c_char,
     ) -> *mut f32;
+    fn splice_audio_waveform(
+        input: *const c_char,
+        track: u32,
+        seconds: f64,
+        buckets: usize,
+        out: *mut f32,
+        error: *mut *mut c_char,
+    ) -> bool;
     fn splice_audio_classify(
         input: *const c_char,
         track: u32,
@@ -123,6 +131,42 @@ pub fn envelope(input: &Path, track: u32, rate: f64) -> Result<Vec<f32>, Error> 
     Ok(out)
 }
 
+/// Channel-energy RMS of `track` in `buckets` equal intervals spanning `[0, seconds)`.
+///
+/// Presentation timestamps place audio in source time and missing time contributes silence.
+/// Accepts 1 through 65,536 buckets and a span from one nanosecond through 24 hours.
+/// Reads synchronously. Call from a worker thread.
+pub fn waveform(input: &Path, track: u32, seconds: f64, buckets: usize) -> Result<Vec<f32>, Error> {
+    if !(1.0e-9..=86_400.0).contains(&seconds) {
+        return Err(Error::message(
+            "Waveform span must be between 1 ns and 24 hours.",
+        ));
+    }
+    if !(1..=65_536).contains(&buckets) {
+        return Err(Error::message(
+            "Waveform bucket count must be between 1 and 65,536.",
+        ));
+    }
+    let input = path(input)?;
+    let mut out = vec![0.0; buckets];
+    let mut error = ptr::null_mut();
+    // SAFETY: the C string and `buckets` writable floats remain valid throughout the call.
+    if unsafe {
+        splice_audio_waveform(
+            input.as_ptr(),
+            track,
+            seconds,
+            buckets,
+            out.as_mut_ptr(),
+            &mut error,
+        )
+    } {
+        Ok(out)
+    } else {
+        Err(failed(error, "Could not read the audio waveform."))
+    }
+}
+
 /// One SoundAnalysis window: start and duration in seconds, label, confidence.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sound {
@@ -163,4 +207,23 @@ pub fn classify(input: &Path, track: u32, scratch: &Path) -> Result<Vec<Sound>, 
             })
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::waveform;
+    use std::path::Path;
+
+    #[test]
+    fn waveform_rejects_unbounded_spans_and_bucket_counts() {
+        let input = Path::new("unused\0.wav");
+        for seconds in [f64::NAN, f64::INFINITY, -1.0, 0.0, 1.0e-10, 86_401.0] {
+            let error = waveform(input, 0, seconds, 256).unwrap_err();
+            assert!(error.to_string().contains("span"));
+        }
+        for buckets in [0, 65_537, usize::MAX] {
+            let error = waveform(input, 0, 1.0, buckets).unwrap_err();
+            assert!(error.to_string().contains("bucket count"));
+        }
+    }
 }

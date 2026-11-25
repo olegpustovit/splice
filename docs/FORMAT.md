@@ -216,12 +216,22 @@ Rules:
   `motionBlur` and `rotate` (all off by default except `removeShakes`; MCP.md, Camera and cursor motion). 0.3 `motion` items migrate to zoom items
   (`amount = max(to, 1)`, same focus) and the 0.3 `clickZoom` effect is dropped
   (`intent.autoZoom` writes zoom items instead).
+- **Linear scale animations.** Camera lanes can also hold
+  `{"kind":"motion","params":{"from":1,"to":1.16,"curve":"linear"}}`. The two finite
+  scales default to 1 and 1.32. The first and last frames inside the half-open item span
+  use the endpoints, and the frames between them interpolate linearly. The highest active
+  lane supplies the scale, with creation order breaking ties on a lane. The canvas-centered
+  transform affects only the spine picture, including the window and cursor. Unmarked 0.3
+  motion items continue to migrate to zoom items.
 - **Keys only where they animate (T36.4).** A 0.3 file with keys on a parameter that is not
   keyable loads with the first key's value (0.3 rendered the default there).
 - **Free-text caption cues (T41.5).** A caption item's `params` may carry `"text"` after
   `words` and `edits`: `{"words":[],"edits":[],"text":"Open the settings"}` is a cue that needs no
   transcript. It keeps the item's own anchor and length (settle never retimes it), and `words`
   must then be empty. Files without `text` read as before.
+- **Hidden caption words.** A word edit writes `"hidden":true` only when explicitly hidden.
+  Its replacement `text`, `emph` and `emoji` are independent. An old empty replacement
+  also hides the word. Showing that word restores the transcript text if no replacement was supplied.
 - **Transitions consume handles (D14).** A `transition` effect belongs to a spine clip right after
   another; its length is at most the shorter clip and needs `length/2` unused source frames before
   the incoming clip and the rest after the outgoing one. Writers refuse anything else
@@ -305,6 +315,9 @@ One JSON object per line:
 - `parent` is the previous line's `hash`, or the origin hash on the first line. `hash` is FNV-1a 64 of
   the canonical record with its `hash` field and trailing newline omitted. Readers verify the
   revision sequence, links, and record bytes.
+- `engine` records the command semantics. Batches containing `caption.set` write engine 5
+  so that word hides stay independent of replacement text. Engine 4 and earlier replay that command
+  with the empty replacement it wrote then.
 - `ops` are exactly what `edit.apply` received (after `$ref` resolution is recorded in `mints`), so a
   batch replays byte-identically.
 - Path imports record an `imports` array of `{request, descriptor}` entries alongside the original

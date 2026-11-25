@@ -36,6 +36,19 @@ impl Editor {
                 lane,
                 length,
             } => self.add_item(content, at.as_ref(), anchor.as_ref(), lane.as_ref(), length),
+            Op::MotionAdd {
+                at,
+                length,
+                motion,
+                lane,
+            } => self.add_item(
+                OverlayContent::Motion(motion),
+                Some(&at),
+                None,
+                lane.as_ref(),
+                Some(length),
+            ),
+            Op::MotionSet { item, from, to } => self.set_motion(&item, from, to),
             Op::TitleAdd {
                 at,
                 length,
@@ -401,6 +414,11 @@ impl Editor {
                 Appearance::default(),
             ),
             OverlayContent::Zoom(zoom) => (ItemKind::Zoom(zoom), 90, Appearance::default()),
+            OverlayContent::Motion(motion) => (
+                ItemKind::Motion(motion),
+                ScaleMotion::LENGTH,
+                Appearance::default(),
+            ),
             OverlayContent::Media {
                 media: id,
                 source,
@@ -505,6 +523,34 @@ impl Editor {
             format!("Added {id} on {lane_id}"),
             Target::Timeline(TimelineId::Item(id)),
         ))
+    }
+
+    fn set_motion(
+        &mut self,
+        item: &Target,
+        from: Option<f64>,
+        to: Option<f64>,
+    ) -> Result<Outcome, CommandError> {
+        let wrong = || wrong_kind("Pass a scale animation item from timeline.snapshot.");
+        let TimelineId::Item(id) = self.timeline(item)? else {
+            return Err(wrong());
+        };
+        let slot = item_slot(&self.project, id)?;
+        let ItemKind::Motion(motion) =
+            &mut self.project.items.data_mut(slot).expect("live item").kind
+        else {
+            return Err(wrong());
+        };
+        let [low, high] = ScaleMotion::EDIT_RANGE;
+        if let Some(from) = from {
+            motion.from = from.clamp(low, high);
+        }
+        if let Some(to) = to {
+            motion.to = to.clamp(low, high);
+        }
+        let ScaleMotion { from, to } = *motion;
+        self.say(format_args!("Scale {from}?{to}?"));
+        Ok(Outcome::noted(Target::Timeline(TimelineId::Item(id))))
     }
 
     fn add_marker(&mut self, at: Frame, name: Option<String>) -> Result<Outcome, CommandError> {

@@ -538,7 +538,8 @@ impl Editor {
         for (id, slot, mut timing) in clips {
             timing.start = frame_add(position, timing.start - first.start)?;
             let copied = ClipId::from_serial(self.mint("clp")?);
-            let data = self.project.clips.data(slot).expect("live clip").clone();
+            let mut data = self.project.clips.data(slot).expect("live clip").clone();
+            self.mint_copied_effects(&mut data.appearance)?;
             self.project
                 .clips
                 .insert(Clip {
@@ -637,13 +638,24 @@ impl Editor {
         created: &mut Vec<Target>,
     ) -> Result<ItemId, CommandError> {
         let id = ItemId::from_serial(self.mint("ovl")?);
-        let data = self.project.items.data(slot).expect("live item").clone();
+        let mut data = self.project.items.data(slot).expect("live item").clone();
+        self.mint_copied_effects(&mut data.appearance)?;
         self.project
             .items
             .insert(Item { id, timing, data })
             .ok_or_else(arena_full)?;
         created.push(Target::Timeline(TimelineId::Item(id)));
         Ok(id)
+    }
+
+    fn mint_copied_effects(&mut self, appearance: &mut Appearance) -> Result<(), CommandError> {
+        // Old duplicate batches minted effect IDs during settle, after every op ran.
+        if !self.legacy_duplicate_effects {
+            for effect in &mut appearance.effects {
+                effect.id = EffectId::from_serial(self.mint("fx")?);
+            }
+        }
+        Ok(())
     }
 }
 

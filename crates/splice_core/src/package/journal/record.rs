@@ -80,7 +80,7 @@ pub struct Record {
     pub batch: Batch,
 }
 
-/// The current edit engine (0.4 changed edit semantics; see `edit::legacy`).
+/// The base edit engine for 0.4 journals. Some commands record a newer version.
 pub const ENGINE: u32 = 4;
 
 impl Record {

@@ -608,11 +608,18 @@ pub(super) fn tokens(p: &Project, slot: Slot) -> Result<Vec<CaptionWord>, StoreE
 }
 
 pub(super) fn caption_text(words: &[CaptionWord]) -> String {
-    words
-        .iter()
-        .map(|word| word.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut text = String::new();
+    for word in words.iter().filter(|word| !word.hidden) {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(&word.text);
+        if let Some(emoji) = &word.emoji {
+            text.push(' ');
+            text.push_str(emoji);
+        }
+    }
+    text
 }
 
 /// A cue's words; a free-text cue (T41.5) has none.
@@ -633,6 +640,9 @@ pub(super) fn caption_json(words: &[CaptionWord]) -> Json {
                 }
                 if let Some(emoji) = &word.emoji {
                     fields.push(("emoji", text(emoji)));
+                }
+                if word.hidden {
+                    fields.push(("hidden", Json::Bool(true)));
                 }
                 object(fields)
             })

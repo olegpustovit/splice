@@ -51,6 +51,22 @@ pub struct GpuProgram {
     pub(crate) transparent: bool,
 }
 
+impl Drop for GpuProgram {
+    fn drop(&mut self) {
+        if let Some((texture, target, _)) = self.group_target.take() {
+            drop(target);
+            let _ = b::destroy_texture(&texture);
+        }
+        let copies = self.copies.iter().flatten().map(|(texture, ..)| texture);
+        let texts = self.texts.iter().map(|(texture, ..)| texture);
+        let luts = self.luts.iter().map(|(texture, _)| texture);
+        let cursors = self.cursors.iter().flatten().map(|(texture, _)| texture);
+        for texture in copies.chain(texts).chain(luts).chain(cursors) {
+            let _ = b::destroy_texture(texture);
+        }
+    }
+}
+
 fn gpu(error: ogpu_core::error::Error) -> Error {
     Error::Input(ogpu_core::error::to_string(&error))
 }
@@ -68,7 +84,7 @@ impl GpuProgram {
         plan: &Plan,
         text: &[TimedText],
     ) -> Result<Self, Error> {
-        let mtl_device = b::native_leased(device).map_err(gpu)?.mtl_device;
+        let mtl_device = b::native(device).map_err(gpu)?.mtl_device;
         let upload = |pixels: &[u8], [w, h]: [u32; 2], label: &str| -> Result<Texture, Error> {
             let texture = b::create_texture(
                 device,
@@ -101,9 +117,32 @@ impl GpuProgram {
         };
         let mut texts = Vec::with_capacity(text.len());
         for cue in text {
-            let [_, _, w, h] = cue.layer.bounds;
+            let [x, y, w, h] = cue.layer.bounds;
+            if let Some(layout) = cue
+                .layer
+                .style
+                .caption
+                .as_ref()
+                .and_then(|caption| caption.layout)
+            {
+                let (rect, pixels) =
+                    apple_sys::composition::positioned_caption_rgba(&cue.layer, layout)?;
+                let [px, py, pw, ph] = rect.map(f64::from);
+                let texture = upload(&pixels, [rect[2], rect[3]], "Splice caption")?;
+                texts.push((texture, cue.clone(), [px - x, py - y, pw, ph]));
+                continue;
+            }
             let size = [w.ceil().max(1.0) as u32, h.ceil().max(1.0) as u32];
-            let pixels = apple_sys::composition::text_rgba(&cue.layer, size)?;
+            let default_title = plan
+                .evaluator
+                .as_ref()
+                .zip(cue.item)
+                .is_some_and(|(eval, item)| eval.is_unstyled_title(item));
+            let pixels = if default_title {
+                apple_sys::composition::program_title_rgba(&cue.layer, size)?
+            } else {
+                apple_sys::composition::text_rgba(&cue.layer, size)?
+            };
             // An animator unit keeps only its own glyphs' pixels: a 120-character animation
             // uploads and composites 120 glyph-sized quads, not 120 full boxes. A unit with no
             // ink draws nothing.
@@ -229,6 +268,9 @@ impl GpuProgram {
                 .as_ref()
                 .is_none_or(|(_, known, _)| *known != size)
             {
+                if let Some((previous, ..)) = &self.copies[i] {
+                    b::destroy_texture(previous).map_err(gpu)?;
+                }
                 let texture = b::create_texture(
                     &self.device,
                     TextureDescriptor {
@@ -243,7 +285,13 @@ impl GpuProgram {
                     },
                 )
                 .map_err(gpu)?;
-                let native = b::native_texture(&texture).map_err(gpu)?.mtl_texture as usize;
+                let native = match b::native_texture(&texture) {
+                    Ok(native) => native.mtl_texture as usize,
+                    Err(error) => {
+                        let _ = b::destroy_texture(&texture);
+                        return Err(gpu(error));
+                    }
+                };
                 self.copies[i] = Some((texture, size, native));
             }
             let (_, _, native) = self.copies[i].as_ref().expect("source copy");
@@ -482,7 +530,28 @@ impl GpuProgram {
             }
             splice_eval::Layer::Picture(picture) => {
                 if let Some(texture) = texture {
+                    let motion = match slot.role {
+                        Role::Picture(splice_model::TimelineId::Clip(_)) => plan
+                            .evaluator
+                            .as_ref()
+                            .map_or(1.0, |eval| eval.motion_scale(self.frame.frame)),
+                        _ => 1.0,
+                    };
+                    if motion == 0.0 {
+                        return Ok(());
+                    }
+                    let first = self.layers.len();
                     self.picture(plan, slot, &picture, target, source, texture, orient);
+                    if motion.is_finite() && motion != 1.0 {
+                        // Keep even authored extreme scales representable in the shader's geometry.
+                        let limit = f64::from(f32::MAX.sqrt() / target[0].max(target[1]));
+                        let scale = motion.clamp(-limit, limit) as f32;
+                        let center = target.map(|side| side * 0.5);
+                        // The layers emitted together are the picture, cursor, and click rings.
+                        for layer in &mut self.layers[first..] {
+                            move_layer(layer, scale, [0.0; 2], center);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -1005,6 +1074,10 @@ impl GpuProgram {
             .as_ref()
             .is_none_or(|(.., known)| *known != size)
         {
+            if let Some((texture, target, _)) = self.group_target.take() {
+                drop(target);
+                b::destroy_texture(&texture).map_err(gpu)?;
+            }
             let (texture, target) = crate::offscreen_target(&self.device, size, 0.0)?;
             self.group_target = Some((texture, target, size));
         }
@@ -1064,15 +1137,30 @@ fn transform([x, y, w, h]: [f64; 4], look: &Look) -> ([f32; 4], [f32; 2]) {
 /// Scales a layer about `center` and offsets it (a rigid move of a transition side).
 fn move_layer(layer: &mut Layer, scale: f32, [ox, oy]: [f32; 2], [cx, cy]: [f32; 2]) {
     let point = |x: f32, y: f32| [cx + (x - cx) * scale + ox, cy + (y - cy) * scale + oy];
-    let [x, y] = point(layer.dest[0], layer.dest[1]);
-    layer.dest = [x, y, layer.dest[2] * scale, layer.dest[3] * scale];
-    layer.pivot = point(layer.pivot[0], layer.pivot[1]);
+    let pivot = point(layer.pivot[0], layer.pivot[1]);
+    let magnitude = scale.abs();
+    let [x, y] = if scale < 0.0 {
+        layer.rotation += std::f32::consts::PI;
+        [
+            pivot[0] + (layer.dest[0] - layer.pivot[0]) * magnitude,
+            pivot[1] + (layer.dest[1] - layer.pivot[1]) * magnitude,
+        ]
+    } else {
+        point(layer.dest[0], layer.dest[1])
+    };
+    layer.dest = [x, y, layer.dest[2] * magnitude, layer.dest[3] * magnitude];
+    layer.pivot = pivot;
     if layer.flags & Layer::CLIP != 0 {
-        let [x, y] = point(layer.clip[0], layer.clip[1]);
-        layer.clip = [x, y, layer.clip[2] * scale, layer.clip[3] * scale];
+        let [x, y, w, h] = layer.clip;
+        let [x, y] = if scale < 0.0 {
+            point(x + w, y + h)
+        } else {
+            point(x, y)
+        };
+        layer.clip = [x, y, w * magnitude, h * magnitude];
     }
-    layer.corner *= scale;
-    layer.ring *= scale;
+    layer.corner *= magnitude;
+    layer.ring *= magnitude;
 }
 
 /// The motion-blur crop for a layer drawn with `crop` at `dest` that showed `before_crop` at

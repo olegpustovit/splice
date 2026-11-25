@@ -441,7 +441,7 @@ impl Editor {
                 let slot = item_slot(&self.project, item)?;
                 if matches!(
                     self.project.items.data(slot).expect("live item").kind,
-                    ItemKind::Sound(_) | ItemKind::Zoom(_)
+                    ItemKind::Sound(_) | ItemKind::Zoom(_) | ItemKind::Motion(_)
                 ) {
                     return Err(wrong_kind(
                         "motion.preset moves pictures, titles, shapes and captions; zooms are \
@@ -509,7 +509,7 @@ impl Editor {
                 .filter(|&&other| {
                     !matches!(
                         self.project.items.data(other).map(|d| &d.kind),
-                        Some(ItemKind::Sound(_) | ItemKind::Zoom(_))
+                        Some(ItemKind::Sound(_) | ItemKind::Zoom(_) | ItemKind::Motion(_))
                     )
                 })
                 .filter_map(|&other| self.project.items.data(other))
@@ -559,7 +559,7 @@ impl Editor {
         let slot = item_slot(&self.project, id)?;
         if matches!(
             self.project.items.data(slot).expect("live item").kind,
-            ItemKind::Sound(_) | ItemKind::Zoom(_)
+            ItemKind::Sound(_) | ItemKind::Zoom(_) | ItemKind::Motion(_)
         ) {
             return Err(wrong_kind(
                 "Sounds and zooms do not paint; pass an overlay, title, shape or caption.",

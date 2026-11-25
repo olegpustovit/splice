@@ -18,6 +18,7 @@ unsafe extern "C" {
     fn splice_image_release(data: *mut c_void);
     fn splice_image_rgba(
         path: *const c_char,
+        max_edge: u32,
         width: *mut u32,
         height: *mut u32,
         error: *mut *mut c_char,
@@ -87,13 +88,26 @@ pub fn system_cursor(previous: Option<&[u8; 32]>) -> Result<Option<CursorImage>,
 
 /// Decodes an image file to straight-alpha sRGB RGBA8.
 pub fn decode_rgba(path: &std::path::Path) -> Result<(Vec<u8>, [u32; 2]), Error> {
+    decode(path, 0)
+}
+
+/// Decodes a thumbnail to straight-alpha sRGB RGBA8 with a bounded longest edge.
+pub fn decode_thumbnail(
+    path: &std::path::Path,
+    max_edge: u32,
+) -> Result<(Vec<u8>, [u32; 2]), Error> {
+    decode(path, max_edge.max(1))
+}
+
+fn decode(path: &std::path::Path, max_edge: u32) -> Result<(Vec<u8>, [u32; 2]), Error> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())
         .map_err(|_| Error::message("An image path contains NUL."))?;
     let (mut width, mut height) = (0, 0);
     let mut error = ptr::null_mut();
     // SAFETY: the path lives for the call; native returns a malloc'd buffer of width*height*4.
-    let pixels = unsafe { splice_image_rgba(path.as_ptr(), &mut width, &mut height, &mut error) };
+    let pixels =
+        unsafe { splice_image_rgba(path.as_ptr(), max_edge, &mut width, &mut height, &mut error) };
     if pixels.is_null() {
         // SAFETY: the bridge transfers ownership of the optional diagnostic on failure.
         return Err(unsafe { Error::from_native(error, "Image decoding failed.") });

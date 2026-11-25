@@ -23,7 +23,8 @@ mod tier_c;
 mod time;
 
 pub use graphics::saved_look;
-pub use tier_c::{consolidated_path, is_filler, parse_cues, retakes};
+pub use tier_b::effect_target_allowed;
+pub use tier_c::{consolidated_path, is_filler, parse_cues, retakes, transition_capacity};
 pub(crate) use time::resolve_word_anchors;
 pub use time::{resolve_view_frame, span};
 
@@ -288,8 +289,10 @@ pub(crate) fn stage_recorded(
             .map_or_else(|| missing_media(path), Ok)
     };
     let mut work = ApplyWorkspace::default();
-    // An older engine's record: translate retired ops and mint leniently (legacy.rs).
+    // Engine 3 translates retired ops and mints leniently (legacy.rs).
     work.edit.legacy = engine < crate::package::journal::ENGINE;
+    work.edit.legacy_caption_hide = engine < crate::package::journal::CAPTION_HIDE_ENGINE;
+    work.edit.legacy_duplicate_effects = engine < crate::package::journal::DUPLICATE_EFFECT_ENGINE;
     work.stage(base, ops, source, Some(mints), base.serial, &mut load)?;
     let (project, report, resolved) = (work.edit.project, work.edit.report, work.edit.imports);
     if resolved != imports {
@@ -448,8 +451,11 @@ struct Editor {
     source: Source,
     serial_floor: u64,
     replay: Option<Vec<String>>,
-    /// Replaying a record from an older engine (see legacy.rs).
+    /// Replaying a record from the 0.3 engine (see legacy.rs).
     legacy: bool,
+    /// Replaying caption edits that used an empty replacement for hides.
+    legacy_caption_hide: bool,
+    legacy_duplicate_effects: bool,
     report: ApplyReport,
     imports: Vec<MediaImport>,
     spare_changes: Vec<EditChange>,
@@ -476,6 +482,8 @@ impl Default for Editor {
             serial_floor: 0,
             replay: None,
             legacy: false,
+            legacy_caption_hide: false,
+            legacy_duplicate_effects: false,
             report: ApplyReport::default(),
             imports: Vec::new(),
             spare_changes: Vec::new(),

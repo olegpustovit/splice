@@ -130,6 +130,95 @@ mod looks {
         a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= tolerance)
     }
 
+    pub(super) fn linear_motion_scales_the_picture_about_canvas_center() {
+        let dir = scratch("linear-motion");
+        let red = [210, 40, 20];
+        let green = [30, 200, 65];
+        let mut project = project(
+            vec![still(&dir.0, 1, red), still(&dir.0, 2, green)],
+            vec![(
+                1,
+                30,
+                vec![fx(
+                    1,
+                    "window",
+                    vec![
+                        ("padding", n(0.1)),
+                        ("corner", n(0.0)),
+                        ("shadow", n(0.0)),
+                        ("color", s("#112233")),
+                        ("color2", s("#6688aa")),
+                    ],
+                )],
+            )],
+        );
+        let motion = LaneId::from_serial(100);
+        let overlay = LaneId::from_serial(101);
+        for (id, name, kind) in [
+            (motion, "Motion", LaneKind::Camera),
+            (overlay, "Overlay", LaneKind::Overlay),
+        ] {
+            project.lanes.push(Lane {
+                id,
+                name: name.into(),
+                kind,
+                effects: Vec::new(),
+            });
+        }
+        project
+            .items
+            .insert(Item {
+                id: ItemId::from_serial(1),
+                timing: ItemTiming {
+                    anchor: Anchor::Pinned(4),
+                    length: 9,
+                },
+                data: ItemData {
+                    lane: motion,
+                    kind: ItemKind::Motion(ScaleMotion { from: 0.5, to: 1.0 }),
+                    appearance: Appearance::default(),
+                },
+            })
+            .unwrap();
+        project
+            .items
+            .insert(Item {
+                id: ItemId::from_serial(2),
+                timing: ItemTiming {
+                    anchor: Anchor::Pinned(0),
+                    length: 30,
+                },
+                data: ItemData {
+                    lane: overlay,
+                    kind: ItemKind::Media(Overlay {
+                        media: MediaId::from_serial(2),
+                        source: 0,
+                        placement: Placement::TopLeft,
+                        behind_presenter: false,
+                        muted: true,
+                        framing: Framing {
+                            crop: None,
+                            fit: Fit::Fill,
+                        },
+                    }),
+                    appearance: Appearance::default(),
+                },
+            })
+            .unwrap();
+
+        let composition = Composition::prepare(&project, &dir.0).unwrap();
+        assert_eq!(composition.evaluator().motion_scale(8), 0.75);
+        let backdrop = pixel(&composition, 0, [0, 32]);
+        assert!(backdrop[2] > backdrop[0]);
+        for at in [0, 4, 8, 12, 13] {
+            assert!(near(pixel(&composition, at, [0, 32]), backdrop, 2));
+            assert!(near(pixel(&composition, at, [12, 10]), green, 5));
+            assert!(near(pixel(&composition, at, [48, 32]), red, 5));
+            let edge = pixel(&composition, at, [21, 32]);
+            assert_eq!(near(edge, red, 5), at != 4, "frame {at}: {edge:?}");
+        }
+    }
+
     pub(super) fn color_lut_masks_and_key_render() {
         let dir = scratch("color");
         let red = still(&dir.0, 1, [220, 30, 30]);
@@ -1188,6 +1277,209 @@ mod looks {
         assert!(lower > 300, "second line dropped: {lower}");
     }
 
+    pub(super) fn standard_bold_caption_centers_and_highlights_separate_words() {
+        use apple_sys::composition::{CaptionRaster, CaptionSpan, TextLayer, TextStyle, text_rgba};
+        let size = [320, 120];
+        let mut layer = TextLayer {
+            text: "AAA BBB CCC".into(),
+            bounds: [0.0, 0.0, 320.0, 120.0],
+            font: 25.0,
+            opacity: [1.0; 2],
+            color: 0xffffff,
+            style: TextStyle::default(),
+            visible: None,
+            active: None,
+        };
+        let top_aligned = text_rgba(&layer, size).unwrap();
+        layer.style.caption = Some(CaptionRaster {
+            color: 0xffd23f,
+            spans: vec![
+                CaptionSpan::new([0, 3], 1.12),
+                CaptionSpan::new([8, 11], 1.1),
+            ],
+            layout: None,
+        });
+        let pixels = text_rgba(&layer, size).unwrap();
+
+        let ink_center = |image: &[u8]| {
+            let mut total = 0;
+            let mut n = 0;
+            for (index, pixel) in image.chunks_exact(4).enumerate() {
+                if pixel[3] > 240 {
+                    total += index / size[0] as usize;
+                    n += 1;
+                }
+            }
+            assert!(n > 0);
+            total / n
+        };
+        assert!(ink_center(&pixels).abs_diff(60) < 12);
+        assert!(ink_center(&pixels).abs_diff(ink_center(&top_aligned)) > 25);
+        let yellow = |right| {
+            pixels
+                .chunks_exact(4)
+                .enumerate()
+                .filter(|(index, pixel)| {
+                    let x = index % size[0] as usize;
+                    (x >= 160) == right
+                        && pixel[3] > 250
+                        && pixel[0] > 220
+                        && pixel[1] > 170
+                        && pixel[2] < 90
+                })
+                .count()
+        };
+        assert!(yellow(false) > 35 && yellow(true) > 35);
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .any(|pixel| pixel.iter().all(|&c| c > 243))
+        );
+    }
+
+    pub(super) fn bold_caption_preserves_word_gaps_and_wraps_whole_tokens() {
+        use apple_sys::composition::{
+            CaptionLayout, CaptionRaster, CaptionSpan, TextLayer, TextStyle,
+            positioned_caption_rgba,
+        };
+        let mut layout = CaptionLayout {
+            canvas: [320, 160],
+            box_pixels: [145.0, 80.0, 12.0, 140.0, 300.0],
+            font_scale: 1.0,
+            clean: false,
+        };
+        let layer = TextLayer {
+            text: "A FRAME, \u{1f3af} STUDY".into(),
+            bounds: [0.0, 0.0, 320.0, 160.0],
+            font: 27.0,
+            opacity: [1.0; 2],
+            color: 0xffffff,
+            style: TextStyle {
+                font: "Barlow Semi Condensed".into(),
+                weight: 4,
+                stroke_width: 0.07,
+                caption: Some(CaptionRaster {
+                    color: 0xffd23f,
+                    spans: vec![
+                        CaptionSpan::new([0, 1], 1.0),
+                        CaptionSpan::new([2, 11], 1.12),
+                        CaptionSpan {
+                            reserve: 1.1,
+                            ..CaptionSpan::new([12, 17], 1.1)
+                        },
+                    ],
+                    layout: Some(layout),
+                }),
+                ..TextStyle::default()
+            },
+            visible: None,
+            active: None,
+        };
+        let (wide, pixels) = positioned_caption_rgba(&layer, layout).unwrap();
+        assert!(wide[2] < 270 && wide[3] < 60 && wide[1] > 40, "{wide:?}");
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .any(|p| p[3] > 240 && p[0] > 230 && p[2] < 90)
+        );
+        assert!(pixels.chunks_exact(4).any(|p| p.iter().all(|&c| c > 240)));
+
+        layout.box_pixels[4] = 125.0;
+        let (narrow, wrapped) = positioned_caption_rgba(&layer, layout).unwrap();
+        assert!(
+            narrow[3] > wide[3] + 25 && narrow[2] < wide[2],
+            "{narrow:?}"
+        );
+        let yellow_in_half = |bottom| {
+            wrapped
+                .chunks_exact(4)
+                .enumerate()
+                .filter(|(i, p)| {
+                    let y = i / narrow[2] as usize;
+                    (y >= narrow[3] as usize / 2) == bottom
+                        && p[3] > 240
+                        && p[0] > 230
+                        && p[1] > 150
+                        && p[2] < 90
+                })
+                .count()
+        };
+        assert!(yellow_in_half(false) > 20 && yellow_in_half(true) > 20);
+    }
+
+    pub(super) fn caption_presets_rasterize_plates_dimming_and_prefixes() {
+        use apple_sys::composition::{
+            CaptionLayout, CaptionRaster, CaptionSpan, TextLayer, TextStyle,
+            positioned_caption_rgba,
+        };
+        let mut layout = CaptionLayout {
+            canvas: [320, 160],
+            box_pixels: [145.0, 80.0, 12.0, 140.0, 270.0],
+            font_scale: 1.0,
+            clean: false,
+        };
+        let mut word = CaptionSpan::new([0, 2], 1.0);
+        word.reserve = 1.0;
+        let mut next = CaptionSpan::new([3, 5], 1.0);
+        next.reserve = 1.0;
+        next.opacity = 0.5;
+        word.highlight = 1;
+        let mut layer = TextLayer {
+            text: "HI GO".into(),
+            bounds: [0.0, 0.0, 320.0, 160.0],
+            font: 32.0,
+            opacity: [1.0; 2],
+            color: 0xffffff,
+            style: TextStyle {
+                font: "Barlow Semi Condensed".into(),
+                weight: 4,
+                caption: Some(CaptionRaster {
+                    color: 0xffd23f,
+                    spans: vec![word, next],
+                    layout: Some(layout),
+                }),
+                ..TextStyle::default()
+            },
+            visible: None,
+            active: None,
+        };
+
+        let has = |bitmap: &[u8], test: &dyn Fn(&[u8]) -> bool| bitmap.chunks_exact(4).any(test);
+        let (full, karaoke) = positioned_caption_rgba(&layer, layout).unwrap();
+        assert!(has(&karaoke, &|p| (125..=129).contains(&p[3])
+            && p[0] > 240
+            && p[2] > 240));
+        let yellow = |p: &[u8]| p[3] > 245 && p[0] > 220 && p[1] > 170 && p[2] < 90;
+        assert!(has(&karaoke, &yellow));
+
+        layer.style.caption.as_mut().unwrap().spans[0].highlight = 2;
+        let (boxed, box_pixels) = positioned_caption_rgba(&layer, layout).unwrap();
+        assert!(boxed[3] > full[3] && has(&box_pixels, &yellow));
+        assert!(has(&box_pixels, &|p| p[3] > 245
+            && p[..3].iter().all(|&c| c < 35)));
+
+        layout.clean = true;
+        layer.style.weight = 2;
+        let spans = &mut layer.style.caption.as_mut().unwrap().spans;
+        spans[0].highlight = 0;
+        spans[1].opacity = 1.0;
+        let (plate, clean) = positioned_caption_rgba(&layer, layout).unwrap();
+        assert!(plate[2] > full[2] && plate[3] > full[3]);
+        assert!(has(&clean, &|p| (186..=191).contains(&p[3])
+            && p[..3].iter().all(|&c| c < 35)));
+
+        layout.clean = false;
+        layout.font_scale = 0.86;
+        layer.style.font = "IBM Plex Mono".into();
+        layer.style.weight = 1;
+        let spans = &mut layer.style.caption.as_mut().unwrap().spans;
+        spans[0].visible_to = 1;
+        spans[1].opacity = 0.0;
+        let (prefix, typed) = positioned_caption_rgba(&layer, layout).unwrap();
+        assert!(prefix[2] < full[2] / 2);
+        assert!(has(&typed, &|p| p.iter().all(|&c| c > 240)));
+    }
+
     pub(super) fn ocr_reads_text_and_a_blur_mask_hides_it() {
         let dir = scratch("ocr");
         // A "screen" still with black text on white, like a recorded window.
@@ -1780,6 +2072,22 @@ fn main() {
         (
             "looks_h8_caption_stroke_sits_under_the_fill_and_the_active_word_is_colored",
             looks::h8_caption_stroke_sits_under_the_fill_and_the_active_word_is_colored,
+        ),
+        (
+            "looks_standard_bold_caption_centers_and_highlights_separate_words",
+            looks::standard_bold_caption_centers_and_highlights_separate_words,
+        ),
+        (
+            "looks_bold_caption_preserves_word_gaps_and_wraps_whole_tokens",
+            looks::bold_caption_preserves_word_gaps_and_wraps_whole_tokens,
+        ),
+        (
+            "looks_linear_motion_scales_the_picture_about_canvas_center",
+            looks::linear_motion_scales_the_picture_about_canvas_center,
+        ),
+        (
+            "looks_caption_presets_rasterize_plates_dimming_and_prefixes",
+            looks::caption_presets_rasterize_plates_dimming_and_prefixes,
         ),
         (
             "looks_exports_alpha_audio_ranges_and_chapters",

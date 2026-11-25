@@ -182,8 +182,10 @@ fn fourcc(value: u32) -> Option<[u8; 4]> {
 
 unsafe extern "C" {
     fn splice_free_space(path: *const std::ffi::c_char, bytes: *mut u64) -> bool;
-    fn splice_media_first_frame(
+    fn splice_media_frame_at(
         path: *const std::ffi::c_char,
+        seconds: f64,
+        oriented: bool,
         width: *mut u32,
         height: *mut u32,
         error: *mut *mut std::ffi::c_char,
@@ -197,18 +199,32 @@ unsafe extern "C" {
 
 /// The first frame of a movie as straight RGBA with its size (alpha preserved).
 pub fn first_frame(path: &Path) -> Result<(Vec<u8>, [u32; 2]), Error> {
-    use std::os::unix::ffi::OsStrExt;
-    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| Error::message("The path contains NUL."))?;
+    movie_frame(path, 0.0, false)
+}
+
+/// An uncropped RGBA movie frame at asset time, with the video track's preferred orientation.
+pub fn frame_at(path: &Path, seconds: f64) -> Result<(Vec<u8>, [u32; 2]), Error> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(Error::message(
+            "The source frame time must be finite and nonnegative.",
+        ));
+    }
+    movie_frame(path, seconds, true)
+}
+
+fn movie_frame(path: &Path, seconds: f64, oriented: bool) -> Result<(Vec<u8>, [u32; 2]), Error> {
+    let path = native_path(path)?;
     let (mut w, mut h, mut error) = (0, 0, std::ptr::null_mut());
     // SAFETY: out pointers are valid; native returns calloc'd w*h*4 bytes or null.
-    let pixels = unsafe { splice_media_first_frame(path.as_ptr(), &mut w, &mut h, &mut error) };
+    let pixels = unsafe {
+        splice_media_frame_at(path.as_ptr(), seconds, oriented, &mut w, &mut h, &mut error)
+    };
     if pixels.is_null() {
         // SAFETY: the bridge transferred its diagnostic.
         return Err(unsafe { Error::from_native(error, "No frame.") });
     }
     // SAFETY: w*h*4 initialized bytes until freed below.
-    let out = unsafe { std::slice::from_raw_parts(pixels, (w * h * 4) as usize) }.to_vec();
+    let out = unsafe { std::slice::from_raw_parts(pixels, w as usize * h as usize * 4) }.to_vec();
     // SAFETY: calloc allocation, not used again.
     unsafe { free(pixels.cast()) };
     Ok((out, [w, h]))

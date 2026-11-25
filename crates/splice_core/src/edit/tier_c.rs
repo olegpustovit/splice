@@ -457,10 +457,7 @@ impl Editor {
     }
 
     fn previous_adjacent(&self, slot: Slot) -> Option<Slot> {
-        let order = self.project.clips.order();
-        let index = order.iter().position(|&s| s == slot)?;
-        let previous = *order.get(index.checked_sub(1)?)?;
-        (self.next_adjacent(previous) == Some(slot)).then_some(previous)
+        previous_adjacent(&self.project, slot)
     }
 
     /// Source frame just past the clip's last frame.
@@ -1153,27 +1150,7 @@ impl Editor {
                 &format!("Use length ≤ {longest}."),
             ));
         }
-        // Handles in timeline frames: unused source before the incoming clip and after the
-        // outgoing one. Stills and gaps have unlimited handles.
-        let still = |slot: Slot| {
-            self.project
-                .clips
-                .data(slot)
-                .and_then(|data| data.media)
-                .and_then(|id| media(&self.project, id).ok())
-                .is_none_or(|m| m.kind == MediaKind::Image)
-        };
-        let head = if still(slot) {
-            f64::MAX
-        } else {
-            f64::from(tb.source) / source_rate(&self.project, slot)?
-        };
-        let tail = match self.media_frames(previous) {
-            Some(frames) if !still(previous) => {
-                (frames - self.source_end(previous)?) / source_rate(&self.project, previous)?
-            }
-            _ => f64::MAX,
-        };
+        let [head, tail] = transition_handles(&self.project, previous, slot)?;
         let (need_head, need_tail) = (length / 2, length - length / 2);
         let fits =
             |head: f64, tail: f64| head >= f64::from(need_head) && tail >= f64::from(need_tail);
@@ -1910,6 +1887,7 @@ impl Editor {
                         text: Some(if n == 0 { text.clone() } else { String::new() }),
                         emph: false,
                         emoji: None,
+                        hidden: false,
                     })
                     .collect();
                 ItemKind::Caption {
@@ -1989,6 +1967,7 @@ impl Editor {
                     text: Some(if n == 0 { cue.clone() } else { String::new() }),
                     emph: false,
                     emoji: None,
+                    hidden: false,
                 })
                 .collect();
             let anchor = anchor_at(&self.project, first.start)?;
@@ -2874,6 +2853,65 @@ fn no_handles() -> CommandError {
         "The source has no media beyond this edit.",
         "Use a smaller offset, or trim the neighbor first.",
     )
+}
+
+/// Maximum incoming transition length in frames, or zero without an adjacent clip and usable handles.
+pub fn transition_capacity(project: &Project, clip: ClipId) -> Frame {
+    let Some((slot, previous)) = project
+        .clips
+        .find(clip)
+        .and_then(|slot| previous_adjacent(project, slot).map(|previous| (slot, previous)))
+    else {
+        return 0;
+    };
+    let a = project.clips.timing(previous).expect("live clip");
+    let b = project.clips.timing(slot).expect("live clip");
+    let longest = a.length.min(b.length);
+    let Ok([head, tail]) = transition_handles(project, previous, slot) else {
+        return 0;
+    };
+    let frames = |room: f64| room.floor().clamp(0.0, f64::from(longest)) as i64;
+    i64::from(longest)
+        .min(2 * frames(head) + 1)
+        .min(2 * frames(tail)) as Frame
+}
+
+fn previous_adjacent(project: &Project, slot: Slot) -> Option<Slot> {
+    let order = project.clips.order();
+    let index = order.iter().position(|&candidate| candidate == slot)?;
+    let previous = *order.get(index.checked_sub(1)?)?;
+    let a = project.clips.timing(previous)?;
+    let b = project.clips.timing(slot)?;
+    (a.end() == Some(b.start)).then_some(previous)
+}
+
+// Unused source before the incoming clip and after the outgoing one, in timeline frames.
+fn transition_handles(
+    project: &Project,
+    previous: Slot,
+    slot: Slot,
+) -> Result<[f64; 2], CommandError> {
+    let descriptor = |slot| {
+        let id = project.clips.data(slot)?.media?;
+        project
+            .media
+            .iter()
+            .find(|media| media.id == id && media.kind != MediaKind::Image)
+    };
+    let a = project.clips.timing(previous).expect("live clip");
+    let b = project.clips.timing(slot).expect("live clip");
+    let head = if descriptor(slot).is_some() {
+        f64::from(b.source) / source_rate(project, slot)?
+    } else {
+        f64::MAX
+    };
+    let tail = if let Some(media) = descriptor(previous) {
+        let end = f64::from(a.source) + time::consumed(project, previous, f64::from(a.length))?;
+        (f64::from(media.probe.frames) - end) / source_rate(project, previous)?
+    } else {
+        f64::MAX
+    };
+    Ok([head, tail])
 }
 
 /// A clip's transition length in frames (the schema default when unset).

@@ -51,14 +51,6 @@ impl Versions {
             .expect("origin stays materialized")
     }
 
-    pub fn tip(&self) -> Version {
-        let entry = self.all.last().expect("origin");
-        Version {
-            project: entry.project.clone().expect("tip stays materialized"),
-            active: entry.active.clone(),
-        }
-    }
-
     /// The tip's project (always materialized).
     pub fn tip_project(&self) -> &Project {
         self.all

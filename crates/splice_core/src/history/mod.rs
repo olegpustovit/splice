@@ -310,7 +310,7 @@ impl Store {
             .map_err(Into::into)
     }
 
-    /// Appends a session revert or a restore to a retained revision.
+    /// Appends a batch or session revert, or restores a retained revision.
     pub fn undo(
         &mut self,
         scope: Scope,
@@ -326,27 +326,42 @@ impl Store {
             .iter()
             .find(|candidate| candidate.id == session)
             .ok_or_else(|| unknown_session(session))?;
-        let mut revisions: Vec<_> = self
-            .versions
-            .tip()
-            .active
-            .iter()
-            .copied()
-            .filter(|&rev| {
-                versions::at(self.records(), self.versions.origin().rev, rev).is_some_and(
-                    |record| {
-                        record.batch.session == Some(session)
-                            && record.batch.source == Source::Agent
-                    },
-                )
+        let owns_batch = |rev| {
+            versions::at(self.records(), self.versions.origin().rev, rev).is_some_and(|record| {
+                record.batch.session == Some(session)
+                    && record.batch.source == Source::Agent
+                    && matches!(record.batch.change, Change::Edit { .. })
             })
-            .collect();
-        if scope == Scope::Last
-            && let Some(last) = revisions.pop()
-        {
-            revisions.clear();
-            revisions.push(last);
-        }
+        };
+        let revisions: Vec<_> = if let Scope::Batch(revision) = scope {
+            if !owns_batch(revision) {
+                return Err(StoreError::new(
+                    "NOT_FOUND",
+                    &format!("No agent batch r{revision} in session {session}."),
+                    "Use the revision of an agent batch listed by history.list {sessionId}.",
+                ));
+            }
+            if !self.is_active(revision) {
+                return Err(StoreError::new(
+                    "NOTHING_TO_UNDO",
+                    &format!("Agent batch r{revision} in session {session} is no longer live."),
+                    "Use a live batch from history.list {sessionId}.",
+                ));
+            }
+            vec![revision]
+        } else {
+            let mut live = self
+                .versions
+                .tip_active()
+                .iter()
+                .copied()
+                .filter(|&rev| owns_batch(rev));
+            if scope == Scope::Last {
+                live.next_back().into_iter().collect()
+            } else {
+                live.collect()
+            }
+        };
         if revisions.is_empty() {
             return Err(StoreError::new(
                 "NOTHING_TO_UNDO",
@@ -363,10 +378,10 @@ impl Store {
             preview.replayed = rebuilt.replayed;
             return Ok(preview);
         }
-        let label = if scope == Scope::Last {
-            format!("Undo agent revision r{}", revisions[0])
-        } else {
+        let label = if scope == Scope::Session {
             format!("Undo agent session {session}")
+        } else {
+            format!("Undo agent revision r{}", revisions[0])
         };
         let warning = self.commit(
             rebuilt.version,

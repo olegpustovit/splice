@@ -1,0 +1,18 @@
+> {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project.info","arguments":{"path":"$sample"}}}
+< {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"projectId":"prj_1","revision":"r0"},"isError":false}}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session.start","arguments":{"projectId":"prj_1","agent":"fixture"}}}
+< {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"sessionId":"ses_1","checkpoint":"r0","revision":"r0"},"isError":false}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"edit.apply","arguments":{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r0","ops":[{"cmd":"item.set","items":"clp_take","name":"Edited"}]}}}
+< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"revision":"r1"},"isError":false}}
+> {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"session.end","arguments":{"sessionId":"ses_1"}}}
+< {"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"error":{"code":"BAD_ARGS","message":"Missing projectId."}},"isError":true}}
+> {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"session.end","arguments":{"projectId":"prj_1"}}}
+< {"jsonrpc":"2.0","id":5,"result":{"structuredContent":{"error":{"code":"NO_SESSION"}},"isError":true}}
+> {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"session.end","arguments":{"projectId":"prj_1","sessionId":"ses_1"}}}
+< {"jsonrpc":"2.0","id":6,"result":{"structuredContent":{"sessionId":"ses_1","open":false,"revision":"r1"},"isError":false}}
+> {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"edit.apply","arguments":{"projectId":"prj_1","sessionId":"ses_1","ifRevision":"r1","ops":[{"cmd":"item.set","items":"clp_take","name":"Refused"}]}}}
+< {"jsonrpc":"2.0","id":7,"result":{"structuredContent":{"error":{"code":"NO_SESSION"}},"isError":true}}
+> {"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"history.list","arguments":{"projectId":"prj_1","sessionId":"ses_1"}}}
+< {"jsonrpc":"2.0","id":8,"result":{"structuredContent":{"sessionId":"ses_1","open":false,"checkpoint":"r0","revision":"r1","batches":[{"revision":"r1","source":"agent","state":"live"}]},"isError":false}}
+> {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"project.info","arguments":{"projectId":"prj_1"}}}
+< {"jsonrpc":"2.0","id":9,"result":{"structuredContent":{"revision":"r1","openSession":null},"isError":false}}

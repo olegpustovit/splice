@@ -319,6 +319,8 @@ pub struct CaptionWord {
     pub emoji: Option<String>,
     /// Whether the cue emphasizes the word.
     pub emph: bool,
+    /// Whether this cue hides the word while retaining its timing and edits.
+    pub hidden: bool,
     /// Inclusive timeline start.
     pub start: Frame,
     /// Exclusive timeline end.

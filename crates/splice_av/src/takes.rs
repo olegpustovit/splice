@@ -6,6 +6,78 @@ use splice_eval::cursor::Sample;
 use splice_json::Value as Json;
 use std::{fs, path::Path};
 
+/// Recorded input events for the editor timeline, sorted by source seconds.
+#[derive(Default)]
+pub struct TimelineEvents {
+    /// Source frames per second, used to convert the clip's source trim.
+    pub fps: f64,
+    /// Timestamps of recorded pointer presses.
+    pub clicks: Vec<f64>,
+    /// Displayable keys and modifier taps.
+    pub keys: Vec<TimelineKey>,
+}
+
+/// One redacted key or modifier tap from a recorded take.
+pub struct TimelineKey {
+    /// Source seconds when the key was pressed.
+    pub t: f64,
+    /// Event index used by the clip's hidden-key list.
+    pub index: Option<u32>,
+    /// Category mask bit used by the clip's keystroke settings.
+    pub category: u8,
+    /// Display text with typed characters redacted.
+    pub label: String,
+}
+
+/// Decode timeline input from the same recorded log used by native playback.
+pub fn load_timeline_events(path: &Path, fps: f64) -> Result<TimelineEvents, Error> {
+    use splice_eval::chips;
+    let take = load(path, None)?;
+    let clicks = take
+        .samples
+        .iter()
+        .filter(|sample| sample.click)
+        .map(|sample| sample.t)
+        .collect();
+    let mut keys = take
+        .keys
+        .into_iter()
+        .filter_map(|key| {
+            let tap = key.index.is_none();
+            let label = chips::chip_text(&key.text, key.code, key.mods, tap, true);
+            let category = if tap {
+                chips::MODIFIERS
+            } else {
+                chips::category(key.code, key.mods, &key.text)
+            };
+            (!label.trim().is_empty()).then_some(TimelineKey {
+                t: key.t,
+                index: key.index,
+                category,
+                label,
+            })
+        })
+        .collect::<Vec<_>>();
+    keys.sort_by(|left, right| left.t.total_cmp(&right.t));
+    Ok(TimelineEvents { fps, clicks, keys })
+}
+
+/// Resolve whether click rings are active and which key categories are visible.
+/// Scope order is project, spine, then clip. Call once per project revision.
+pub fn timeline_event_visibility(scopes: &[&[splice_model::Effect]]) -> (bool, u8) {
+    use splice_model::EffectValue;
+    let rings = splice_eval::resolve_effect(scopes, "cursor").is_some_and(|(enabled, params)| {
+        enabled
+            && !params
+                .iter()
+                .any(|p| p.name == "hidden" && p.value == EffectValue::Bool(true))
+            && !params
+                .iter()
+                .any(|p| p.name == "clickRings" && p.value == EffectValue::Bool(false))
+    });
+    (rings, splice_eval::chips::shown(scopes))
+}
+
 /// Cursor samples and images on the source clock, plus typed keys.
 pub(crate) struct TakeEvents {
     /// Captured source width and height in screen points.

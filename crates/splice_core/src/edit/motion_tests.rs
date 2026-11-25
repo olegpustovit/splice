@@ -464,3 +464,74 @@ fn templates_use_brand_colors_and_safe_zones() {
         EffectValue::Text("#1d2420".into())
     );
 }
+
+#[test]
+fn v13_scale_motion_defaults_and_validation_follow_the_timeline_rules() {
+    let mut project = sample();
+    let report = run(
+        &mut project,
+        r#"[{"cmd":"motion.add","at":{"item":"clp_take","offset":30},"from":null}]"#,
+    )
+    .unwrap();
+    let Target::Timeline(TimelineId::Item(id)) = report.changes[0].created[0] else {
+        panic!("expected an overlay ID");
+    };
+    let slot = project.items.find(id).unwrap();
+    let data = project.items.data(slot).unwrap();
+    assert_eq!(data.kind, ItemKind::Motion(ScaleMotion::default()));
+    assert_eq!(project.items.timing(slot).unwrap().length, 120);
+    assert_eq!(time::item_span(&project, slot).unwrap().start, 150);
+    assert_eq!(data.kind.lane_kind(), LaneKind::Camera);
+
+    for (ops, expected) in [
+        (r#"[{"cmd":"motion.add","at":20,"length":2}]"#, "TOO_SHORT"),
+        (r#"[{"cmd":"motion.add","at":20,"length":4.5}]"#, "BAD_ARGS"),
+        (r#"[{"cmd":"motion.add","at":20,"from":"bad"}]"#, "BAD_ARGS"),
+        (
+            r#"[{"cmd":"motion.add","at":150,"lane":"lan_gfx"}]"#,
+            "WRONG_KIND",
+        ),
+        (
+            r#"[{"cmd":"motion.add","at":180,"lane":"lan_mo"}]"#,
+            "LANE_CONFLICT",
+        ),
+        (
+            r#"[{"cmd":"motion.set","item":"ovl_detail","to":1.8}]"#,
+            "WRONG_KIND",
+        ),
+    ] {
+        let error = run(&mut project, ops).unwrap_err();
+        assert_eq!(error.error.code, expected, "{error}");
+        assert_eq!(
+            project.items.data(slot).unwrap().kind,
+            ItemKind::Motion(ScaleMotion::default())
+        );
+    }
+
+    let edits = [
+        format!(r#"{{"cmd":"motion.set","item":"{id}","from":2.2}}"#),
+        format!(r#"{{"cmd":"motion.set","item":"{id}","to":0.2}}"#),
+        format!(r#"{{"cmd":"motion.set","item":"{id}","from":0.2}}"#),
+        format!(r#"{{"cmd":"motion.set","item":"{id}","to":7}}"#),
+    ]
+    .map(|edit| splice_json::parse(&edit).unwrap());
+    let mut workspace = ApplyWorkspace::default();
+    splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset).warm(
+        &mut || {
+            for edit in &edits {
+                workspace
+                    .apply(
+                        &mut project,
+                        std::slice::from_ref(edit),
+                        Source::Human,
+                        false,
+                    )
+                    .unwrap();
+            }
+        },
+    );
+    assert_eq!(
+        project.items.data(slot).unwrap().kind,
+        ItemKind::Motion(ScaleMotion { from: 0.5, to: 2.0 })
+    );
+}

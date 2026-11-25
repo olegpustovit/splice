@@ -47,9 +47,10 @@ const PRELUDE: &str = r#"(() => {
     // The first project opened and session started become the defaults for later calls.
     if (r && typeof r === "object") {
       if (!ctx.projectId && typeof r.projectId === "string") ctx.projectId = r.projectId;
-      if (!ctx.sessionId && typeof r.sessionId === "string") ctx.sessionId = r.sessionId;
-      if (!ctx.sessionId && typeof r.openSession === "string") ctx.sessionId = r.openSession;
       const pid = typeof r.projectId === "string" ? r.projectId : a.projectId || ctx.projectId;
+      if (r.open === false && pid === ctx.projectId && r.sessionId === ctx.sessionId) ctx.sessionId = null;
+      if (!ctx.sessionId && r.open !== false && typeof r.sessionId === "string") ctx.sessionId = r.sessionId;
+      if (!ctx.sessionId && typeof r.openSession === "string") ctx.sessionId = r.openSession;
       if (typeof r.revision === "string" && pid === ctx.projectId) ctx.revision = r.revision;
     }
     return r;
@@ -154,13 +155,17 @@ fn context(project: Option<&str>, session: Option<&str>) -> Result<String, Store
         .iter()
         .filter(|tool| callable(tool.name))
         .map(|tool| {
-            let accepts = |field: &str| Json::Bool(tool.input.iter().any(|(key, _)| *key == field));
+            let defaults = |field: &str| {
+                Json::Bool(
+                    tool.name != "session.end" && tool.input.iter().any(|(key, _)| *key == field),
+                )
+            };
             (
                 tool.name.to_string(),
                 Json::Array(vec![
-                    accepts("projectId"),
-                    accepts("sessionId"),
-                    accepts("ifRevision"),
+                    defaults("projectId"),
+                    defaults("sessionId"),
+                    defaults("ifRevision"),
                 ]),
             )
         })
@@ -274,6 +279,8 @@ pub(super) const ALIASES: &[(&str, &str)] = &[
     ("item.inspect", "items.inspect"),
     ("edit.batch", "edit.apply"),
     ("history.revert", "history.undo"),
+    ("session.close", "session.end"),
+    ("session.stop", "session.end"),
 ];
 
 /// One tool call: its structured result, or its error payload.
@@ -309,10 +316,9 @@ fn dispatch(
             Some(near) => format!("Code cannot call {name:?}. Did you mean {near:?}?"),
             None => format!("Code cannot call {name:?}."),
         };
-        let fix = match (name, &near) {
-            ("session.end" | "session.close" | "session.stop", _) => "Sessions need no end: the next session.start opens a new one, and history.undo {session} reverts a whole session.".to_owned(),
-            (_, Some(near)) => format!("Call {near}, or one of the tools in `valid`."),
-            (_, None) => "Call one of the tools in `valid`.".to_owned(),
+        let fix = match &near {
+            Some(near) => format!("Call {near}, or one of the tools in `valid`."),
+            None => "Call one of the tools in `valid`.".to_owned(),
         };
         return Err(object(vec![
             ("code", text("UNKNOWN_TOOL")),

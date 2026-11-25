@@ -162,6 +162,157 @@ fn speed_ramps_integrate_and_freezes_hold() {
     }
 }
 
+#[test]
+fn prepared_source_clock_inverts_sparse_ramps_and_preserves_trim() {
+    use splice_model::{
+        Clip, ClipData, ClipTiming, Ease, Effect, EffectId, EffectParam, EffectValue, Key, Media,
+        MediaKind, Probe,
+    };
+
+    let mut project = Project {
+        fps: 30,
+        ..Project::default()
+    };
+    let media = MediaId::from_serial(1);
+    project.media.push(Media {
+        id: media,
+        kind: MediaKind::Video,
+        path: "long.mov".into(),
+        bookmark: None,
+        size: 0,
+        mtime: 0,
+        take: None,
+        probe: Probe {
+            fps: 60.0,
+            frames: 200_000,
+            width: 64,
+            height: 64,
+            audio: Vec::new(),
+            codec: None,
+            loudness: None,
+        },
+    });
+    let id = ClipId::from_serial(1);
+    let timing = ClipTiming {
+        start: 120,
+        length: 60_000,
+        source: 240,
+        speed: 1.25,
+    };
+    let end = timing.start + timing.length;
+    let mut data = ClipData {
+        media: Some(media),
+        ..ClipData::default()
+    };
+    data.appearance.effects.push(Effect {
+        id: EffectId::from_serial(1),
+        kind: "speed".into(),
+        enabled: Some(true),
+        params: vec![EffectParam {
+            name: "rate".into(),
+            value: EffectValue::Keys(vec![
+                Key {
+                    at: 0,
+                    value: 2.0,
+                    ease: Ease::Back,
+                },
+                Key {
+                    at: 800,
+                    value: 0.0,
+                    ease: Ease::Hold,
+                },
+                Key {
+                    at: 1000,
+                    value: 1.0,
+                    ease: Ease::Hold,
+                },
+            ]),
+        }],
+    });
+    let slot = project.clips.insert(Clip { id, timing, data }).unwrap();
+    let evaluator = Evaluator::prepare(&project).unwrap();
+    let (span, map) = evaluator.clip_clock(id, timing.start).unwrap();
+    assert!(evaluator.clip_clock(id, timing.start + 1).is_none());
+    assert!(
+        evaluator
+            .clip_clock(ClipId::from_serial(2), timing.start)
+            .is_none()
+    );
+    assert_eq!(span.source_at(0.0, map), 240.0);
+    assert_eq!(span.frame_at(240.0, map), Some(120.0));
+    assert_eq!(span.seek_at(239.0, map), None);
+    let source_end = span.source_at(f64::from(end), map);
+    assert_eq!(span.source_at(f64::from(end) + 50.0, map), source_end);
+    assert_eq!(span.frame_at(source_end, map), None);
+    assert_eq!(
+        span.seek_at(span.source_at(f64::from(end) - 0.1, map), map),
+        Some(end - 1)
+    );
+    assert_eq!(
+        span.seek_at(240.0 + 360.0 * 2.5, map),
+        Some(timing.start + 1130)
+    );
+
+    assert_eq!(map.as_ptr(), evaluator.speed_map(id).unwrap().as_ptr());
+    let held = span.source_at(f64::from(timing.start + 600), map);
+    let first = map.partition_point(|&offset| 240.0 + offset < held);
+    assert!(first < 600);
+    assert_eq!(
+        span.frame_at(held, map),
+        Some(f64::from(timing.start) + first as f64)
+    );
+    let mut plan = evaluator.buffer();
+    for at in [120, 220, 720, 1260, end - 2] {
+        evaluator.frame(at, &mut plan);
+        assert_eq!(
+            span.source_at(f64::from(at), map),
+            picture(&plan, TimelineId::Clip(id)).source_frame
+        );
+        let middle = f64::from(at) + 0.5;
+        let local = (at - timing.start) as usize;
+        let expected = 240.0 + (map[local] + map[local + 1]) * 0.5;
+        assert!((span.source_at(middle, map) - expected).abs() < 1e-8);
+        if map[local] < map[local + 1] {
+            assert!((span.frame_at(expected, map).unwrap() - middle).abs() < 1e-8);
+        }
+    }
+    splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset).warm(
+        &mut || {
+            for at in [120.25, 1260.5, f64::from(end) - 0.1] {
+                let (span, map) = evaluator.clip_clock(id, timing.start).unwrap();
+                assert!((span.frame_at(span.source_at(at, map), map).unwrap() - at).abs() < 1e-8);
+            }
+        },
+    );
+
+    project.clips.data_mut(slot).unwrap().appearance.effects[0].params[0].value =
+        EffectValue::Number(0.0);
+    let freeze = Evaluator::prepare(&project).unwrap();
+    let (span, map) = freeze.clip_clock(id, timing.start).unwrap();
+    assert_eq!(span.source_at(f64::from(end), map), 240.0);
+    assert_eq!(span.frame_at(240.0, map), None);
+    assert_eq!(span.seek_at(240.0, map), None);
+}
+
+#[test]
+fn linear_source_clock_clamps_and_rejects_a_stationary_trim() {
+    let span = SourceSpan {
+        start: 10,
+        end: 12,
+        source: 100.0,
+        step: 2.0,
+    };
+    assert_eq!(span.source_at(0.0, &[]), 100.0);
+    assert_eq!(span.frame_at(101.0, &[]), Some(10.5));
+    assert_eq!(span.seek_at(103.9, &[]), Some(11));
+    assert_eq!(span.source_at(500.0, &[]), 104.0);
+    assert_eq!(span.frame_at(104.0, &[]), None);
+    assert_eq!(span.frame_at(f64::NAN, &[]), None);
+    let freeze = SourceSpan { step: 0.0, ..span };
+    assert_eq!(freeze.source_at(11.0, &[]), 100.0);
+    assert_eq!(freeze.seek_at(100.0, &[]), None);
+}
+
 /// (source frame of the spine picture, total audio gain) at a frame.
 fn plan_at(evaluator: &Evaluator, at: Frame) -> (f64, f64) {
     let mut plan = evaluator.buffer();

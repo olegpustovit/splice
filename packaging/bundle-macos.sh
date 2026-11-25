@@ -24,7 +24,7 @@ identity=$(/usr/bin/security find-identity -v -p codesigning "$keychain" 2>/dev/
 [ -n "$identity" ] || fail "Import a valid Developer ID Application identity for team $team into $keychain and run make bundle again."
 
 [ -x "$products/splice" ] || fail "Build the splice executable in $products first."
-[ -f "$products/libpxui.1.dylib" ] || fail "Build libpxui.1.dylib in $products first."
+[ -f "$products/libpxui.2.dylib" ] || fail "Build libpxui.2.dylib in $products first."
 [ -f "$sdl_prefix/lib/libSDL3.0.dylib" ] || fail 'Build the pinned macOS SDL with make sdl first.'
 
 output=$root/Splice.app
@@ -50,14 +50,16 @@ trap 'exit 1' HUP INT TERM
 
 app=$stage/Splice.app
 binary=$app/Contents/MacOS/splice
-library=$app/Contents/Frameworks/libpxui.1.dylib
+library=$app/Contents/Frameworks/libpxui.2.dylib
 sdl=$app/Contents/Frameworks/libSDL3.0.dylib
 /bin/mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
 /bin/cp packaging/Info.plist "$app/Contents/Info.plist"
 /bin/cp "$products/splice" "$binary"
-/bin/cp -L "$products/libpxui.1.dylib" "$library"
+/bin/cp -L "$products/libpxui.2.dylib" "$library"
 /bin/cp -L "$sdl_prefix/lib/libSDL3.0.dylib" "$sdl"
 /bin/cp "$sdl_prefix/share/licenses/SDL3/LICENSE.txt" "$app/Contents/Resources/SDL3-LICENSE.txt"
+/bin/cp crates/apple_sys/assets/barlow/OFL.txt "$app/Contents/Resources/Barlow-LICENSE.txt"
+/bin/cp crates/apple_sys/assets/ibm-plex/OFL.txt "$app/Contents/Resources/IBM-Plex-LICENSE.txt"
 
 clear_rpaths() {
     loads=$(/usr/bin/otool -l "$1")

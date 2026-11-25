@@ -3,6 +3,7 @@
 #![deny(missing_docs)]
 
 mod audio;
+mod caption;
 mod export;
 mod gpu;
 mod lower;
@@ -11,9 +12,11 @@ mod takes;
 
 pub use export::{Export, ExportState, Frames};
 pub use gpu::GpuProgram;
+pub use splice_eval::{Evaluator, SourceSpan, caption_tokens};
+pub use takes::{TimelineEvents, TimelineKey, load_timeline_events, timeline_event_visibility};
 
 use apple_sys::composition;
-use splice_eval::{EvalError, Evaluator};
+use splice_eval::EvalError;
 use splice_model::{Frame, Project};
 use std::{
     fmt,

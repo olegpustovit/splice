@@ -5,6 +5,11 @@
 #import <SoundAnalysis/SoundAnalysis.h>
 #include "platform.h"
 
+#include <float.h>
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
 // The synchronous track accessors are fine off the main thread in this headless path.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -186,6 +191,127 @@ float *splice_audio_envelope(const char *input, uint32_t track, double rate, siz
         }
         *count = n;
         return out;
+    }
+}
+
+static bool waveform_buffer(CMSampleBufferRef sample, double bucket_rate, size_t buckets, double *energy) {
+    CMItemCount count = CMSampleBufferGetNumSamples(sample);
+    if (count == 0) return true;  // Empty edits carry no PCM.
+    CMFormatDescriptionRef description = CMSampleBufferGetFormatDescription(sample);
+    const AudioStreamBasicDescription *format = description != NULL &&
+        CMFormatDescriptionGetMediaType(description) == kCMMediaType_Audio
+        ? CMAudioFormatDescriptionGetStreamBasicDescription(description) : NULL;
+    if (count < 0 || !CMSampleBufferDataIsReady(sample) || format == NULL ||
+        format->mFormatID != kAudioFormatLinearPCM || format->mBitsPerChannel != 32 ||
+        !(format->mFormatFlags & kAudioFormatFlagIsFloat) ||
+        (format->mFormatFlags & (kAudioFormatFlagIsNonInterleaved | kAudioFormatFlagIsBigEndian)) ||
+        !isfinite(format->mSampleRate) || format->mSampleRate <= 0) return false;
+
+    size_t channels = format->mChannelsPerFrame;
+    size_t frame_bytes = format->mBytesPerFrame;
+    char scratch[16 * 1024];
+    if (channels == 0 || frame_bytes != channels * sizeof(float) || frame_bytes > sizeof(scratch)) return false;
+    CMBlockBufferRef block = CMSampleBufferGetDataBuffer(sample);
+    if (block == NULL) return false;
+    size_t length = CMBlockBufferGetDataLength(block);
+    size_t frames = (size_t)count;
+    if (length / frame_bytes != frames || length % frame_bytes != 0) return false;
+
+    // Work in bucket units so missing time contributes zero power even within a partly filled bucket.
+    double origin = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample)) * bucket_rate;
+    double step = bucket_rate / format->mSampleRate;
+    double end = origin + (double)frames * step;
+    if (!isfinite(origin) || !isfinite(end) || step <= 0) return false;
+    if (origin >= (double)buckets || end <= 0) return true;
+    double channel_weight = 1.0 / (double)channels;
+    for (size_t at = 0; at < frames;) {
+        size_t chunk = MIN(frames - at, sizeof(scratch) / frame_bytes);
+        char *pcm = NULL;
+        if (CMBlockBufferAccessDataBytes(block, at * frame_bytes, chunk * frame_bytes, scratch, &pcm) != noErr ||
+            pcm == NULL) return false;
+        for (size_t i = 0; i < chunk; i++) {
+            double from = MAX(0.0, origin + (double)(at + i) * step);
+            double to = MIN((double)buckets, origin + (double)(at + i + 1) * step);
+            if (from >= to) continue;
+            double power = 0;
+            for (size_t c = 0; c < channels; c++) {
+                float value;
+                memcpy(&value, pcm + i * frame_bytes + c * sizeof(value), sizeof(value));
+                if (!isfinite(value)) return false;
+                power += (double)value * value;
+            }
+            power *= channel_weight;
+            for (size_t bucket = (size_t)from; from < to; bucket++) {
+                double boundary = MIN(to, (double)(bucket + 1));
+                energy[bucket] += power * (boundary - from);
+                from = boundary;
+            }
+        }
+        at += chunk;
+    }
+    return true;
+}
+
+bool splice_audio_waveform(const char *input, uint32_t track, double seconds, size_t buckets, float *out, char **error) {
+    @autoreleasepool {
+        NSURL *url = [NSURL fileURLWithFileSystemRepresentation:input isDirectory:NO relativeToURL:nil];
+        if (url == nil) {
+            splice_set_error(error, "Could not open the local audio URL.");
+            return false;
+        }
+        AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:@{AVURLAssetPreferPreciseDurationAndTimingKey: @YES}];
+        NSArray<AVAssetTrack *> *tracks = [asset tracksWithMediaType:AVMediaTypeAudio];
+        if (track >= tracks.count) {
+            splice_set_error(error, "The file has no such audio track.");
+            return false;
+        }
+        NSError *failure = nil;
+        AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&failure];
+        NSDictionary *settings = @{
+            AVFormatIDKey: @(kAudioFormatLinearPCM), AVLinearPCMBitDepthKey: @32, AVLinearPCMIsFloatKey: @YES,
+            AVLinearPCMIsNonInterleaved: @NO, AVLinearPCMIsBigEndianKey: @NO,
+        };
+        AVAssetReaderTrackOutput *output = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:tracks[track]
+                                                                                     outputSettings:settings];
+        if (reader == nil || output == nil || ![reader canAddOutput:output]) {
+            splice_set_error(error, failure.localizedDescription.UTF8String ?: "Could not read the audio track.");
+            return false;
+        }
+        output.alwaysCopiesSampleData = NO;
+        reader.timeRange = CMTimeRangeMake(kCMTimeZero, CMTimeMakeWithSeconds(seconds, 1000000000));
+        [reader addOutput:output];
+        if (![reader startReading]) {
+            splice_set_error(error, reader.error.localizedDescription.UTF8String ?: "Could not start reading audio.");
+            return false;
+        }
+        double *energy = calloc(buckets, sizeof(*energy));
+        if (energy == NULL) {
+            [reader cancelReading];
+            splice_set_error(error, "Could not allocate audio waveform buckets.");
+            return false;
+        }
+        bool ok = true;
+        double bucket_rate = (double)buckets / seconds;
+        for (;;) {
+            @autoreleasepool {
+                CMSampleBufferRef sample = [output copyNextSampleBuffer];
+                if (sample == NULL) break;
+                ok = waveform_buffer(sample, bucket_rate, buckets, energy);
+                CFRelease(sample);
+                if (!ok) break;
+            }
+        }
+        if (!ok) {
+            [reader cancelReading];
+            splice_set_error(error, "The audio reader returned invalid PCM or timing.");
+        } else if (reader.status != AVAssetReaderStatusCompleted) {
+            splice_set_error(error, reader.error.localizedDescription.UTF8String ?: "Reading the audio failed.");
+            ok = false;
+        } else {
+            for (size_t i = 0; i < buckets; i++) out[i] = (float)MIN(sqrt(energy[i]), (double)FLT_MAX);
+        }
+        free(energy);
+        return ok;
     }
 }
 

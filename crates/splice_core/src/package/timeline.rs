@@ -141,6 +141,14 @@ pub(super) fn decode_clip(value: &Json) -> Result<Clip, PackageError> {
 pub(super) fn encode_item(id: ItemId, timing: ItemTiming, data: &ItemData) -> Json {
     let (kind, params) = match &data.kind {
         ItemKind::Title { text: title } => ("title", object(vec![("text", text(title))])),
+        ItemKind::Motion(motion) => (
+            "motion",
+            object(vec![
+                ("from", Json::Float(motion.from)),
+                ("to", Json::Float(motion.to)),
+                ("curve", text("linear")),
+            ]),
+        ),
         ItemKind::Zoom(zoom) => {
             let mut fields = vec![("amount", Json::Float(zoom.amount))];
             if zoom.follow {
@@ -309,7 +317,22 @@ pub(super) fn decode_item(value: &Json) -> Result<Item, PackageError> {
                 },
             })
         }
-        // 0.3 motion items migrate to camera segments that hold their end scale (D12): the old
+        "motion" if params.field("curve").is_some() => {
+            shape(params, &["from", "to", "curve"])?;
+            if params.string("curve")? != "linear" {
+                return Err(bad("motion.curve", "linear"));
+            }
+            let default = ScaleMotion::default();
+            let scale = |key, default| match params.field(key) {
+                None | Some(Json::Null) => Ok(default),
+                Some(_) => number(params, key),
+            };
+            ItemKind::Motion(ScaleMotion {
+                from: scale("from", default.from)?,
+                to: scale("to", default.to)?,
+            })
+        }
+        // Unmarked 0.3 motion items migrate to camera segments that hold their end scale (D12): the old
         // renderer snapped back to 1× after them, which nobody wanted.
         "motion" => {
             shape(params, &["from", "to", "focus", "ease"])?;
@@ -442,11 +465,14 @@ fn encode_caption_edit(edit: &CaptionEdit) -> Json {
         fields.push(("emph", Json::Bool(true)));
     }
     push_text(&mut fields, "emoji", &edit.emoji);
+    if edit.hidden {
+        fields.push(("hidden", Json::Bool(true)));
+    }
     object(fields)
 }
 
 fn decode_caption_edit(value: &Json) -> Result<CaptionEdit, PackageError> {
-    shape(value, &["word", "text", "emph", "emoji"])?;
+    shape(value, &["word", "text", "emph", "emoji", "hidden"])?;
     Ok(CaptionEdit {
         word: value
             .string("word")?
@@ -455,6 +481,7 @@ fn decode_caption_edit(value: &Json) -> Result<CaptionEdit, PackageError> {
         text: optional_string(value, "text")?,
         emph: optional_bool(value, "emph")?.unwrap_or(false),
         emoji: optional_string(value, "emoji")?,
+        hidden: optional_bool(value, "hidden")?.unwrap_or(false),
     })
 }
 

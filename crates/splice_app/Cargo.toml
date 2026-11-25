@@ -16,13 +16,13 @@ pxui_sdl = { path = "../../pxui/crates/open/pxui_sdl" }
 splice_core = { path = "../splice_core" }
 splice_json = { path = "../splice_json" }
 splice_mcp = { path = "../splice_mcp" }
+splice_model = { path = "../splice_model" }
 splice_av = { path = "../splice_av" }
 splice_gpu = { path = "../splice_gpu" }
 splice_kit = { path = "../splice_kit" }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 mem_sys = { path = "../../pxui/crates/open/mem_sys", features = ["counting"] }
-splice_model = { path = "../splice_model" }
 splice_testkit = { path = "../splice_testkit" }
 
 [[test]]

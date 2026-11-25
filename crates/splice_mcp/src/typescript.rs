@@ -471,8 +471,9 @@ fn tool_signature(out: &mut String, tool: &tools::Tool, brief: bool) {
     let mut args = String::new();
     let mut any_required = false;
     for (name, spec) in tool.input {
-        // code.run supplies projectId and sessionId.
-        let required = tool.required.contains(name) && !matches!(*name, "projectId" | "sessionId");
+        // Ending a session requires an explicit project and session even in code.run.
+        let required = tool.required.contains(name)
+            && (tool.name == "session.end" || !matches!(*name, "projectId" | "sessionId"));
         any_required |= required;
         let kind = if *name == "ops" {
             "Splice.Op[]".to_string()

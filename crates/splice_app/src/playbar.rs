@@ -1,9 +1,12 @@
+#[cfg(test)]
 use pxui::{
     Button, Fill, Label, Node, Rect, Scrubber, Stroke, Ui,
     geom::Edges,
     ui::{Align, Size},
 };
-use splice_kit::{CommandState, Phase};
+use splice_kit::CommandState;
+#[cfg(test)]
+use splice_kit::Phase;
 
 #[derive(Clone, Copy)]
 pub(super) struct View {
@@ -11,15 +14,25 @@ pub(super) struct View {
     pub end: i32,
     pub fps: u32,
     pub play: CommandState,
+    pub rate: i8,
     pub dragging: bool,
 }
 
+pub(super) fn clock(at: i32, fps: u32) -> [u32; 3] {
+    let at = at.max(0) as u32;
+    let fps = fps.max(1);
+    let seconds = at / fps;
+    [seconds / 60, seconds % 60, at % fps]
+}
+
+#[cfg(test)]
 #[derive(Default)]
 pub(super) struct Intents {
     pub play: bool,
     pub scrub: Option<(Phase, i32)>,
 }
 
+#[cfg(test)]
 pub(super) fn paint(ui: &mut Ui, view: View) -> Intents {
     let mut intents = Intents::default();
     ui.row(
@@ -91,11 +104,10 @@ pub(super) fn paint(ui: &mut Ui, view: View) -> Intents {
     intents
 }
 
+#[cfg(test)]
 fn timecode(at: i32, fps: u32) -> [u32; 4] {
-    let at = at.max(0) as u32;
-    let fps = fps.max(1);
-    let seconds = at / fps;
-    [seconds / 3600, seconds / 60 % 60, seconds % 60, at % fps]
+    let [minutes, seconds, frames] = clock(at, fps);
+    [minutes / 60, minutes % 60, seconds, frames]
 }
 
 #[cfg(test)]

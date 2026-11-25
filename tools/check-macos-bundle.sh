@@ -26,7 +26,7 @@ def require(condition, message):
 contents = Path(sys.argv[1]) / "Contents"
 executable = contents / "MacOS/splice"
 frameworks = contents / "Frameworks"
-library_names = {"libpxui.1.dylib", "libSDL3.0.dylib"}
+library_names = {"libpxui.2.dylib", "libSDL3.0.dylib"}
 project_type = "com.olegpustovit.splice.project"
 
 with (contents / "Info.plist").open("rb") as file:

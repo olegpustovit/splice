@@ -1,6 +1,6 @@
 use splice_model::{
     Access, Aspect, CameraMode, Duck, Ease, Edge, EffectId, EffectParam, Fit, Frame, Key, LaneId,
-    LaneKind, MediaId, Placement, Rect, ShapeKind, Spring, TimelineId, WordId, Zoom,
+    LaneKind, MediaId, Placement, Rect, ScaleMotion, ShapeKind, Spring, TimelineId, WordId, Zoom,
 };
 
 /// What smart cuts measure pauses against (D15).
@@ -150,6 +150,26 @@ pub enum Op {
         text: Option<String>,
         /// Inline box, style and animation (T42.2).
         look: Option<Box<TitleLook>>,
+    },
+    /// Add a linear scale animation.
+    MotionAdd {
+        /// Start position.
+        at: FrameArg,
+        /// Duration in sequence frames.
+        length: Frame,
+        /// The two scale endpoints.
+        motion: ScaleMotion,
+        /// Explicit camera lane.
+        lane: Option<Target>,
+    },
+    /// Edit either or both scale endpoints.
+    MotionSet {
+        /// Scale animation to edit.
+        item: Target,
+        /// New start scale, if supplied.
+        from: Option<f64>,
+        /// New end scale, if supplied.
+        to: Option<f64>,
     },
     /// Add Zoom: a camera segment (D12).
     ZoomAdd {
@@ -1037,6 +1057,8 @@ pub enum OverlayContent {
     Title(Option<String>),
     /// Camera segment.
     Zoom(Zoom),
+    /// Linear scale animation.
+    Motion(ScaleMotion),
     /// Media overlay.
     Media {
         /// The referenced media descriptor.

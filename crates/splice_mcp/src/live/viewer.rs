@@ -6,16 +6,30 @@ use splice_core::{
     history::{Store, StoreError, WriteOptions},
     package,
 };
-use splice_model::JobId;
+use splice_model::{ClipId, ItemId, JobId, LaneId, MarkerId, Project, TimelineId};
 use std::{
-    io,
+    collections::HashSet,
+    fmt, io,
     path::{Path, PathBuf},
 };
 
 /// Viewer-only intents handled on the window thread.
 pub enum ViewCommand {
-    /// Move to the given timeline frame.
-    Seek(i32),
+    /// Apply view changes and return the current selection as an array of ID strings.
+    Show {
+        /// Timeline frame to seek to. Leave the playhead unchanged when absent.
+        at: Option<i32>,
+        /// Selection in request order. An empty list clears it and absence preserves it.
+        select: Option<Vec<ViewSelection>>,
+        /// Recorded clip whose component rows should open.
+        expand: Option<ClipId>,
+        /// Nonempty timeline range to frame, with an exclusive end.
+        range: Option<[i32; 2]>,
+        /// Native view to open.
+        view: Option<ViewTab>,
+        /// Program viewer zoom to apply.
+        zoom: Option<ViewerZoom>,
+    },
     /// Render the viewer into a PNG.
     Snapshot {
         /// Requested timeline frame.
@@ -23,6 +37,44 @@ pub enum ViewCommand {
         /// Absolute PNG output location.
         output: PathBuf,
     },
+}
+
+/// A tab in the native project window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewTab {
+    /// The project editor.
+    Editor,
+    /// The Agent MCP lab.
+    Agent,
+    /// The Splice specification.
+    Spec,
+}
+
+/// Zoom of the program viewer, independent of timeline framing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ViewerZoom {
+    /// Fit the project canvas within the viewer.
+    Fit,
+    /// An absolute zoom factor, where 1.0 displays the canvas at 100%.
+    Factor(f32),
+}
+
+/// A project object selectable in the viewer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ViewSelection {
+    /// A clip, overlay, or marker.
+    Timeline(TimelineId),
+    /// A secondary lane or the video spine.
+    Lane(LaneId),
+}
+
+impl fmt::Display for ViewSelection {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Timeline(id) => fmt::Display::fmt(id, output),
+            Self::Lane(id) => fmt::Display::fmt(id, output),
+        }
+    }
 }
 
 /// The viewer's store and MCP state. Call it only from the viewer's event loop.
@@ -148,44 +200,66 @@ impl Viewer {
         let store = self
             .projects
             .lookup_id(args.optional_string("projectId")?.unwrap_or("prj_1"))?;
-        let at = if let Some(value) = args.field("at") {
-            Some(splice_core::edit::resolve_view_frame(
-                store.project(),
-                value,
-            )?)
-        } else if let Some(range) = args.field("range") {
-            Some(
-                range
-                    .frame("from")?
-                    .ok_or_else(|| bad("range", "an object with from and to frames"))?,
-            )
-        } else {
-            None
-        };
-        let mut frame_at = current;
-        if let Some(at) = at {
-            frame_at = at.clamp(
-                0,
-                timeline::duration(store.project())?
-                    .saturating_sub(1)
-                    .max(0),
-            );
-            view(store, ViewCommand::Seek(frame_at))?;
+        let project = store.project();
+        let range = args.field("range").map(parse_range).transpose()?;
+        let at = args
+            .field("at")
+            .map(|value| splice_core::edit::resolve_view_frame(project, value))
+            .transpose()?
+            .or_else(|| range.map(|[from, _]| from));
+        let at = at
+            .map(|at| {
+                timeline::duration(project).map(|end| at.clamp(0, end.saturating_sub(1).max(0)))
+            })
+            .transpose()?;
+        let select = args
+            .field("select")
+            .map(|value| parse_selection(project, value))
+            .transpose()?;
+        let expand = args
+            .optional_string("expand")?
+            .map(|id| expandable_take(project, id))
+            .transpose()?;
+        let tab = args
+            .optional_string("view")?
+            .map(|name| match name {
+                "edit" | "editor" => Ok(ViewTab::Editor),
+                "mcp" | "agent" => Ok(ViewTab::Agent),
+                "spec" => Ok(ViewTab::Spec),
+                _ => Err(bad("view", "edit, editor, mcp, agent or spec")),
+            })
+            .transpose()?;
+        let zoom = args.field("viewer").map(parse_zoom).transpose()?;
+        let applied = at.is_some()
+            || select.is_some()
+            || expand.is_some()
+            || range.is_some()
+            || tab.is_some()
+            || zoom.is_some();
+        let selection = view(
+            store,
+            ViewCommand::Show {
+                at,
+                select,
+                expand,
+                range,
+                view: tab,
+                zoom,
+            },
+        )?;
+        if selection.as_array().is_none() {
+            return Err(failure(
+                "INVARIANT",
+                "The viewer did not return a selection array.",
+                "Reopen the viewer and retry.",
+            ));
         }
-        let mut fields = vec![
-            ("applied", Json::Bool(at.is_some())),
-            ("revision", rev(store.project().rev)),
-            ("playhead", frame(frame_at)),
-            ("selection", Json::Array(Vec::new())),
-        ];
-        if at.is_none()
-            && ["select", "expand", "view", "viewer"]
-                .iter()
-                .any(|key| args.field(key).is_some())
-        {
-            fields.push(("reason", text("viewer controls the playhead only")));
-        }
-        Ok(object(fields))
+        Ok(object(vec![
+            ("applied", Json::Bool(applied)),
+            ("revision", rev(project.rev)),
+            ("playhead", frame(at.unwrap_or(current))),
+            ("selection", selection),
+        ]))
     }
 
     fn cli(&mut self, command: &str, request: &Json) -> Result<Json, StoreError> {
@@ -280,5 +354,259 @@ impl Viewer {
             }
             _ => Err(bad("command", "a supported viewer command")),
         }
+    }
+}
+
+fn parse_range(range: &Json) -> Result<[i32; 2], StoreError> {
+    match (range.frame("from")?, range.frame("to")?) {
+        (Some(from), Some(to)) if from < to => Ok([from, to]),
+        _ => Err(bad(
+            "range",
+            "an object with from and to frames where from < to",
+        )),
+    }
+}
+
+fn parse_zoom(viewer: &Json) -> Result<ViewerZoom, StoreError> {
+    let zoom = viewer
+        .field("zoom")
+        .ok_or_else(|| bad("viewer", "an object with a zoom field"))?;
+    if zoom.as_str() == Some("fit") {
+        return Ok(ViewerZoom::Fit);
+    }
+    zoom.as_f64()
+        .map(|factor| factor as f32)
+        .filter(|factor| factor.is_finite() && *factor > 0.0)
+        .map(ViewerZoom::Factor)
+        .ok_or_else(|| bad("viewer.zoom", "\"fit\" or a positive finite zoom factor"))
+}
+
+fn parse_selection(project: &Project, value: &Json) -> Result<Vec<ViewSelection>, StoreError> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| bad("select", "an array of timeline item or lane IDs"))?;
+    let mut selection = Vec::with_capacity(values.len());
+    let mut seen = HashSet::with_capacity(values.len());
+    for value in values {
+        let id = value
+            .as_str()
+            .ok_or_else(|| bad("select", "an array of timeline item or lane IDs"))?;
+        let parsed = if let Ok(clip) = id.parse::<ClipId>() {
+            project
+                .clips
+                .find(clip)
+                .map(|_| ViewSelection::Timeline(TimelineId::Clip(clip)))
+        } else if let Ok(item) = id.parse::<ItemId>() {
+            project
+                .items
+                .find(item)
+                .map(|_| ViewSelection::Timeline(TimelineId::Item(item)))
+        } else if let Ok(marker) = id.parse::<MarkerId>() {
+            project
+                .markers
+                .iter()
+                .any(|entry| entry.id == marker)
+                .then_some(ViewSelection::Timeline(TimelineId::Marker(marker)))
+        } else if let Ok(lane) = id.parse::<LaneId>() {
+            (lane == project.spine.id || project.lanes.iter().any(|entry| entry.id == lane))
+                .then_some(ViewSelection::Lane(lane))
+        } else {
+            return Err(bad("select", "an array of timeline item or lane IDs"));
+        };
+        let parsed = parsed.ok_or_else(|| {
+            failure(
+                "NOT_FOUND",
+                &format!("No timeline object {id}."),
+                "Read timeline.snapshot and use a current ID.",
+            )
+        })?;
+        if seen.insert(parsed) {
+            selection.push(parsed);
+        }
+    }
+    Ok(selection)
+}
+
+fn expandable_take(project: &Project, id: &str) -> Result<ClipId, StoreError> {
+    let clip = id
+        .parse::<ClipId>()
+        .map_err(|_| bad("expand", "a recorded clip ID"))?;
+    let data = project
+        .clips
+        .find(clip)
+        .and_then(|slot| project.clips.data(slot))
+        .ok_or_else(|| {
+            failure(
+                "NOT_FOUND",
+                &format!("No clip {clip}."),
+                "Read timeline.snapshot and use a current clip ID.",
+            )
+        })?;
+    let components = &data.enabled;
+    let present = [
+        components.screen,
+        components.camera,
+        components.mic,
+        components.system,
+        components.pointer,
+        components.keys,
+    ];
+    if present.into_iter().all(|component| component.is_none()) {
+        return Err(failure(
+            "WRONG_KIND",
+            &format!("Clip {clip} has no recorded components."),
+            "Use the ID of a recorded take with component rows.",
+        ));
+    }
+    Ok(clip)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::TestDirectory;
+    use splice_json::parse;
+    use splice_model::{Clip, ClipData, ClipTiming};
+
+    #[test]
+    fn show_seeks_to_range_start_and_applies_tab_or_fit_without_seeking() {
+        let dir = TestDirectory::new("show-controls");
+        let mut store = Store::create(&dir.0.join("view.splice"), &Project::default()).unwrap();
+        let ops = parse(r#"[{"cmd":"title.add","at":0,"length":60,"text":"Title"}]"#).unwrap();
+        store
+            .apply(ops.as_array().unwrap(), &Default::default())
+            .unwrap();
+        let mut viewer = Viewer::new(store, None);
+        let cases = [
+            (
+                r#"{"range":{"from":5,"to":25}}"#,
+                (Some(5), Some([5, 25]), None, None),
+            ),
+            (
+                r#"{"view":"edit"}"#,
+                (None, None, Some(ViewTab::Editor), None),
+            ),
+            (
+                r#"{"view":"editor"}"#,
+                (None, None, Some(ViewTab::Editor), None),
+            ),
+            (
+                r#"{"view":"agent"}"#,
+                (None, None, Some(ViewTab::Agent), None),
+            ),
+            (
+                r#"{"view":"spec"}"#,
+                (None, None, Some(ViewTab::Spec), None),
+            ),
+            (
+                r#"{"viewer":{"zoom":"fit"}}"#,
+                (None, None, None, Some(ViewerZoom::Fit)),
+            ),
+        ];
+        let selection = parse(r#"["lan_spine"]"#).unwrap();
+        for (args, expected) in cases {
+            let result = viewer
+                .show(&parse(args).unwrap(), 15, &mut |_, command| {
+                    let ViewCommand::Show {
+                        at,
+                        range,
+                        view,
+                        zoom,
+                        select,
+                        expand,
+                    } = command
+                    else {
+                        panic!("expected the show command");
+                    };
+                    assert_eq!((at, range, view, zoom), expected, "{args}");
+                    assert!(select.is_none() && expand.is_none());
+                    Ok(selection.clone())
+                })
+                .unwrap();
+            assert_eq!(result.field("applied"), Some(&Json::Bool(true)));
+            assert_eq!(
+                result.field("playhead"),
+                Some(&frame(expected.0.unwrap_or(15)))
+            );
+            assert_eq!(result.field("selection"), Some(&selection));
+            assert_eq!(result.field("revision"), Some(&rev(1)));
+        }
+        viewer.close().unwrap();
+    }
+
+    #[test]
+    fn show_rejects_invalid_view_controls_before_dispatch() {
+        let dir = TestDirectory::new("show-invalid-controls");
+        let store = Store::create(&dir.0.join("view.splice"), &Project::default()).unwrap();
+        let mut viewer = Viewer::new(store, None);
+        for field in [
+            r#""range":[]"#,
+            r#""range":{"from":1}"#,
+            r#""range":{"to":2}"#,
+            r#""range":{"from":2,"to":1}"#,
+            r#""range":{"from":1,"to":1}"#,
+            r#""range":{"from":-1,"to":2}"#,
+            r#""range":{"from":1,"to":2.5}"#,
+            r#""range":{"from":1,"to":2147483648}"#,
+            r#""view":"timeline""#,
+            r#""view":1"#,
+            r#""viewer":[]"#,
+            r#""viewer":{}"#,
+            r#""viewer":{"zoom":"1"}"#,
+            r#""viewer":{"zoom":0}"#,
+            r#""viewer":{"zoom":-1}"#,
+            r#""viewer":{"zoom":1e50}"#,
+            r#""viewer":{"zoom":1e-60}"#,
+        ] {
+            let args = parse(&format!(r#"{{"at":5,"select":["lan_spine"],{field}}}"#)).unwrap();
+            let error = viewer
+                .show(&args, 0, &mut |_, _| panic!("dispatched invalid {field}"))
+                .unwrap_err();
+            assert_eq!(error.code, "BAD_ARGS", "{field}");
+        }
+        viewer.close().unwrap();
+    }
+
+    #[test]
+    fn show_validates_selection_ids_and_expands_only_recorded_components() {
+        let mut project = Project::default();
+        let id = ClipId::from_serial(1);
+        let slot = project
+            .clips
+            .insert(Clip {
+                id,
+                timing: ClipTiming {
+                    start: 0,
+                    length: 100,
+                    source: 0,
+                    speed: 1.0,
+                },
+                data: ClipData::default(),
+            })
+            .unwrap();
+        let ids = splice_json::parse(r#"["lan_spine","clp_1","clp_1"]"#).unwrap();
+        assert_eq!(
+            parse_selection(&project, &ids).unwrap(),
+            [
+                ViewSelection::Lane(LaneId::SPINE),
+                ViewSelection::Timeline(TimelineId::Clip(id)),
+            ]
+        );
+        let malformed = splice_json::parse(r#"["not-an-id"]"#).unwrap();
+        assert_eq!(
+            parse_selection(&project, &malformed).unwrap_err().code,
+            "BAD_ARGS"
+        );
+        let missing = splice_json::parse(r#"["clp_2"]"#).unwrap();
+        assert_eq!(
+            parse_selection(&project, &missing).unwrap_err().code,
+            "NOT_FOUND"
+        );
+        assert_eq!(
+            expandable_take(&project, "clp_1").unwrap_err().code,
+            "WRONG_KIND"
+        );
+        project.clips.data_mut(slot).unwrap().enabled.mic = Some(false);
+        assert_eq!(expandable_take(&project, "clp_1").unwrap(), id);
     }
 }

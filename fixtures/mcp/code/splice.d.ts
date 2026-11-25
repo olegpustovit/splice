@@ -142,7 +142,7 @@ declare namespace Splice {
     /** Add as Overlay (edit, 0.1). */
     interface OverlayAdd extends Base {
       cmd: "overlay.add";
-      kind: "title" | "motion" | "media";
+      kind: "title" | "motion" | "media" | "zoom";
       /** med_… when kind=media */
       media?: string;
       /** frame or anchor form */
@@ -153,9 +153,9 @@ declare namespace Splice {
       length?: number;
       /** title text */
       text?: string;
-      /** scale */
+      /** number · @default 1 ? start scale for motion */
       from?: number;
-      /** scale */
+      /** number · @default 1.32 ? end scale for motion */
       to?: number;
       /** {x,y} canvas point (0–1) a motion holds still */
       focus?: { x: number; y: number };
@@ -210,6 +210,30 @@ declare namespace Splice {
       out?: { preset: "fade" | "sink" | "shrink" | "slide"; duration?: number; intensity?: number };
       /** replaces the loop keys */
       loop?: { preset: "pulse" | "float" | "wiggle" | "shake"; period?: number; intensity?: number };
+    }
+    /** Add Scale Animation (edit, 0.2). */
+    interface MotionAdd extends Base {
+      cmd: "motion.add";
+      /** frame or anchor form */
+      at: At;
+      /** @default 120 ? at least 3 */
+      length?: number;
+      /** number · @default 1 ? scale at the first active frame */
+      from?: number;
+      /** number · @default 1.32 ? scale at the last active frame */
+      to?: number;
+      /** lan_? camera lane */
+      lane?: string;
+    }
+    /** Edit Scale Keyframes (edit, 0.2). */
+    interface MotionSet extends Base {
+      cmd: "motion.set";
+      /** ovl_? motion */
+      item: string;
+      /** 0.5?2 ? start scale, clamped */
+      from?: number;
+      /** 0.5?2 ? end scale, clamped */
+      to?: number;
     }
     /** Add Zoom (edit, 0.2). */
     interface ZoomAdd extends Base {
@@ -1548,6 +1572,8 @@ declare namespace Splice {
     | op.OverlayAdd
     | op.TitleAdd
     | op.TitleSet
+    | op.MotionAdd
+    | op.MotionSet
     | op.ZoomAdd
     | op.ZoomSet
     | op.ItemAnchor
@@ -1674,6 +1700,11 @@ declare const splice: {
       add(args: Omit<Splice.op.TitleAdd, "cmd">): Splice.op.TitleAdd;
       set(args: Omit<Splice.op.TitleSet, "cmd">): Splice.op.TitleSet;
     };
+    motion: {
+      add(args: Omit<Splice.op.MotionAdd, "cmd">): Splice.op.MotionAdd;
+      set(args: Omit<Splice.op.MotionSet, "cmd">): Splice.op.MotionSet;
+      preset(args: Omit<Splice.op.MotionPreset, "cmd">): Splice.op.MotionPreset;
+    };
     zoom: {
       add(args: Omit<Splice.op.ZoomAdd, "cmd">): Splice.op.ZoomAdd;
       set(args: Omit<Splice.op.ZoomSet, "cmd">): Splice.op.ZoomSet;
@@ -1776,9 +1807,6 @@ declare const splice: {
     take: {
       pointer(args: Omit<Splice.op.TakePointer, "cmd">): Splice.op.TakePointer;
     };
-    motion: {
-      preset(args: Omit<Splice.op.MotionPreset, "cmd">): Splice.op.MotionPreset;
-    };
     html: {
       add(args: Omit<Splice.op.HtmlAdd, "cmd">): Splice.op.HtmlAdd;
     };
@@ -1838,6 +1866,8 @@ declare const splice: {
   session: {
     /** Start an agent editing session and get its checkpoint revision and session ID. */
     start(args?: { projectId?: string; agent?: string; }): { sessionId: string; checkpoint: Splice.Revision; revision: Splice.Revision; access?: string; resumed?: boolean; };
+    /** End an agent editing session. Its committed batches remain in history. */
+    end(args: { projectId: string; sessionId: string; }): { sessionId: string; open: boolean; revision: Splice.Revision; };
   };
   edit: {
     /** Apply one atomic batch of registry commands. Use dryRun to preview and idempotencyKey for a safe retry. The result carries the lints the batch introduced (lintsStanding counts the ones already there; warnings with a fix and a suggested ops batch: text outside the safe zone or over the window, long static stretches) and pacing stats; profile (reel, demo, tutorial) adds pacing rules: hook, still stretches, average shot length, tiny shots, duration. */
@@ -1846,8 +1876,8 @@ declare const splice: {
   history: {
     /** List revision labels, sources and affected IDs. Filter by session to inspect its batch history. */
     list(args?: { projectId?: string; sessionId?: string; limit?: number; cursor?: string; }): { sessionId?: string; revision: Splice.Revision; batches: unknown[]; open?: boolean; checkpoint?: Splice.Revision; humanEditsSince?: number; nextCursor?: string | null; };
-    /** Create an undo revision for the session's last edit, the whole session, or an exact earlier revision. */
-    undo(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; scope: "last" | "session" | "to"; revision?: Splice.Revision; dryRun?: boolean; }): { revision: Splice.Revision; skipped?: unknown[]; replayed?: number; reverted?: unknown[]; restored?: string | null; };
+    /** Create an undo revision for the session's last edit or the whole session. Use scope:batch with sessionId and revision to revert a single live agent batch, or scope:to with revision to restore that state. */
+    undo(args: { projectId?: string; sessionId?: string; ifRevision: Splice.Revision; scope: "last" | "batch" | "session" | "to"; revision?: Splice.Revision; dryRun?: boolean; }): { revision: Splice.Revision; skipped?: unknown[]; replayed?: number; reverted?: unknown[]; restored?: string | null; };
   };
   ui: {
     /** Set playhead, selection, range or zoom in an open viewer. Headless calls return applied:false. */

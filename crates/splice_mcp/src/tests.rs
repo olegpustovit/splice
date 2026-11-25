@@ -96,7 +96,7 @@ fn tools_list_golden() {
     let message = splice_json::parse(response).unwrap();
     let result = message.field("result").unwrap();
     let tools = result.field("tools").unwrap().as_array().unwrap();
-    assert_eq!(tools.len(), 20);
+    assert_eq!(tools.len(), 21);
     for tool in tools {
         for field in ["inputSchema", "outputSchema"] {
             assert_eq!(
@@ -151,6 +151,12 @@ fn tool_transcripts_run_against_live_store() {
         );
     }
 
+    let template = test_runs.0.join("template.splice");
+    copy_fixture(&fixtures.join("../projects/sample.splice"), &template).unwrap();
+    let take = template.join("takes/med_screen");
+    fs::create_dir_all(&take).unwrap();
+    fs::write(take.join("events.json"), r#"{"events":[{"t":0.2,"k":"move","x":0.25,"y":0.5},{"t":0.4,"k":"down","b":0},{"t":0.5,"k":"key","ch":"private","keyCode":4}]}"#).unwrap();
+
     for case in cases {
         let name = case.file_stem().and_then(|stem| stem.to_str()).unwrap();
         // These cases exercise explicit protocol handshakes and reconnect faults.
@@ -169,10 +175,7 @@ fn tool_transcripts_run_against_live_store() {
         let directory = test_runs.0.join(name);
         let sample = directory.join("sample.splice");
         let new = directory.join("new.splice");
-        copy_fixture(&fixtures.join("../projects/sample.splice"), &sample).unwrap();
-        let take = sample.join("takes/med_screen");
-        fs::create_dir_all(&take).unwrap();
-        fs::write(take.join("events.json"), r#"{"events":[{"t":0.2,"k":"move","x":0.25,"y":0.5},{"t":0.4,"k":"down","b":0},{"t":0.5,"k":"key","ch":"private","keyCode":4}]}"#).unwrap();
+        copy_fixture(&template, &sample).unwrap();
 
         let seed = case.with_extension("splice");
         let project = directory.join("repro.splice");
@@ -195,6 +198,24 @@ fn tool_transcripts_run_against_live_store() {
             let reopened = splice_core::history::Store::open(&sample).unwrap();
             assert_eq!(reopened.project().rev, 1);
             assert_eq!(reopened.records().len(), 1);
+        }
+        if name == "session.end" {
+            use splice_core::history::{Scope, Store, WriteOptions};
+
+            let mut reopened = Store::open(&sample).unwrap();
+            let session = &reopened.sessions()[0];
+            assert!(!session.open);
+            let undo = reopened
+                .undo(
+                    Scope::Session,
+                    &WriteOptions {
+                        session: Some(session.id),
+                        ..WriteOptions::default()
+                    },
+                )
+                .unwrap();
+            assert_eq!(undo.reverted, [1]);
+            assert_eq!(undo.revision, 2);
         }
         if name == "record.start" {
             assert!(!new.exists(), "capture dry run created a project");
@@ -1319,7 +1340,7 @@ fn m11_caption_sidecars_follow_the_export_range_and_overwrite() {
     let root = TestDirectory::new("sidecar");
     let sample = root.0.join("sample.splice");
     copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
-    let store = splice_core::history::Store::open(&sample).unwrap();
+    let mut store = splice_core::history::Store::open(&sample).unwrap();
     let p = store.project();
     let all = super::media::captions(p, &object(vec![]), "json", None).unwrap();
     let all = all.field("cues").unwrap().as_array().unwrap();
@@ -1341,6 +1362,23 @@ fn m11_caption_sidecars_follow_the_export_range_and_overwrite() {
     let srt = super::media::captions(p, &object(vec![]), "srt", Some(window)).unwrap();
     let srt = srt.field("text").and_then(Json::as_str).unwrap();
     assert!(srt.starts_with("1\n00:00:00,000 --> "), "{srt}");
+    assert!(srt.contains("a frame 🎯 study"));
+    let hide = splice_json::parse(
+        r#"{"cmd":"caption.set","item":"ovl_cap2","words":{"w:screen:5":{"text":"shot","hidden":true}}}"#,
+    )
+    .unwrap();
+    super::history::apply_batch(&mut store, &[hide], &Default::default()).unwrap();
+    let args = object(vec![]);
+    let hidden = super::media::captions(store.project(), &args, "json", Some(window)).unwrap();
+    let cue = &hidden.field("cues").unwrap().as_array().unwrap()[0];
+    let word = &cue.field("words").unwrap().as_array().unwrap()[1];
+    assert_eq!(cue.field("text").and_then(Json::as_str), Some("a study"));
+    assert_eq!(word.field("text").and_then(Json::as_str), Some("shot"));
+    assert_eq!(word.field("hidden"), Some(&Json::Bool(true)));
+    assert_eq!(word.field("emoji").and_then(Json::as_str), Some("🎯"));
+    let srt = super::media::captions(store.project(), &args, "srt", Some(window)).unwrap();
+    let srt = srt.field("text").and_then(Json::as_str).unwrap();
+    assert!(srt.contains("\na study\n") && !srt.contains("shot") && !srt.contains('🎯'));
     // An existing sidecar is replaced only with overwrite.
     let path = root.0.join("out.srt");
     super::export_file::write_sidecar(&path, "first", false).unwrap();
@@ -1581,6 +1619,9 @@ fn capability_sweep_applies_every_row_and_restores_the_start() {
                 r#"[{"cmd":"template.add","name":"lower-third","at":150,"ref":"lower"}]"#
             }
             "item.slide" => r#"[{"cmd":"item.trim","item":"clp_end","edge":"in","delta":12}]"#,
+            "motion.set" => {
+                r#"[{"cmd":"motion.add","at":180,"length":150,"from":1,"to":1.16,"ref":"motion"}]"#
+            }
             "caption.set" | "caption.split" | "caption.merge" => "[]",
             _ => "[]",
         }
@@ -2422,4 +2463,73 @@ fn an_output_path_keeps_the_default_project() {
         .find(|(name, _)| name == "export.start")
         .unwrap();
     assert_eq!(export.1, Some(text("prj_1")), "{seen:?}");
+}
+
+#[test]
+fn v13_scale_motion_is_editable_inspectable_and_replayable_over_mcp() {
+    use splice_core::history::Store;
+    use splice_model::{ItemKind, ScaleMotion};
+
+    let root = TestDirectory::new("scale-motion-mcp");
+    let sample = root.0.join("sample.splice");
+    copy_fixture(&mcp_fixtures().join("../projects/sample.splice"), &sample).unwrap();
+    let mut store = Store::open(&sample).unwrap();
+    let session = store.start_session("scale-motion", 1).unwrap().id;
+    let request = |revision, ops: &str| {
+        splice_json::parse(&format!(
+            r#"{{"sessionId":"{session}","ifRevision":"r{revision}","ops":{ops}}}"#
+        ))
+        .unwrap()
+    };
+    history::apply(
+        &mut store,
+        &request(
+            0,
+            r#"[{"cmd":"motion.add","at":180,"length":150,"from":1,"to":1.16,"ref":"$motion"},
+                {"cmd":"motion.set","item":"$motion","from":1}]"#,
+        ),
+    )
+    .unwrap();
+    let id = store
+        .project()
+        .items
+        .order()
+        .iter()
+        .find_map(|&slot| {
+            let items = &store.project().items;
+            matches!(items.data(slot).unwrap().kind, ItemKind::Motion(_))
+                .then(|| items.id(slot).unwrap())
+        })
+        .unwrap();
+    let inspect = splice_json::parse(&format!(r#"{{"ids":["{id}"]}}"#)).unwrap();
+    let assert_scales = |store: &Store, from, to| {
+        let p = store.project();
+        assert_eq!(
+            p.items.data(p.items.find(id).unwrap()).unwrap().kind,
+            ItemKind::Motion(ScaleMotion { from, to })
+        );
+        let result = timeline::inspect(p, &inspect).unwrap();
+        let item = &result.field("items").unwrap().as_array().unwrap()[0];
+        assert_eq!(item.field("kind").and_then(Json::as_str), Some("motion"));
+        let params = item.field("params").unwrap();
+        assert_eq!(params.field("from").and_then(Json::as_f64), Some(from));
+        assert_eq!(params.field("to").and_then(Json::as_f64), Some(to));
+    };
+    assert_scales(&store, 1.0, 1.16);
+    for (revision, args, from, to) in [
+        (1, r#""from":1.08"#, 1.08, 1.16),
+        (2, r#""to":1.24"#, 1.08, 1.24),
+        (3, r#""from":1.24,"to":1.08"#, 1.24, 1.08),
+    ] {
+        let ops = format!(r#"[{{"cmd":"motion.set","item":"{id}",{args}}}]"#);
+        history::apply(&mut store, &request(revision, &ops)).unwrap();
+        assert_scales(&store, from, to);
+    }
+    drop(store);
+    let replayed = Store::open(&sample).unwrap();
+    assert_eq!(replayed.project().rev, 4);
+    replayed.verify().unwrap();
+    assert_scales(&replayed, 1.24, 1.08);
+    replayed.close().unwrap();
+    assert_scales(&Store::open(&sample).unwrap(), 1.24, 1.08);
 }

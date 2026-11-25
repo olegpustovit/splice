@@ -276,25 +276,39 @@ bool splice_free_space(const char *path, uint64_t *bytes) {
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-// The first video frame of a file as straight RGBA (alpha kept), for export checks.
-uint8_t *splice_media_first_frame(const char *path, uint32_t *width, uint32_t *height, char **error) {
+// The video frame at asset time as RGBA, with an optional display transform.
+uint8_t *splice_media_frame_at(const char *path, double seconds, bool oriented, uint32_t *width, uint32_t *height, char **error) {
     @autoreleasepool {
         NSURL *url = [NSURL fileURLWithFileSystemRepresentation:path isDirectory:NO relativeToURL:nil];
         AVAssetImageGenerator *generator = [AVAssetImageGenerator assetImageGeneratorWithAsset:[AVURLAsset assetWithURL:url]];
+        generator.appliesPreferredTrackTransform = oriented;
         generator.requestedTimeToleranceBefore = kCMTimeZero;
         generator.requestedTimeToleranceAfter = kCMTimeZero;
         NSError *failure = nil;
-        CGImageRef image = [generator copyCGImageAtTime:kCMTimeZero actualTime:NULL error:&failure];
+        CGImageRef image = [generator copyCGImageAtTime:CMTimeMakeWithSeconds(seconds, 600000) actualTime:NULL error:&failure];
         if (image == NULL) {
             splice_set_error(error, failure.localizedDescription.UTF8String ?: "No frame.");
             return NULL;
         }
         size_t w = CGImageGetWidth(image), h = CGImageGetHeight(image);
+        if (w == 0 || h == 0 || w > UINT32_MAX || h > UINT32_MAX || w > PTRDIFF_MAX / h / 4) {
+            CGImageRelease(image);
+            splice_set_error(error, "Source frame dimensions are invalid.");
+            return NULL;
+        }
         uint8_t *pixels = calloc(w * h, 4);
         CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-        CGContextRef context = CGBitmapContextCreate(pixels, w, h, 8, w * 4, space,
-                                                     kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
-        CGColorSpaceRelease(space);
+        CGContextRef context = pixels != NULL && space != NULL
+            ? CGBitmapContextCreate(pixels, w, h, 8, w * 4, space,
+                                    kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast)
+            : NULL;
+        if (space != NULL) CGColorSpaceRelease(space);
+        if (context == NULL) {
+            free(pixels);
+            CGImageRelease(image);
+            splice_set_error(error, "Could not allocate source frame pixels.");
+            return NULL;
+        }
         CGContextDrawImage(context, CGRectMake(0, 0, w, h), image);
         CGContextRelease(context);
         CGImageRelease(image);

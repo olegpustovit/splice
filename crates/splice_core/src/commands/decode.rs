@@ -1,6 +1,7 @@
 use super::{CommandError as Error, DecodeScratch, Json, args::*, op::*};
 use splice_model::{
-    CameraMode, Duck, Ease, EffectParam, Fit, Frame, Placement, Rect, ShapeKind, Spring, Zoom,
+    CameraMode, Duck, Ease, EffectParam, Fit, Frame, Placement, Rect, ScaleMotion, ShapeKind,
+    Spring, Zoom,
 };
 
 type DecodedOp = Result<Op, Error>;
@@ -212,6 +213,7 @@ pub(super) fn overlay_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
     let content = match a.string("kind")? {
         "title" => OverlayContent::Title(a.opt_string("text")?),
         "zoom" => OverlayContent::Zoom(zoom_args(a)?),
+        "motion" => OverlayContent::Motion(motion_args(a)?),
         "media" => OverlayContent::Media {
             media: a.target("media")?,
             source: a.opt_int("source")?.unwrap_or(0),
@@ -231,14 +233,18 @@ pub(super) fn overlay_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
                 .transpose()?
                 .unwrap_or(Fit::Fill),
         },
-        _ => return Err(Error::bad("kind", "title, zoom or media")),
+        _ => return Err(Error::bad("kind", "title, motion, zoom or media")),
+    };
+    let length = match content {
+        OverlayContent::Motion(_) => Some(motion_length(a)?),
+        _ => a.opt_int("length")?,
     };
     Ok(Op::OverlayAdd {
         content,
         at: a.opt_frame("at")?,
         anchor: a.field("anchor").map(anchor).transpose()?,
         lane: a.opt_target("lane")?,
-        length: a.opt_int("length")?,
+        length,
     })
 }
 
@@ -299,6 +305,49 @@ pub(super) fn title_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
         item: a.target("item")?,
         text,
         look,
+    })
+}
+
+fn motion_args(a: &Json) -> Result<ScaleMotion, Error> {
+    let default = ScaleMotion::default();
+    let scale = |key, default| match a.field(key) {
+        None | Some(Json::Null) => Ok(default),
+        Some(_) => a.number(key),
+    };
+    Ok(ScaleMotion {
+        from: scale("from", default.from)?,
+        to: scale("to", default.to)?,
+    })
+}
+
+fn motion_length(a: &Json) -> Result<Frame, Error> {
+    let length = if a.field("length") == Some(&Json::Null) {
+        None
+    } else {
+        a.opt_int("length")?
+    };
+    Ok(length.unwrap_or(ScaleMotion::LENGTH))
+}
+
+pub(super) fn motion_add(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    Ok(Op::MotionAdd {
+        at: a.frame("at")?,
+        length: motion_length(a)?,
+        motion: motion_args(a)?,
+        lane: a.opt_target("lane")?,
+    })
+}
+
+pub(super) fn motion_set(a: &Json, _scratch: &mut DecodeScratch) -> DecodedOp {
+    let scale = |key| match a.field(key) {
+        None => Ok(None),
+        Some(Json::Null) => Ok(Some(0.0)),
+        Some(_) => a.number(key).map(Some),
+    };
+    Ok(Op::MotionSet {
+        item: a.target("item")?,
+        from: scale("from")?,
+        to: scale("to")?,
     })
 }
 

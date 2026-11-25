@@ -204,7 +204,9 @@ mod native {
             .unwrap();
         let composition = Composition::prepare(&project, &fixture()).unwrap();
         assert_eq!(composition.end(), 9);
-        assert!(brightness(pixel(&composition, 8, [48, 32])) <= 12);
+        assert!(brightness(pixel(&composition, 8, [4, 32])) <= 12);
+        let plate = brightness(pixel(&composition, 8, [160, 23]));
+        assert!((21..=39).contains(&plate), "title plate brightness {plate}");
         let mut frame = composition.evaluator().buffer();
         composition.evaluator().frame(0, &mut frame);
         assert_eq!(frame.audio[0].gain, 0.5);

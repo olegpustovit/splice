@@ -1,4 +1,6 @@
 #include "platform.h"
+#include <time.h>
+#include "caption_layout.h"
 
 #import <AppKit/AppKit.h>
 #import <Accelerate/Accelerate.h>
@@ -75,6 +77,17 @@ NSDictionary *splice_video_color(void) {
 @property(nonatomic, strong) NSMutableArray *slots;  // three NSArrays of retained source buffers
 @property(nonatomic, strong) AVPlayer *player;
 @property(nonatomic, strong) AVPlayerItemVideoOutput *output;
+@property(nonatomic) int8_t requestedRate;
+@property(nonatomic) BOOL ratePending;
+@property(nonatomic) int8_t playbackDirection;
+@property(nonatomic) BOOL seeking;
+@property(nonatomic) uint64_t seekGeneration;
+@property(nonatomic) BOOL shuttling;
+@property(nonatomic) BOOL awaitingShuttle;
+@property(nonatomic) int32_t shuttleFrame;
+@property(nonatomic) int32_t shuttleOrigin;
+@property(nonatomic) int32_t lastFrame;
+@property(nonatomic) uint64_t shuttleStart;
 @end
 
 @implementation SpliceAVPlayer
@@ -114,13 +127,13 @@ static void rgb(uint32_t value, CGFloat out[4]) {
     out[3] = 1.0;
 }
 
-static CGImageRef still_image(NSURL *file) {
+static CGImageRef still_image(NSURL *file, uint32_t max_edge) {
     CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)file, NULL);
     if (source == NULL) return NULL;
     NSDictionary *options = @{
         (__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
         (__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES,
-        (__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @8192,
+        (__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @(max_edge),
     };
     CGImageRef image = CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)options);
     CFRelease(source);
@@ -335,7 +348,7 @@ static NSURL *still_movie(SpliceAVAssembly *assembly, NSURL *file, const uint32_
         }
         if (error != NULL && *error != NULL) return nil;
     }
-    CGImageRef image = file != nil ? still_image(file) : NULL;
+    CGImageRef image = file != nil ? still_image(file, 8192) : NULL;
     if (file != nil && image == NULL) {
         fail(error, nil, "ImageIO could not read a still image.");
         return nil;
@@ -667,15 +680,15 @@ static NSDictionary *buffer_attributes(void) {
 }
 @end
 
-// Takes the pinned sources for `frame`, dropping it and everything before it.
-static NSArray *take_frame(SpliceAVAssembly *assembly, int32_t frame) {
+// Takes the pinned sources for the frame, dropping frames already passed in this direction.
+static NSArray *take_frame(SpliceAVAssembly *assembly, int32_t frame, BOOL reverse) {
     @synchronized (assembly) {
         NSArray *found = nil;
         NSMutableIndexSet *done = [NSMutableIndexSet indexSet];
         for (NSUInteger index = 0; index < assembly.frames.count; index++) {
             int32_t at = [assembly.frames[index][0] intValue];
             if (at == frame) found = assembly.frames[index];
-            if (at <= frame) [done addIndex:index];
+            if (reverse ? at >= frame : at <= frame) [done addIndex:index];
         }
         [assembly.frames removeObjectsAtIndexes:done];
         return found;
@@ -774,6 +787,24 @@ bool splice_av_range(void *raw, int32_t from, int32_t to, const int32_t *tracks,
 }
 
 static CTFontRef styled_font(const SpliceTextStyle *style, double size) {
+    if (style->bundled_length != 0 && style->bundled_face < 4) {
+        static dispatch_once_t loaded[4];
+        static CGFontRef faces[4];
+        size_t index = style->bundled_face;
+        dispatch_once(&loaded[index], ^{
+            CFDataRef bytes = CFDataCreateWithBytesNoCopy(NULL, style->bundled_font,
+                (CFIndex)style->bundled_length, kCFAllocatorNull);
+            if (bytes == NULL) return;
+            CGDataProviderRef provider = CGDataProviderCreateWithCFData(bytes);
+            CFRelease(bytes);
+            if (provider == NULL) return;
+            faces[index] = CGFontCreateWithDataProvider(provider);
+            CGDataProviderRelease(provider);
+        });
+        if (faces[index] != NULL) {
+            return CTFontCreateWithGraphicsFont(faces[index], size, NULL, NULL);
+        }
+    }
     NSString *name = style->font == NULL ? @"" : [NSString stringWithUTF8String:style->font];
     static const CGFloat weights[8] = {0.0, 0.23, 0.3, 0.4, 0.56, 0.62, -0.4, -0.6};
     CGFloat weight = weights[MIN(style->weight, 7u)];
@@ -798,7 +829,7 @@ static CTFontRef styled_font(const SpliceTextStyle *style, double size) {
 static NSAttributedString *styled_text(NSString *text, CTFontRef font, CTParagraphStyleRef paragraph,
                                        const SpliceTextStyle *style, CGColorRef color, CGColorRef stroke,
                                        CGColorRef clear, BOOL outline, NSRange visible, NSRange active,
-                                       CGColorRef active_color) {
+                                       CGColorRef active_color, const SpliceCaptionSpan *spans, size_t span_count) {
     NSMutableDictionary *attributes = [@{
         (__bridge NSString *)kCTFontAttributeName: (__bridge id)font,
         (__bridge NSString *)kCTParagraphStyleAttributeName: (__bridge id)paragraph,
@@ -815,6 +846,16 @@ static NSAttributedString *styled_text(NSString *text, CTFontRef font, CTParagra
         [styled addAttribute:(__bridge NSString *)kCTForegroundColorAttributeName value:(__bridge id)active_color
                        range:active];
     }
+    for (size_t i = 0; i < span_count; i++) {
+        SpliceCaptionSpan span = spans[i];
+        if ((span.scale == 1.0 && !span.highlight) || span.from >= span.to || span.to > text.length || !isfinite(span.scale) || span.scale <= 0) continue;
+        NSRange range = NSMakeRange(span.from, span.to - span.from);
+        CTFontRef scaled = CTFontCreateCopyWithAttributes(font, CTFontGetSize(font) * span.scale, NULL, NULL);
+        [styled addAttribute:(__bridge NSString *)kCTFontAttributeName value:(__bridge id)scaled range:range];
+        CFRelease(scaled);
+        if (!outline) [styled addAttribute:(__bridge NSString *)kCTForegroundColorAttributeName
+                                    value:(__bridge id)active_color range:range];
+    }
     if (visible.location != NSNotFound) {
         NSDictionary *hidden = @{(__bridge NSString *)kCTForegroundColorAttributeName: (__bridge id)clear,
                                  (__bridge NSString *)kCTStrokeColorAttributeName: (__bridge id)clear};
@@ -826,7 +867,8 @@ static NSAttributedString *styled_text(NSString *text, CTFontRef font, CTParagra
 }
 
 static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, const SpliceTextStyle *style,
-                              NSRange visible, NSRange active, uint32_t active_rgb) {
+                              NSRange visible, NSRange active, uint32_t active_rgb,
+                              const SpliceCaptionSpan *spans, size_t span_count, bool center_lines) {
     size_t width = (size_t)ceil(size.width), height = (size_t)ceil(size.height);
     CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, space,
@@ -860,7 +902,7 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
     if (multiple < 1) room.height = MAX(room.height - (1 - multiple) * CTFontGetAscent(font), 1);
     for (int attempt = 0; attempt < 8; attempt++) {
         NSAttributedString *probe = styled_text(text, font, paragraph, style, color, stroke, clear, NO,
-                                                NSMakeRange(NSNotFound, 0), NSMakeRange(NSNotFound, 0), color);
+                                                NSMakeRange(NSNotFound, 0), NSMakeRange(NSNotFound, 0), color, spans, span_count);
         CTFramesetterRef measure = CTFramesetterCreateWithAttributedString((__bridge CFAttributedStringRef)probe);
         // Without wrapping, each line is measured at its natural width and must fit the box.
         CGFloat across = style->wrap ? room.width : CGFLOAT_MAX;
@@ -874,7 +916,7 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
         font = styled_font(style, font_size);
     }
     NSAttributedString *fill = styled_text(text, font, paragraph, style, color, stroke, clear, NO, visible, active,
-                                           active_color);
+                                           active_color, spans, span_count);
     CTFramesetterRef setter = CTFramesetterCreateWithAttributedString((__bridge CFAttributedStringRef)fill);
     // Units of an animated title skip the box; an empty visible range draws the box alone under them.
     if (style->boxed && (visible.location == NSNotFound || visible.length == 0)) {
@@ -897,11 +939,16 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
         CGContextSetShadowWithColor(context, CGSizeMake(0, -font_size * 0.05), font_size * 0.15, shade);
         CGColorRelease(shade);
     }
+    if (center_lines) {
+        CGSize fit = CTFramesetterSuggestFrameSizeWithConstraints(setter, CFRangeMake(0, 0), NULL,
+                                                                  CGSizeMake(room.width, CGFLOAT_MAX), NULL);
+        room.height = (room.height + MIN(room.height, ceil(fit.height))) / 2;
+    }
     CGPathRef path = CGPathCreateWithRect(CGRectMake(pad + inset, inset, room.width, room.height), NULL);
     if (style->stroke_width > 0) {
         // Stroke under fill (H8): the outline pass casts the shadow, the fill draws on top.
         NSAttributedString *outline = styled_text(text, font, paragraph, style, color, stroke, clear, YES, visible,
-                                                  NSMakeRange(NSNotFound, 0), active_color);
+                                                  NSMakeRange(NSNotFound, 0), active_color, spans, span_count);
         CTFramesetterRef outliner = CTFramesetterCreateWithAttributedString((__bridge CFAttributedStringRef)outline);
         CTFrameRef under = CTFramesetterCreateFrame(outliner, CFRangeMake(0, 0), path, NULL);
         CTFrameDraw(under, context);
@@ -925,15 +972,216 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
     return image;
 }
 
+static CTLineRef caption_line(NSString *token, CTFontRef font, CGColorRef fill, CGColorRef stroke,
+                              double stroke_width) {
+    NSMutableDictionary *attributes = [@{
+        (__bridge NSString *)kCTFontAttributeName: (__bridge id)font,
+        (__bridge NSString *)kCTForegroundColorAttributeName: (__bridge id)fill,
+    } mutableCopy];
+    if (stroke_width > 0) {
+        attributes[(__bridge NSString *)kCTStrokeWidthAttributeName] = @(stroke_width * 200.0);
+        attributes[(__bridge NSString *)kCTStrokeColorAttributeName] = (__bridge id)stroke;
+    }
+    NSAttributedString *run = [[NSAttributedString alloc] initWithString:token attributes:attributes];
+    return CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)run);
+}
+
+static CGRect caption_plate(SpliceCaptionWord word, SpliceCaptionSpan span, double size, bool clean) {
+    if (clean && word.row_width > 0) {
+        return CGRectMake(word.slot_x - size * .32, word.y - size * .6, word.row_width + size * .64, size * 1.2);
+    }
+    if (span.highlight == 2) {
+        return CGRectMake(word.slot_x - size * .14, word.y - size * 1.2 * .47,
+                          word.advance * word.reserve + size * .28, size * 1.2 * .94);
+    }
+    return CGRectNull;
+}
+
+static uint8_t *positioned_caption(NSString *text, uint32_t width, uint32_t height, double font_size,
+                                  const SpliceTextStyle *style, uint32_t active_color,
+                                  const SpliceCaptionSpan *spans, size_t count, const double box[5],
+                                  double font_scale, bool clean, uint32_t rect[4]) {
+    if (count == 0 || !isfinite(font_scale) || font_scale <= 0 || font_scale > 1) return NULL;
+    for (size_t i = 0; i < 5; i++) if (!isfinite(box[i])) return NULL;
+    if (box[4] <= 0) return NULL;
+    for (size_t i = 0; i < count; i++) {
+        if (spans[i].from >= spans[i].to || spans[i].to > text.length ||
+            spans[i].visible_to < spans[i].from || spans[i].visible_to > spans[i].to ||
+            !isfinite(spans[i].scale) || spans[i].scale <= 0 || spans[i].scale > 2.0 ||
+            !isfinite(spans[i].reserve) || spans[i].reserve <= 0 || spans[i].reserve > 2.0 ||
+            !isfinite(spans[i].opacity) || spans[i].opacity < 0 || spans[i].opacity > 1 ||
+            spans[i].highlight > 2) return NULL;
+    }
+
+    // Caption words and their CoreText lines are temporary preparation data.
+    SpliceCaptionWord *words = calloc(count, sizeof(*words));
+    CTLineRef *lines = calloc(count, sizeof(*lines));
+    const double glyph_size = font_size * font_scale;
+    CTFontRef font = styled_font(style, glyph_size);
+    if (words == NULL || lines == NULL || font == NULL) {
+        free(words);
+        free(lines);
+        if (font != NULL) CFRelease(font);
+        return NULL;
+    }
+    CGFloat c[4];
+    rgb(style->color, c);
+    CGColorRef fill = CGColorCreateGenericRGB(c[0], c[1], c[2], 1);
+    rgb(active_color, c);
+    CGColorRef highlight = CGColorCreateGenericRGB(c[0], c[1], c[2], 1);
+    rgb(style->stroke, c);
+    CGColorRef stroke = CGColorCreateGenericRGB(c[0], c[1], c[2], 1);
+    CGColorRef clear = CGColorCreateGenericRGB(0, 0, 0, 0);
+    CGColorRef dark = CGColorCreateGenericRGB(17.0/255, 17.0/255, 17.0/255, 1);
+    CGColorRef backing = CGColorCreateGenericRGB(10.0/255, 10.0/255, 10.0/255, .74);
+    CTLineRef space = caption_line(@" ", font, fill, stroke, 0);
+    const double gap = CTLineGetTypographicBounds(space, NULL, NULL, NULL);
+    CFRelease(space);
+
+    for (size_t i = 0; i < count; i++) {
+        const SpliceCaptionSpan span = spans[i];
+        NSString *token = [text substringWithRange:NSMakeRange(span.from, span.to - span.from)];
+        CGColorRef color = span.highlight == 2 ? dark : span.highlight == 1 ? highlight : fill;
+        lines[i] = caption_line(token, font, color, stroke, 0);
+        words[i] = (SpliceCaptionWord){ .advance = CTLineGetTypographicBounds(lines[i], NULL, NULL, NULL),
+                                        .scale = span.scale, .reserve = span.reserve };
+        if (span.visible_to < span.to) {
+            CFRelease(lines[i]);
+            token = [text substringWithRange:NSMakeRange(span.from, span.visible_to - span.from)];
+            lines[i] = caption_line(token, font, color, stroke, 0);
+        }
+    }
+    splice_caption_place(words, count, font_size, gap, box);
+    double left = (double)width, right = 0, top = (double)height, bottom = 0;
+    const double ascent = CTFontGetAscent(font), descent = CTFontGetDescent(font);
+    // Canvas's middle baseline centers the em square, using the font's ascent/descent proportions.
+    const double middle = (ascent - descent) * glyph_size / (2 * (ascent + descent));
+    for (size_t i = 0; i < count; i++) {
+        const SpliceCaptionWord word = words[i];
+        const SpliceCaptionSpan span = spans[i];
+        const CGRect plate = caption_plate(word, span, font_size, clean);
+        if (!CGRectIsNull(plate)) {
+            left = fmin(left, CGRectGetMinX(plate));
+            right = fmax(right, CGRectGetMaxX(plate));
+            top = fmin(top, CGRectGetMinY(plate));
+            bottom = fmax(bottom, CGRectGetMaxY(plate));
+        }
+        if (span.opacity == 0) continue;
+        const CGRect ink = CTLineGetBoundsWithOptions(lines[i], kCTLineBoundsUseGlyphPathBounds);
+        CGFloat line_ascent = 0, line_descent = 0;
+        CTLineGetTypographicBounds(lines[i], &line_ascent, &line_descent, NULL);
+        const double pad = word.scale * (font_size * style->stroke_width + 2.0);
+        // Include advances and font extents as bounds for color-emoji runs whose paths can be empty.
+        left = fmin(left, word.x + fmin(0, CGRectGetMinX(ink)) * word.scale - pad);
+        right = fmax(right, word.x + fmax(word.advance, CGRectGetMaxX(ink)) * word.scale + pad);
+        top = fmin(top, word.y + (middle - fmax(line_ascent, CGRectGetMaxY(ink))) * word.scale - pad);
+        bottom = fmax(bottom, word.y + (middle + fmax(line_descent, -CGRectGetMinY(ink))) * word.scale + pad);
+    }
+    rect[0] = (uint32_t)fmax(0, fmin(width - 1, floor(left)));
+    rect[1] = (uint32_t)fmax(0, fmin(height - 1, floor(top)));
+    rect[2] = (uint32_t)fmax(1, fmin(width, ceil(right)) - rect[0]);
+    rect[3] = (uint32_t)fmax(1, fmin(height, ceil(bottom)) - rect[1]);
+    uint8_t *pixels = calloc((size_t)rect[2] * rect[3], 4);
+    CGColorSpaceRef space_rgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef context = pixels == NULL ? NULL : CGBitmapContextCreate(pixels, rect[2], rect[3], 8,
+        (size_t)rect[2] * 4, space_rgb, kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(space_rgb);
+    if (context != NULL) {
+        CGContextSetLineJoin(context, kCGLineJoinRound);
+        for (size_t i = 0; i < count; i++) {
+            SpliceCaptionWord word = words[i];
+            const SpliceCaptionSpan span = spans[i];
+            CGRect plate = caption_plate(word, span, font_size, clean);
+            if (!CGRectIsNull(plate)) {
+                plate.origin.x -= rect[0];
+                plate.origin.y = rect[1] + rect[3] - CGRectGetMaxY(plate);
+                double radius = font_size * (clean ? .16 : .14);
+                CGPathRef path = CGPathCreateWithRoundedRect(plate, radius, radius, NULL);
+                CGContextSetFillColorWithColor(context, clean ? backing : highlight);
+                CGContextAddPath(context, path);
+                CGContextFillPath(context);
+                CGPathRelease(path);
+            }
+            if (span.opacity == 0) continue;
+            CGContextSaveGState(context);
+            CGContextTranslateCTM(context, word.x - rect[0], rect[1] + rect[3] - word.y);
+            CGContextScaleCTM(context, word.scale, word.scale);
+            CGContextSetAlpha(context, span.opacity);
+            if (style->stroke_width > 0 && span.highlight != 2) {
+                NSString *token = [text substringWithRange:NSMakeRange(span.from, span.visible_to - span.from)];
+                CTLineRef outline = caption_line(token, font, clear, stroke, style->stroke_width / font_scale);
+                CGContextSetTextPosition(context, 0, -middle);
+                CTLineDraw(outline, context);
+                CFRelease(outline);
+            }
+            CGContextSetTextPosition(context, 0, -middle);
+            CTLineDraw(lines[i], context);
+            CGContextRestoreGState(context);
+        }
+        CGContextRelease(context);
+        const uint32_t stride = rect[2] * 4;
+        uint32_t x0 = rect[2], y0 = rect[3], x1 = 0, y1 = 0;
+        for (uint32_t y = 0; y < rect[3]; y++) {
+            for (uint32_t x = 0; x < rect[2]; x++) {
+                uint8_t *pixel = pixels + (size_t)y * stride + x * 4;
+                const uint8_t alpha = pixel[3];
+                if (alpha == 0) continue;
+                x0 = MIN(x0, x);
+                y0 = MIN(y0, y);
+                x1 = MAX(x1, x + 1);
+                y1 = MAX(y1, y + 1);
+                if (alpha != 255) for (int j = 0; j < 3; j++) pixel[j] = (uint8_t)MIN(255, pixel[j] * 255 / alpha);
+            }
+        }
+        // CoreText's color-emoji metrics reserve more vertical space than the pixels need.
+        if (x0 < x1 && y0 < y1) {
+            const uint32_t width = (x1 - x0) * 4;
+            if (x0 != 0 || y0 != 0 || width != stride) {
+                for (uint32_t y = 0; y < y1 - y0; y++) {
+                    memmove(pixels + (size_t)y * width, pixels + (size_t)(y + y0) * stride + x0 * 4, width);
+                }
+            }
+            rect[0] += x0;
+            rect[1] += y0;
+            rect[2] = x1 - x0;
+            rect[3] = y1 - y0;
+        } else {
+            rect[2] = 1;
+            rect[3] = 1;
+        }
+    } else {
+        free(pixels);
+        pixels = NULL;
+    }
+    for (size_t i = 0; i < count; i++) CFRelease(lines[i]);
+    free(words);
+    free(lines);
+    CFRelease(font);
+    CGColorRelease(dark);
+    CGColorRelease(backing);
+    CGColorRelease(fill);
+    CGColorRelease(highlight);
+    CGColorRelease(stroke);
+    CGColorRelease(clear);
+    return pixels;
+}
+
 uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, double font,
                           const SpliceTextStyle *style, int64_t visible_from, int64_t visible_to,
-                          int64_t active_from, int64_t active_to, uint32_t active_color, char **error) {
+                          int64_t active_from, int64_t active_to, uint32_t active_color,
+                          const SpliceCaptionSpan *spans, size_t span_count, bool center_lines,
+                          const double *caption_box, double font_scale, bool clean, uint32_t rect[4], char **error) {
     @autoreleasepool {
         NSString *string = [NSString stringWithUTF8String:text];
         if (string == nil || width == 0 || height == 0 || width > 16384 || height > 16384 ||
             !isfinite(font) || font <= 0 || style == NULL) {
             splice_set_error(error, "Invalid text raster.");
             return NULL;
+        }
+        if (caption_box != NULL) {
+            uint8_t *pixels = positioned_caption(string, width, height, font, style, active_color, spans, span_count, caption_box, font_scale, clean, rect);
+            if (pixels == NULL) splice_set_error(error, "Could not rasterize positioned caption words.");
+            return pixels;
         }
         NSRange visible = NSMakeRange(NSNotFound, 0);
         if (visible_from >= 0 && visible_to >= visible_from && (NSUInteger)visible_to <= string.length) {
@@ -943,7 +1191,7 @@ uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, dou
         if (active_from >= 0 && active_to > active_from && (NSUInteger)active_to <= string.length) {
             active = NSMakeRange((NSUInteger)active_from, (NSUInteger)(active_to - active_from));
         }
-        CGImageRef image = text_bitmap(string, CGSizeMake(width, height), font, style, visible, active, active_color);
+        CGImageRef image = text_bitmap(string, CGSizeMake(width, height), font, style, visible, active, active_color, spans, span_count, center_lines);
         uint8_t *pixels = image == NULL ? NULL : calloc((size_t)width * height, 4);
         CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         CGContextRef context = pixels == NULL ? NULL : CGBitmapContextCreate(pixels, width, height, 8, width * 4,
@@ -958,6 +1206,73 @@ uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, dou
         CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
         CGContextRelease(context);
         CGImageRelease(image);
+        for (size_t i = 0; i < (size_t)width * height * 4; i += 4) {
+            uint8_t a = pixels[i + 3];
+            if (a != 0 && a != 255) for (int c = 0; c < 3; c++) pixels[i + c] = (uint8_t)MIN(255, pixels[i + c] * 255 / a);
+        }
+        return pixels;
+    }
+}
+
+uint8_t *splice_program_title_rgba(const char *text, uint32_t width, uint32_t height,
+                                  const double geometry[3], const uint8_t *face, size_t face_size,
+                                  char **error) {
+    @autoreleasepool {
+        NSString *string = [NSString stringWithUTF8String:text];
+        const double w = geometry[0], h = geometry[1], font_size = geometry[2];
+        if (string == nil || width == 0 || height == 0 || width > 16384 || height > 16384 ||
+            !isfinite(w) || !isfinite(h) || !isfinite(font_size) ||
+            w <= 0 || h <= 0 || w > width || h > height || font_size <= 0 || face_size == 0) {
+            splice_set_error(error, "Invalid Program title raster.");
+            return NULL;
+        }
+        const SpliceTextStyle style = {
+            .font = "Barlow Semi Condensed",
+            .bundled_font = face,
+            .bundled_length = face_size,
+        };
+        CTFontRef font = styled_font(&style, font_size);
+        if (font == NULL) {
+            splice_set_error(error, "Could not create the Program title font.");
+            return NULL;
+        }
+        uint8_t *pixels = calloc((size_t)width * height, 4);
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGContextRef context = pixels == NULL ? NULL : CGBitmapContextCreate(pixels, width, height, 8, width * 4,
+            space, kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+        CGColorSpaceRelease(space);
+        if (context == NULL) {
+            free(pixels);
+            CFRelease(font);
+            splice_set_error(error, "Could not rasterize the Program title.");
+            return NULL;
+        }
+
+        const CGRect plate = CGRectMake(0, height - h, w, h);
+        const CGFloat radius = h * 0.18;
+        CGPathRef path = CGPathCreateWithRoundedRect(plate, radius, radius, NULL);
+        CGContextSetRGBFillColor(context, 11.0 / 255, 11.0 / 255, 11.0 / 255, 0.86);
+        CGContextAddPath(context, path);
+        CGContextFillPath(context);
+        CGContextAddPath(context, path);
+        CGContextClip(context);
+        CGPathRelease(path);
+
+        // Canvas fillText lays out one line and clips it at the plate, with the
+        // baseline 70% down and an inset of 3% of the canvas width.
+        NSCharacterSet *breaks = [NSCharacterSet characterSetWithCharactersInString:@"\t\n\f\r"];
+        NSString *line_text = [[string componentsSeparatedByCharactersInSet:breaks] componentsJoinedByString:@" "];
+        NSAttributedString *styled = [[NSAttributedString alloc] initWithString:line_text attributes:@{
+            (__bridge NSString *)kCTFontAttributeName: (__bridge id)font,
+            (__bridge NSString *)kCTForegroundColorFromContextAttributeName: @YES,
+        }];
+        CTLineRef line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)styled);
+        CGContextSetRGBFillColor(context, 244.0 / 255, 243.0 / 255, 238.0 / 255, 1);
+        CGContextSetTextPosition(context, w * (0.03 / 0.88), height - h * 0.70);
+        CTLineDraw(line, context);
+        CFRelease(line);
+        CFRelease(font);
+        CGContextRelease(context);
         for (size_t i = 0; i < (size_t)width * height * 4; i += 4) {
             uint8_t a = pixels[i + 3];
             if (a != 0 && a != 255) for (int c = 0; c < 3; c++) pixels[i + c] = (uint8_t)MIN(255, pixels[i + c] * 255 / a);
@@ -1019,7 +1334,7 @@ int32_t splice_av_grab(void *raw, void *device_raw, int32_t frame, SpliceAVFrame
             return -1;
         }
         CGImageRelease(image);
-        NSArray *entry = take_frame(assembly, frame);
+        NSArray *entry = take_frame(assembly, frame, NO);
         if (entry == nil) {
             splice_set_error(error, "The compositor did not deliver the requested frame.");
             return -1;
@@ -1053,6 +1368,7 @@ void *splice_av_player(void *raw, char **error) {
         preview.assembly = assembly;
         preview.player = player;
         preview.output = output;
+        preview.lastFrame = -1;
         preview.surfaces = [NSMutableDictionary dictionary];
         preview.slots = [NSMutableArray arrayWithArray:@[@[], @[], @[]]];
         [player seekToTime:kCMTimeZero toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
@@ -1060,19 +1376,109 @@ void *splice_av_player(void *raw, char **error) {
     }
 }
 
-void splice_av_player_play(void *raw, bool playing) {
+// All transport state is main-thread owned. AVFoundation may finish a seek on any queue.
+static void seek_preview(SpliceAVPlayer *preview, int32_t frame) {
+    preview.seeking = YES;
+    const uint64_t generation = ++preview.seekGeneration;
+    __weak SpliceAVPlayer *weakPreview = preview;
+    [preview.player seekToTime:time_for(preview.assembly, frame)
+               toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero
+               completionHandler:^(BOOL finished) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            SpliceAVPlayer *current = weakPreview;
+            if (current == nil || current.seekGeneration != generation) return;
+            current.seeking = NO;
+            if (!finished) current.awaitingShuttle = NO;
+        });
+    }];
+}
+
+static void stop_shuttle(SpliceAVPlayer *preview) {
+    if (!preview.shuttling) return;
+    if (preview.awaitingShuttle && preview.seeking) {
+        ++preview.seekGeneration;
+        preview.seeking = NO;
+        [preview.player.currentItem cancelPendingSeeks];
+    }
+    preview.shuttling = NO;
+    preview.awaitingShuttle = NO;
+}
+
+static int32_t preview_frame(SpliceAVAssembly *assembly, CMTime time) {
+    return (int32_t)MAX(0, MIN(assembly.end - 1,
+        CMTimeConvertScale(time, assembly.fps, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value));
+}
+
+void splice_av_player_set_rate(void *raw, int8_t rate) {
     @autoreleasepool {
         SpliceAVPlayer *preview = (__bridge SpliceAVPlayer *)raw;
-        if (playing) [preview.player play]; else [preview.player pause];
+        const BOOL restore = preview.awaitingShuttle && preview.lastFrame >= 0;
+        stop_shuttle(preview);
+        if (restore) seek_preview(preview, preview.lastFrame);
+        preview.requestedRate = MAX(-8, MIN(8, rate));
+        preview.ratePending = preview.requestedRate != 0;
+        if (preview.requestedRate == 0) [preview.player pause];
     }
+}
+
+static void apply_preview_rate(SpliceAVPlayer *preview, AVPlayerItem *item) {
+    if (!preview.ratePending) return;
+    const int8_t rate = preview.requestedRate;
+    // AVFoundation has separate capabilities for ordinary and fast reverse.
+    // Ready items need not advertise fast-forward to play at 2x.
+    if ((rate > 2 && !item.canPlayFastForward) ||
+        (rate == -1 && !item.canPlayReverse) ||
+        (rate < -1 && !item.canPlayFastReverse)) {
+        [preview.player pause];
+        CMTime now = preview.player.currentTime;
+        preview.shuttleOrigin = CMTIME_IS_NUMERIC(now) ? preview_frame(preview.assembly, now) : MAX(0, preview.lastFrame);
+        preview.shuttleStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        preview.shuttling = YES;
+    } else {
+        const int8_t direction = rate < 0 ? -1 : 1;
+        if (preview.playbackDirection != 0 && preview.playbackDirection != direction) {
+            // A video output can keep its old direction after a rate reversal, even while the
+            // player's clock runs in the new direction. Reattach the output to the same item.
+            [preview.player pause];
+            AVPlayerItemVideoOutput *output = [[AVPlayerItemVideoOutput alloc]
+                initWithPixelBufferAttributes:buffer_attributes()];
+            if (output != nil) {
+                [item removeOutput:preview.output];
+                [item addOutput:output];
+                preview.output = output;
+            }
+        }
+        preview.playbackDirection = direction;
+        if (rate == 1) [preview.player play];
+        else preview.player.rate = rate;
+    }
+    preview.ratePending = NO;
+}
+
+// Use the project clock, dropping elapsed targets while a seek is in flight.
+static void request_shuttle_frame(SpliceAVPlayer *preview) {
+    if (preview.awaitingShuttle) return;
+    const double elapsed = (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - preview.shuttleStart) / 1e9;
+    const double frames = trunc(elapsed * preview.assembly.fps * preview.requestedRate);
+    const int32_t frame = (int32_t)fmax(0, fmin(preview.assembly.end - 1, preview.shuttleOrigin + frames));
+    if (frame == preview.lastFrame) return;
+    preview.shuttleFrame = frame;
+    preview.awaitingShuttle = YES;
+    seek_preview(preview, frame);
 }
 
 bool splice_av_player_ended(void *raw) {
     @autoreleasepool {
         SpliceAVPlayer *preview = (__bridge SpliceAVPlayer *)raw;
+        if (preview.shuttling) {
+            return !preview.awaitingShuttle && preview.lastFrame ==
+                (preview.requestedRate < 0 ? 0 : preview.assembly.end - 1);
+        }
         CMTime now = preview.player.currentTime;
-        return CMTIME_IS_NUMERIC(now) &&
-               CMTimeCompare(now, time_for(preview.assembly, preview.assembly.end)) >= 0;
+        if (preview.seeking || preview.ratePending || !CMTIME_IS_NUMERIC(now)) return false;
+        return preview.requestedRate < 0
+            ? CMTimeCompare(now, kCMTimeZero) <= 0
+            : CMTimeCompare(now, time_for(preview.assembly, preview.assembly.end)) >= 0;
     }
 }
 
@@ -1080,8 +1486,11 @@ bool splice_av_player_seek(void *raw, int32_t frame) {
     @autoreleasepool {
         SpliceAVPlayer *preview = (__bridge SpliceAVPlayer *)raw;
         if (frame < 0 || frame >= preview.assembly.end) return false;
-        [preview.player seekToTime:time_for(preview.assembly, frame)
-                   toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+        if (preview.shuttling) {
+            stop_shuttle(preview);
+            preview.ratePending = YES;
+        }
+        seek_preview(preview, frame);
         return true;
     }
 }
@@ -1102,21 +1511,34 @@ int32_t splice_av_player_sources(void *raw, void *device_raw, uint32_t slot, Spl
             fail(error, item.error, "The program player failed.");
             return -1;
         }
-        if (item.status != AVPlayerItemStatusReadyToPlay) return 0;
-        CMTime time = CMTimeMinimum(preview.player.currentTime, time_for(assembly, assembly.end - 1));
-        if (!CMTIME_IS_NUMERIC(time) || ![preview.output hasNewPixelBufferForItemTime:time]) return 0;
+        if (item.status != AVPlayerItemStatusReadyToPlay || preview.seeking) return 0;
+        apply_preview_rate(preview, item);
+        if (preview.shuttling) {
+            request_shuttle_frame(preview);
+            if (preview.seeking || !preview.awaitingShuttle) return 0;
+        }
+        CMTime time = preview.shuttling ? time_for(assembly, preview.shuttleFrame) : preview.player.currentTime;
+        if (!CMTIME_IS_NUMERIC(time)) return 0;
+        time = CMTimeMaximum(kCMTimeZero, CMTimeMinimum(time, time_for(assembly, assembly.end - 1)));
+        const BOOL fresh = [preview.output hasNewPixelBufferForItemTime:time];
+        if (!fresh && !preview.shuttling) return 0;
         CMTime display = kCMTimeInvalid;
-        CVPixelBufferRef placeholder = [preview.output copyPixelBufferForItemTime:time itemTimeForDisplay:&display];
-        if (placeholder != NULL) CFRelease(placeholder);
-        if (!CMTIME_IS_NUMERIC(display)) display = time;
-        int32_t at = (int32_t)MAX(0, MIN(assembly.end - 1,
-            CMTimeConvertScale(display, assembly.fps, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value));
-        NSArray *entry = take_frame(assembly, at);
+        if (fresh) {
+            CVPixelBufferRef placeholder = [preview.output copyPixelBufferForItemTime:time itemTimeForDisplay:&display];
+            if (placeholder != NULL) CFRelease(placeholder);
+        }
+        // A seek completion and the output/broker can arrive on separate clocks.
+        // Keep polling this exact target until the composition has delivered its sources.
+        int32_t at = preview.shuttling ? preview.shuttleFrame :
+            preview_frame(assembly, CMTIME_IS_NUMERIC(display) ? display : time);
+        NSArray *entry = take_frame(assembly, at, preview.requestedRate < 0);
         if (entry == nil) return 0;
         preview.slots[slot] = entry;  // retains this frame's buffers until the slot is reused
         int64_t filled = fill_sources(entry, device, preview.surfaces, sources, capacity, error);
         if (filled < 0) return -1;
         *count = (size_t)filled;
+        preview.lastFrame = at;
+        preview.awaitingShuttle = NO;
         *frame = at;
         return 1;
     }
@@ -1148,10 +1570,10 @@ bool splice_av_blit(void *command_buffer, void *const *sources, void *const *des
     }
 }
 
-uint8_t *splice_image_rgba(const char *path, uint32_t *width, uint32_t *height, char **error) {
+uint8_t *splice_image_rgba(const char *path, uint32_t max_edge, uint32_t *width, uint32_t *height, char **error) {
     @autoreleasepool {
         NSURL *url = [NSURL fileURLWithFileSystemRepresentation:path isDirectory:NO relativeToURL:nil];
-        CGImageRef image = still_image(url);
+        CGImageRef image = still_image(url, max_edge == 0 ? 8192 : MIN(max_edge, 8192));
         if (image == NULL) {
             splice_set_error(error, "Could not decode the image.");
             return NULL;
@@ -1262,7 +1684,7 @@ int32_t splice_av_reader_next(void *raw, void *device_raw, SpliceAVFrameSource *
         CMTime at = CMSampleBufferGetPresentationTimeStamp(sample);
         CFRelease(sample);
         int32_t index = (int32_t)llround(CMTimeGetSeconds(at) * reader.assembly.fps);
-        NSArray *entry = take_frame(reader.assembly, index);
+        NSArray *entry = take_frame(reader.assembly, index, NO);
         if (entry == nil) {
             splice_set_error(error, "The compositor did not deliver a frame being exported.");
             return -1;

@@ -378,6 +378,8 @@ pub enum ItemKind {
     Media(Overlay),
     /// A camera segment: while it lasts the timeline camera springs toward its framing (D12).
     Zoom(Zoom),
+    /// Linear scale animation of the spine picture about the canvas center.
+    Motion(ScaleMotion),
     /// Music or a sound effect on an audio lane.
     Sound(Sound),
     /// Generated graphic: solid, gradient, shape, arrow, line or callout (T17.5).
@@ -405,10 +407,36 @@ impl ItemKind {
         match self {
             Self::Title { .. } => LaneKind::Graphics,
             Self::Media(_) => LaneKind::Overlay,
-            Self::Zoom(_) => LaneKind::Camera,
+            Self::Zoom(_) | Self::Motion(_) => LaneKind::Camera,
             Self::Caption { .. } => LaneKind::Captions,
             Self::Sound(_) => LaneKind::Audio,
             Self::Shape { .. } => LaneKind::Graphics,
+        }
+    }
+}
+
+/// Independent scale endpoints for a linear spine-picture animation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScaleMotion {
+    /// Scale on the first active frame.
+    pub from: f64,
+    /// Scale on the last active frame.
+    pub to: f64,
+}
+
+impl ScaleMotion {
+    /// Default duration of a new animation in sequence frames.
+    pub const LENGTH: Frame = 120;
+
+    /// Range to which endpoint edits are clamped.
+    pub const EDIT_RANGE: [f64; 2] = [0.5, 2.0];
+}
+
+impl Default for ScaleMotion {
+    fn default() -> Self {
+        Self {
+            from: 1.0,
+            to: 1.32,
         }
     }
 }
@@ -677,6 +705,15 @@ pub struct CaptionEdit {
     pub emph: bool,
     /// Optional emoji accompaniment.
     pub emoji: Option<String>,
+    /// Whether to hide the word independently of its replacement text.
+    pub hidden: bool,
+}
+
+impl CaptionEdit {
+    /// Whether this word is hidden, including legacy empty replacements.
+    pub fn is_hidden(&self) -> bool {
+        self.hidden || self.text.as_deref() == Some("")
+    }
 }
 
 /// Named timeline point.
@@ -830,6 +867,7 @@ impl Clone for CaptionEdit {
             text: self.text.clone(),
             emph: self.emph,
             emoji: self.emoji.clone(),
+            hidden: self.hidden,
         }
     }
 
@@ -838,6 +876,7 @@ impl Clone for CaptionEdit {
         self.text.clone_from(&source.text);
         self.emph = source.emph;
         self.emoji.clone_from(&source.emoji);
+        self.hidden = source.hidden;
     }
 }
 
@@ -902,6 +941,7 @@ impl Clone for ItemKind {
                 rect: *rect,
             },
             Self::Zoom(zoom) => Self::Zoom(*zoom),
+            Self::Motion(motion) => Self::Motion(*motion),
             Self::Caption { words, edits, text } => Self::Caption {
                 words: words.clone(),
                 edits: edits.clone(),

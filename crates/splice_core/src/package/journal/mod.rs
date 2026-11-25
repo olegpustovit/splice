@@ -13,6 +13,11 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+/// Command semantics used by batches containing caption.set.
+pub(crate) const CAPTION_HIDE_ENGINE: u32 = 5;
+/// Command semantics used by batches containing item.duplicate.
+pub(crate) const DUPLICATE_EFFECT_ENGINE: u32 = 6;
+
 const JOURNAL: &str = "journal.ops";
 const ORIGIN: &str = "journal.base.json";
 const SNAPSHOT_EVERY: usize = 64;
@@ -190,6 +195,18 @@ impl Journal {
         batch: Batch,
     ) -> Result<Checkpoint, PackageError> {
         self.check_tip(project)?;
+        let engine = match &batch.change {
+            Change::Edit { ops, .. } => ops
+                .iter()
+                .map(|op| match op.field("cmd").and_then(Json::as_str) {
+                    Some("item.duplicate") => DUPLICATE_EFFECT_ENGINE,
+                    Some("caption.set") => CAPTION_HIDE_ENGINE,
+                    _ => ENGINE,
+                })
+                .max()
+                .unwrap_or(ENGINE),
+            _ => ENGINE,
+        };
         let mut record = Record {
             rev: project
                 .rev
@@ -197,7 +214,7 @@ impl Journal {
                 .ok_or_else(|| bad("rev", "a revision with a successor"))?,
             parent: project.hash,
             hash: 0,
-            engine: record::ENGINE,
+            engine,
             batch,
         };
         record.validate()?;

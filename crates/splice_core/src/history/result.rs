@@ -61,6 +61,8 @@ pub struct EditResult {
 pub enum Scope {
     /// Remove the session's latest live edit from the active history.
     Last,
+    /// Remove the specified live agent revision from the named session.
+    Batch(u64),
     /// Remove all live edits from that session in one revision.
     Session,
     /// Restore the exact state at a revision.

@@ -17,14 +17,21 @@ const RANGE: &str = r#"{"type":"object","properties":{"from":{"type":"integer","
 const MUSIC: &str = r#"{"type":"object","properties":{"query":{"type":"string"},"mood":{"type":"string"},"bpm":{"type":"number"},"minLength":{"type":"number"},"maxLength":{"type":"number"},"limit":{"type":"integer","minimum":1}}}"#;
 const ERROR_SCHEMA: &str = r#"{"type":"object","properties":{"code":{"type":"string"},"message":{"type":"string"},"fix":{"type":"string"},"valid":{"type":"array"},"current":{},"changedSince":{"type":"array"},"op":{"type":"integer","minimum":0}},"required":["code","message","fix"]}"#;
 
-pub(super) struct Tool {
-    pub(super) name: &'static str,
-    pub(super) description: &'static str,
+/// The documentation and wire schema of one MCP tool.
+pub struct Tool {
+    /// Stable MCP tool name.
+    pub name: &'static str,
+    /// Guidance shown in tool discovery.
+    pub description: &'static str,
     read_only: bool,
-    pub(super) input: &'static [(&'static str, &'static str)],
-    pub(super) required: &'static [&'static str],
-    pub(super) output: &'static [(&'static str, &'static str)],
-    pub(super) success: &'static [&'static [&'static str]],
+    /// Input field names and schema definitions.
+    pub input: &'static [(&'static str, &'static str)],
+    /// Input fields that are always required.
+    pub required: &'static [&'static str],
+    /// Output field names and schema definitions.
+    pub output: &'static [(&'static str, &'static str)],
+    /// Required field sets of successful result variants.
+    pub success: &'static [&'static [&'static str]],
 }
 
 /// The code profile's runner (`splice mcp --code`); the default profile does not list it.
@@ -399,13 +406,13 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "history.undo",
-        description: "Create an undo revision for the session's last edit, the whole session, or an exact earlier revision.",
+        description: "Create an undo revision for the session's last edit or the whole session. Use scope:batch with sessionId and revision to revert a single live agent batch, or scope:to with revision to restore that state.",
         read_only: false,
         input: &[
             ("projectId", "string"),
             ("sessionId", "string"),
             ("ifRevision", REVISION),
-            ("scope", r#"{"enum":["last","session","to"]}"#),
+            ("scope", r#"{"enum":["last","batch","session","to"]}"#),
             ("revision", REVISION),
             ("dryRun", "boolean"),
         ],
@@ -626,6 +633,19 @@ pub(super) const TOOLS: &[Tool] = &[
         ],
         success: &[&["state", "jobId"], &["state", "id"]],
     },
+    Tool {
+        name: "session.end",
+        description: "End an agent editing session. Its committed batches remain in history.",
+        read_only: false,
+        input: &[("projectId", "string"), ("sessionId", "string")],
+        required: &["projectId", "sessionId"],
+        output: &[
+            ("sessionId", "string"),
+            ("open", "boolean"),
+            ("revision", REVISION),
+        ],
+        success: &[&["sessionId", "open", "revision"]],
+    },
 ];
 
 /// The code profile lists only `code.run` and `commands.describe`.
@@ -652,6 +672,11 @@ pub(super) fn list(code: bool) -> Json {
 }
 
 impl Tool {
+    /// The default profile's MCP read-only annotation for this tool.
+    pub const fn read_only(&self) -> bool {
+        self.read_only
+    }
+
     fn description(&self) -> Json {
         let mut input = properties(self.input);
         input.push(("friction".into(), schema("string")));
@@ -763,8 +788,8 @@ pub(super) fn reply(
 /// The project and session an agent meant but did not say (found by the evals: 26 calls
 /// failed on a missing, "undefined" or path-valued projectId, 6 on a missing or invented
 /// sessionId). With one open project, an omitted projectId is that project; a package path
-/// passed as projectId is the open project at that path; edit.apply and history.undo without
-/// sessionId join the project's open session, or start one, and say so in the result.
+/// passed as projectId is the open project at that path. edit.apply and history.undo
+/// can join or start a session when sessionId is omitted. Batch undo names its session.
 fn with_defaults(
     projects: &mut Projects,
     name: &str,
@@ -804,15 +829,19 @@ fn with_defaults(
         // path selects the project only for project.info and record.start; export.start's
         // path is its output file.
         let selects = matches!(name, "project.info" | "record.start");
-        if field(&fields, "projectId").is_none()
+        if name != "session.end"
+            && field(&fields, "projectId").is_none()
             && !(selects && field(&fields, "path").is_some())
             && let Some(only) = projects.only_open()
         {
             fields.push(("projectId".into(), text(&only)));
         }
     }
+    let batch_undo =
+        name == "history.undo" && args.field("scope").and_then(Json::as_str) == Some("batch");
     // history.undo {to: rN} is scope "to" with that revision.
     if name == "history.undo"
+        && !batch_undo
         && field(&fields, "revision").is_none()
         && let Some((at, _)) = field(&fields, "to")
     {
@@ -823,6 +852,7 @@ fn with_defaults(
     }
     let mut started = None;
     if matches!(name, "edit.apply" | "history.undo")
+        && !batch_undo
         && field(&fields, "sessionId").is_none()
         && let Some((_, Some(project))) = field(&fields, "projectId")
         && projects.lookup_id(&project).is_ok()
@@ -941,6 +971,7 @@ fn execute(
         // 0.2 name, kept for one cut (D6).
         "audio.summary" => media::audio(projects.lookup(args)?, args),
         "session.start" => history::start(projects.lookup(args)?, args),
+        "session.end" => history::end(projects.lookup(args)?, args),
         "edit.apply" => history::apply(projects.lookup(args)?, args),
         "history.list" => history::list(projects.lookup(args)?, args),
         "history.undo" => history::undo(projects.lookup(args)?, args),

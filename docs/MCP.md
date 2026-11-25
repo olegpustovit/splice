@@ -50,7 +50,7 @@ not take is refused with `UNKNOWN_PARAM`, its `param` and the closest accepted n
 (it is never silently ignored). A tool call that hits a Splice bug returns `INTERNAL` as an error
 result, is logged to the friction log, and the server keeps serving.
 
-## Tools (20, fixed order)
+## Tools (21, fixed order)
 
 | # | Tool | Hint | Purpose |
 | --- | --- | --- | --- |
@@ -67,13 +67,14 @@ result, is logged to the friction log, and the server keeps serving.
 | 11 | `session.start` | edit | A session id and a checkpoint revision |
 | 12 | `edit.apply` | edit | One atomic batch of registry commands; `dryRun`, `ifRevision`, `idempotencyKey` |
 | 13 | `history.list` | read | Revisions with labels, sources, sessions, and what each changed |
-| 14 | `history.undo` | edit | `scope: "last"` (the session's last batch) · `"session"` (all of it) · `"to"` + `revision` (restore that exact state). Always a new revision; undo an undo to redo. With nothing left to undo it returns `NOTHING_TO_UNDO` and changes nothing |
+| 14 | `history.undo` | edit | `scope: "last"` (the session's last batch) · `"batch"` + `revision` (one live batch) · `"session"` (all of it) · `"to"` + `revision` (restore that exact state). Always a new revision; undo an undo to redo. With nothing left to undo it returns `NOTHING_TO_UNDO` and changes nothing |
 | 15 | `ui.show` | view | Playhead, selection, framing in a viewer if one is open; headless: `{applied:false, reason:"headless"}` |
 | 16 | `export.start` | edit | Export job, **no approval**: presets, `variants`, `range`, chapters, caption sidecars, `format:"fcpxml"`. Default path `<project>.splice/exports/<name>-r<rev>.mp4`; refuses to overwrite unless `overwrite:true` |
 | 17 | `jobs.status` | read | Progress and result of export, transcription and recording jobs |
 | 18 | `jobs.cancel` | edit | Cancel a job |
 | 19 | `record.start` | edit | Headless capture of a display, window or area, with mic, system audio, camera and input events, into a project (`create:true` makes one). `dryRun:true` lists sources, devices and permission states without recording; `duration` auto-stops. Also voice-overs, retakes, `resume` with `marker`, `exclude`, `recover` |
 | 20 | `record.stop` | edit | Finish recording: the take lands in `takes/` and on the spine as one undoable agent batch (`insert:false` keeps it in media only); `pause:true` pauses instead |
+| 21 | `session.end` | edit | Close an agent editing session and return the current revision |
 
 Changes from the prototype's 17 tools: no export approval (`NEEDS_APPROVAL` and `DENIED` are gone),
 `history.undo` gains `scope:"to"`, `project.info` opens by path, and the recording pair is added.
@@ -81,7 +82,7 @@ Recording runs in Splice.app's capture agent (LaunchServices-launched, accessory
 privacy grants belong to the stably signed `~/Applications/Splice.app`, never to the terminal or MCP
 client that spawned `splice mcp` (PLAN.md T8).
 
-Stay under 20 tools in the default profile: new capabilities become `edit.apply` commands or parameters, not tools. Code mode is a separate profile, `splice mcp --code` (PLAN.md D3, T14).
+New timeline operations belong in `edit.apply`. Code mode is a separate profile, `splice mcp --code` (PLAN.md D3, T14).
 
 ## Every call
 
@@ -94,8 +95,13 @@ Stay under 20 tools in the default profile: new capabilities become `edit.apply`
   project, an omitted `projectId` is that project; a `.splice` path passed as `projectId` is the
   open project at that path; `"undefined"`/`"null"` count as omitted. `edit.apply` and
   `history.undo` without `sessionId` join the project's open session, or start one, and the
-  result's `session` says which. `history.undo {to}` is `{scope:"to", revision}`.
+  result's `session` says which. Batch undo requires an explicit `sessionId`.
+  `history.undo {to}` is `{scope:"to", revision}`.
   `commands.describe {id}` naming a tool (`record.start`, `edit.apply`) returns its schema.
+- `session.end {projectId, sessionId}` requires both IDs and returns
+  `{sessionId, open:false, revision}` at the current revision. New edits need an open session.
+  The closed session is still listed by `history.list {projectId, sessionId}`, and the editor
+  can undo its committed batches.
 - In ops, an argument named by its one obvious other name is that argument: `item`/`id`/`ids`
   for `items`, `id` for `item`, `item`/`items` for `zoom`; a one-element list names one target.
   `$ref.left` is a split's left piece. Integer frame arguments refuse fractions with the
@@ -150,6 +156,13 @@ it as `pacing`). Without `profile` neither tool reads event logs or changes its 
 
 ## Camera and cursor motion (T46.2)
 
+- **Linear scale animations.** `motion.add` takes `at`, `length` (default 120),
+  `from` (default 1) and `to` (default 1.32). It scales the spine window and cursor
+  about the canvas center and reaches `to` on the last active frame. Use
+  `motion.set {item, from?, to?}` to edit either endpoint. Supplied values clamp to
+  the range 0.5 to 2. To reverse the scale, pass both values in the opposite order.
+  To create and edit the same animation in one batch, set `ref` to `motion` on
+  `motion.add` and pass `"$motion"` as the `item` for `motion.set`.
 - **Following zooms.** `zoom.add`/`zoom.set {focus:"cursor"}` makes a camera segment follow the
   drawn cursor of the take under it: the exact smoothed table the renderer draws (the clip's
   `cursor` effect: smoothing, synthesized paths, `loop`), mapped into the crop space `focus:{x,y}` uses
@@ -325,10 +338,17 @@ A committed edit advances the revision after the journal is synced. A stale writ
 current revision and up to eight intervening changes. A retry of the original operation batch
 with its session's `idempotencyKey` returns the original revision and result with `replayed:true`.
 
-Use `history.undo` with `scope:"last"` or `"session"` to remove edits from that session and replay
-the remaining edits in order. A later edit that depended on a removed object appears in
-`skipped`. Use `scope:"to"` with a retained revision to restore its exact project content.
-Agents cannot restore a revision that would change the project's access level.
+Use `history.undo` with `scope:"last"` or `"session"` to remove edits from a session. To remove
+one specific batch, pass `scope:"batch"`, its `sessionId`, and its `revision` from `history.list`.
+The target must be a live agent edit from that session. Unknown revisions, human edits, and
+batches from other sessions return `NOT_FOUND`. An inactive agent batch returns `NOTHING_TO_UNDO`.
+Remaining edits replay in order. A later edit that depended on a removed object appears in
+`skipped`. A successful undo creates a new revision. Pass `dryRun:true` to preview it and
+`ifRevision` to guard against stale writes. MCP undo requires an open agent session. The editor
+can undo individual batches from closed sessions.
+
+Use `scope:"to"` with a retained revision to restore its exact project content. Agents cannot
+restore a revision that would change the project's access level.
 
 ## Headless media reads
 
@@ -413,6 +433,9 @@ ramped clip resolve at its constant rate.
 on silent takes. Free cues keep their own timing (trim and move them like titles) and retype with
 `caption.set {text}`; word operations (`caption.split`, `caption.merge`, `words`) refuse them with
 `WRONG_KIND`. `transcript.get {captions}` and export sidecars list them with `words: []`.
+For a transcript-derived cue, `caption.set {words:{id:{hidden:true}}}` keeps the word's text,
+emoji and emphasis edits. Caption JSON includes `hidden:true` on the word. The cue text and SRT
+or WebVTT omit hidden words.
 
 ## Inputs edit.apply fills
 
@@ -454,15 +477,19 @@ drawn from fonts (not glyph outlines) are not drawn.
 
 On Linux, rendering, export and capture return `UNSUPPORTED_PLATFORM`. A job ID with no retained
 job returns `NOT_FOUND`. Headless `ui.show` returns `{"applied":false,"reason":"headless"}`.
-In the 0.1 viewer, `ui.show` moves the playhead using a frame or an item, marker, or word anchor.
-`range.from` seeks to the start of a range. The view tool reports the live playhead and leaves the
-project revision unchanged.
+
+The native viewer accepts `at` as a frame or an item, marker, or word anchor. It frames the
+half-open `range:{from,to}` and seeks to `from` when `at` is omitted. `select` accepts a group of
+clips, overlays, and markers, or a single lane. An empty list clears selection. `expand` opens a recorded clip's
+component rows. `view` switches to `edit`, `mcp`, or `spec`. `viewer:{zoom:"fit"}` fits the
+canvas, and a positive numeric zoom selects a scale such as `1` for 100%. The reply includes the
+playhead, selection, and current project revision. View changes create no project revision.
 
 ## Music library (T45.3)
 
 The music library is a folder of audio files the user holds the rights to (CC0 tracks, a
 purchased pack), configured with `SPLICE_MUSIC` or `music.json` (docs/FORMAT.md, Music library).
-To stay within 20 tools it is searched through `commands.describe`:
+Search the library through `commands.describe`:
 
 `commands.describe {music:{query?, mood?, bpm?, minLength?, maxLength?, limit?}}` returns
 `{library, tracks, total, moods, note?}`. Each track is `{track, title, artist, length, bpm, key,
@@ -682,6 +709,7 @@ Inside the code, the global `splice` has:
   `splice.call(name, args)` is the same by name. Calls are synchronous and return the tool's
   structured result; `view.frames` returns paths, and the code.run reply carries its preview images (at most 6 per run, 640 px). `projectId` and
   `sessionId` default to the ones passed to `code.run` (`splice.projectId`, `splice.sessionId`).
+  Pass both explicitly to `splice.session.end`.
 - `splice.op.<group>.<name>(fields)` builds a registry op, e.g. `splice.op.item.split({item, at})`
   is `{cmd:"item.split", item, at}`.
 - `splice.describe(query?)` returns the TypeScript declarations below, filtered by name.

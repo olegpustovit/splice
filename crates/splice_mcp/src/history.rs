@@ -23,6 +23,16 @@ pub(super) fn start(store: &mut Store, args: &Json) -> Result<Json, StoreError> 
     ]))
 }
 
+pub(super) fn end(store: &mut Store, args: &Json) -> Result<Json, StoreError> {
+    let session = args.session()?;
+    store.end_session(session)?;
+    Ok(object(vec![
+        ("sessionId", display(&session)),
+        ("open", Json::Bool(false)),
+        ("revision", rev(store.project().rev)),
+    ]))
+}
+
 pub(super) fn apply(store: &mut Store, args: &Json) -> Result<Json, StoreError> {
     let options = write_options(args)?;
     let profile = super::lints::profile_arg(args)?;
@@ -322,9 +332,10 @@ pub(super) fn list(store: &Store, args: &Json) -> Result<Json, StoreError> {
 pub(super) fn undo(store: &mut Store, args: &Json) -> Result<Json, StoreError> {
     let scope = match args.string("scope")? {
         "last" => Scope::Last,
+        "batch" => Scope::Batch(args.revision("revision")?),
         "session" => Scope::Session,
         "to" => Scope::To(args.revision("revision")?),
-        _ => return Err(bad("scope", "last, session or to")),
+        _ => return Err(bad("scope", "last, batch, session or to")),
     };
     let options = write_options(args)?;
     if options.key.is_some() {

@@ -40,7 +40,7 @@ lib:
 	@test -e pxui/Cargo.toml || git submodule update --init pxui
 ifeq ($(OS),Darwin)
 	cargo build $(CARGOFLAGS) --manifest-path pxui/Cargo.toml -p pxui_dylib --target-dir target
-	ln -sfn libpxui.dylib $(PRODUCTS)/libpxui.1.dylib
+	ln -sfn libpxui.dylib $(PRODUCTS)/libpxui.2.dylib
 	ln -sfn '$(SDL3_DIR)/lib/libSDL3.0.dylib' $(PRODUCTS)/libSDL3.0.dylib
 endif
 

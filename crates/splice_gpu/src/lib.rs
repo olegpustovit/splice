@@ -199,6 +199,19 @@ pub struct Compositor {
     scratch: Vec<u8>,
 }
 
+impl Drop for Compositor {
+    fn drop(&mut self) {
+        for pipeline in [&self.pipeline, &self.blended, &self.fill, &self.motion] {
+            let _ = b::destroy_pipeline(pipeline);
+        }
+        let _ = b::destroy_sampler(&self.sampler);
+        let _ = b::destroy_texture(&self.blank);
+        for page in &self.pages {
+            let _ = b::destroy_buffer(page);
+        }
+    }
+}
+
 impl Compositor {
     /// Builds the layer pipeline on `device`. Metal only until the Vulkan SPIR-V lands.
     pub fn new(device: &Device) -> Result<Self, Error> {

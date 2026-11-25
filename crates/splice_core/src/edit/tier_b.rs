@@ -71,6 +71,93 @@ pub(super) fn applies(kind: &str) -> Result<(Applies, bool), CommandError> {
     Ok((class, multiple))
 }
 
+/// Whether a live effect type accepts the given concrete owner and its available components.
+pub fn effect_target_allowed(project: &Project, target: &Target, kind: &str) -> bool {
+    if effect_schemas().field(kind).is_none() {
+        return false;
+    }
+    let owner = match *target {
+        Target::Project => Some(Owner::Project),
+        Target::Lane(LaneId::SPINE) => Some(Owner::Spine),
+        Target::Lane(id) => project
+            .lanes
+            .iter()
+            .position(|lane| lane.id == id)
+            .map(Owner::Lane),
+        Target::Timeline(TimelineId::Clip(id)) => project.clips.find(id).map(Owner::Clip),
+        Target::Timeline(TimelineId::Item(id)) => project.items.find(id).map(Owner::Item),
+        _ => None,
+    };
+    owner.is_some_and(|owner| {
+        let (class, _) = applies(kind).expect("known schema");
+        fits(project, class, owner)
+            && (kind != "transition" || matches!(owner, Owner::Clip(_)))
+            && missing_effect_component(project, owner, kind).is_none()
+    })
+}
+
+fn missing_effect_component(
+    project: &Project,
+    owner: Owner,
+    kind: &str,
+) -> Option<(Slot, Component)> {
+    let Owner::Clip(slot) = owner else {
+        return None;
+    };
+    let enabled = &project.clips.data(slot).expect("live clip").enabled;
+    let component = match kind {
+        "camera" if enabled.camera.is_none() => Component::Camera,
+        "cursor" if enabled.pointer.is_none() => Component::Pointer,
+        "keystrokes" if enabled.keys.is_none() => Component::Keys,
+        _ => return None,
+    };
+    Some((slot, component))
+}
+
+fn fits(project: &Project, kind: Applies, owner: Owner) -> bool {
+    use Applies::*;
+    match owner {
+        Owner::Project => true,
+        Owner::Spine => matches!(kind, Visual | Take | Layer | Spine | Audio),
+        Owner::Lane(index) => matches!(
+            (project.lanes[index].kind, kind),
+            (LaneKind::Captions, Caption | Text | Layer)
+                | (LaneKind::Audio, Audio)
+                | (LaneKind::Overlay, Visual | Layer | Audio)
+                | (LaneKind::Graphics, Text | Layer | Shape | Title)
+        ),
+        Owner::Clip(slot) => {
+            let media_id = project.clips.data(slot).expect("live clip").media;
+            let descriptor =
+                media_id.and_then(|id| project.media.iter().find(|media| media.id == id));
+            match kind {
+                Take => descriptor.is_some_and(|m| m.kind == MediaKind::Take),
+                Visual | Layer | Spine => descriptor.is_some_and(|m| m.kind != MediaKind::Audio),
+                Audio => descriptor
+                    .is_some_and(|m| m.kind == MediaKind::Take || !m.probe.audio.is_empty()),
+                Caption | Text | Shape | Title | Template | Project => false,
+            }
+        }
+        Owner::Item(slot) => {
+            let item = &project.items.data(slot).expect("live item").kind;
+            match kind {
+                Caption => matches!(item, ItemKind::Caption { .. }),
+                Text => matches!(item, ItemKind::Caption { .. } | ItemKind::Title { .. }),
+                Visual => matches!(item, ItemKind::Media(_)),
+                Layer => !matches!(
+                    item,
+                    ItemKind::Sound(_) | ItemKind::Zoom(_) | ItemKind::Motion(_)
+                ),
+                Audio => matches!(item, ItemKind::Sound(_) | ItemKind::Media(_)),
+                Shape => matches!(item, ItemKind::Shape { .. }),
+                Title => matches!(item, ItemKind::Title { .. }),
+                Template => true,
+                Take | Spine | Project => false,
+            }
+        }
+    }
+}
+
 pub(super) use crate::commands::check_effect as check_params;
 
 /// Moves `params`' values into `into`; `params` keeps its name buffers for reuse.
@@ -749,45 +836,7 @@ impl Editor {
     }
 
     pub(super) fn fits(&self, kind: Applies, owner: Owner) -> bool {
-        use Applies::*;
-        match owner {
-            Owner::Project => true,
-            Owner::Spine => matches!(kind, Visual | Take | Layer | Spine | Audio),
-            Owner::Lane(index) => matches!(
-                (self.project.lanes[index].kind, kind),
-                (LaneKind::Captions, Caption | Text | Layer)
-                    | (LaneKind::Audio, Audio)
-                    | (LaneKind::Overlay, Visual | Layer | Audio)
-                    | (LaneKind::Graphics, Text | Layer | Shape | Title)
-            ),
-            Owner::Clip(slot) => {
-                let media_id = self.project.clips.data(slot).expect("live clip").media;
-                let descriptor = media_id.and_then(|id| media(&self.project, id).ok());
-                match kind {
-                    Take => descriptor.is_some_and(|m| m.kind == MediaKind::Take),
-                    Visual | Layer | Spine => {
-                        descriptor.is_some_and(|m| m.kind != MediaKind::Audio)
-                    }
-                    Audio => descriptor
-                        .is_some_and(|m| m.kind == MediaKind::Take || !m.probe.audio.is_empty()),
-                    Caption | Text | Shape | Title | Template | Project => false,
-                }
-            }
-            Owner::Item(slot) => {
-                let item = &self.project.items.data(slot).expect("live item").kind;
-                match kind {
-                    Caption => matches!(item, ItemKind::Caption { .. }),
-                    Text => matches!(item, ItemKind::Caption { .. } | ItemKind::Title { .. }),
-                    Visual => matches!(item, ItemKind::Media(_)),
-                    Layer => !matches!(item, ItemKind::Sound(_) | ItemKind::Zoom(_)),
-                    Audio => matches!(item, ItemKind::Sound(_) | ItemKind::Media(_)),
-                    Shape => matches!(item, ItemKind::Shape { .. }),
-                    Title => matches!(item, ItemKind::Title { .. }),
-                    Template => true,
-                    Take | Spine | Project => false,
-                }
-            }
-        }
+        fits(&self.project, kind, owner)
     }
 
     /// Writes params into the owner's instance of a type, creating it when missing.
@@ -817,27 +866,9 @@ impl Editor {
                 .unwrap_or("its owners");
             return Err(wrong_kind(&format!("{kind} applies to {to}.")));
         }
-        // A take's camera, cursor and keystroke looks need that component (M18).
-        if let Owner::Clip(slot) = owner {
-            let component = match kind {
-                "camera" => Some(Component::Camera),
-                "cursor" => Some(Component::Pointer),
-                "keystrokes" => Some(Component::Keys),
-                _ => None,
-            };
-            if let Some(component) = component {
-                let mut states = self
-                    .project
-                    .clips
-                    .data(slot)
-                    .expect("live clip")
-                    .enabled
-                    .clone();
-                if component_state(&mut states, component).is_none() {
-                    let id = self.project.clips.id(slot).expect("live clip");
-                    return Err(no_component(id, component));
-                }
-            }
+        if let Some((slot, component)) = missing_effect_component(&self.project, owner, kind) {
+            let id = self.project.clips.id(slot).expect("live clip");
+            return Err(no_component(id, component));
         }
         check_params(kind, &params)?;
         let existing = if multiple {
@@ -1308,7 +1339,7 @@ impl Editor {
         for &word in words {
             let word = time::bind_word(&self.project, word, hash, self.replay.is_some())?;
             // A transcript word outside every clip is already cut: skip it, like the prototype.
-            if self.word_text(word).is_none() {
+            if word_text(&self.project.transcripts, word).is_none() {
                 return Err(not_found(&word, "transcript.get lists words."));
             }
             let Some(span) = time::word_span(&self.project, word, hash, None)? else {
@@ -1738,17 +1769,21 @@ impl Editor {
         if free.is_some() {
             return self.set_free_cue(slot, text, &patches);
         }
-        let words = words.clone();
-        let visible: Vec<(WordId, String)> = words
-            .iter()
-            .filter_map(|&id| {
-                time::word_span(&self.project, id, None, None)
-                    .ok()
-                    .flatten()?;
-                Some((id, self.word_text(id)?))
-            })
-            .collect();
-        let ItemKind::Caption { edits, .. } =
+        let transcripts = &self.project.transcripts;
+        let visible: Vec<(WordId, &str)> = if text.is_some() || self.legacy_caption_hide {
+            words
+                .iter()
+                .filter_map(|&id| {
+                    time::word_span(&self.project, id, None, None)
+                        .ok()
+                        .flatten()?;
+                    Some((id, word_text(transcripts, id)?))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let ItemKind::Caption { words, edits, .. } =
             &mut self.project.items.data_mut(slot).expect("live").kind
         else {
             unreachable!("checked caption")
@@ -1769,16 +1804,15 @@ impl Editor {
                     (index < tokens.len()).then(|| tokens[index..].join(" "))
                 };
                 let edit = caption_edit(edits, *id);
-                // A hidden word is stored as empty display text.
+                edit.hidden = token.is_none() && !self.legacy_caption_hide;
                 edit.text = match token {
-                    None => Some(String::new()),
-                    Some(token) if token == *original => None,
-                    Some(token) => Some(token),
+                    None if self.legacy_caption_hide => Some(String::new()),
+                    token => token.filter(|token| token.as_str() != *original),
                 };
             }
         }
         for mut patch in patches {
-            patch.word = in_cue(&words, patch.word);
+            patch.word = in_cue(words, patch.word);
             if !words.contains(&patch.word) {
                 return Err(error(
                     "NOT_FOUND",
@@ -1790,13 +1824,18 @@ impl Editor {
                 edits.retain(|edit| edit.word != patch.word);
                 continue;
             };
-            let original = visible
-                .iter()
-                .find(|(id, _)| *id == patch.word)
-                .map(|(_, text)| text.clone());
             let edit = caption_edit(edits, patch.word);
             if let Some(text) = change.text {
-                edit.text = text.filter(|t| !t.is_empty() && Some(t) != original.as_ref());
+                let original = if self.legacy_caption_hide {
+                    visible
+                        .iter()
+                        .find(|(id, _)| *id == patch.word)
+                        .map(|(_, text)| *text)
+                } else {
+                    edit.hidden = edit.is_hidden();
+                    word_text(transcripts, patch.word)
+                };
+                edit.text = text.filter(|t| !t.is_empty() && Some(t.as_str()) != original);
             }
             if let Some(emoji) = change.emoji {
                 edit.emoji = emoji
@@ -1806,13 +1845,20 @@ impl Editor {
             if let Some(emph) = change.emph {
                 edit.emph = emph.unwrap_or(false);
             }
-            match change.hidden {
-                Some(Some(true)) => edit.text = Some(String::new()),
-                Some(_) if edit.text.as_deref() == Some("") => edit.text = None,
-                _ => {}
+            if let Some(hidden) = change.hidden {
+                let hidden = hidden.unwrap_or(false);
+                if self.legacy_caption_hide && hidden {
+                    edit.text = Some(String::new());
+                } else {
+                    edit.hidden = hidden;
+                    if edit.text.as_deref() == Some("") {
+                        edit.text = None;
+                    }
+                }
             }
         }
-        edits.retain(|edit| edit.text.is_some() || edit.emph || edit.emoji.is_some());
+        edits
+            .retain(|edit| edit.text.is_some() || edit.emph || edit.emoji.is_some() || edit.hidden);
         let id = self.project.items.id(slot).expect("live item");
         Ok(Outcome::edit(
             format!("Caption {id}"),
@@ -1894,15 +1940,6 @@ impl Editor {
             format!("Transcript of {id}: {count} words"),
             Target::Media(id),
         ))
-    }
-
-    fn word_text(&self, id: WordId) -> Option<String> {
-        self.project
-            .transcripts
-            .iter()
-            .flat_map(|t| &t.words)
-            .find(|word| word.id == id)
-            .map(|word| word.text.clone())
     }
 
     fn split_caption(&mut self, item: &Target, word: WordId) -> Result<Outcome, CommandError> {
@@ -2050,6 +2087,14 @@ fn free_cue(fix: &str) -> CommandError {
     )
 }
 
+fn word_text(transcripts: &[Transcript], id: WordId) -> Option<&str> {
+    transcripts
+        .iter()
+        .flat_map(|t| &t.words)
+        .find(|word| word.id == id)
+        .map(|word| word.text.as_str())
+}
+
 fn caption_edit(edits: &mut Vec<CaptionEdit>, word: WordId) -> &mut CaptionEdit {
     let index = match edits.iter().position(|edit| edit.word == word) {
         Some(index) => index,
@@ -2059,6 +2104,7 @@ fn caption_edit(edits: &mut Vec<CaptionEdit>, word: WordId) -> &mut CaptionEdit 
                 text: None,
                 emph: false,
                 emoji: None,
+                hidden: false,
             });
             edits.len() - 1
         }

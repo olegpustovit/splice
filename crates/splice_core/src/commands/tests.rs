@@ -14,28 +14,15 @@ fn registry_matches_prototype_ids_order_and_status() {
         .filter_map(|line| line.trim().strip_prefix("[\"")?.split('"').next())
         .collect();
     assert_eq!((built.len(), planned.len()), (41, 20));
-    // 0.4 replaces the prototype's scale animations with camera segments (D12): motion.add and
-    // motion.set take their places as zoom.add and zoom.set, and the prototype's planned click
-    // "zoom.set" (settings) became intent.autoZoom's job.
-    let renamed = |id: &str| {
-        RETIRED
-            .iter()
-            .find(|(old, ..)| *old == id)
-            .map_or(id.to_owned(), |(_, new, _)| (*new).to_owned())
-    };
-    let built: Vec<String> = built.into_iter().map(renamed).collect();
-    let planned: Vec<String> = planned
-        .into_iter()
-        .filter(|id| *id != "zoom.set")
-        .map(renamed)
-        .collect();
-    let extensions: Vec<String> = EXTENSIONS.iter().map(|id| (*id).to_owned()).collect();
+    let mut built = built;
+    // Native camera commands follow the prototype's scale animation commands. The prototype's
+    // planned click-zoom settings are covered by intent.autoZoom.
+    let zoom = built.iter().position(|&id| id == "motion.set").unwrap() + 1;
+    built.splice(zoom..zoom, ["zoom.add", "zoom.set"]);
+    let planned: Vec<_> = planned.into_iter().filter(|id| *id != "zoom.set").collect();
     assert_eq!(
-        COMMANDS
-            .iter()
-            .map(|row| row.id.to_owned())
-            .collect::<Vec<_>>(),
-        [built, planned, extensions].concat()
+        COMMANDS.iter().map(|row| row.id).collect::<Vec<_>>(),
+        [built.as_slice(), planned.as_slice(), EXTENSIONS].concat()
     );
     assert_eq!(
         COMMANDS

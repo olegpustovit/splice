@@ -33,18 +33,18 @@ fn tier_b_described_examples_apply_replay_and_match_goldens() {
     {
         let described = commands::describe(Some(command.id), None).unwrap();
         let op = described.field("example").unwrap();
+        let mut ops = Vec::new();
+        if command.id == "motion.set" {
+            let setup = commands::describe(Some("motion.add"), None).unwrap();
+            ops.push(setup.field("example").unwrap().clone());
+        }
+        ops.push(op.clone());
         let mut project = base.clone();
-        let report = apply(&mut project, std::slice::from_ref(op), Source::Agent, false)
+        let report = apply(&mut project, &ops, Source::Agent, false)
             .unwrap_or_else(|error| panic!("{}: {error}", command.id));
-        assert_eq!(report.changes[0].cmd, command.id);
+        assert_eq!(report.changes.last().unwrap().cmd, command.id);
         let mut replayed = base.clone();
-        let again = replay(
-            &mut replayed,
-            std::slice::from_ref(op),
-            Source::Agent,
-            &report.mints,
-        )
-        .unwrap();
+        let again = replay(&mut replayed, &ops, Source::Agent, &report.mints).unwrap();
         assert_eq!(report, again, "{}", command.id);
         golden(command.id, &project, &report);
     }

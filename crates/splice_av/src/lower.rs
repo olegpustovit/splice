@@ -1,3 +1,4 @@
+use crate::caption::caption_text;
 use crate::{
     Error, TimedText,
     takes::{self, TakeEvents},
@@ -151,7 +152,6 @@ pub(super) fn build(
     // One black track stands in for every fill: the GPU draws backgrounds and fades from the
     // evaluated layer, and a fill source decodes to no texture.
     let black = state.black()?;
-    let [width, height] = project.size.map(f64::from);
     let mut first = evaluator.buffer();
     let mut last = evaluator.buffer();
     let mut chips: Vec<(ClipId, MediaId, Keys)> = Vec::new();
@@ -269,59 +269,15 @@ pub(super) fn build(
                     Layer::Caption { .. },
                 ) => {
                     if let Some(words) = evaluator.caption_words(item) {
-                        let count = match style.preset {
-                            CaptionPreset::Pop | CaptionPreset::Typewriter => {
-                                word.map_or(0, |i| i + 1)
-                            }
-                            _ => words.len(),
-                        };
-                        let mut text = String::new();
-                        // The spoken word in UTF-16 units, drawn in the active color.
-                        let mut active = None;
-                        for (index, token) in words[..count].iter().enumerate() {
-                            if !text.is_empty() {
-                                text.push(' ');
-                            }
-                            let start = text.encode_utf16().count();
-                            text.push_str(&token.text);
-                            if word == Some(index) {
-                                active = Some([start, text.encode_utf16().count()]);
-                            }
-                            if let Some(emoji) = &token.emoji {
-                                text.push_str(emoji);
-                            }
-                        }
-                        if !text.is_empty() {
-                            let [top, bottom, left, right] = style.safe;
-                            let font = (width * style.size).min(height * 0.15);
-                            let content_height = font * 2.5;
-                            let y = (height * style.position - content_height / 2.0).clamp(
-                                height * top,
-                                (height * (1.0 - bottom) - content_height).max(height * top),
-                            );
-                            let text_style = evaluator.text_style(item);
-                            state.add_text(
-                                range,
-                                Some(item),
-                                TextLayer {
-                                    text,
-                                    bounds: [
-                                        width * left,
-                                        y,
-                                        width * (1.0 - left - right),
-                                        content_height,
-                                    ],
-                                    font,
-                                    opacity: [1.0; 2],
-                                    color: text_style.map_or(style.color, |s| s.color),
-                                    style: native_style(text_style, style.stroke),
-                                    visible: None,
-                                    active: active
-                                        .filter(|_| style.active != style.color)
-                                        .map(|range| (range, style.active)),
-                                },
-                            );
-                        }
+                        state.caption(
+                            item,
+                            word,
+                            style,
+                            range,
+                            project.size,
+                            words,
+                            evaluator.text_style(item),
+                        );
                     }
                 }
                 (
@@ -640,6 +596,104 @@ impl Lowering {
         Ok(())
     }
 
+    fn caption(
+        &mut self,
+        item: ItemId,
+        word: Option<usize>,
+        style: splice_eval::CaptionStyle,
+        [from, to]: [Frame; 2],
+        canvas: [u32; 2],
+        words: &[splice_eval::CaptionWord],
+        text_style: Option<&TextStyle>,
+    ) {
+        let preset = (style.standard && text_style.is_none()).then_some(style.preset);
+        if word.is_none() && matches!(style.preset, CaptionPreset::Pop | CaptionPreset::Typewriter)
+        {
+            return;
+        }
+        let count = if preset.is_none()
+            && matches!(style.preset, CaptionPreset::Pop | CaptionPreset::Typewriter)
+        {
+            word.map_or(0, |i| i + 1)
+        } else {
+            words.len()
+        };
+        let [width, height] = canvas.map(f64::from);
+        let [top, bottom, left, right] = style.safe;
+        let font = if preset.is_some() {
+            (width * style.size).max(7.0)
+        } else {
+            (width * style.size).min(height * 0.15)
+        };
+        let h = font * 2.5;
+        let y = (height * style.position - h / 2.0).clamp(
+            height * top,
+            (height * (1.0 - bottom) - h).max(height * top),
+        );
+        let mut at = from;
+        while at < to {
+            let caption = caption_text(&words[..count], word, preset, [at, to]);
+            if caption.text.is_empty() {
+                break;
+            }
+            let mut raster = native_style(text_style, style.stroke);
+            if let Some(preset) = preset {
+                let (family, weight) = match preset {
+                    CaptionPreset::Typewriter => ("IBM Plex Mono", 1),
+                    CaptionPreset::Clean => ("Barlow Semi Condensed", 2),
+                    _ => ("Barlow Semi Condensed", 4),
+                };
+                raster.font = family.into();
+                raster.weight = weight;
+                raster.stroke_width = if preset == CaptionPreset::Clean {
+                    0.0
+                } else {
+                    raster.stroke_width * 0.5
+                };
+                let positioned = !caption.spans.is_empty();
+                raster.caption = Some(apple_sys::composition::CaptionRaster {
+                    color: style.active,
+                    spans: caption.spans,
+                    layout: positioned.then_some(apple_sys::composition::CaptionLayout {
+                        canvas,
+                        box_pixels: [
+                            width * (left + (1.0 - left - right) / 2.0),
+                            height * style.position,
+                            height * top,
+                            height * (1.0 - bottom),
+                            width * (1.0 - left - right) * 0.94,
+                        ],
+                        font_scale: if preset == CaptionPreset::Typewriter {
+                            0.86
+                        } else {
+                            1.0
+                        },
+                        clean: preset == CaptionPreset::Clean,
+                    }),
+                });
+            }
+            let until = caption.until.clamp(at.saturating_add(1), to);
+            self.add_text(
+                [at, until],
+                Some(item),
+                TextLayer {
+                    text: caption.text,
+                    bounds: [width * left, y, width * (1.0 - left - right), h],
+                    font,
+                    opacity: [1.0; 2],
+                    color: text_style.map_or(style.color, |s| s.color),
+                    style: raster,
+                    visible: None,
+                    active: caption
+                        .active
+                        .filter(|_| style.active != style.color)
+                        .map(|span| (span, style.active)),
+                },
+            );
+            at = until;
+        }
+    }
+
     /// Adds timed text, extending the previous cue when it continues unchanged.
     fn add_text(&mut self, range: [Frame; 2], item: Option<ItemId>, layer: TextLayer) {
         if let Some(last) = self.text.last_mut()
@@ -648,6 +702,7 @@ impl Lowering {
             && last.range[1] == range[0]
             && last.layer.text == layer.text
             && last.layer.active == layer.active
+            && last.layer.style.caption == layer.style.caption
             && last.reveal.is_none()
         {
             last.range[1] = range[1];
@@ -1300,6 +1355,7 @@ fn native_style(style: Option<&TextStyle>, stroke: f64) -> apple_sys::compositio
             align: u32::from(s.align),
             line_height: s.line_height,
             wrap: true,
+            caption: None,
         },
         None => apple_sys::composition::TextStyle {
             stroke_width: stroke,

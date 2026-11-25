@@ -75,6 +75,13 @@ fn window_program_4k_reuses_shared_textures_without_allocations() {
         Window::open_with("Splice preview test", 320, 180, false, true, false).unwrap();
     let mut ui = Ui::new(&UiDesc::DEFAULT).unwrap();
     let mut surface = Surface::open(&mut window, &ui, Some(size)).unwrap();
+    let device = surface.device().clone();
+    surface.set_crop_preview(Some((&[0; 16], [2, 2]))).unwrap();
+    assert!(surface.crop_preview().is_some());
+    surface.set_crop_preview(None).unwrap();
+    assert!(surface.crop_preview().is_none());
+    assert!(surface.add_thumbnail(&[0; 16], [2, 2]).is_ok());
+    surface.clear_thumbnails().unwrap();
     let mut pixels = vec![0; size[0] as usize * size[1] as usize * 4];
     let mut events = Vec::with_capacity(input::EVENT_RESERVE);
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -120,10 +127,18 @@ fn window_program_4k_reuses_shared_textures_without_allocations() {
         let start = Instant::now();
         let sample = surface.sample(&composition, &mut player).unwrap();
         let image = surface.image();
+        let matte = surface.matte().expect("stage matte");
         let input = FrameIn::new(320.0, 180.0).time(window.time());
         ui.frame(&input, &mut |ui| {
             let node = ui.node("program", Node::DEFAULT.w_px(320.0).h_px(180.0));
             ui.canvas(&node, move |paint, rect| {
+                paint
+                    .image(
+                        rect,
+                        &matte,
+                        &ImageStyle::DEFAULT.fit(pxui::draw::Fit::Fill),
+                    )
+                    .unwrap();
                 if let Some(image) = image {
                     paint.image(rect, &image, &ImageStyle::DEFAULT).unwrap();
                 }
@@ -175,18 +190,209 @@ fn window_program_4k_reuses_shared_textures_without_allocations() {
         window.wait(Some(window.time() + 0.01));
     }
     assert!(surface.image().is_some());
-    surface.clear_program();
+    surface.clear_program().unwrap();
     assert!(surface.image().is_none());
+
+    let package = std::env::temp_dir().join(format!("splice-window-lab-{}", std::process::id()));
+    let cache = package.join("cache");
+    let frames = cache.join("frames");
+    std::fs::create_dir(&package).unwrap();
+    std::fs::create_dir_all(&frames).unwrap();
+    let path = frames.join("frame.png");
+    std::fs::write(&path, splice_av::encode_png(&[255; 16], [2, 2], 2).unwrap()).unwrap();
+    let reply = [surface::ReplyFrame {
+        path,
+        at: Some(11),
+        aspect: 1.0,
+    }];
+    surface
+        .refresh_lab_frames(Some((1, &reply, &package)))
+        .unwrap();
+    let preview = surface.lab_images()[0].expect("uploaded Agent reply");
+    assert!(surface.begin(&window).unwrap());
+    let input = FrameIn::new(320.0, 180.0).time(window.time());
+    ui.frame(&input, &mut |ui| {
+        let node = ui.node(
+            i64::from(reply[0].at.unwrap()),
+            Node::DEFAULT.w_px(150.0 * reply[0].aspect).h_px(150.0),
+        );
+        ui.canvas(&node, move |paint, rect| {
+            paint.image(rect, &preview, &ImageStyle::DEFAULT).unwrap();
+        });
+    })
+    .unwrap();
+    assert!(surface.draw(&window, &ui).unwrap());
+    surface.refresh_lab_frames(None).unwrap();
+    assert!(surface.lab_images().is_empty());
+    surface
+        .refresh_lab_frames(Some((1, &reply, &package)))
+        .unwrap();
+    assert!(surface.lab_images()[0].is_some());
+    std::fs::remove_file(&reply[0].path).unwrap();
+    std::fs::remove_dir(frames).unwrap();
+    std::fs::remove_dir(cache).unwrap();
+    std::fs::remove_dir(package).unwrap();
+    surface.close().unwrap();
+    assert!(ogpu_core::backend::create_queue(&device).is_err());
+    assert!(ogpu_core::handle::device_destroyed(
+        ogpu_core::backend::device_handle(&device),
+    ));
+    window.destroy().unwrap();
+}
+
+#[cfg(target_os = "macos")]
+fn window_program_shuttle_crosses_clip_boundaries() {
+    use pxui::{FrameIn, Ui, UiDesc};
+    use pxui_host::Window;
+    use splice_av::Composition;
+    use splice_model::*;
+    use std::{
+        path::Path,
+        rc::Rc,
+        time::{Duration, Instant},
+    };
+    use surface::Surface;
+
+    let size = [96, 64];
+    let mut project = Project {
+        size,
+        ..Project::default()
+    };
+    let media = MediaId::from_serial(1);
+    project.media.push(Media {
+        id: media,
+        kind: MediaKind::Video,
+        path: "probe.mov".into(),
+        bookmark: None,
+        size: 0,
+        mtime: 0,
+        probe: Probe {
+            fps: 30.0,
+            frames: 30,
+            width: size[0],
+            height: size[1],
+            audio: Vec::new(),
+            codec: None,
+            loudness: None,
+        },
+        take: None,
+    });
+    for start in [0, 30, 60] {
+        project
+            .clips
+            .insert(Clip {
+                id: ClipId::from_serial(1 + start as u64),
+                timing: ClipTiming {
+                    start,
+                    length: 30,
+                    source: 0,
+                    speed: 1.0,
+                },
+                data: ClipData {
+                    media: Some(media),
+                    ..ClipData::default()
+                },
+            })
+            .unwrap();
+    }
+    let media_files = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/media");
+    let composition = Rc::new(Composition::prepare(&project, &media_files).unwrap());
+    let mut player = composition.player().unwrap();
+    let mut window =
+        Window::open_with("Splice shuttle test", 320, 180, false, true, false).unwrap();
+    let mut ui = Ui::new(&UiDesc::DEFAULT).unwrap();
+    let mut surface = Surface::open(&mut window, &ui, Some(size)).unwrap();
+    let mut events = Vec::with_capacity(input::EVENT_RESERVE);
+    let mut sample = |player: &mut splice_av::Player| {
+        assert!(window.pump(&mut events));
+        events.clear();
+        assert!(surface.begin(&window).unwrap());
+        let at = surface.sample(&composition, player);
+        let input = FrameIn::new(320.0, 180.0).time(window.time());
+        ui.frame(&input, &mut |_| {}).unwrap();
+        assert!(surface.draw(&window, &ui).unwrap());
+        window.wait(Some(window.time() + 0.008));
+        at
+    };
+    for (rate, start) in [
+        (-1, Some(35)),
+        (-2, Some(35)),
+        (-4, Some(35)),
+        (-8, Some(35)),
+        (1, Some(25)),
+        (2, Some(25)),
+        (4, Some(25)),
+        (8, Some(25)),
+        (-1, None),
+        (1, None),
+    ] {
+        if let Some(start) = start {
+            player.set_rate(0);
+            player.seek(start).unwrap();
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while sample(&mut player).unwrap() != Some(start) {
+                assert!(
+                    Instant::now() < deadline,
+                    "shuttle start {start} did not display"
+                );
+            }
+        }
+        player.set_rate(rate);
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let mut last = None;
+        loop {
+            if let Some(at) =
+                sample(&mut player).unwrap_or_else(|error| panic!("shuttle {rate}: {error}"))
+            {
+                last = Some(at);
+                if (rate < 0 && at < 30) || (rate > 0 && at >= 30) {
+                    break;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "shuttle {rate} from {start:?} did not cross the edit, last frame {last:?}"
+            );
+        }
+    }
+    for (rate, end) in [(-8, 0), (8, 89)] {
+        player.set_rate(rate);
+        let deadline = Instant::now() + Duration::from_millis(800);
+        let mut shown = None;
+        while !player.ended() {
+            shown = sample(&mut player).unwrap().or(shown);
+            assert!(Instant::now() < deadline, "shuttle {rate} did not stop");
+        }
+        assert!(shown.is_some());
+        player.set_rate(0);
+        if shown != Some(end) {
+            player.seek(end).unwrap();
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while sample(&mut player).unwrap() != Some(end) {
+                assert!(
+                    Instant::now() < deadline,
+                    "shuttle end {end} did not display"
+                );
+            }
+        }
+    }
+    player.set_rate(0);
     surface.close().unwrap();
     window.destroy().unwrap();
 }
 
 #[cfg(target_os = "macos")]
 fn main() {
-    harness::run(&[(
-        "window_program_4k_reuses_shared_textures_without_allocations",
-        window_program_4k_reuses_shared_textures_without_allocations,
-    )]);
+    harness::run(&[
+        (
+            "window_program_4k_reuses_shared_textures_without_allocations",
+            window_program_4k_reuses_shared_textures_without_allocations,
+        ),
+        (
+            "window_program_shuttle_crosses_clip_boundaries",
+            window_program_shuttle_crosses_clip_boundaries,
+        ),
+    ]);
 }
 
 #[cfg(not(target_os = "macos"))]

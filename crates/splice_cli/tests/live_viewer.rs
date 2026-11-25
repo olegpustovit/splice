@@ -10,7 +10,7 @@ fn release_keepalive() {}
 mod live {
     use splice_core::history::Store;
     use splice_json::{Value as Json, parse};
-    use splice_mcp::live::{Server, ViewCommand, Viewer};
+    use splice_mcp::live::{Server, ViewCommand, ViewTab, Viewer, ViewerZoom};
     use std::{
         fs,
         io::{BufRead, BufReader, Write},
@@ -112,6 +112,15 @@ mod live {
                 local.field("projectId").and_then(Json::as_str),
                 Some("prj_1")
             );
+            let headless = peer.tool(
+                "ui.show",
+                r#"{"projectId":"prj_1","range":{"from":5,"to":25},"view":"mcp","viewer":{"zoom":1.25}}"#,
+            );
+            assert_eq!(headless.field("applied"), Some(&Json::Bool(false)));
+            assert_eq!(
+                headless.field("reason").and_then(Json::as_str),
+                Some("headless")
+            );
             let live = peer.tool("project.info", r#"{"path":"Live.splice"}"#);
             assert_eq!(
                 live.field("projectId").and_then(Json::as_str),
@@ -119,9 +128,16 @@ mod live {
             );
             let focused = peer.tool(
                 "ui.show",
-                &format!(r#"{{"projectId":"prj_2","at":{{"item":"{title}","offset":15}}}}"#),
+                &format!(r#"{{"projectId":"prj_2","at":{{"item":"{title}","offset":15}},"select":["{title}","{title}"],"range":{{"from":5,"to":25}},"view":"mcp","viewer":{{"zoom":1.25}}}}"#),
             );
+            assert_eq!(focused.field("applied"), Some(&Json::Bool(true)));
             assert_eq!(focused.field("playhead").and_then(Json::as_u64), Some(15));
+            let ids = Json::Array(vec![Json::String(title.to_string())]);
+            assert_eq!(focused.field("selection"), Some(&ids));
+            let query = peer.tool("ui.show", r#"{"projectId":"prj_2"}"#);
+            assert_eq!(query.field("selection"), Some(&ids));
+            let clear = peer.tool("ui.show", r#"{"projectId":"prj_2","select":[]}"#);
+            assert_eq!(clear.field("selection"), Some(&Json::Array(Vec::new())));
             let baseline = snapshot(&remote, "before.png");
             assert_eq!(baseline.field("frame").and_then(Json::as_u64), Some(15));
             let session = peer.tool("session.start", r#"{"projectId":"prj_2"}"#);
@@ -131,16 +147,47 @@ mod live {
             let updated = snapshot(&remote, "after.png");
             assert_eq!(updated.field("revision").and_then(Json::as_str), Some("r2"));
             assert_eq!(updated.field("frame").and_then(Json::as_u64), Some(15));
-            let before = fs::read(remote.join("before.png")).unwrap();
-            assert_ne!(before, fs::read(remote.join("after.png")).unwrap());
+            let mut before = without_revision_badge(&remote.join("before.png"));
+            let after = without_revision_badge(&remote.join("after.png"));
+            let stage = (64 * 960 * 4)..(241 * 960 * 4);
+            assert!(
+                before[stage.clone()] != after[stage],
+                "The Program should show the title edit"
+            );
+            let rendered = peer.tool("view.frames", r#"{"projectId":"prj_2","at":[15,30]}"#);
+            assert_eq!(
+                rendered.field("revision").and_then(Json::as_str),
+                Some("r2")
+            );
+            let frames = rendered.field("frames").and_then(Json::as_array).unwrap();
+            assert_eq!(frames.len(), 2);
+            assert!(
+                frames
+                    .iter()
+                    .all(|image| image.field("uri").and_then(Json::as_str).is_some())
+            );
             undo.send(()).unwrap();
             undone.recv().unwrap();
+            let ended = peer.tool(
+                "session.end",
+                &format!(r#"{{"projectId":"prj_2","sessionId":"{session}"}}"#),
+            );
+            assert_eq!(ended.field("open"), Some(&Json::Bool(false)));
             let restored = snapshot(&remote, "undo.png");
             assert_eq!(
                 restored.field("revision").and_then(Json::as_str),
                 Some("r3")
             );
-            assert_eq!(before, fs::read(remote.join("undo.png")).unwrap());
+            let mut undone_pixels = without_revision_badge(&remote.join("undo.png"));
+            assert_eq!(mask_redo_ink(&mut before), 0);
+            assert!(
+                mask_redo_ink(&mut undone_pixels) > 0,
+                "Undo should enable Redo"
+            );
+            assert!(
+                before == undone_pixels,
+                "Undo should restore every pixel outside the revision badge and Redo control"
+            );
             assert_eq!(
                 peer.tool("timeline.snapshot", r#"{"projectId":"prj_1"}"#)
                     .field("revision")
@@ -152,12 +199,35 @@ mod live {
         });
         let deadline = Instant::now() + Duration::from_secs(4);
         let mut at = 0;
+        let mut selection = Vec::new();
         while !worker.is_finished() {
             if let Some(request) = server.next_request() {
                 let reply = viewer.handle(&request.body, at, &mut |store, intent| match intent {
-                    ViewCommand::Seek(frame) => {
-                        at = frame;
-                        Ok(Json::Null)
+                    ViewCommand::Show {
+                        at: seek,
+                        select,
+                        expand,
+                        range,
+                        view,
+                        zoom,
+                    } => {
+                        assert!(expand.is_none());
+                        if let Some(seek) = seek {
+                            assert_eq!(seek, 15);
+                            assert_eq!(range, Some([5, 25]));
+                            assert_eq!(view, Some(ViewTab::Agent));
+                            assert_eq!(zoom, Some(ViewerZoom::Factor(1.25)));
+                            at = seek;
+                        }
+                        if let Some(select) = select {
+                            selection = select;
+                        }
+                        Ok(Json::Array(
+                            selection
+                                .iter()
+                                .map(|id| Json::String(id.to_string()))
+                                .collect(),
+                        ))
                     }
                     ViewCommand::Snapshot { at, output } => {
                         splice_app::snapshot_output(store, at, &output)
@@ -192,6 +262,30 @@ mod live {
     }
     /// T10.1: an agent opened the project first; the viewer takes it over, and the agent's
     /// next edit on the same connection lands in the viewer.
+    fn without_revision_badge(path: &Path) -> Vec<u8> {
+        let (mut pixels, [width, height]) = apple_sys::image::decode_rgba(path).unwrap();
+        assert_eq!([width, height], [960, 640]);
+        let stride = width as usize * 4;
+        for line in pixels.chunks_exact_mut(stride).take(34) {
+            // A durable undo writes a new revision.
+            line[845 * 4..881 * 4].fill(0);
+        }
+        pixels
+    }
+
+    fn mask_redo_ink(pixels: &mut [u8]) -> usize {
+        let mut bright = 0;
+        for row in pixels.chunks_exact_mut(960 * 4).skip(282).take(28) {
+            let control = &mut row[325 * 4..351 * 4];
+            bright += control
+                .chunks_exact(4)
+                .filter(|pixel| pixel[0] > 128)
+                .count();
+            control.fill(0);
+        }
+        bright
+    }
+
     pub(super) fn native_viewer_takes_over_a_project_held_by_headless_mcp() {
         let dir = std::env::temp_dir().join(format!("splice-handoff-{}", std::process::id()));
         fs::create_dir(&dir).unwrap();

@@ -9,6 +9,7 @@ fn playbar_controls_have_accessible_names_and_cancel_captured_scrubs() {
         end: 61,
         fps: 30,
         play: CommandState::default(),
+        rate: 0,
         dragging: false,
     });
     let result = Cell::new(Intents::default());
@@ -61,6 +62,7 @@ fn playbar_running_clock_allocates_nothing_with_warmed_digits() {
             title: Some("Pause"),
             ..CommandState::default()
         },
+        rate: 1,
         dragging: false,
     };
     let mut tick = || {

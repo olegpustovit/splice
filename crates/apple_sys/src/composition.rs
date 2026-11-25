@@ -225,6 +225,61 @@ pub struct TextLayer {
     pub active: Option<([usize; 2], u32)>,
 }
 
+/// Highlights and line centering used by a caption raster.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CaptionRaster {
+    /// Shared highlight RGB.
+    pub color: u32,
+    /// Non-overlapping UTF-16 ranges and run font-size multipliers.
+    pub spans: Vec<CaptionSpan>,
+    /// Canvas-relative word placement for the standard caption presets.
+    pub layout: Option<CaptionLayout>,
+}
+
+/// Geometry for a positioned caption.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CaptionLayout {
+    /// Canvas size in pixels, used to clip the raster.
+    pub canvas: [u32; 2],
+    /// Center x, desired center y, safe top, safe bottom and maximum line width.
+    pub box_pixels: [f64; 5],
+    /// Ratio of glyph font size to caption line size.
+    pub font_scale: f64,
+    /// Draws the Clean preset's line plate.
+    pub clean: bool,
+}
+
+/// The measured UTF-16 token and its visible ink for this raster.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CaptionSpan {
+    /// Full UTF-16 token range.
+    pub range: [usize; 2],
+    /// Exclusive UTF-16 endpoint of the visible prefix.
+    pub visible_to: usize,
+    /// Scale around the slot's center.
+    pub scale: f64,
+    /// Slot width as a multiple of the unscaled advance.
+    pub reserve: f64,
+    /// Word opacity.
+    pub opacity: f64,
+    /// 0 base, 1 highlight, 2 dark ink on a highlight plate.
+    pub highlight: u32,
+}
+impl CaptionSpan {
+    /// A full token at the given scale.
+    pub fn new(range: [usize; 2], scale: f64) -> Self {
+        Self {
+            range,
+            visible_to: range[1],
+            scale,
+            reserve: scale * 1.1,
+            opacity: 1.0,
+            highlight: u32::from(scale != 1.0),
+        }
+    }
+}
+
 /// Font, weight and decoration of rasterized text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
@@ -248,6 +303,8 @@ pub struct TextStyle {
     pub line_height: f64,
     /// Wrap lines at the box width; otherwise the font shrinks until each line fits.
     pub wrap: bool,
+    /// Optional caption alignment and word highlights.
+    pub caption: Option<CaptionRaster>,
 }
 
 impl Default for TextStyle {
@@ -263,6 +320,7 @@ impl Default for TextStyle {
             align: 1,
             line_height: 1.15,
             wrap: true,
+            caption: None,
         }
     }
 }
@@ -270,6 +328,9 @@ impl Default for TextStyle {
 #[repr(C)]
 struct RawTextStyle {
     font: *const c_char,
+    bundled_font: *const u8,
+    bundled_length: usize,
+    bundled_face: u32,
     weight: u32,
     color: u32,
     stroke: u32,
@@ -324,6 +385,15 @@ unsafe extern "C" {
         error: *mut *mut c_char,
     ) -> bool;
     fn splice_av_finish(composition: *mut c_void, error: *mut *mut c_char) -> bool;
+    fn splice_program_title_rgba(
+        text: *const c_char,
+        width: u32,
+        height: u32,
+        geometry: *const f64,
+        face: *const u8,
+        face_size: usize,
+        error: *mut *mut c_char,
+    ) -> *mut u8;
     fn splice_av_blit(
         command_buffer: *mut c_void,
         sources: *const *mut c_void,
@@ -342,7 +412,7 @@ unsafe extern "C" {
         error: *mut *mut c_char,
     ) -> i32;
     fn splice_av_player(composition: *mut c_void, error: *mut *mut c_char) -> *mut c_void;
-    fn splice_av_player_play(player: *mut c_void, playing: bool);
+    fn splice_av_player_set_rate(player: *mut c_void, rate: i8);
     fn splice_av_player_ended(player: *mut c_void) -> bool;
     fn splice_av_player_seek(player: *mut c_void, frame: i32) -> bool;
     fn splice_av_grab(
@@ -396,6 +466,13 @@ unsafe extern "C" {
         active_from: i64,
         active_to: i64,
         active_color: u32,
+        caption_spans: *const CaptionSpan,
+        span_count: usize,
+        center_lines: bool,
+        caption_box: *const f64,
+        font_scale: f64,
+        clean: bool,
+        rect: *mut u32,
         error: *mut *mut c_char,
     ) -> *mut u8;
     fn splice_av_append(
@@ -631,8 +708,14 @@ impl Player {
 
     /// Starts or pauses playback.
     pub fn set_playing(&mut self, playing: bool) {
-        // SAFETY: this handle owns the player and is called on its owning thread.
-        unsafe { splice_av_player_play(self.0.as_ptr(), playing) };
+        self.set_rate(if playing { 1 } else { 0 });
+    }
+
+    /// Requests a signed preview rate, bounded to -8 through 8 (0 pauses).
+    /// Unsupported transport rates are reported by the next frame request.
+    pub fn set_rate(&mut self, rate: i8) {
+        // SAFETY: the native player lives for self and the bridge takes a scalar.
+        unsafe { splice_av_player_set_rate(self.0.as_ptr(), rate.clamp(-8, 8)) };
     }
 
     /// Seeks to a frame on the composition clock.
@@ -803,12 +886,49 @@ fn raw_source(source: Source, timing: &Timing) -> Result<(Option<CString>, RawSo
     Ok((path, raw))
 }
 
+const BARLOW_REGULAR: &[u8] = include_bytes!("../assets/barlow/BarlowSemiCondensed-Regular.ttf");
+
 /// Rasterizes a text layer into straight RGBA8 of `size`.
 pub fn text_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, Error> {
+    raster_text(layer, size, None).map(|(_, pixels)| pixels)
+}
+
+/// Rasterizes positioned caption words into a cropped straight RGBA8 bitmap and its canvas rect.
+pub fn positioned_caption_rgba(
+    layer: &TextLayer,
+    layout: CaptionLayout,
+) -> Result<([u32; 4], Vec<u8>), Error> {
+    raster_text(layer, layout.canvas, Some(&layout))
+}
+
+fn raster_text(
+    layer: &TextLayer,
+    size: [u32; 2],
+    layout: Option<&CaptionLayout>,
+) -> Result<([u32; 4], Vec<u8>), Error> {
     let text = CString::new(layer.text.replace('\0', "\u{FFFD}")).expect("NUL replaced");
     let family = CString::new(layer.style.font.replace('\0', "")).expect("NUL removed");
+    let (face, face_index): (&[u8], u32) = match (family.as_bytes(), layer.style.weight) {
+        (b"Barlow Semi Condensed", 0) => (BARLOW_REGULAR, 0),
+        (b"Barlow Semi Condensed", 4) => (
+            include_bytes!("../assets/barlow/BarlowSemiCondensed-ExtraBold.ttf"),
+            1,
+        ),
+        (b"Barlow Semi Condensed", 2) if layout.is_some() => (
+            include_bytes!("../assets/barlow/BarlowSemiCondensed-SemiBold.ttf"),
+            2,
+        ),
+        (b"IBM Plex Mono", 1) if layout.is_some() => (
+            include_bytes!("../assets/ibm-plex/IBMPlexMono-Medium.ttf"),
+            3,
+        ),
+        _ => (&[], 0),
+    };
     let style = RawTextStyle {
         font: family.as_ptr(),
+        bundled_font: face.as_ptr(),
+        bundled_length: face.len(),
+        bundled_face: face_index,
         weight: layer.style.weight,
         color: layer.color,
         stroke: layer.style.stroke,
@@ -825,6 +945,17 @@ pub fn text_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, Error> {
         layer.active.map_or(([-1, -1], 0), |(range, color)| {
             (range.map(|v| v as i64), color)
         });
+    let spans = layer
+        .style
+        .caption
+        .as_ref()
+        .map_or(&[][..], |caption| caption.spans.as_slice());
+    let active_color = layer
+        .style
+        .caption
+        .as_ref()
+        .map_or(active_color, |caption| caption.color);
+    let mut rect = [0, 0, size[0], size[1]];
     let mut error = ptr::null_mut();
     // SAFETY: the strings and style live for the call; native returns a malloc'd
     // width*height*4 buffer.
@@ -840,6 +971,41 @@ pub fn text_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, Error> {
             active_from,
             active_to,
             active_color,
+            spans.as_ptr(),
+            spans.len(),
+            layer.style.caption.is_some(),
+            layout.map_or(ptr::null(), |layout| layout.box_pixels.as_ptr()),
+            layout.map_or(1.0, |layout| layout.font_scale),
+            layout.is_some_and(|layout| layout.clean),
+            rect.as_mut_ptr(),
+            &mut error,
+        )
+    };
+    if pixels.is_null() {
+        return Err(diagnostic(error));
+    }
+    let length = rect[2] as usize * rect[3] as usize * 4;
+    // SAFETY: the buffer holds `length` initialized bytes until freed below.
+    let bytes = unsafe { std::slice::from_raw_parts(pixels, length) }.to_vec();
+    // SAFETY: the allocation came from calloc and is not used again.
+    unsafe { free(pixels.cast()) };
+    Ok((rect, bytes))
+}
+
+/// Rasterizes the default Program title and its plate into straight RGBA8 of `size`.
+pub fn program_title_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, Error> {
+    let text = CString::new(layer.text.replace('\0', "\u{FFFD}")).expect("NUL replaced");
+    let geometry = [layer.bounds[2], layer.bounds[3], layer.font];
+    let mut error = ptr::null_mut();
+    // SAFETY: the text and geometry live for the call and the embedded face is static.
+    let pixels = unsafe {
+        splice_program_title_rgba(
+            text.as_ptr(),
+            size[0],
+            size[1],
+            geometry.as_ptr(),
+            BARLOW_REGULAR.as_ptr(),
+            BARLOW_REGULAR.len(),
             &mut error,
         )
     };
@@ -847,7 +1013,7 @@ pub fn text_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, Error> {
         return Err(diagnostic(error));
     }
     let length = size[0] as usize * size[1] as usize * 4;
-    // SAFETY: the buffer holds `length` initialized bytes until freed below.
+    // SAFETY: `pixels` holds `length` initialized bytes until freed below.
     let bytes = unsafe { std::slice::from_raw_parts(pixels, length) }.to_vec();
     // SAFETY: the allocation came from calloc and is not used again.
     unsafe { free(pixels.cast()) };

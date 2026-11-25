@@ -1,4 +1,4 @@
 [submodule "pxui"]
 	path = pxui
 	url = https://github.com/olegpustovit/pxui.git
-	branch = rust-port
+	branch = dev

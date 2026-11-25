@@ -44,6 +44,34 @@ fn title(plan: &FramePlan, id: ItemId) -> (Rect, f64, bool, Look) {
         .unwrap()
 }
 
+#[test]
+fn unstyled_title_keeps_the_plate_bounds_and_uses_single_line_program_type() {
+    let project = sample();
+    let evaluator = Evaluator::prepare(&project).unwrap();
+    let mut plan = evaluator.buffer();
+    evaluator.frame(192, &mut plan);
+    let id = item("ovl_label");
+    assert!(evaluator.is_unstyled_title(id));
+    assert!(!evaluator.is_unstyled_title(item("ovl_cap2")));
+    let (bounds, font, wrap, _) = title(&plan, id);
+    let [w, h] = project.size.map(f64::from);
+    let height = w.min(h) * 0.1;
+    for (actual, expected) in [
+        (bounds.x, w * 0.06),
+        (bounds.y, h * 0.07),
+        (bounds.w, w * 0.88),
+        (bounds.h, height),
+        (font, height * 0.56),
+    ] {
+        assert!((actual - expected).abs() < 1e-9);
+    }
+    assert!(!wrap);
+    let [start, _] = evaluator.extent(TimelineId::Item(id)).unwrap();
+    evaluator.frame(start, &mut plan);
+    assert!(plan.layers.iter().any(|layer| matches!(layer,
+        Layer::Title { item, opacity, .. } if *item == id && *opacity == 1.0 / 6.0)));
+}
+
 /// T42.2/T42.3: a box pins the title's rectangle; the font starts at its style size (or the
 /// box height for `fill`) and the rasterizer wraps or not as the box says.
 #[test]
@@ -56,6 +84,8 @@ fn title_box_sets_bounds_font_and_wrap() {
     let evaluator = Evaluator::prepare(&project).unwrap();
     let mut plan = evaluator.buffer();
     evaluator.frame(30, &mut plan);
+    assert!(!evaluator.is_unstyled_title(item("ovl_hook")));
+    assert!(!evaluator.is_unstyled_title(item("ovl_label")));
     let (bounds, font, wrap, _) = title(&plan, item("ovl_hook"));
     let [w, h] = project.size.map(f64::from);
     let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
@@ -184,4 +214,91 @@ fn lane_and_project_transforms_are_parents() {
             }
         },
     );
+}
+
+/// V13 chooses the topmost lane and scales the spine picture on its own clock.
+#[test]
+fn v13_scale_motion_has_exact_endpoints_and_no_warm_allocations() {
+    let mut project = sample();
+    let camera = Evaluator::prepare(&project).unwrap();
+    let apply = |project: &mut Project, ops: &str| {
+        let ops = splice_json::parse(ops).unwrap();
+        edit::apply(project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
+    };
+    apply(
+        &mut project,
+        r#"[{"cmd":"motion.add","at":180,"length":150,"from":1,"to":1.16}]"#,
+    );
+    let evaluator = Evaluator::prepare(&project).unwrap();
+    let scale = |at| evaluator.motion_scale(at);
+    assert_eq!(scale(179), 1.0);
+    assert_eq!(scale(180), 1.0);
+    assert!((scale(192) - 1.0128859060402684).abs() < 1e-12);
+    assert_eq!(scale(329), 1.16);
+    assert_eq!(scale(330), 1.0);
+    assert!(camera.view(192).amount > 1.0);
+    for at in 175..340 {
+        assert_eq!(evaluator.view(at), camera.view(at));
+    }
+
+    let mut plan = evaluator.buffer();
+    splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset).warm(
+        &mut || {
+            for at in 178..=331 {
+                evaluator.frame(at, &mut plan);
+                std::hint::black_box((scale(at), &plan));
+            }
+        },
+    );
+
+    apply(
+        &mut project,
+        r#"[{"cmd":"motion.add","at":210,"length":30,"from":0.8,"to":0.9}]"#,
+    );
+    let overlap = Evaluator::prepare(&project).unwrap();
+    assert_eq!(overlap.motion_scale(209), scale(209));
+    assert_eq!(overlap.motion_scale(210), 0.8);
+    assert_eq!(overlap.motion_scale(239), 0.9);
+    assert_eq!(overlap.motion_scale(240), scale(240));
+
+    // A file may supply overlapping items at the same rank. Creation order breaks the tie,
+    // even when the second item starts before the first.
+    let slot = *project.items.order().last().unwrap();
+    let mut data = project.items.data(slot).unwrap().clone();
+    data.kind = ItemKind::Motion(splice_model::ScaleMotion { from: 1.7, to: 1.7 });
+    project
+        .items
+        .insert(splice_model::Item {
+            id: ItemId::from_serial(project.serial),
+            timing: splice_model::ItemTiming {
+                anchor: splice_model::Anchor::Pinned(204),
+                length: 50,
+            },
+            data,
+        })
+        .unwrap();
+    let tie = Evaluator::prepare(&project).unwrap();
+    assert_eq!(tie.motion_scale(209), 1.7);
+    assert_eq!(tie.motion_scale(220), overlap.motion_scale(220));
+    assert_eq!(tie.motion_scale(240), 1.7);
+}
+
+#[test]
+fn v13_scale_motion_is_identity_in_explicit_and_implicit_gaps() {
+    let project = applied(
+        r#"[{"cmd":"overlay.add","kind":"motion","anchor":{"pinned":true,"frame":20},
+             "length":560,"from":0.6,"to":0.6},
+            {"cmd":"item.delete","items":"clp_take","ripple":false,"overlays":"delete"}]"#,
+    );
+    let evaluator = Evaluator::prepare(&project).unwrap();
+    assert_eq!(evaluator.motion_scale(90), 0.6);
+    assert_eq!(evaluator.motion_scale(200), 1.0);
+    assert_eq!(evaluator.motion_scale(550), 0.6);
+
+    let mut project = project;
+    let gap = project.clips.find("clp_open".parse().unwrap()).unwrap();
+    project.clips.data_mut(gap).unwrap().media = None;
+    let evaluator = Evaluator::prepare(&project).unwrap();
+    assert_eq!(evaluator.motion_scale(90), 1.0);
+    assert_eq!(evaluator.motion_scale(550), 0.6);
 }

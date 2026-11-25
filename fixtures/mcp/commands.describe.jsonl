@@ -1,2 +1,6 @@
 > {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"commands.describe","arguments":{"id":"item.trim"}}}
 < {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"id":"item.trim","cut":"0.1","example":{"cmd":"item.trim"}},"isError":false}}
+> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"commands.describe","arguments":{"id":"motion.add"}}}
+< {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"id":"motion.add","title":"Add Scale Animation","shortcut":"Z","example":{"cmd":"motion.add","at":180,"length":150,"from":1,"to":1.16,"ref":"motion"}},"isError":false}}
+> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"commands.describe","arguments":{"id":"motion.set"}}}
+< {"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"id":"motion.set","title":"Edit Scale Keyframes","example":{"cmd":"motion.set","item":"$motion","from":1.16,"to":1}},"isError":false}}

@@ -1,4 +1,5 @@
 use super::*;
+use splice_model::{CaptionEdit, ItemKind};
 use splice_testkit::Xorshift;
 use std::fs;
 use std::path::PathBuf;
@@ -178,6 +179,115 @@ fn history_session_revert_replays_later_human_edits_and_undoes_the_undo() {
     let store = Store::open(&temp.0).unwrap();
     assert!(store.problem().is_none());
     assert_eq!(state_hash(store.project()).unwrap(), altered);
+}
+
+#[test]
+fn history_batch_undo_keeps_other_batches_and_replays_after_reopen() {
+    let temp = Temp::new("batch-undo");
+    let mut store = Store::create(&temp.0, &Project::default()).unwrap();
+    let session = store.start_session("agent", 1).unwrap().id;
+    let other = store.start_session("other", 1).unwrap().id;
+    store
+        .apply(
+            &[op(r#"{"cmd":"marker.add","at":5}"#)],
+            &agent(session, 0, 2),
+        )
+        .unwrap();
+    store
+        .apply(
+            &[op(
+                r#"{"cmd":"marker.set","marker":"mrk_1","name":"Human edit"}"#,
+            )],
+            &WriteOptions {
+                session: Some(session),
+                ..human(3)
+            },
+        )
+        .unwrap();
+    store
+        .apply(
+            &[op(
+                r#"{"cmd":"marker.add","at":12,"name":"Keep same session"}"#,
+            )],
+            &agent(session, 2, 4),
+        )
+        .unwrap();
+    store
+        .apply(
+            &[op(
+                r#"{"cmd":"marker.add","at":20,"name":"Keep other session"}"#,
+            )],
+            &agent(other, 3, 5),
+        )
+        .unwrap();
+    store
+        .apply(&[op(r#"{"cmd":"project.set","aspect":"4:3"}"#)], &human(6))
+        .unwrap();
+
+    let original = state_hash(store.project()).unwrap();
+    let kept_markers = store.project().markers[1..].to_vec();
+    for revision in [0, 2, 4, 6] {
+        let error = store
+            .undo(Scope::Batch(revision), &agent(session, 5, 7))
+            .unwrap_err();
+        assert_eq!(error.code, "NOT_FOUND");
+    }
+    store.end_session(session).unwrap();
+    let closed = store
+        .undo(Scope::Batch(1), &agent(session, 5, 7))
+        .unwrap_err();
+    assert_eq!(closed.code, "NO_SESSION");
+    assert_eq!(store.project().rev, 5);
+
+    let mut options = WriteOptions {
+        session: Some(session),
+        if_revision: Some(5),
+        ..human(7)
+    };
+    let undo = store.undo(Scope::Batch(1), &options).unwrap();
+    assert_eq!(undo.revision, 6);
+    assert_eq!(undo.reverted, [1]);
+    assert_eq!(undo.replayed, 3);
+    assert_eq!(undo.skipped.len(), 1);
+    assert_eq!(
+        (undo.skipped[0].revision, undo.skipped[0].error.as_str()),
+        (2, "NOT_FOUND")
+    );
+    let record = &store.records()[5];
+    assert_eq!(
+        (record.batch.source, record.batch.session),
+        (Source::Human, Some(session))
+    );
+    assert_eq!(store.project().markers, kept_markers);
+    assert_eq!(store.project().aspect, splice_model::Aspect::Standard);
+    assert!(!store.is_active(1));
+    assert!(!store.is_active(2));
+    assert!([3, 4, 5].into_iter().all(|rev| store.is_active(rev)));
+
+    options.if_revision = Some(6);
+    assert_eq!(
+        store.undo(Scope::Batch(1), &options).unwrap_err().code,
+        "NOTHING_TO_UNDO"
+    );
+    assert_eq!(
+        store.undo(Scope::Batch(6), &options).unwrap_err().code,
+        "NOT_FOUND"
+    );
+    assert_eq!(store.project().rev, 6);
+    let reverted = state_hash(store.project()).unwrap();
+    drop(store);
+
+    let mut store = Store::open(&temp.0).unwrap();
+    assert!(store.problem().is_none());
+    assert_eq!(store.project().rev, 6);
+    assert_eq!(state_hash(store.project()).unwrap(), reverted);
+    assert!(!store.sessions()[0].open);
+    assert_eq!(store.human_undo(8).unwrap().revision, 7);
+    assert!(store.is_active(1));
+    assert_eq!(state_hash(store.project()).unwrap(), original);
+    assert_eq!(store.human_redo(9).unwrap().revision, 8);
+    assert!(!store.is_active(1));
+    assert_eq!(state_hash(store.project()).unwrap(), reverted);
 }
 
 #[test]
@@ -741,4 +851,390 @@ fn a_0_3_journal_opens_replays_and_takes_new_edits() {
     let store = Store::open(&temp.0).unwrap();
     assert!(store.problem().is_none());
     store.verify().unwrap();
+}
+
+fn sample_store(path: &Path) -> Store {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/sample.splice");
+    fs::create_dir_all(path.join("transcripts")).unwrap();
+    for file in ["project.json", "media.json", "transcripts/med_screen.json"] {
+        fs::copy(source.join(file), path.join(file)).unwrap();
+    }
+    Store::open(path).unwrap()
+}
+
+fn caption_edits(project: &Project) -> &[CaptionEdit] {
+    let slot = project.items.find("ovl_cap1".parse().unwrap()).unwrap();
+    let ItemKind::Caption { edits, .. } = &project.items.data(slot).unwrap().kind else {
+        panic!("expected ovl_cap1 to be a caption");
+    };
+    edits
+}
+
+fn set_caption(store: &mut Store, args: &str) {
+    let edit = op(&format!(
+        r#"{{"cmd":"caption.set","item":"ovl_cap1",{args}}}"#
+    ));
+    store
+        .apply(&[edit], &human(store.project().rev + 1))
+        .unwrap();
+}
+
+#[test]
+fn caption_hide_preserves_replacement_and_retype_restores_words() {
+    let temp = Temp::new("caption-hide");
+    let mut store = sample_store(&temp.0);
+    set_caption(
+        &mut store,
+        r#""words":{"w:screen:2":{"text":"weaver","emph":true,"emoji":"!"}}"#,
+    );
+    // The same edit written by engine 4 has the same canonical project bytes.
+    let replacement = 0x3a94_7f41_8640_4c8e;
+    assert_eq!(state_hash(store.project()).unwrap(), replacement);
+
+    set_caption(&mut store, r#""words":{"w:screen:2":{"hidden":true}}"#);
+    assert_eq!(
+        store.records().last().unwrap().engine,
+        package::journal::CAPTION_HIDE_ENGINE
+    );
+    store.checkpoint().unwrap();
+    let snapshot = fs::read_to_string(temp.0.join("project.json")).unwrap();
+    assert!(snapshot.contains(
+        r#"{"word":"w:screen:2","text":"weaver","emph":true,"emoji":"!","hidden":true}"#
+    ));
+    drop(store);
+    let mut store = Store::open(&temp.0).unwrap();
+    assert!(store.verify().is_ok());
+    let edit = &caption_edits(store.project())[0];
+    assert!(edit.hidden && edit.is_hidden());
+    assert_eq!(edit.text.as_deref(), Some("weaver"));
+
+    set_caption(&mut store, r#""words":{"w:screen:2":{"hidden":false}}"#);
+    assert_eq!(state_hash(store.project()).unwrap(), replacement);
+
+    set_caption(
+        &mut store,
+        r#""words":{"w:screen:2":{"text":"another replacement","hidden":true}}"#,
+    );
+    assert_eq!(
+        caption_edits(store.project())[0].text.as_deref(),
+        Some("another replacement")
+    );
+    set_caption(
+        &mut store,
+        r#""words":{"w:screen:2":{"text":"still hidden"}}"#,
+    );
+    assert!(caption_edits(store.project())[0].is_hidden());
+    assert_eq!(
+        caption_edits(store.project())[0].text.as_deref(),
+        Some("still hidden")
+    );
+
+    set_caption(&mut store, r#""text":"Today""#);
+    let edits = caption_edits(store.project());
+    assert_eq!(edits.len(), 2);
+    assert!(edits.iter().all(|edit| edit.hidden && edit.text.is_none()));
+    assert!(edits[0].emph);
+    assert_eq!(edits[0].emoji.as_deref(), Some("!"));
+
+    set_caption(&mut store, r#""text":"Today we build in the lab""#);
+    let edits = caption_edits(store.project());
+    assert_eq!(edits.len(), 2);
+    assert!(edits.iter().all(|edit| !edit.is_hidden()));
+    assert!(edits[0].text.is_none() && edits[0].emph);
+    assert_eq!(edits[0].emoji.as_deref(), Some("!"));
+    assert_eq!(edits[1].text.as_deref(), Some("build in the lab"));
+
+    set_caption(
+        &mut store,
+        r#""words":{"w:screen:2":{"text":"cut replacement","hidden":true}}"#,
+    );
+    store
+        .apply(
+            &[op(r#"{"cmd":"cut.words","words":["w:screen:2"]}"#)],
+            &human(store.project().rev + 1),
+        )
+        .unwrap();
+    set_caption(&mut store, r#""text":"Today build after the cut""#);
+    let edits = caption_edits(store.project());
+    assert!(edits[0].is_hidden());
+    assert_eq!(edits[0].text.as_deref(), Some("cut replacement"));
+    assert_eq!(edits[1].text.as_deref(), Some("build after the cut"));
+
+    set_caption(&mut store, r#""words":{"w:screen:2":{"text":"we"}}"#);
+    let cut = &caption_edits(store.project())[0];
+    assert!(cut.hidden && cut.text.is_none());
+
+    set_caption(
+        &mut store,
+        r#""words":{"w:screen:2":{"hidden":true},"w:screen:3":{"hidden":true}}"#,
+    );
+    set_caption(
+        &mut store,
+        r#""words":{"w:screen:2":{"hidden":null,"text":null,"emph":false,"emoji":""},"w:screen:3":null}"#,
+    );
+    assert!(caption_edits(store.project()).is_empty());
+    store.close().unwrap();
+    let store = Store::open(&temp.0).unwrap();
+    store.verify().unwrap();
+    assert!(caption_edits(store.project()).is_empty());
+}
+
+#[test]
+fn caption_hide_replays_engine_four_and_unhides_legacy_empty_text() {
+    let temp = Temp::new("caption-hide-v4");
+    drop(sample_store(&temp.0));
+    // Captured from a pre-change Store after a replacement and a separate hide.
+    let records = concat!(
+        r#"{"rev":1,"parent":"6d4ac5c362bbe1d2","hash":"59ab1fb22698eef0","engine":4,"time":1,"source":"human","label":"Caption ovl_cap1","ops":[{"cmd":"caption.set","item":"ovl_cap1","words":{"w:screen:2":{"text":"weaver","emph":true,"emoji":"!"}}}],"mints":[]}"#,
+        "\n",
+        r#"{"rev":2,"parent":"59ab1fb22698eef0","hash":"82bf67582aa960aa","engine":4,"time":2,"source":"human","label":"Caption ovl_cap1","ops":[{"cmd":"caption.set","item":"ovl_cap1","words":{"w:screen:2":{"hidden":true}}}],"mints":[]}"#,
+        "\n",
+    );
+    fs::write(temp.0.join("journal.ops"), records).unwrap();
+    let path = temp.0.join("project.json");
+    let word_edits = r#""words":["w:screen:1","w:screen:2","w:screen:3"],"edits":"#;
+    let checkpoint = fs::read_to_string(&path)
+        .unwrap()
+        .replacen(
+            r#""rev":0,"hash":"6d4ac5c362bbe1d2""#,
+            r#""rev":2,"hash":"82bf67582aa960aa""#,
+            1,
+        )
+        .replacen(
+            &format!("{word_edits}[]"),
+            &format!(r#"{word_edits}[{{"word":"w:screen:2","text":"","emph":true,"emoji":"!"}}]"#),
+            1,
+        );
+    fs::write(&path, &checkpoint).unwrap();
+    let (package, saved) = package::Package::open(&temp.0).unwrap();
+    assert_eq!(
+        package::json_bytes(&package::snapshot(&saved)).unwrap(),
+        checkpoint.as_bytes()
+    );
+    drop(package);
+
+    let mut store = Store::open(&temp.0).unwrap();
+    assert_eq!(store.project().rev, 2);
+    assert_eq!(store.verify().unwrap(), 0x55cc_7daa_a158_0322);
+    let edit = &caption_edits(store.project())[0];
+    assert!(!edit.hidden && edit.is_hidden());
+    assert_eq!(edit.text.as_deref(), Some(""));
+
+    set_caption(&mut store, r#""words":{"w:screen:2":{"hidden":false}}"#);
+    let edit = &caption_edits(store.project())[0];
+    assert!(!edit.is_hidden() && edit.text.is_none());
+    assert!(edit.emph);
+    assert_eq!(edit.emoji.as_deref(), Some("!"));
+    store.close().unwrap();
+
+    let mut store = Store::open(&temp.0).unwrap();
+    store.verify().unwrap();
+    assert!(!caption_edits(store.project())[0].is_hidden());
+    assert!(caption_edits(&store.at(2).unwrap())[0].is_hidden());
+    store.undo(Scope::To(2), &human(4)).unwrap();
+    set_caption(
+        &mut store,
+        r#""words":{"w:screen:2":{"text":"new replacement"}}"#,
+    );
+    let edit = &caption_edits(store.project())[0];
+    assert!(edit.hidden && edit.is_hidden());
+    assert_eq!(edit.text.as_deref(), Some("new replacement"));
+}
+
+fn duplicate_effects(project: &Project, id: splice_model::TimelineId) -> &[splice_model::Effect] {
+    use splice_model::TimelineId;
+    match id {
+        TimelineId::Clip(id) => {
+            &project
+                .clips
+                .data(project.clips.find(id).unwrap())
+                .unwrap()
+                .appearance
+                .effects
+        }
+        TimelineId::Item(id) => {
+            &project
+                .items
+                .data(project.items.find(id).unwrap())
+                .unwrap()
+                .appearance
+                .effects
+        }
+        TimelineId::Marker(_) => panic!("markers have no effects"),
+    }
+}
+
+#[test]
+fn duplicate_effect_ids_are_independent_before_settle_and_through_history() {
+    use crate::commands::Target;
+    use splice_model::{Anchor, EffectValue, TimelineId};
+
+    let temp = Temp::new("duplicate-effects");
+    let mut store = sample_store(&temp.0);
+    let source = [
+        TimelineId::Clip("clp_open".parse().unwrap()),
+        TimelineId::Item("ovl_hook".parse().unwrap()),
+        TimelineId::Item("ovl_label".parse().unwrap()),
+        TimelineId::Item("ovl_broll".parse().unwrap()),
+    ];
+    store.apply(op(r#"[
+        {"cmd":"param.keys","target":"clp_open","path":"transform.scale","keys":[{"at":0,"value":1},{"at":30,"value":1.2}]},
+        {"cmd":"param.keys","target":"ovl_hook","path":"transform.scale","keys":[{"at":0,"value":1},{"at":30,"value":1.2}]},
+        {"cmd":"item.anchor","item":"ovl_label","anchor":{"item":"ovl_hook","edge":"end","offset":18}},
+        {"cmd":"param.keys","target":"ovl_label","path":"transform.scale","keys":[{"at":0,"value":1},{"at":30,"value":1.2}]},
+        {"cmd":"param.keys","target":"ovl_broll","path":"transform.scale","keys":[{"at":0,"value":1},{"at":30,"value":1.2}]}
+    ]"#).as_array().unwrap(), &human(1)).unwrap();
+    let before = source.map(|id| duplicate_effects(store.project(), id).to_vec());
+    let before_paste = state_hash(store.project()).unwrap();
+
+    // The pasted clip sorts before its source. A deferred rekey let this command edit the copy.
+    let batch = op(r#"[
+        {"cmd":"item.duplicate","items":["clp_open","ovl_broll"],"at":0},
+        {"cmd":"effect.set","effect":"fx_openwin","params":{"padding":0.12}}
+    ]"#);
+    let pasted = store.apply(batch.as_array().unwrap(), &human(2)).unwrap();
+    assert_eq!(
+        store.records()[1].engine,
+        package::journal::DUPLICATE_EFFECT_ENGINE
+    );
+    let [
+        Target::Timeline(clip @ TimelineId::Clip(clip_id)),
+        Target::Timeline(child @ TimelineId::Item(child_id)),
+        Target::Timeline(nested @ TimelineId::Item(nested_id)),
+        Target::Timeline(overlay @ TimelineId::Item(_)),
+    ] = pasted.report.changes[0].created.as_slice()
+    else {
+        panic!("expected the clip, its two descendants, and the selected overlay");
+    };
+    let project = store.project();
+    let anchor = |id| {
+        project
+            .items
+            .timing(project.items.find(id).unwrap())
+            .unwrap()
+            .anchor
+    };
+    assert!(matches!(anchor(*child_id), Anchor::ClipSource { clip, .. } if clip == *clip_id));
+    assert!(matches!(anchor(*nested_id), Anchor::Item { item, .. } if item == *child));
+    assert_eq!(
+        duplicate_effects(project, source[0])[0].params[0].value,
+        EffectValue::Number(0.12)
+    );
+    for ((copy, source), prior) in [*clip, *child, *nested, *overlay]
+        .into_iter()
+        .zip(source)
+        .zip(&before)
+    {
+        let copied = duplicate_effects(project, copy);
+        let original = duplicate_effects(project, source);
+        assert_eq!(copied.len(), prior.len());
+        for ((copy, original), prior) in copied.iter().zip(original).zip(prior) {
+            assert_eq!(original.id, prior.id);
+            assert_ne!(copy.id, prior.id);
+            let mut expected = prior.clone();
+            expected.id = copy.id;
+            assert_eq!(*copy, expected);
+        }
+    }
+    let overlay = *overlay;
+    let overlay_fx = duplicate_effects(project, overlay)[0].id;
+    let batch = state_hash(project).unwrap();
+
+    store
+        .apply(
+            &[op(&format!(
+                r#"{{"cmd":"effect.set","effect":"{overlay_fx}","params":{{"scale":1.3}}}}"#,
+            ))],
+            &human(3),
+        )
+        .unwrap();
+    assert_eq!(duplicate_effects(store.project(), source[3]), before[3]);
+    assert_eq!(
+        duplicate_effects(store.project(), overlay)[0].params[0].value,
+        EffectValue::Number(1.3)
+    );
+    let edited = state_hash(store.project()).unwrap();
+    store.close().unwrap();
+
+    let mut store = Store::open(&temp.0).unwrap();
+    assert_eq!(store.verify().unwrap(), edited);
+    store.human_undo(4).unwrap();
+    assert_eq!(state_hash(store.project()).unwrap(), batch);
+    store.human_undo(5).unwrap();
+    assert_eq!(state_hash(store.project()).unwrap(), before_paste);
+    store.human_redo(6).unwrap();
+    assert_eq!(state_hash(store.project()).unwrap(), batch);
+    store.human_redo(7).unwrap();
+    assert_eq!(state_hash(store.project()).unwrap(), edited);
+
+    // A new copy must also mint its own ID when the source is gone at settle.
+    let result = store
+        .apply(
+            op(r#"[
+        {"cmd":"item.duplicate","items":["clp_end"]},
+        {"cmd":"item.delete","items":["clp_end"]}
+    ]"#)
+            .as_array()
+            .unwrap(),
+            &human(8),
+        )
+        .unwrap();
+    let Target::Timeline(copy @ TimelineId::Clip(_)) = result.report.changes[0].created[0] else {
+        panic!("expected a copied clip");
+    };
+    assert!(
+        store
+            .project()
+            .clips
+            .find("clp_end".parse().unwrap())
+            .is_none()
+    );
+    let effect = &duplicate_effects(store.project(), copy)[0];
+    assert_ne!(effect.id, "fx_endwin".parse().unwrap());
+    assert_eq!(effect.kind, "window");
+    assert_eq!(effect.enabled, Some(false));
+    let replaced = state_hash(store.project()).unwrap();
+    store.close().unwrap();
+    assert_eq!(Store::open(&temp.0).unwrap().verify().unwrap(), replaced);
+}
+
+#[test]
+fn duplicate_effects_keep_legacy_mint_order_and_unstyled_mints() {
+    let temp = Temp::new("duplicate-effects-legacy");
+    drop(sample_store(&temp.0));
+    // Real pre-change Store batches with effect IDs minted at settle, after the marker IDs.
+    let journal = concat!(
+        r#"{"rev":1,"parent":"6d4ac5c362bbe1d2","hash":"e55b26437a594fd3","engine":4,"time":1,"source":"human","label":"Duplicated 1 item(s) · window on clp_5k · Added marker mrk_5m at frame 20","ops":[{"cmd":"item.duplicate","items":["clp_open"],"at":0},{"cmd":"effect.set","effect":"fx_openwin","params":{"padding":0.12}},{"cmd":"marker.add","at":20,"name":"After the copy"}],"mints":["clp_5k","ovl_5l","mrk_5m","fx_5n"]}"#,
+        "\n",
+        r#"{"rev":2,"parent":"e55b26437a594fd3","hash":"65fd678e7e2fd547","engine":5,"time":2,"source":"human","label":"Duplicated 1 item(s) · Caption ovl_cap1 · Added marker mrk_5p at frame 30","ops":[{"cmd":"item.duplicate","items":["clp_end"]},{"cmd":"caption.set","item":"ovl_cap1","words":{}},{"cmd":"marker.add","at":30,"name":"Mixed engine batch"}],"mints":["clp_5o","mrk_5p","fx_5q"]}"#,
+        "\n",
+    );
+    fs::write(temp.0.join("journal.ops"), journal).unwrap();
+    let store = Store::open(&temp.0).unwrap();
+    assert_eq!(store.project().rev, 2);
+    assert_eq!(
+        state_hash(&store.at(1).unwrap()).unwrap(),
+        0x7f02_3965_6b08_03a7
+    );
+    assert_eq!(store.verify().unwrap(), 0x9bbc_fa5e_8f66_4703);
+    store.close().unwrap();
+
+    let mut store = Store::open(&temp.0).unwrap();
+    assert_eq!(store.verify().unwrap(), 0x9bbc_fa5e_8f66_4703);
+    let unstyled = store
+        .apply(
+            op(r#"[
+        {"cmd":"item.duplicate","items":["ovl_broll"],"at":0},
+        {"cmd":"marker.add","at":10,"name":"No effect mint"}
+    ]"#)
+            .as_array()
+            .unwrap(),
+            &human(3),
+        )
+        .unwrap();
+    assert_eq!(unstyled.report.mints, ["ovl_5r", "mrk_5s"]);
+    let extended = state_hash(store.project()).unwrap();
+    store.close().unwrap();
+    assert_eq!(Store::open(&temp.0).unwrap().verify().unwrap(), extended);
 }
