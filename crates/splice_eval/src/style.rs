@@ -231,7 +231,8 @@ pub(super) fn window(scopes: &[&[Effect]]) -> Option<Window> {
     };
     Some(Window {
         padding: style.number("padding", 0.07).clamp(0.0, 0.3),
-        corner: style.number("corner", 0.03).clamp(0.0, 0.12),
+        // The v13 roundness range ends at 0.12, or a physical radius of 0.264.
+        corner: style.number("corner", 0.03).clamp(0.0, 0.264),
         shadow: style.number("shadow", 0.6).clamp(0.0, 1.0),
         inset: style.number("inset", 0.0).clamp(0.0, 0.02),
         inset_color: style.color("insetColor", 0x000000),
@@ -251,6 +252,7 @@ pub(super) fn cursor(scopes: &[&[Effect]]) -> Option<Cursor> {
                 hide_idle: false,
                 click_pulse: false,
                 synthesize: false,
+                remove_shakes: false,
                 ..crate::cursor::Motion::default()
             },
             loop_frames: 0.0,

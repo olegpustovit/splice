@@ -109,7 +109,7 @@ impl Draft {
         let (id, _, name) = target_data(project, self.id)?;
         name.filter(|name| !name.is_empty()).or_else(|| {
             let media = project.media.iter().find(|media| media.id == id)?;
-            Path::new(&media.path).file_stem()?.to_str()
+            super::viewer_drawers::media_title(media)
         })
     }
 

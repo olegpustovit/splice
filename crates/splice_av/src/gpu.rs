@@ -12,8 +12,6 @@ use splice_eval::{Animate, FramePlan, Look, MaskMode, MaskShape};
 use splice_gpu::{Bound, Compositor, Layer, MAX_LAYERS, rgb};
 use splice_model::{Frame, ItemId, ShapeKind};
 
-const RING_SECONDS: f64 = 0.45;
-
 /// Per-viewer GPU state: the compositor, per-layer source copies and cursor textures.
 pub struct GpuProgram {
     compositor: Compositor,
@@ -634,7 +632,7 @@ impl GpuProgram {
         }
         if let Some(window) = p.window {
             layer.corner = (window.corner * dw.min(dh) * card * look.scale) as f32;
-            layer.shadow = window.shadow.clamp(0.0, 1.0) as f32;
+            layer.set_window_shadow(window.shadow, dw.min(dh) * look.scale);
             // The inset: an inner border over the picture's edge, inside the card's corners.
             layer.ring = (window.inset * dw.min(dh) * card * look.scale) as f32;
             layer.color0 = rgb(window.inset_color);
@@ -706,7 +704,8 @@ impl GpuProgram {
         ) else {
             return;
         };
-        let st = p.source_frame / table.fps.max(1.0);
+        let fps = table.fps.max(1.0);
+        let st = p.source_frame / fps;
         let per_px = placed[2] / cwid; // canvas pixels per source pixel
         let px_per_point = w / table.points;
         let to_canvas = |x: f64, y: f64| {
@@ -715,47 +714,17 @@ impl GpuProgram {
                 placed[1] + (y * h - cy) * per_px,
             ]
         };
-        // Only inside the visible crop: a cropped-away part of the capture would put the cursor
-        // and its rings on the backdrop beside the card.
-        let visible = |x: f64, y: f64| {
-            (cx..=cx + cwid).contains(&(x * w)) && (cy..=cy + chei).contains(&(y * h))
-        };
-        let rotation = look.rotation.to_radians() as f32;
-        if cursor.click_rings {
-            // Clicks are in time order: only those of the last RING_SECONDS can show.
-            let clicks = table.track.clicks();
-            let first = clicks.partition_point(|c| c[0] < st - RING_SECONDS);
-            for &[t, px, py] in clicks[first..].iter().take_while(|c| c[0] <= st) {
-                if !visible(px, py) {
-                    continue;
-                }
-                let age = st - t;
-                let [x, y] = to_canvas(px, py);
-                let radius =
-                    (10.0 + 34.0 * age / RING_SECONDS) * px_per_point * per_px * cursor.scale;
-                let mut ring = Layer::new(
-                    Layer::RING,
-                    [x - radius, y - radius, 2.0 * radius, 2.0 * radius].map(|v| v as f32),
-                    target,
-                );
-                ring.ring = (radius * 0.45) as f32;
-                ring.color0 = [1.0, 1.0, 1.0, (0.6 * (1.0 - age / RING_SECONDS)) as f32];
-                ring.opacity = opacity;
-                (ring.pivot, ring.rotation) = (pivot, rotation);
-                self.push(ring, Bound::default());
-            }
-        }
         // The smoothed table (T39): position, idle fade and click pulse at this source time,
         // eased back to the clip's first position over its last `loop` frames (T46.2).
         let index = slot.cursor as usize;
         let span = plan.evaluator.as_ref().and_then(|e| e.source_span(p.item));
-        let fps = table.fps.max(1.0);
+        let frame = self.frame.frame;
         let at = |t: f64| {
             let point = table.track.at(t)?;
             match span.filter(|_| cursor.loop_frames > 0.0) {
                 Some(span) => {
                     let first = table.track.at(span.source / fps)?;
-                    let left = f64::from(span.end - 1 - self.frame.frame);
+                    let left = f64::from(span.end - 1 - frame);
                     Some(splice_eval::cursor::looped(
                         point,
                         first,
@@ -766,19 +735,39 @@ impl GpuProgram {
                 None => Some(point),
             }
         };
-        let sprite = at(st)
-            .filter(|point| point.opacity > 0.0)
-            .and_then(|point| {
-                // Always arrow: the table holds only the system arrow (a hidden system cursor
-                // stays hidden).
-                let image = usize::try_from(point.image).ok()?;
-                let image = if cursor.motion.always_arrow { 0 } else { image };
-                let (texture, size) = self.cursors[index].get(image)?;
-                Some((table.images.get(image)?, texture.clone(), *size, point))
-            });
-        if let Some((meta, texture, [pw, ph], point)) =
-            sprite.filter(|(.., point)| visible(point.x, point.y))
+        let point = at(st).filter(|point| point.opacity > 0.0);
+        let rotation = layer.rotation;
+        if cursor.click_rings
+            && let Some(point) = point
+            && let Some(phase) = table.track.click_ring_phase(p.source_frame, fps)
         {
+            let [x, y] = to_canvas(point.x, point.y);
+            // The ring is a two-source-pixel stroke centered on the expanding circle.
+            let width = 2.0 * per_px;
+            let radius =
+                w.min(h) * 0.03 * cursor.scale * (0.6 + 1.6 * phase) * per_px + width * 0.5;
+            let mut ring = Layer::new(
+                Layer::RING,
+                [x - radius, y - radius, 2.0 * radius, 2.0 * radius].map(|v| v as f32),
+                target,
+            );
+            ring.ring = width as f32;
+            ring.color0 = rgb(0xf4f3ee);
+            ring.color0[3] = (1.0 - phase) as f32;
+            ring.opacity = opacity * point.opacity as f32;
+            (ring.pivot, ring.rotation) = (pivot, rotation);
+            ring.clip_to(&layer);
+            self.push(ring, Bound::default());
+        }
+        let sprite = point.and_then(|point| {
+            // Always arrow: the table holds only the system arrow (a hidden system cursor
+            // stays hidden).
+            let image = usize::try_from(point.image).ok()?;
+            let image = if cursor.motion.always_arrow { 0 } else { image };
+            let (texture, size) = self.cursors[index].get(image)?;
+            Some((table.images.get(image)?, texture.clone(), *size, point))
+        });
+        if let Some((meta, texture, [pw, ph], point)) = sprite {
             let [x, y] = [point.x, point.y];
             // canvas px per PNG px
             let k = cursor.scale * point.scale * px_per_point * per_px / meta.scale;
@@ -833,6 +822,7 @@ impl GpuProgram {
                 sprite.pivot = hot.map(|v| v as f32);
                 sprite.rotation = rotation + tilt.to_radians() as f32;
             }
+            sprite.clip_to(&layer);
             self.push(
                 sprite,
                 Bound {
@@ -1053,6 +1043,8 @@ impl GpuProgram {
             for (layer, &depth) in self.layers.iter_mut().zip(&self.depths) {
                 if inside(shift.layers, depth) {
                     move_layer(layer, shift.scale as f32, offset, center);
+                    // A transition scales the whole image, including the Window halo.
+                    layer.lut[3] *= shift.scale.abs() as f32;
                 }
             }
         }
@@ -1154,7 +1146,7 @@ fn move_layer(layer: &mut Layer, scale: f32, [ox, oy]: [f32; 2], [cx, cy]: [f32;
     };
     layer.dest = [x, y, layer.dest[2] * magnitude, layer.dest[3] * magnitude];
     layer.pivot = pivot;
-    if layer.flags & Layer::CLIP != 0 {
+    if layer.flags & (Layer::CLIP | Layer::ROUNDED_CLIP) != 0 {
         let [x, y, w, h] = layer.clip;
         let [x, y] = if scale < 0.0 {
             point(x + w, y + h)
@@ -1162,6 +1154,7 @@ fn move_layer(layer: &mut Layer, scale: f32, [ox, oy]: [f32; 2], [cx, cy]: [f32;
             point(x, y)
         };
         layer.clip = [x, y, w * magnitude, h * magnitude];
+        layer.clip_corner *= magnitude;
     }
     layer.corner *= magnitude;
     layer.ring *= magnitude;

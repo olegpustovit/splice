@@ -971,6 +971,62 @@ mod looks {
         assert!(near(card, [110, 115, 15], 8), "card {card:?}");
     }
 
+    pub(super) fn window_shadow_keeps_its_canvas_width_during_motion() {
+        let dir = scratch("window-shadow");
+        let red = [220, 40, 30];
+        let mut project = project(vec![still(&dir.0, 1, red)], vec![(1, 30, vec![])]);
+        project.size = [960, 640];
+        project.effects.push(fx(
+            9,
+            "window",
+            vec![
+                ("padding", n(0.25)),
+                ("corner", n(0.066)),
+                ("shadow", n(0.6)),
+                ("background", s("color")),
+                ("color", s("#00c800")),
+            ],
+        ));
+        let lane = LaneId::from_serial(20);
+        project.lanes.push(Lane {
+            id: lane,
+            name: "Motion".into(),
+            kind: LaneKind::Camera,
+            effects: Vec::new(),
+        });
+        project
+            .items
+            .insert(Item {
+                id: ItemId::from_serial(30),
+                timing: ItemTiming {
+                    anchor: Anchor::Pinned(4),
+                    length: 9,
+                },
+                data: ItemData {
+                    lane,
+                    kind: ItemKind::Motion(ScaleMotion {
+                        from: 1.0,
+                        to: 1.25,
+                    }),
+                    appearance: Appearance::default(),
+                },
+            })
+            .unwrap();
+
+        let composition = Composition::prepare(&project, &dir.0).unwrap();
+        // The bottom edge moves from y480 to y520. The halo remains sigma 7.68 px with
+        // a 3.84 px downward offset. At 12.5 px outside, green 200 becomes about 191.
+        for (at, y) in [(0, 492), (12, 532)] {
+            let halo = pixel(&composition, at, [480, y]);
+            assert!(near(halo, [0, 191, 0], 2), "frame {at}: {halo:?}");
+        }
+        assert!(near(pixel(&composition, 0, [480, 156]), [0, 188, 0], 2));
+        assert!(near(pixel(&composition, 0, [480, 511]), [0, 200, 0], 2));
+        // The card still uses its authored physical radius of 0.066 × 320 px.
+        assert_eq!(pixel(&composition, 0, [161, 161])[0], 0);
+        assert!(near(pixel(&composition, 0, [168, 168]), red, 4));
+    }
+
     /// Recorder parity (inset): the window `inset` draws an opaque inner border of `insetColor`
     /// (black by default) over the picture's edge, inside the card; 0 draws none.
     pub(super) fn window_inset_draws_an_inner_border() {
@@ -2100,6 +2156,10 @@ fn main() {
         (
             "looks_cutout_uses_the_person_matte",
             looks::cutout_uses_the_person_matte,
+        ),
+        (
+            "looks_window_shadow_keeps_its_canvas_width_during_motion",
+            looks::window_shadow_keeps_its_canvas_width_during_motion,
         ),
         (
             "looks_window_inset_draws_an_inner_border",

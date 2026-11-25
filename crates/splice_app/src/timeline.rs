@@ -1126,9 +1126,16 @@ pub(super) struct MediaPreview {
     pub thumbnail: Option<Image>,
     pub waveform: Vec<f32>,
     pub camera: Option<Image>,
+    pub camera_only: bool,
     pub mic: Vec<f32>,
     pub system: Vec<f32>,
     pub events: splice_av::TimelineEvents,
+}
+
+impl MediaPreview {
+    fn filmstrip(&self) -> Option<Image> {
+        self.thumbnail.or(self.camera.filter(|_| self.camera_only))
+    }
 }
 
 #[derive(Default)]
@@ -4541,7 +4548,7 @@ fn overlay_lane(
                 let visual = match data.kind {
                     ItemKind::Media(overlay) => BlockMedia {
                         thumbnail: preview_for(previews, overlay.media)
-                            .and_then(|preview| preview.thumbnail),
+                            .and_then(MediaPreview::filmstrip),
                         ..BlockMedia::default()
                     },
                     ItemKind::Sound(sound) => BlockMedia {
@@ -4688,7 +4695,7 @@ fn spine_lane(
                         thumbnail: data
                             .media
                             .and_then(|media| preview_for(previews, media))
-                            .and_then(|preview| preview.thumbnail),
+                            .and_then(MediaPreview::filmstrip),
                         ..BlockMedia::default()
                     },
                     BlockDecor {
@@ -4727,7 +4734,7 @@ fn clip_name(project: &Project, slot: Slot) -> &str {
 
 fn media_stem(project: &Project, id: MediaId) -> Option<&str> {
     let media = project.media.iter().find(|media| media.id == id)?;
-    std::path::Path::new(&media.path).file_stem()?.to_str()
+    viewer_drawers::media_title(media)
 }
 
 fn resolved_item_chrome(
@@ -6647,6 +6654,113 @@ mod tests {
     use super::*;
 
     #[test]
+    fn camera_only_take_paints_spine_overlay_and_camera_strip_without_warm_allocations() {
+        use pxui::{FrameIn, UiDesc, draw::kind};
+        use splice_core::history::{Store, WriteOptions};
+        use std::{fs, path::Path};
+
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/sample.splice");
+        let (_, sample) = splice_core::package::Package::open(&fixture).unwrap();
+        let media: MediaId = "med_webcam".parse().unwrap();
+        let mut project = Project::default();
+        project.media.push(
+            sample
+                .media
+                .iter()
+                .find(|entry| entry.id == media)
+                .unwrap()
+                .clone(),
+        );
+        let folder =
+            std::env::temp_dir().join(format!("splice-camera-strip-{}", std::process::id()));
+        fs::create_dir(&folder).unwrap();
+        let mut store = Store::create(&folder.join("Camera.splice"), &project).unwrap();
+        let ops = splice_json::parse(
+            r#"[
+            {"cmd":"clip.insert","media":"med_webcam"},
+            {"cmd":"overlay.add","kind":"media","media":"med_webcam","at":10}
+        ]"#,
+        )
+        .unwrap();
+        store
+            .apply(ops.as_array().unwrap(), &WriteOptions::default())
+            .unwrap();
+        let project = store.project();
+        let clip = project.clips.id(project.clips.order()[0]).unwrap();
+        let view = View {
+            width: 960.0,
+            height: 440.0,
+            at: 20,
+            end: 300,
+            dragging: false,
+            history: (false, false),
+            state: State {
+                expanded: Some(clip),
+                ..State::default()
+            },
+        };
+        let image = Image::rgba8(96, 54, std::ptr::null_mut(), std::ptr::dangling_mut());
+        let mut previews = [MediaPreview {
+            id: media,
+            thumbnail: None,
+            camera: None,
+            camera_only: false,
+            waveform: Vec::new(),
+            mic: Vec::new(),
+            system: Vec::new(),
+            events: splice_av::TimelineEvents::default(),
+        }];
+        let mut ui = Ui::new(&UiDesc::DEFAULT).unwrap();
+        let mut cache = Cache::default();
+        let mut draw = |ui: &mut Ui, previews: &[MediaPreview]| {
+            ui.frame(&FrameIn::new(view.width, view.height), &mut |ui| {
+                paint(
+                    ui,
+                    Some(project),
+                    view.clone(),
+                    &mut cache,
+                    (previews, None),
+                );
+            })
+            .unwrap();
+        };
+        let strip = |ui: &Ui, opacity| {
+            ui.layers().any(|layer| {
+                layer
+                    .instances
+                    .iter()
+                    .any(|instance| instance.kind == kind::IMAGE && instance.color[3] == opacity)
+            })
+        };
+        draw(&mut ui, &previews);
+        assert!(
+            [255, 135, 120]
+                .into_iter()
+                .all(|opacity| !strip(&ui, opacity))
+        );
+        previews[0].camera = Some(image);
+        draw(&mut ui, &previews);
+        assert!(strip(&ui, 120));
+        assert!(!strip(&ui, 255) && !strip(&ui, 135));
+        previews[0].camera_only = true;
+        draw(&mut ui, &previews);
+        for (row, opacity) in [("spine", 255), ("overlay", 135), ("camera", 120)] {
+            assert!(strip(&ui, opacity), "missing {row} filmstrip");
+        }
+        mem_sys::set_peer(pxui::library_counter);
+        splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset).warm(
+            &mut || {
+                for _ in 0..12 {
+                    draw(&mut ui, &previews);
+                }
+            },
+        );
+        store.close().unwrap();
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
     fn edit_points_use_overlay_ends_and_fresh_markers_without_allocating() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/projects/sample.splice");
@@ -8043,6 +8157,7 @@ mod tests {
         let previews = [MediaPreview {
             events: splice_av::TimelineEvents::default(),
             id: media,
+            camera_only: false,
             thumbnail: Some(Image::rgba8(
                 80,
                 60,
@@ -9524,6 +9639,7 @@ mod tests {
             thumbnail: None,
             waveform: Vec::new(),
             camera: None,
+            camera_only: false,
             mic: Vec::new(),
             system: Vec::new(),
             events,

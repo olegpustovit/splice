@@ -132,7 +132,7 @@ pub(super) fn paint_with_parity(
         View::Agent => {
             agent(ui, project, selection.tool).map(|tool| Selection { tool, ..selection })
         }
-        View::Spec => spec_with_parity(ui, selection, (bindings, parity)),
+        View::Spec => paint_spec(ui, selection, (bindings, parity), &mut |_| {}),
     }
 }
 
@@ -214,34 +214,31 @@ fn agent(ui: &mut Ui, project: Option<&Project>, selected: usize) -> Option<usiz
 
 #[cfg(test)]
 fn spec(ui: &mut Ui, selection: Selection, bindings: &[BindingDescription]) -> Option<Selection> {
-    spec_with_parity(ui, selection, (bindings, &Parity::default()))
+    paint_spec(ui, selection, (bindings, &Parity::default()), &mut |_| {})
 }
 
-fn spec_with_parity(
+pub(super) fn paint_spec(
     ui: &mut Ui,
     selection: Selection,
     context: (&[BindingDescription], &Parity),
+    titlebar: &mut dyn FnMut(&mut Ui),
 ) -> Option<Selection> {
     let selected = selection.section;
     let mut next = selection;
     let narrow = ui.view_size().width <= 820.0;
     let mut picked = None;
-    let mut position = None;
-    let frame = Node::DEFAULT.w(Size::Grow).h(Size::Grow);
-    if narrow {
-        ui.column(frame, |ui| {
-            let (section, travel) = spec_nav(ui, selected, true);
-            picked = section;
-            row_rule(ui);
-            position = spec_document(ui, narrow, context, &mut next, &mut picked, travel);
-        });
+    let position = if narrow {
+        spec_document(ui, context, &mut next, &mut picked, Some(titlebar))
     } else {
-        ui.row(frame, |ui| {
+        titlebar(ui);
+        let mut position = None;
+        ui.row(Node::DEFAULT.w(Size::Grow).h(Size::Grow), |ui| {
             picked = spec_nav(ui, selected, false).0;
             vertical_rule(ui, "spec-divider");
-            position = spec_document(ui, narrow, context, &mut next, &mut picked, 0.0);
+            position = spec_document(ui, context, &mut next, &mut picked, None);
         });
-    }
+        position
+    };
     let (active, scroll) = position.unwrap_or((None, selection.scroll));
     next.section = picked.or(active).unwrap_or(selected);
     next.scroll = scroll;
@@ -338,12 +335,13 @@ fn compact_rail_travel(ui: &mut Ui, rail: i64) -> f32 {
 
 fn spec_document(
     ui: &mut Ui,
-    narrow: bool,
     (bindings, parity): (&[BindingDescription], &Parity),
     selection: &mut Selection,
     picked: &mut Option<usize>,
-    rail_travel: f32,
+    mut titlebar: Option<&mut dyn FnMut(&mut Ui)>,
 ) -> Option<(Option<usize>, f32)> {
+    let narrow = titlebar.is_some();
+    let mut rail_travel = 0.0;
     let mut sections = [None; SECTIONS.len()];
     let doc = ui.node(
         "spec-document",
@@ -358,6 +356,11 @@ fn spec_document(
     );
     ui.a11y_name(&doc, "Spec document");
     ui.within(&doc, &mut |ui| {
+        if let Some(titlebar) = titlebar.as_deref_mut() {
+            titlebar(ui);
+            (*picked, rail_travel) = spec_nav(ui, selection.section, true);
+            row_rule(ui);
+        }
         let padding = if narrow {
             Edges::new(16.0, 12.0, 16.0, 80.0)
         } else {
@@ -2166,6 +2169,12 @@ mod tests {
     use pxui::testing;
     use std::cell::Cell;
 
+    pub(super) fn paint_spec_titlebar(ui: &mut Ui) {
+        let width = ui.view_size().width;
+        let layout = crate::editor_titlebar::Layout::new(width, Some(0), None);
+        crate::editor_titlebar::paint(ui, Some("Shorts"), Some(0), View::Spec, &layout, None);
+    }
+
     #[test]
     fn compact_product_tables_fit_and_the_roadmap_link_navigates() {
         use pxui::{Event, FrameIn};
@@ -2204,7 +2213,7 @@ mod tests {
             draw(&mut ui, &[]);
         }
         let heading = testing::find(&ui, Role::Heading, "Roadmap").unwrap();
-        assert!((heading.y - 53.4).abs() < 0.1, "{heading:?}");
+        assert!((heading.y - 21.0).abs() < 0.1, "{heading:?}");
     }
 
     #[test]
@@ -2268,7 +2277,7 @@ mod tests {
     }
 
     #[test]
-    fn vertical_wheel_on_compact_spec_rail_scrolls_the_document_under_it() {
+    fn compact_spec_outer_scroll_moves_the_titlebar_and_contents() {
         use pxui::{Event, FrameIn};
         use splice_testkit::alloc::Meter;
 
@@ -2280,62 +2289,90 @@ mod tests {
             let draw = |ui: &mut Ui, events: &[Event]| {
                 let mut next = None;
                 ui.frame(&input.events(events), &mut |ui| {
-                    next = paint(ui, None, View::Spec, selection.get(), &[]).or(next);
+                    next = paint_spec(
+                        ui,
+                        selection.get(),
+                        (&[], &Parity::default()),
+                        &mut paint_spec_titlebar,
+                    )
+                    .or(next);
                 })
                 .unwrap();
                 if let Some(next) = next {
                     selection.set(next);
                 }
             };
+            let geometry = |ui: &Ui| {
+                [
+                    testing::find(ui, Role::Button, "Editor").unwrap(),
+                    testing::find(ui, Role::ScrollArea, "Spec sections").unwrap(),
+                    testing::find(ui, Role::Heading, "Splice: the main spec").unwrap(),
+                ]
+            };
             draw(&mut ui, &[]);
             draw(&mut ui, &[]);
-            let rail = testing::find(&ui, Role::ScrollArea, "Spec sections").unwrap();
-            assert!((rail.h - 31.4).abs() < 0.01);
-            let before = testing::find(&ui, Role::Heading, "Decisions").unwrap();
-            // Bring the Decisions section inside the 120-point scroll spy threshold.
-            let travel = before.y - 21.0 - rail.y - rail.h - 119.0;
-            let position = Event::pointer(Event::POINTER_MOVED, 0, 100.0, 18.0);
-            let wheel = Event::pointer(Event::SCROLLED, 0, 0.0, f64::from(-travel / 24.0));
-            draw(&mut ui, &[position, wheel]);
-            draw(&mut ui, &[]);
-            draw(&mut ui, &[]);
-            let after = testing::find(&ui, Role::Heading, "Decisions").unwrap();
-            assert!(
-                (before.y - after.y - travel).abs() < 0.2,
-                "{before:?} -> {after:?}"
-            );
-            assert_eq!(
-                testing::find(&ui, Role::ScrollArea, "Spec sections"),
-                Some(rail)
-            );
-            assert_eq!(SECTIONS[selection.get().section].0, "s-decisions");
+            let top = geometry(&ui);
+            assert_eq!((top[0].y, top[1].y), (0.0, 34.0));
+            assert!((top[1].h - 31.4).abs() < 0.01);
+            assert!((top[2].y - 78.4).abs() < 0.01, "{top:?}");
 
             let left = testing::find(&ui, Role::Button, "Decisions").unwrap().x;
-            let wheel = Event::pointer(Event::SCROLLED, 0, -4.0, 0.0);
-            draw(&mut ui, &[wheel]);
+            let over_rail = Event::pointer(Event::POINTER_MOVED, 0, 100.0, 48.0);
+            let sideways = Event::pointer(Event::SCROLLED, 0, -4.0, 0.0);
+            draw(&mut ui, &[over_rail, sideways]);
             draw(&mut ui, &[]);
             assert!(testing::find(&ui, Role::Button, "Decisions").unwrap().x < left);
-            assert_eq!(testing::find(&ui, Role::Heading, "Decisions"), Some(after));
-            assert_eq!(SECTIONS[selection.get().section].0, "s-decisions");
+            assert_eq!(geometry(&ui), top);
+
+            let down = Event::pointer(Event::SCROLLED, 0, 0.0, -7.5);
+            draw(&mut ui, &[down]);
+            draw(&mut ui, &[]);
+            let scrolled = geometry(&ui);
+            for (before, after) in top.iter().zip(scrolled) {
+                assert!(
+                    (before.y - after.y - 180.0).abs() < 0.15,
+                    "{before:?} -> {after:?}"
+                );
+            }
+            println!(
+                "PAGE|{width}|top: {}, {}, {}|after 180pt: {}, {}, {}",
+                top[0].y, top[1].y, top[2].y, scrolled[0].y, scrolled[1].y, scrolled[2].y,
+            );
+
+            let over_body = Event::pointer(Event::POINTER_MOVED, 0, (width - 12.0).into(), 290.0);
+            let up = Event::pointer(Event::SCROLLED, 0, 0.0, 7.5);
+            draw(&mut ui, &[over_body, up]);
+            draw(&mut ui, &[]);
+            assert_eq!(geometry(&ui), top);
+
             let touch = Event::pointer(Event::TRACKPAD_SCROLLED, 0, 0.0, -12.0);
             let moved = Event::pointer(Event::TRACKPAD_SCROLLED, 1, 0.0, -16.0);
             let duplicate = Event::pointer(Event::SCROLLED, 0, 0.0, -1.0);
-            draw(&mut ui, &[touch, moved, duplicate]);
+            draw(&mut ui, &[over_rail, touch, moved, duplicate]);
             draw(&mut ui, &[]);
-            let tracked = testing::find(&ui, Role::Heading, "Decisions").unwrap();
-            assert!(
-                (after.y - tracked.y - 28.0).abs() < 0.15,
-                "{after:?} -> {tracked:?}"
-            );
-            assert_eq!(
-                testing::find(&ui, Role::ScrollArea, "Spec sections"),
-                Some(rail)
-            );
+            for (before, after) in top.iter().zip(geometry(&ui)) {
+                assert!(
+                    (before.y - after.y - 28.0).abs() < 0.15,
+                    "{before:?} -> {after:?}"
+                );
+            }
+
+            let decisions = testing::find(&ui, Role::Heading, "Decisions").unwrap();
+            let travel = decisions.y - 21.0 - 119.0;
+            // The partially visible rail can still pass vertical input to the page.
+            let over_rail = Event::pointer(Event::POINTER_MOVED, 0, 100.0, 18.0);
+            let down = Event::pointer(Event::SCROLLED, 0, 0.0, f64::from(-travel / 24.0));
+            draw(&mut ui, &[over_rail, down]);
+            draw(&mut ui, &[]);
+            draw(&mut ui, &[]);
+            let heading = testing::find(&ui, Role::Heading, "Decisions").unwrap();
+            assert!((heading.y - 140.0).abs() < 0.2, "{heading:?}");
             assert_eq!(SECTIONS[selection.get().section].0, "s-decisions");
-            println!("RAIL|{width}|mouse wheel, horizontal rail, 28 pt trackpad and active anchor");
+            assert!(geometry(&ui)[1].y + top[1].h < 0.0);
             for _ in 0..6 {
                 draw(&mut ui, &[]);
             }
+            mem_sys::set_peer(pxui::library_counter);
             Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
                 .warm(&mut || draw(&mut ui, &[]));
         }
@@ -2390,47 +2427,88 @@ mod tests {
     }
 
     #[test]
-    fn spec_navigation_returns_selection_for_the_next_frame() {
-        let picked = Cell::new(None);
-        let selected = Cell::new(Selection::default());
-        let mut frame = |ui: &mut Ui| {
-            // PXUI may call the build again without events to settle layout.
-            if let Some(selection) = paint(ui, None, View::Spec, selected.get(), &[]) {
-                picked.set(Some(selection));
-            }
-        };
-        let mut ui = crate::viewer_ui().unwrap();
-        ui.set_a11y(true);
-        for _ in 0..2 {
-            testing::frame(&mut ui, &[], &mut frame);
-        }
-        let rect = testing::find(&ui, Role::Button, "Decisions").unwrap();
-        testing::click(
-            &mut ui,
-            f64::from(rect.x + rect.w * 0.5),
-            f64::from(rect.y + rect.h * 0.5),
-            &mut frame,
-        );
-        let selection = picked.get().unwrap();
-        assert_eq!(selection.section, 1);
-        assert!(selection.scroll > 0.0);
-        selected.set(selection);
-        testing::frame(&mut ui, &[], &mut frame);
-        let heading = testing::find(&ui, Role::Heading, "Decisions").unwrap();
-        assert!(heading.y >= 34.0 && heading.y <= 65.0, "{heading:?}");
+    fn compact_spec_navigation_and_fresh_capture_restore_the_page_offset() {
+        use pxui::{Event, FrameIn};
 
-        let mut restored = selection;
-        assert!(restored.restore_scroll());
-        let mut capture = crate::viewer_ui().unwrap();
-        capture.set_a11y(true);
-        for _ in 0..3 {
-            testing::frame(&mut capture, &[], &mut |ui| {
-                paint(ui, None, View::Spec, restored, &[]);
-            });
+        for width in [800.0, 480.0] {
+            let picked = Cell::new(None);
+            let selected = Cell::new(Selection::default());
+            let mut frame = |ui: &mut Ui| {
+                // PXUI may call the build again without events to settle layout.
+                if let Some(selection) = paint_spec(
+                    ui,
+                    selected.get(),
+                    (&[], &Parity::default()),
+                    &mut paint_spec_titlebar,
+                ) {
+                    picked.set(Some(selection));
+                }
+            };
+            let mut ui = crate::viewer_ui().unwrap();
+            ui.set_a11y(true);
+            let input = FrameIn::new(width, 640.0);
+            for _ in 0..2 {
+                ui.frame(&input, &mut frame).unwrap();
+            }
+
+            let rect = testing::find(&ui, Role::Button, "MCP surface").unwrap();
+            let center = rect.x + rect.w * 0.5;
+            let reveal = [
+                Event::pointer(Event::POINTER_MOVED, 0, 120.0, 48.0),
+                Event::pointer(
+                    Event::SCROLLED,
+                    0,
+                    f64::from((width * 0.5 - center) / 24.0),
+                    0.0,
+                ),
+            ];
+            ui.frame(&input.events(&reveal), &mut frame).unwrap();
+            ui.frame(&input, &mut frame).unwrap();
+            let rect = testing::find(&ui, Role::Button, "MCP surface").unwrap();
+            let x = rect.x + rect.w * 0.5;
+            let y = rect.y + rect.h * 0.5;
+            assert!((0.0..width).contains(&x) && (34.0..66.0).contains(&y));
+            for kind in [Event::POINTER_PRESSED, Event::POINTER_RELEASED] {
+                let event = Event::pointer(kind, 0, x.into(), y.into());
+                ui.frame(&input.events(&[event]), &mut frame).unwrap();
+            }
+            let selection = picked.get().unwrap();
+            assert_eq!(SECTIONS[selection.section].0, "s-mcp");
+            assert!(selection.scroll > 0.0);
+            selected.set(selection);
+            ui.frame(&input, &mut frame).unwrap();
+            let heading = testing::find(&ui, Role::Heading, "MCP surface").unwrap();
+            assert!((heading.y - 21.0).abs() < 0.1, "{heading:?}");
+
+            let mut restored = selection;
+            assert!(restored.restore_scroll());
+            let mut capture = crate::viewer_ui().unwrap();
+            capture.set_a11y(true);
+            for _ in 0..3 {
+                capture
+                    .frame(&input, &mut |ui| {
+                        paint_spec(
+                            ui,
+                            restored,
+                            (&[], &Parity::default()),
+                            &mut paint_spec_titlebar,
+                        );
+                    })
+                    .unwrap();
+            }
+            assert_eq!(
+                testing::find(&capture, Role::Heading, "MCP surface"),
+                Some(heading)
+            );
+            for (role, name) in [
+                (Role::Button, "Editor"),
+                (Role::ScrollArea, "Spec sections"),
+            ] {
+                let live = testing::find(&ui, role, name).unwrap();
+                assert!(live.y + live.h < 0.0);
+                assert_eq!(testing::find(&capture, role, name), Some(live));
+            }
+            println!("RESTORE|{width}|MCP heading y={}", heading.y);
         }
-        assert_eq!(
-            testing::find(&capture, Role::Heading, "Decisions"),
-            Some(heading)
-        );
     }
 }

@@ -514,6 +514,7 @@ fn run_surface(
                         thumbnail,
                         waveform: decoded.waveform,
                         camera,
+                        camera_only: decoded.camera_only,
                         mic: decoded.mic,
                         system: decoded.system,
                         events: decoded.events,
@@ -2096,8 +2097,21 @@ fn paint_viewer(
     }
     let mut program_effect = None;
     let mut content = |ui: &mut Ui| {
-        intents.titlebar =
-            editor_titlebar::paint(ui, name, revision, active_view, &titlebar, session_state);
+        let mut paint_titlebar = |ui: &mut Ui| {
+            intents.titlebar =
+                editor_titlebar::paint(ui, name, revision, active_view, &titlebar, session_state);
+        };
+        if active_view == editor_titlebar::View::Spec {
+            intents.view_selection = editor_views::paint_spec(
+                ui,
+                view_selection,
+                (bindings, &cache.parity),
+                &mut paint_titlebar,
+            );
+            intents.timeline.state = timeline.clone();
+            return;
+        }
+        paint_titlebar(ui);
         if active_view != editor_titlebar::View::Editor {
             if active_view == editor_titlebar::View::Agent
                 && let Some((lab, images)) = lab

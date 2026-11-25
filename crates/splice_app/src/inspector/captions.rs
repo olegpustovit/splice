@@ -1,13 +1,14 @@
 use super::{
-    BODY, CAPTION, CHOICE_LOOK, INK, Intents, LINE, MUTED, QUIET, SELECTED, STRONG_LINE, Selection,
-    ink, item_setting, lane_choice, numeric, section, text_field,
+    BODY, CAPTION, CHOICE_LOOK, FIELD, INK, Intents, LINE, MUTED, QUIET, SELECTED, STRONG_LINE,
+    Selection, ink, item_setting, lane_choice, numeric, property_row, section, style_field,
+    text_field,
 };
 use crate::{
     EDITOR_HEADING, caption_appearance,
     viewer_captions::{self, STYLES, Style},
 };
 use pxui::{
-    Button, Fill, Label, Node, Rect, Toggle, Ui,
+    Button, Fill, Label, Node, Rect, Toggle, Ui, ValueCallbacks,
     geom::{Edges, Rgba},
     ui::{Align, Justify, Look, Size, States},
 };
@@ -243,12 +244,8 @@ pub(super) fn cue_fields(
             let [d, e, f] = crate::playbar::clock(cue.range[1], project.fps);
             numeric(
                 ui,
-                if cue.from_words {
-                    "From words"
-                } else {
-                    "Timeline"
-                },
-                format_args!("{a:02}:{b:02};{c:02} – {d:02}:{e:02};{f:02}"),
+                "From words",
+                format_args!("{a:02}:{b:02}:{c:02} – {d:02}:{e:02}:{f:02}"),
             );
             if let Some(lane) = lane
                 && project
@@ -425,23 +422,32 @@ fn word_editor(
                     intents.op = Some(edit_word(id, word.id, Some(("text", value))));
                 },
             );
-            text_field(
-                ui,
-                ("Emoji", "Word emoji"),
-                word.emoji.as_deref().unwrap_or(""),
-                "none",
-                size,
-                (8, None),
-                &mut |emoji| {
-                    let emoji = emoji.trim();
-                    let value = if emoji.is_empty() {
+            property_row(ui, "Emoji", &mut |ui| {
+                let emoji = word.emoji.as_deref().unwrap_or("");
+                let valid = |text: &str| {
+                    // The v13 input has a maximum of eight UTF-16 code units.
+                    text.encode_utf16().count() <= 8 && !text.chars().any(char::is_control)
+                };
+                let response = pxui::ext::value_field(
+                    ui,
+                    "Word emoji",
+                    emoji,
+                    size,
+                    &FIELD.name("Word emoji"),
+                    &ValueCallbacks::DEFAULT.valid(&valid),
+                );
+                if let Some(value) = response.changed.filter(|&value| value != emoji) {
+                    let value = value.trim();
+                    let value = if value.is_empty() {
                         Json::Null
                     } else {
-                        Json::String(emoji.into())
+                        Json::String(value.into())
                     };
                     intents.op = Some(edit_word(id, word.id, Some(("emoji", value))));
-                },
-            );
+                }
+                let (response, editing) = (response.response, response.editing);
+                style_field(ui, response, editing, emoji, "none");
+            });
             let toggle = Toggle::DEFAULT.row_h(26.0).label(BODY);
             for (name, key, on) in [
                 ("Emphasis", "emph", word.emph),
@@ -663,18 +669,23 @@ fn style_op(target: String, style: Style) -> Json {
 mod tests {
     use super::*;
     use pxui::{Event, FrameIn, KeyCode, Role, testing};
-    use splice_core::{
-        edit::apply,
-        package::{Package, journal::Source},
-    };
+    use splice_core::history::{Store, WriteOptions};
     use std::cell::{Cell, RefCell};
+    use std::fs;
 
     #[test]
     fn caption_inspector_edits_words_and_lane_through_core() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/projects/sample.splice");
-        let (_, project) = Package::open(&path).unwrap();
-        let project = RefCell::new(project);
+        let path = std::env::temp_dir().join(format!(
+            "splice-caption-inspector-{}.splice",
+            std::process::id()
+        ));
+        fs::create_dir_all(path.join("transcripts")).unwrap();
+        for file in ["project.json", "media.json", "transcripts/med_screen.json"] {
+            fs::copy(fixture.join(file), path.join(file)).unwrap();
+        }
+        let store = RefCell::new(Store::open(&path).unwrap());
         let cue: ItemId = "ovl_cap2".parse().unwrap();
         let lane = "lan_cap".parse().unwrap();
         let word: WordId = "w:screen:5".parse().unwrap();
@@ -685,11 +696,12 @@ mod tests {
         let copy = Cell::new(false);
         let mut cache = Cache::default();
         let mut paint = |ui: &mut Ui| {
-            let project = project.borrow();
-            cache.refresh(ui, Some(&project), selection.get());
+            let store = store.borrow();
+            let project = store.project();
+            cache.refresh(ui, Some(project), selection.get());
             let intents = super::super::paint(
                 ui,
-                Some(&project),
+                Some(project),
                 selection.get(),
                 super::super::Scope::Selection,
                 660,
@@ -727,13 +739,14 @@ mod tests {
                 .take()
                 .unwrap_or_else(|| panic!("{action} expected {command}"));
             assert_eq!(op.field("cmd").and_then(Json::as_str), Some(command));
-            let mut project = project.borrow_mut();
-            apply(&mut project, &[op], Source::Human, false).unwrap();
-            // The Store assigns a revision after applying an in-memory batch.
-            project.rev += 1;
+            store
+                .borrow_mut()
+                .apply(&[op], &WriteOptions::default())
+                .unwrap();
         };
         let word_edit = || {
-            let project = project.borrow();
+            let store = store.borrow();
+            let project = store.project();
             let slot = project.items.find(cue).unwrap();
             let ItemKind::Caption { edits, .. } = &project.items.data(slot).unwrap().kind else {
                 panic!("expected caption");
@@ -741,37 +754,71 @@ mod tests {
             edits.iter().find(|edit| edit.word == word).cloned()
         };
         settle(&mut ui, &mut paint);
+        assert!(testing::find(&ui, Role::Label, "00:05:12 – 00:06:15").is_some());
         click(&mut ui, Role::Button, "frame 🎯", &mut paint);
         settle(&mut ui, &mut paint);
         click(&mut ui, Role::Button, "Jump to word", &mut paint);
         assert_eq!(seek.take(), Some(170));
-        click(&mut ui, Role::TextField, "Word text", &mut paint);
-        assert!(ui.text_input_focused());
-        let new = "shot";
-        let event = Event {
-            kind: Event::TEXT_INPUT,
-            text: pxui::Str {
-                ptr: new.as_ptr(),
-                len: new.len(),
-            },
-            ..Event::default()
+        let replace_field = |ui: &mut Ui, name, new: &str, paint: &mut dyn FnMut(&mut Ui)| {
+            click(ui, Role::TextField, name, paint);
+            assert!(ui.text_input_focused());
+            if new.is_empty() {
+                testing::key(ui, KeyCode::Backspace, paint);
+            } else {
+                let event = Event {
+                    kind: Event::TEXT_INPUT,
+                    text: pxui::Str {
+                        ptr: new.as_ptr(),
+                        len: new.len(),
+                    },
+                    ..Event::default()
+                };
+                ui.frame(&input.events(&[event]), paint).unwrap();
+            }
+            testing::key(ui, KeyCode::Enter, paint);
         };
-        ui.frame(&input.events(&[event]), &mut paint).unwrap();
-        testing::key(&mut ui, KeyCode::Enter, &mut paint);
+        replace_field(&mut ui, "Word text", "wide shot", &mut paint);
         commit("editing word text", "caption.set");
         settle(&mut ui, &mut paint);
-        assert!(testing::find(&ui, Role::Button, "shot 🎯").is_some());
+        assert!(testing::find(&ui, Role::Button, "wide shot 🎯").is_some());
         click(&mut ui, Role::Toggle, "Hide word", &mut paint);
         commit("hiding the word", "caption.set");
         let hidden = word_edit().unwrap();
         assert!(hidden.is_hidden());
-        assert_eq!(hidden.text.as_deref(), Some("shot"));
+        assert_eq!(hidden.text.as_deref(), Some("wide shot"));
         assert!(hidden.emph);
         assert_eq!(hidden.emoji.as_deref(), Some("🎯"));
         settle(&mut ui, &mut paint);
         click(&mut ui, Role::Toggle, "Hide word", &mut paint);
         commit("showing the word", "caption.set");
         assert!(!word_edit().unwrap().is_hidden());
+        settle(&mut ui, &mut paint);
+        for emoji in ["👩‍💻", "❤️‍🔥", "🧪🧪🧪🧪"] {
+            replace_field(&mut ui, "Word emoji", emoji, &mut paint);
+            commit("editing emoji", "caption.set");
+            let edit = word_edit().unwrap();
+            assert_eq!(edit.emoji.as_deref(), Some(emoji));
+            assert_eq!(edit.text.as_deref(), Some("wide shot"));
+            assert!(edit.emph && !edit.is_hidden());
+            settle(&mut ui, &mut paint);
+        }
+        mem_sys::set_peer(pxui::library_counter);
+        for _ in 0..8 {
+            ui.frame(&input, &mut paint).unwrap();
+        }
+        let meter =
+            splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset);
+        meter.warm(&mut || {
+            ui.frame(&input, &mut paint).unwrap();
+        });
+        replace_field(&mut ui, "Word emoji", "🧪🧪🧪🧪a", &mut paint);
+        assert!(op.take().is_none());
+        assert_eq!(word_edit().unwrap().emoji.as_deref(), Some("🧪🧪🧪🧪"));
+        testing::key(&mut ui, KeyCode::Escape, &mut paint);
+        settle(&mut ui, &mut paint);
+        replace_field(&mut ui, "Word emoji", "", &mut paint);
+        commit("clearing emoji", "caption.set");
+        assert!(word_edit().unwrap().emoji.is_none());
         settle(&mut ui, &mut paint);
         click(&mut ui, Role::Button, "Pop", &mut paint);
         commit("choosing a cue preset", "effect.set");
@@ -783,19 +830,17 @@ mod tests {
         commit("merging adjacent captions", "caption.merge");
         settle(&mut ui, &mut paint);
 
-        mem_sys::set_peer(pxui::library_counter);
         for selection_now in [Selection::Item(cue), Selection::Lane(lane)] {
             selection.set(selection_now);
             for _ in 0..8 {
                 ui.frame(&input, &mut paint).unwrap();
             }
-            splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
-                .warm(&mut || {
-                    for at in [162, 170, 184, 195] {
-                        playhead.set(at);
-                        ui.frame(&input, &mut paint).unwrap();
-                    }
-                });
+            meter.warm(&mut || {
+                for at in [162, 170, 184, 195] {
+                    playhead.set(at);
+                    ui.frame(&input, &mut paint).unwrap();
+                }
+            });
         }
         click(&mut ui, Role::Button, "Copy as SRT", &mut paint);
         assert!(copy.replace(false));
@@ -805,5 +850,14 @@ mod tests {
         click(&mut ui, Role::Button, "2w", &mut paint);
         commit("regenerating the lane", "captions.generate");
         assert!(op.take().is_none());
+        let store = store.into_inner();
+        let revision = store.project().rev;
+        let stamp = store.verify().unwrap();
+        store.close().unwrap();
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.project().rev, revision);
+        assert_eq!(reopened.verify().unwrap(), stamp);
+        reopened.close().unwrap();
+        fs::remove_dir_all(path).unwrap();
     }
 }

@@ -81,6 +81,24 @@ fn window_backdrops_take_an_image_an_angle_or_a_wallpaper() {
 }
 
 #[test]
+fn b_roll_window_uses_the_v13_physical_corner_radius() {
+    let id = TimelineId::Item("ovl_broll".parse().unwrap());
+    for radius in [0.132, 0.264] {
+        let project = applied(&format!(
+            r#"[{{"cmd":"effect.set","target":"ovl_broll","type":"window","params":{{"corner":{radius}}}}}]"#,
+        ));
+        let plan = frame(&project, 448);
+        let corner = plan.layers.iter().find_map(|layer| match layer {
+            Layer::Picture(picture) if picture.item == id => {
+                picture.window.map(|window| window.corner)
+            }
+            _ => None,
+        });
+        assert_eq!(corner, Some(radius));
+    }
+}
+
+#[test]
 fn an_image_backdrop_must_be_a_still_of_the_project() {
     // A video is refused when written…
     let mut project = sample();

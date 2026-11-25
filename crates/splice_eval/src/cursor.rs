@@ -240,6 +240,7 @@ const IDLE_AFTER: f64 = 2.0;
 const FADE_OUT: f64 = 0.4;
 const FADE_IN: f64 = 0.25;
 const PULSE: f64 = 0.13;
+const RING_FRAMES: f64 = 18.0;
 /// How far from a press any click effect reaches (spring window, press aim, pulse).
 const REACH: f64 = CLICK_WINDOW + PRESS_AIM + 1.0 / RATE;
 /// A move faster than this (screen points per second) is a warp, not a hand.
@@ -329,6 +330,8 @@ impl Track {
         let mut position = filtered[0];
         let mut velocity = [0.0, 0.0];
         let mut points = Vec::with_capacity(count);
+        let smoothing = motion.smoothing.clamp(0.0, 1.0);
+        let aim_at_presses = smoothing > 0.0 || motion.synthesize || motion.remove_shakes;
         // The lead never looks into a synthesized stretch: the spring would leave the resting
         // point early and snap back when the stretch takes over.
         let mut next_synthetic = vec![count; count];
@@ -370,16 +373,17 @@ impl Track {
                     }
                 }
             }
-            let s = motion.smoothing.clamp(0.0, 1.0);
             let mut p = [
-                filtered[i][0] + (position[0] - filtered[i][0]) * s,
-                filtered[i][1] + (position[1] - filtered[i][1]) * s,
+                filtered[i][0] + (position[0] - filtered[i][0]) * smoothing,
+                filtered[i][1] + (position[1] - filtered[i][1]) * smoothing,
             ];
-            // Land exactly on each press.
-            for c in near {
-                // Flat for one table step each side, so lookups between points stay exact.
-                let w = smoothstep(1.0 - ((t - c[0]).abs() - 1.0 / RATE).max(0.0) / PRESS_AIM);
-                p = [p[0] + (c[1] - p[0]) * w, p[1] + (c[2] - p[1]) * w];
+            if aim_at_presses {
+                // Guide adjusted paths onto the press. The raw path keeps its recorded samples.
+                for c in near {
+                    // Flat for one table step each side, so lookups between points stay exact.
+                    let w = smoothstep(1.0 - ((t - c[0]).abs() - 1.0 / RATE).max(0.0) / PRESS_AIM);
+                    p = [p[0] + (c[1] - p[0]) * w, p[1] + (c[2] - p[1]) * w];
+                }
             }
             let image = raw[i].1;
             let mut scale = 1.0;
@@ -464,6 +468,15 @@ impl Track {
     /// Presses as (source seconds, x, y).
     pub fn clicks(&self) -> &[[f64; 3]] {
         &self.clicks
+    }
+
+    /// Progress through the oldest active click ring at `frame` on the source's clock.
+    /// `fps` is the positive source frame rate. A ring covers its press and the next 17 frames.
+    pub fn click_ring_phase(&self, frame: f64, fps: f64) -> Option<f64> {
+        let expired = (frame - RING_FRAMES) / fps;
+        let first = self.clicks.partition_point(|click| click[0] <= expired);
+        let press = self.clicks.get(first)?[0];
+        (press <= frame / fps).then(|| (frame - press * fps).max(0.0) / RING_FRAMES)
     }
 
     /// Table points (tests and diagnostics).
@@ -852,6 +865,46 @@ mod tests {
             .fold(1.0, f64::min);
         assert!((smallest - 0.8).abs() < 0.02, "{smallest}");
         assert_eq!(track.at(0.8).unwrap().scale, 1.0);
+    }
+
+    #[test]
+    fn raw_path_preserves_source_samples_around_presses() {
+        let samples = [
+            sample(39.0 / 30.0, 0.25, 0.5, false),
+            sample(40.0 / 30.0, 0.5, 0.5, true),
+            sample(41.0 / 30.0, 0.7, 0.5, false),
+        ];
+        let raw = Track::build(
+            &samples,
+            SIZE,
+            Motion {
+                smoothing: 0.0,
+                synthesize: false,
+                remove_shakes: false,
+                ..Motion::default()
+            },
+        );
+        for sample in samples {
+            assert!((raw.at(sample.t).unwrap().x - sample.x).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn click_rings_use_half_open_source_frame_intervals() {
+        for fps in [24.0, 30.0, 60.0, 30_000.0 / 1001.0] {
+            let samples = [
+                sample(0.0, 0.5, 0.5, false),
+                sample(40.0 / fps, 0.5, 0.5, true),
+                sample(43.0 / fps, 0.5, 0.5, true),
+            ];
+            let track = Track::build(&samples, SIZE, Motion::default());
+            let phase = |frame| track.click_ring_phase(frame, fps);
+            assert!(phase(39.0).is_none());
+            assert!(phase(40.0).unwrap().abs() < 1e-9);
+            assert!((phase(43.0).unwrap() - 3.0 / 18.0).abs() < 1e-9);
+            assert!((phase(58.0).unwrap() - 15.0 / 18.0).abs() < 1e-9);
+            assert!(phase(61.0).is_none());
+        }
     }
 
     /// T39.3: a thousand random anchor sets give deterministic, continuous, speed-capped paths

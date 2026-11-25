@@ -1823,13 +1823,13 @@ fn performance_section(ui: &mut Ui, width: f32) {
 
 #[cfg(test)]
 mod workflow_tests {
-    use super::super::{Selection, paint};
+    use super::super::Selection;
+    use super::tests::draw;
     use super::{
         ALLOC_LEAD, ALLOC_POINTS, BINDING_CODE, BUILD_POINTS, MEDIA_ROWS, PERF_ROWS, REGISTRY_CODE,
         RUST_CARDS, TEST_ROWS,
     };
-    use crate::editor_titlebar::View;
-    use pxui::{Event, FrameIn, Node, Rect, Role, Size, Ui, testing};
+    use pxui::{Event, FrameIn, Rect, Role, Ui, testing};
 
     const TITLES: &[(&str, &str)] = &[
         ("Media on macOS", "Media on macOS (no ffmpeg)"),
@@ -1866,7 +1866,7 @@ mod workflow_tests {
             width - 32.0
         };
         let left = if width > 820.0 { 252.0 } else { 16.0 };
-        let top = if width > 820.0 { 55.0 } else { 87.4 };
+        let top = if width > 820.0 { 55.0 } else { 21.0 };
         for _ in 0..2 {
             draw(&mut ui, &input, &mut selection);
         }
@@ -2041,20 +2041,6 @@ mod workflow_tests {
         }
     }
 
-    fn draw(ui: &mut Ui, input: &FrameIn, selection: &mut Selection) {
-        let mut next = None;
-        ui.frame(input, &mut |ui| {
-            ui.column(Node::column().w(Size::Grow).h(Size::Grow), |ui| {
-                ui.node("titlebar", Node::DEFAULT.h_px(34.0));
-                next = paint(ui, None, View::Spec, *selection, &[]).or(next);
-            });
-        })
-        .unwrap();
-        if let Some(next) = next {
-            *selection = next;
-        }
-    }
-
     fn scroll_at(
         ui: &mut Ui,
         input: &FrameIn,
@@ -2099,6 +2085,15 @@ mod workflow_tests {
             }
             find(ui, role, name)
         };
+        if role == Role::Button && width <= 820.0 && selection.scroll > 0.0 {
+            scroll_at(
+                ui,
+                input,
+                selection,
+                (f64::from(width - 12.0), 290.0),
+                (0.0, f64::from(selection.scroll / 24.0 + 1.0)),
+            );
+        }
         let r = locate(ui);
         let x = r.x + r.w / 2.0;
         let y = r.y + r.h / 2.0;

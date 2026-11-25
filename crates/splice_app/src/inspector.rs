@@ -239,8 +239,7 @@ pub(super) fn paint(
                             .and_then(|id| project.media.iter().find(|media| media.id == id));
                         let custom_name = data.appearance.name.as_deref();
                         let media_name = media
-                            .and_then(|media| std::path::Path::new(&media.path).file_stem())
-                            .and_then(std::ffi::OsStr::to_str)
+                            .and_then(super::viewer_drawers::media_title)
                             .unwrap_or("Gap");
                         heading(
                             ui,
@@ -1658,7 +1657,7 @@ fn group_name(project: &Project, id: TimelineId) -> (&str, Rgba) {
                         let media = clip
                             .media
                             .and_then(|id| project.media.iter().find(|media| media.id == id))?;
-                        std::path::Path::new(&media.path).file_stem()?.to_str()
+                        super::viewer_drawers::media_title(media)
                     })
                 })
                 .unwrap_or(if clip.is_some_and(|clip| clip.media.is_none()) {
@@ -1710,7 +1709,7 @@ fn group_name(project: &Project, id: TimelineId) -> (&str, Rgba) {
 
 fn group_media_name(project: &Project, id: MediaId) -> Option<&str> {
     let media = project.media.iter().find(|media| media.id == id)?;
-    std::path::Path::new(&media.path).file_stem()?.to_str()
+    super::viewer_drawers::media_title(media)
 }
 fn group_command(command: &str, group: &[TimelineId]) -> Vec<(String, Json)> {
     vec![

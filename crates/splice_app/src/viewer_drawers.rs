@@ -482,6 +482,13 @@ enum MediaGlyph {
 
 fn media_chrome(file: &Media) -> (&str, &'static str, MediaGlyph) {
     use MediaGlyph::*;
+    if let Some(sample) = Sample::identify(file) {
+        let glyph = match sample {
+            Sample::Screen => Screen,
+            Sample::Webcam => Webcam,
+        };
+        return (sample.title(), "sync take", glyph);
+    }
     for (id, kind, name, label, glyph) in [
         (
             "med_opener",
@@ -493,14 +500,14 @@ fn media_chrome(file: &Media) -> (&str, &'static str, MediaGlyph) {
         (
             SCREEN_SAMPLE,
             MediaKind::Take,
-            "Screen take 01",
+            Sample::Screen.title(),
             "sync take",
             Screen,
         ),
         (
             WEBCAM_SAMPLE,
             MediaKind::Take,
-            "Webcam take 01",
+            Sample::Webcam.title(),
             "sync take",
             Webcam,
         ),
@@ -636,6 +643,12 @@ fn file_name(file: &Media) -> &str {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(&file.path)
+}
+
+pub(super) fn media_title(file: &Media) -> Option<&str> {
+    Sample::identify(file)
+        .map(Sample::title)
+        .or_else(|| Path::new(&file.path).file_stem()?.to_str())
 }
 
 fn source_seconds(file: &Media) -> Option<f64> {
@@ -966,6 +979,7 @@ mod tests {
         use splice_model::Probe;
         use std::fs;
 
+        mem_sys::set_peer(pxui::library_counter);
         let folder =
             std::env::temp_dir().join(format!("splice-bundled-drawer-{}", std::process::id()));
         fs::create_dir(&folder).unwrap();
@@ -1114,6 +1128,33 @@ mod tests {
                 assert_eq!(entry.probe.audio.len(), 1);
                 webcam = Some(entry.id);
             }
+            let title = if is_screen {
+                "Screen take 01"
+            } else {
+                "Webcam take 01"
+            };
+            assert_eq!(media_title(entry), Some(title));
+            let mut other_take = entry.clone();
+            other_take.take.as_mut().unwrap().camera = Some("other.mov".into());
+            assert_eq!(media_chrome(&other_take).0, file_name(entry));
+            assert_eq!(
+                media_title(&other_take),
+                Path::new(&entry.path)
+                    .file_stem()
+                    .and_then(std::ffi::OsStr::to_str)
+            );
+            assert!(
+                draw_media(
+                    &mut ui,
+                    (store.project(), store.path()),
+                    480.0,
+                    &[],
+                    &mut sources
+                )
+                .is_none()
+            );
+            assert!(testing::find(&ui, Role::Label, title).is_some());
+            assert!(testing::find(&ui, Role::Label, "screen.mov").is_some());
         }
         assert_eq!(
             fs::read(occupied.join("screen.mov")).unwrap(),
@@ -1121,6 +1162,22 @@ mod tests {
         );
         assert!(!package.join("takes/v13-sample-screen-2").exists());
         assert_eq!(store.project().media.len(), 3);
+        splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset).warm(
+            &mut || {
+                for _ in 0..12 {
+                    assert!(
+                        draw_media(
+                            &mut ui,
+                            (store.project(), store.path()),
+                            480.0,
+                            &[],
+                            &mut sources
+                        )
+                        .is_none()
+                    );
+                }
+            },
+        );
         let webcam = webcam.unwrap();
         let movie = package.join("takes/v13-sample-webcam/webcam.mov");
         store.human_undo(4).unwrap();
@@ -1134,6 +1191,13 @@ mod tests {
         let restored = Store::open(&package).unwrap();
         assert_eq!(restored.project().rev, 5);
         assert_eq!(restored.project().media.len(), 3);
+        let restored_webcam = restored
+            .project()
+            .media
+            .iter()
+            .find(|media| media.id == webcam)
+            .unwrap();
+        assert_eq!(media_title(restored_webcam), Some("Webcam take 01"));
         assert!(restored.verify().is_ok());
         drop(restored);
         fs::remove_dir_all(&folder).unwrap();

@@ -1,6 +1,5 @@
-use super::super::{Selection, paint};
+use super::super::{Parity, Selection, paint_spec, tests::paint_spec_titlebar};
 use super::DIAGRAM_NAME;
-use crate::editor_titlebar::View;
 use pxui::{Event, FrameIn, Node, Rect, Role, Size, Ui, testing};
 
 const TITLES: &[&str] = &["Architecture", "UI framework: PXUI", "Icon system"];
@@ -33,7 +32,7 @@ fn engineering_spec(width: f32) {
         jump(&mut ui, &input, &mut selection, width, Role::Button, title);
         let heading = geometry(&ui, width, title, Role::Heading, title);
         let expected_x = if width > 820.0 { 252.0 } else { 16.0 };
-        let expected_y = if width > 820.0 { 55.0 } else { 87.4 };
+        let expected_y = if width > 820.0 { 55.0 } else { 21.0 };
         assert!((heading.x - expected_x).abs() < 0.1, "{heading:?}");
         assert!((heading.y - expected_y).abs() < 0.15, "{heading:?}");
         let content_width = width - expected_x - if width > 820.0 { 32.0 } else { 16.0 };
@@ -148,17 +147,22 @@ fn engineering_spec(width: f32) {
     );
     let heading = testing::find(&ui, Role::Heading, "UI framework: PXUI").unwrap();
     assert!(
-        (heading.y - if width > 820.0 { 55.0 } else { 87.4 }).abs() < 0.15,
+        (heading.y - if width > 820.0 { 55.0 } else { 21.0 }).abs() < 0.15,
         "{heading:?}"
     );
 }
 
-fn draw(ui: &mut Ui, input: &FrameIn, selection: &mut Selection) {
+pub(super) fn draw(ui: &mut Ui, input: &FrameIn, selection: &mut Selection) {
     let mut next = None;
     ui.frame(input, &mut |ui| {
         ui.column(Node::column().w(Size::Grow).h(Size::Grow), |ui| {
-            ui.node("titlebar", Node::DEFAULT.h_px(34.0));
-            next = paint(ui, None, View::Spec, *selection, &[]).or(next);
+            next = paint_spec(
+                ui,
+                *selection,
+                (&[], &Parity::default()),
+                &mut paint_spec_titlebar,
+            )
+            .or(next);
         });
     })
     .unwrap();
@@ -176,6 +180,22 @@ fn jump(
     name: &str,
 ) {
     let find = |ui: &Ui| testing::find(ui, role, name).unwrap_or_else(|| panic!("missing {name}"));
+    if role == Role::Button && width <= 820.0 && selection.scroll > 0.0 {
+        draw(
+            ui,
+            &input.events(&[
+                Event::pointer(Event::POINTER_MOVED, 0, (width - 12.0).into(), 290.0),
+                Event::pointer(
+                    Event::SCROLLED,
+                    0,
+                    0.0,
+                    f64::from(selection.scroll / 24.0 + 1.0),
+                ),
+            ]),
+            selection,
+        );
+        draw(ui, input, selection);
+    }
     let rect = find(ui);
     if role == Role::Button {
         let x = rect.x + rect.w * 0.5;

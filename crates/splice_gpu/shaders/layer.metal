@@ -22,21 +22,21 @@ struct Layer {
     float shadow;    // 0..1
     float ring;      // ring width in pixels (kind 3); stroke width for shapes; texture: window inset width (color0)
     uint kind;       // 0 texture, 1 solid, 2 gradient, 3 ring, 4 ellipse, 5 line, 6 arrow, 7 callout, 8 box, 9 arc, 10 heart
-    uint flags;      // 1 BGRA source, 2 BGRA output, 4 grade, 8 LUT, 16 key, 32 cutout, 64 cutout blur, 128 clip, 256 motion
+    uint flags;      // 1 BGRA source, 2 BGRA output, 4 grade, 8 LUT, 16 key, 32 cutout, 64 cutout blur, 128 clip, 256 motion, 512 rounded clip
     float2 pivot;    // rotation pivot in target pixels
     float rotation;  // radians, clockwise
     uint orient;     // source orientation: 0 none, 1 90°, 2 180°, 3 270°
     float4 grade0;   // exposure, contrast, saturation, vibrance
     float4 grade1;   // temperature, tint, highlights, shadows
-    float4 lut;      // amount, cube size, cutout amount, unused
+    float4 lut;      // amount, cube size, cutout amount, Window shadow sigma (px)
     float4 key0;     // key rgb, tolerance (shapes: stroke rgb, unused)
     float4 key1;     // softness, spill, unused, unused (ellipse and arc shapes: 1 - sweep; gradients: direction xy, angled flag z)
     float4 clip;     // visible region x, y, w, h in target pixels
     Mask masks[4];
     uint blend;      // 0 normal, 1 multiply, 2 screen, 3 overlay, 4 add, 5 darken, 6 lighten
     uint mask_count;
-    uint pad0;
-    uint pad1;
+    float clip_corner;   // flag 512: rounded clip radius, in target pixels
+    float clip_rotation; // flag 512: clockwise rotation about the clip rectangle's center
     float4 motion;   // flag 256: the crop these pixels showed one frame earlier (relative to dest)
 };
 
@@ -46,13 +46,20 @@ struct Out {
     float2 uv;
 };
 
+static float window_sigma(constant Layer &l) {
+    // Limit the half-plane approximation if an authored motion nearly collapses the card.
+    return min(l.lut.w, min(l.dest.z, l.dest.w) / 6.0);
+}
+
 static float margin(constant Layer &l) {
-    return l.shadow > 0.0 ? 0.08 * min(l.dest.z, l.dest.w) : 0.0;
+    if (l.shadow <= 0.0) return 0.0;
+    float sigma = window_sigma(l);
+    return sigma > 0.0 ? 3.5 * sigma : 0.08 * min(l.dest.z, l.dest.w);
 }
 
 vertex Out layer_vertex(uint id [[vertex_id]], constant Layer &l [[buffer(0)]]) {
     const float2 corners[6] = {float2(0, 0), float2(1, 0), float2(0, 1), float2(1, 0), float2(1, 1), float2(0, 1)};
-    float m = margin(l) + (l.kind >= 4 ? l.ring : 0.0);
+    float m = margin(l) + (l.kind >= 4 ? l.ring : l.kind == 3 ? 0.5 : 0.0);
     float2 p = l.dest.xy - m + corners[id] * (l.dest.zw + 2.0 * m);
     float s = sin(l.rotation), c = cos(l.rotation);
     float2 d = p - l.pivot;
@@ -67,6 +74,14 @@ vertex Out layer_vertex(uint id [[vertex_id]], constant Layer &l [[buffer(0)]]) 
 static float rounded(float2 p, float2 c, float2 h, float r) {
     float2 q = abs(p - c) - h + r;
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// Outside a straight edge, three boxes of width 2 sigma approximate the Gaussian tail.
+static float window_shadow(float d, float sigma) {
+    float a = max(1.5 - abs(d) / max(2.0 * sigma, 1e-4), 0.0);
+    float b = max(a - 1.0, 0.0);
+    float tail = (a * a * a - 3.0 * b * b * b) / 6.0;
+    return d >= 0.0 ? tail : 1.0 - tail;
 }
 
 static float ellipse(float2 p, float2 c, float2 h) {
@@ -337,13 +352,26 @@ static inline float4 layer_body(Out in, constant Layer &l, texture2d<float> sour
         float2 p = in.position.xy;
         if (p.x < l.clip.x || p.y < l.clip.y || p.x >= l.clip.x + l.clip.z || p.y >= l.clip.y + l.clip.w) coverage = 0.0;
     }
+    if (l.flags & 512u) {
+        float2 half_size = l.clip.zw * 0.5;
+        float2 p = in.position.xy - (l.clip.xy + half_size);
+        if (l.clip_rotation != 0.0) {
+            float s = sin(l.clip_rotation), c = cos(l.clip_rotation);
+            p = float2(p.x * c + p.y * s, p.y * c - p.x * s);
+        }
+        float r = min(l.clip_corner, min(half_size.x, half_size.y));
+        coverage *= clamp(0.5 - rounded(p, float2(0.0), half_size, r), 0.0, 1.0);
+    }
     float alpha = color.a * coverage * l.opacity;
     float3 rgb = blend(dst.rgb, color.rgb, l.blend);
     float4 result = float4(rgb, alpha);
-    if (l.shadow > 0.0 && l.kind < 3) {
+    if (l.shadow > 0.0 && l.kind < 3 && alpha != 1.0) {
+        float sigma = window_sigma(l);
         float blur = 0.03 * min(l.dest.z, l.dest.w);
-        float d = rounded(in.px - float2(0.0, blur / 3.0), c, h, min(l.corner, min(h.x, h.y)));
-        float shade = l.shadow * 0.55 * (1.0 - smoothstep(-blur, blur, d)) * l.opacity;
+        float offset = sigma > 0.0 ? sigma * 0.5 : blur / 3.0;
+        float d = rounded(in.px - float2(0.0, offset), c, h, min(l.corner, min(h.x, h.y)));
+        float silhouette = sigma > 0.0 ? window_shadow(d, sigma) : 1.0 - smoothstep(-blur, blur, d);
+        float shade = l.shadow * 0.55 * silhouette * l.opacity;
         float under = shade * (1.0 - alpha);
         float out_alpha = alpha + under;
         result = out_alpha > 0.0 ? float4(rgb * alpha / out_alpha, out_alpha) : float4(0.0);

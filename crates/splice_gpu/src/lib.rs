@@ -77,7 +77,7 @@ pub struct Layer {
     pub ring: f32,
     /// One of the `Layer::*` kinds.
     pub kind: u32,
-    /// `BGRA`, `OUT_BGRA`, `GRADE`, `LUT`, `KEY`, `CUTOUT`, `CUTOUT_BLUR`, `CLIP` bits.
+    /// The `Layer` flags controlling this draw.
     pub flags: u32,
     /// Rotation pivot in target pixels.
     pub pivot: [f32; 2],
@@ -89,14 +89,15 @@ pub struct Layer {
     pub grade0: [f32; 4],
     /// Temperature, tint, highlights, shadows.
     pub grade1: [f32; 4],
-    /// LUT amount, cube size, cutout amount.
+    /// LUT amount, cube size, cutout amount, Window shadow sigma in target pixels (0 for
+    /// the standard drop shadow).
     pub lut: [f32; 4],
     /// Key RGB and tolerance; for shapes, the stroke RGB.
     pub key0: [f32; 4],
     /// Key softness and spill; for ellipse and arc shapes, `1 - sweep` in the first slot; for
     /// gradients, the direction over its extent in x, y and 1 in z when angled (T46.3).
     pub key1: [f32; 4],
-    /// Visible region in target pixels when `CLIP` is set.
+    /// Visible region in target pixels when `CLIP` or `ROUNDED_CLIP` is set.
     pub clip: [f32; 4],
     /// Masks in order; `mask_count` are live.
     pub masks: [Mask; 4],
@@ -104,8 +105,10 @@ pub struct Layer {
     pub blend: u32,
     /// Live masks.
     pub mask_count: u32,
-    /// Padding to the shader's 16-byte alignment.
-    pub pad: [u32; 2],
+    /// The visible region's corner radius for `ROUNDED_CLIP`, in pixels.
+    pub clip_corner: f32,
+    /// Clockwise rotation of the visible region about its center for `ROUNDED_CLIP`.
+    pub clip_rotation: f32,
     /// With `MOTION`: the crop (u, v, w, h) this layer's pixels showed one frame earlier,
     /// relative to the current `dest`; the shader averages taps along the way (T46.2), and taps
     /// off the source (outside 0–1, a cursor's trail) are transparent.
@@ -155,6 +158,8 @@ impl Layer {
     pub const CLIP: u32 = 128;
     /// Motion blur: average `MOTION_TAPS` samples from `crop` toward `motion`.
     pub const MOTION: u32 = 256;
+    /// Apply the rotated, rounded coverage of `clip`.
+    pub const ROUNDED_CLIP: u32 = 512;
     /// Samples a motion-blurred texture layer averages per pixel.
     pub const MOTION_TAPS: u32 = 8;
 
@@ -170,6 +175,34 @@ impl Layer {
             grade0: [0.0, 1.0, 1.0, 0.0],
             ..Self::default()
         }
+    }
+
+    /// Sets a Window shadow for the picture's short edge in pixels before camera and motion zoom.
+    pub fn set_window_shadow(&mut self, strength: f64, short_edge: f64) {
+        let strength = strength.clamp(0.0, 1.0);
+        self.shadow = strength as f32;
+        self.lut[3] = (0.04 * short_edge * strength) as f32;
+    }
+
+    /// Clips this draw to the rotated and rounded bounds of a picture layer.
+    pub fn clip_to(&mut self, picture: &Self) {
+        let [x, y, w, h] = picture.dest;
+        self.clip = if picture.rotation == 0.0 {
+            picture.dest
+        } else {
+            let [px, py] = picture.pivot;
+            let (sin, cos) = picture.rotation.sin_cos();
+            let (dx, dy) = (x + w / 2.0 - px, y + h / 2.0 - py);
+            [
+                px + dx * cos - dy * sin - w / 2.0,
+                py + dx * sin + dy * cos - h / 2.0,
+                w,
+                h,
+            ]
+        };
+        self.flags |= Self::ROUNDED_CLIP;
+        self.clip_corner = picture.corner;
+        self.clip_rotation = picture.rotation;
     }
 }
 
@@ -546,9 +579,10 @@ fn layer_bytes(layer: &Layer, out: &mut [u8]) {
         floats(&mut put, &mask.params);
         floats(&mut put, &mask.color);
     }
-    for value in [layer.blend, layer.mask_count, layer.pad[0], layer.pad[1]] {
+    for value in [layer.blend, layer.mask_count] {
         put(value.to_le_bytes());
     }
+    floats(&mut put, &[layer.clip_corner, layer.clip_rotation]);
     floats(&mut put, &layer.motion);
     debug_assert_eq!(at, LAYER_BYTES);
 }
@@ -560,17 +594,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn window_shadow_keeps_prezoom_sigma_in_the_unused_lut_channel() {
+        let mut layer = Layer::new(Layer::TEXTURE, [0.0, 0.0, 800.0, 400.0], [960.0, 640.0]);
+        layer.corner = 26.4;
+        layer.lut = [0.7, 32.0, 0.2, 0.0];
+        layer.set_window_shadow(0.6, 320.0);
+        assert_eq!(layer.corner, 26.4);
+        assert_eq!(layer.shadow, 0.6);
+        assert_eq!(layer.lut, [0.7, 32.0, 0.2, 7.68]);
+
+        let mut bytes = [0u8; LAYER_BYTES];
+        layer_bytes(&layer, &mut bytes);
+        assert_eq!(
+            f32::from_le_bytes(bytes[156..160].try_into().unwrap()),
+            7.68
+        );
+        layer.set_window_shadow(0.0, 320.0);
+        assert_eq!(layer.lut, [0.7, 32.0, 0.2, 0.0]);
+    }
+
+    #[test]
     fn layer_bytes_match_the_shader_layout() {
         let mut layer = Layer::new(Layer::RING, [1.0, 2.0, 3.0, 4.0], [100.0, 50.0]);
         layer.ring = 6.0;
         layer.blend = 3;
         layer.masks[3].color[3] = 1.0;
+        let mut picture = Layer::new(Layer::TEXTURE, [40.0, 20.0, 96.0, 64.0], layer.target);
+        picture.corner = 5.0;
+        picture.pivot = [40.0, 20.0];
+        picture.rotation = std::f32::consts::FRAC_PI_2;
+        layer.clip_to(&picture);
         layer.motion = [0.25, 0.5, 0.75, 1.0];
         let mut bytes = [0u8; LAYER_BYTES];
         layer_bytes(&layer, &mut bytes);
         let float = |at: usize| f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
         let uint = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
         assert_eq!(uint(400), 3, "blend after the four masks");
+        assert_eq!(uint(92), Layer::ROUNDED_CLIP);
+        assert!((float(192) + 40.0).abs() < 1e-5 && (float(196) - 36.0).abs() < 1e-5);
+        assert_eq!([float(200), float(204)], [96.0, 64.0]);
+        assert_eq!([float(408), float(412)], [5.0, picture.rotation]);
         assert_eq!([float(416), float(428)], [0.25, 1.0], "motion crop last");
         assert_eq!(float(400 - 4), 1.0, "last mask's invert slot");
         assert_eq!(

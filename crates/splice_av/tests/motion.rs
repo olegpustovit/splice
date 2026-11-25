@@ -410,6 +410,110 @@ mod motion {
         );
     }
 
+    /// The v13 ring follows the pointer for 18 source frames. When clicks overlap,
+    /// the first still-active press owns the ring's size and opacity.
+    pub(super) fn cursor_ring_follows_the_recorded_position_and_source_clock() {
+        let dir = scratch("cursor-ring");
+        let path = |t| [0.28 + 0.5 * t, 0.5];
+        let events = events(&path, &[6.0 / 30.0, 10.0 / 30.0]);
+        let render = |rings| {
+            let project = take(
+                &dir.0,
+                &events,
+                vec![
+                    ("path", EffectValue::Text("recorded".into())),
+                    ("smoothing", EffectValue::Number(0.0)),
+                    ("removeShakes", EffectValue::Bool(false)),
+                    ("size", EffectValue::Number(3.0)),
+                    ("clickRings", EffectValue::Bool(rings)),
+                ],
+                &[],
+            );
+            Composition::prepare(&project, &dir.0).unwrap()
+        };
+        let plain = render(false);
+        let rings = render(true);
+        assert_eq!(frame(&plain, 5), frame(&rings, 5));
+        assert_eq!(frame(&plain, 28), frame(&rings, 28));
+        for (at, press) in [(6, 6), (13, 6), (24, 10), (27, 10)] {
+            let [x, y] = path(f64::from(at) / 30.0);
+            let radius = 64.0 * 0.03 * 3.0 * (0.6 + 1.6 * f64::from(at - press) / 18.0);
+            let mut changed = 0;
+            for (index, (plain, ring)) in frame(&plain, at)
+                .chunks_exact(4)
+                .zip(frame(&rings, at).chunks_exact(4))
+                .enumerate()
+            {
+                if (0..3).any(|c| plain[c].abs_diff(ring[c]) > 5) {
+                    changed += 1;
+                    let dx = (index % 96) as f64 + 0.5 - 96.0 * x;
+                    let dy = (index / 96) as f64 + 0.5 - 64.0 * y;
+                    assert!(
+                        (dx.hypot(dy) - radius).abs() < 1.6,
+                        "frame {at}: {dx}, {dy}"
+                    );
+                }
+            }
+            assert!(changed >= 8, "frame {at}: {changed} ring pixels");
+        }
+    }
+
+    /// A cursor can reach the card edge. Its sprite and ring are clipped by the same
+    /// fitted and rounded picture as the recorded source.
+    pub(super) fn cursor_layers_stay_inside_the_rounded_picture() {
+        let dir = scratch("cursor-clip");
+        let events = events(&|_| [0.98, 0.02], &[0.2]);
+        let render = |hidden| {
+            let mut project = take(
+                &dir.0,
+                &events,
+                vec![
+                    ("hidden", EffectValue::Bool(hidden)),
+                    ("size", EffectValue::Number(3.0)),
+                    ("clickRings", EffectValue::Bool(true)),
+                ],
+                &[],
+            );
+            project.size = [128, 64];
+            project.effects.push(fx(
+                2,
+                "window",
+                vec![
+                    ("padding", EffectValue::Number(0.0)),
+                    ("corner", EffectValue::Number(0.1)),
+                    ("shadow", EffectValue::Number(0.0)),
+                ],
+            ));
+            Composition::prepare(&project, &dir.0).unwrap()
+        };
+        let hidden = frame(&render(true), 7);
+        let visible = frame(&render(false), 7);
+        let mut changed = 0;
+        for (index, (a, b)) in hidden
+            .chunks_exact(4)
+            .zip(visible.chunks_exact(4))
+            .enumerate()
+        {
+            if a != b {
+                let x = index % 128;
+                let y = index / 128;
+                assert!(
+                    (16..112).contains(&x),
+                    "cursor escaped the picture at {x}, {y}"
+                );
+                assert!(
+                    x < 111 || y > 2,
+                    "cursor escaped the rounded corner at {x}, {y}"
+                );
+                changed += 1;
+            }
+        }
+        assert!(
+            changed > 16,
+            "the part of the cursor inside the card still draws"
+        );
+    }
+
     /// `clickSound` mixes a click into the exported audio at each recorded press, and nothing
     /// between them.
     pub(super) fn click_sound_is_mixed_at_each_press() {
@@ -459,6 +563,14 @@ fn main() {
         (
             "motion_cursor_rotates_while_moving",
             motion::cursor_rotates_while_moving,
+        ),
+        (
+            "motion_cursor_ring_follows_the_recorded_position_and_source_clock",
+            motion::cursor_ring_follows_the_recorded_position_and_source_clock,
+        ),
+        (
+            "motion_cursor_layers_stay_inside_the_rounded_picture",
+            motion::cursor_layers_stay_inside_the_rounded_picture,
         ),
         (
             "motion_click_sound_is_mixed_at_each_press",

@@ -24,6 +24,8 @@ pub(super) struct DecodedMedia {
     pub(super) thumbnail: Option<(Vec<u8>, [u32; 2])>,
     /// The recorded camera source, independent of the screen.
     pub(super) camera: Option<(Vec<u8>, [u32; 2])>,
+    /// The camera is the take's primary picture.
+    pub(super) camera_only: bool,
     /// Linear RMS levels in source order.
     pub(super) waveform: Vec<f32>,
     /// Separate recorded microphone and system audio levels.
@@ -179,10 +181,12 @@ fn decode_batches() {
 
 fn decode(job: &Job, package: &Path, live: &Mutex<bool>) -> DecodedMedia {
     let path = package.join(&job.path);
+    let camera_only = job.kind == MediaKind::Take && job.screen.is_none() && job.camera.is_some();
     let mut preview = DecodedMedia {
         id: job.id,
         thumbnail: None,
         camera: None,
+        camera_only,
         waveform: Vec::new(),
         mic: Vec::new(),
         system: Vec::new(),
@@ -213,13 +217,16 @@ fn decode(job: &Job, package: &Path, live: &Mutex<bool>) -> DecodedMedia {
             splice_av::load_timeline_events(&folder.join(file), job.fps).unwrap_or_default();
     }
     let primary = screen.as_deref().unwrap_or(&path);
-    let primary_probe = probe(primary, live);
+    // The camera buffer also supplies the main filmstrip for camera-only takes.
+    let primary_probe = if camera_only {
+        None
+    } else {
+        probe(primary, live)
+    };
     if job.kind != MediaKind::Audio {
-        if job.kind != MediaKind::Take || screen.is_some() || job.camera.is_none() {
-            preview.thumbnail = primary_probe
-                .as_ref()
-                .and_then(|asset| video_thumbnail(primary, asset, live));
-        }
+        preview.thumbnail = primary_probe
+            .as_ref()
+            .and_then(|asset| video_thumbnail(primary, asset, live));
         preview.camera = job.camera.as_deref().and_then(|file| {
             let camera = folder.join(file);
             video_thumbnail(&camera, &probe(&camera, live)?, live)

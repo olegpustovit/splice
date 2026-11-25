@@ -1162,7 +1162,7 @@ declare namespace Splice {
     window: {
       /** Padding · 0–0.3 · @default 0.07 */
       padding?: number;
-      /** Corners · 0–0.12 · @default 0.03 */
+      /** Corners · 0–0.264 · @default 0.03 */
       corner?: number;
       /** Shadow · 0–1 · @default 0.6 */
       shadow?: number;

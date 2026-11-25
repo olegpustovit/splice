@@ -21,6 +21,10 @@ const SCREEN_FILES: &[&str] = &[
     "cursors/b2aa4304c7470ab1ee2a469d2be7c292ccb92dac49f6f07f59e9477979c31403.png",
 ];
 const WEBCAM_FILES: &[&str] = &["webcam.mov", "camera.mov", "mic.m4a"];
+const FPS: f64 = 30.0;
+const WIDTH: u32 = 640;
+const CODEC: &str = "hevc";
+const AUDIO_CHANNELS: Option<u32> = Some(2);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Sample {
@@ -47,59 +51,115 @@ impl Sample {
         self.files()[0]
     }
 
-    fn probe(self) -> Probe {
-        let (frames, height, audio): (_, _, &[&str]) = match self {
+    pub(super) fn title(self) -> &'static str {
+        match self {
+            Self::Screen => "Screen take 01",
+            Self::Webcam => "Webcam take 01",
+        }
+    }
+
+    fn probe_spec(self) -> (i32, u32, &'static [&'static str]) {
+        match self {
             Self::Screen => (540, 400, &["mic", "system"]),
             Self::Webcam => (300, 360, &["mic"]),
-        };
+        }
+    }
+
+    fn probe(self) -> Probe {
+        let (frames, height, audio) = self.probe_spec();
         Probe {
-            fps: 30.0,
+            fps: FPS,
             frames,
-            width: 640,
+            width: WIDTH,
             height,
             audio: audio
                 .iter()
                 .map(|name| AudioTrack {
                     name: (*name).into(),
-                    channels: Some(2),
+                    channels: AUDIO_CHANNELS,
                 })
                 .collect(),
-            codec: Some("hevc".into()),
+            codec: Some(CODEC.into()),
             loudness: None,
         }
     }
 
+    fn component_files(self) -> [Option<&'static str>; 6] {
+        let screen = self == Self::Screen;
+        [
+            screen.then_some(self.primary()),
+            Some("camera.mov"),
+            Some("mic.m4a"),
+            screen.then_some("system.m4a"),
+            screen.then_some("events.json"),
+            screen.then_some("cursors"),
+        ]
+    }
+
     fn components(self) -> TakeComponents {
+        let [screen, camera, mic, system, events, cursors] =
+            self.component_files().map(|file| file.map(str::to_owned));
         TakeComponents {
-            screen: (self == Self::Screen).then(|| "screen.mov".into()),
-            camera: Some("camera.mov".into()),
-            mic: Some("mic.m4a".into()),
-            system: (self == Self::Screen).then(|| "system.m4a".into()),
-            events: (self == Self::Screen).then(|| "events.json".into()),
-            cursors: (self == Self::Screen).then(|| "cursors".into()),
+            screen,
+            camera,
+            mic,
+            system,
+            events,
+            cursors,
             ..TakeComponents::default()
         }
     }
 
-    fn path_matches(self, path: &Path) -> bool {
-        let Some(parent) = path
-            .parent()
-            .filter(|dir| dir.parent() == Some(Path::new("takes")))
+    pub(super) fn identify(media: &Media) -> Option<Self> {
+        let take = media.take.as_ref()?;
+        if media.kind != MediaKind::Take
+            || media.bookmark.is_some()
+            || media.probe.fps != FPS
+            || media.probe.width != WIDTH
+            || media.probe.codec.as_deref() != Some(CODEC)
+        {
+            return None;
+        }
+        let components = [
+            take.screen.as_deref(),
+            take.camera.as_deref(),
+            take.mic.as_deref(),
+            take.system.as_deref(),
+            take.events.as_deref(),
+            take.cursors.as_deref(),
+        ];
+        [Self::Screen, Self::Webcam].into_iter().find(|sample| {
+            let (frames, height, audio) = sample.probe_spec();
+            sample.path_matches(&media.path)
+                && components == sample.component_files()
+                && media.probe.frames == frames
+                && media.probe.height == height
+                && media
+                    .probe
+                    .audio
+                    .iter()
+                    .map(|track| (track.name.as_str(), track.channels))
+                    .eq(audio.iter().map(|&name| (name, AUDIO_CHANNELS)))
+        })
+    }
+
+    fn path_matches(self, path: &str) -> bool {
+        let Some((folder, file)) = path
+            .strip_prefix("takes/")
+            .and_then(|relative| relative.split_once('/'))
         else {
             return false;
         };
-        path.file_name().is_some_and(|name| name == self.primary())
-            && parent
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name == self.folder()
-                        || name
-                            .strip_prefix(self.folder())
-                            .and_then(|suffix| suffix.strip_prefix('-'))
-                            .and_then(|suffix| suffix.parse::<u32>().ok())
-                            .is_some()
-                })
+        file == self.primary()
+            && (folder == self.folder()
+                || folder
+                    .strip_prefix(self.folder())
+                    .and_then(|suffix| suffix.strip_prefix('-'))
+                    .is_some_and(|suffix| {
+                        !suffix.starts_with('0')
+                            && suffix.bytes().all(|byte| byte.is_ascii_digit())
+                            && suffix.parse::<u32>().is_ok_and(|number| number >= 2)
+                    }))
     }
 }
 
@@ -151,7 +211,7 @@ impl Bundle {
                 (media.kind == MediaKind::Take
                     && media.probe == probe
                     && media.take.as_ref() == Some(&take)
-                    && sample.path_matches(path)
+                    && sample.path_matches(&media.path)
                     && same_sample(&self.root, &store.path().join(path.parent()?), sample))
                 .then_some(media.id)
             })

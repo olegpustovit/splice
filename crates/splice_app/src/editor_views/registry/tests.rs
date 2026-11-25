@@ -1,6 +1,5 @@
-use super::super::{Selection, paint_with_parity};
+use super::super::{Selection, paint_spec, tests::paint_spec_titlebar};
 use super::*;
-use crate::editor_titlebar::View;
 use pxui::{Event, FrameIn, geom::Rect, testing};
 use splice_testkit::alloc::Meter;
 
@@ -314,14 +313,11 @@ impl Document {
         self.ui
             .frame(&self.input.events(events), &mut |ui| {
                 ui.column(Node::column().w(Size::Grow).h(Size::Grow), |ui| {
-                    ui.node("titlebar", Node::DEFAULT.h_px(34.0));
-                    next = paint_with_parity(
+                    next = paint_spec(
                         ui,
-                        None,
-                        View::Spec,
                         self.selection,
-                        self.keys.bindings(),
-                        &self.parity,
+                        (self.keys.bindings(), &self.parity),
+                        &mut paint_spec_titlebar,
                     )
                     .or(next);
                 });
@@ -347,12 +343,21 @@ impl Document {
     }
 
     fn click(&mut self, role: Role, name: &str) -> bool {
+        let nav = role == Role::Button
+            && ["Command registry", "MCP surface", "Parity check"].contains(&name);
+        let compact = self.width <= 820.0;
+        if nav && compact && self.selection.scroll > 0.0 {
+            self.scroll(
+                self.width - 12.0,
+                290.0,
+                0.0,
+                self.selection.scroll / 24.0 + 1.0,
+            );
+        }
         let rect = self.find(role, name);
         let x = rect.x + rect.w / 2.0;
         let y = rect.y + rect.h / 2.0;
-        let nav = role == Role::Button
-            && ["Command registry", "MCP surface", "Parity check"].contains(&name);
-        if nav && self.width <= 820.0 && !(6.0..self.width - 6.0).contains(&x) {
+        if nav && compact && !(6.0..self.width - 6.0).contains(&x) {
             self.draw(&[
                 Event::pointer(Event::POINTER_MOVED, 0, 120.0, 48.0),
                 Event::pointer(
@@ -374,7 +379,8 @@ impl Document {
         let x = rect.x + rect.w / 2.0;
         let y = rect.y + rect.h / 2.0;
         assert!(
-            (0.0..self.width).contains(&x) && (34.0..640.0).contains(&y),
+            (0.0..self.width).contains(&x)
+                && ((if compact { 0.0 } else { 34.0 })..640.0).contains(&y),
             "{name}: {rect:?}"
         );
         self.draw(&[Event::pointer(
