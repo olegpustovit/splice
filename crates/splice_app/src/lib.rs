@@ -249,7 +249,7 @@ fn run_surface(
         .transpose()?
         .flatten();
     let mut history = store.as_deref().map(commands::History::new);
-    let mut cache = ViewerCache::default();
+    let mut cache = ViewerCache::for_app();
     let mut previews = Vec::new();
     let mut media_key = store.map(|store| timeline_media_key(store.project()));
     let mut media_decoder =
@@ -975,6 +975,7 @@ fn run_surface(
                         })
                 });
             let mut appended = false;
+            let mut bundled_sample = None;
             let operations = if let Some(ops) = primary_ops {
                 Some(ops)
             } else if let Some(moved) = intents.timeline.moved {
@@ -994,15 +995,30 @@ fn run_surface(
                             eprintln!("splice: media source is unavailable");
                             return None;
                         }
-                        appended = matches!(action, viewer_drawers::Action::Append(_));
+                        use viewer_drawers::Action;
+                        appended = matches!(action, Action::Append(_) | Action::Sample(_));
+                        if let Action::Sample(sample) = action {
+                            bundled_sample = Some(sample);
+                        }
                         drawer_operation(action, store.project(), at)
                     })
                     .map(|op| vec![op])
             };
-            if let Some(ops) = operations
-                && let Some(store) = store.as_deref_mut()
+            let result = store.as_deref_mut().and_then(|store| {
+                if let Some(sample) = bundled_sample {
+                    Some(
+                        cache
+                            .media_sources
+                            .append_sample(store, sample, now_millis()),
+                    )
+                } else {
+                    operations.map(|ops| apply_editor_batch(store, &ops))
+                }
+            });
+            if let Some(result) = result
+                && let Some(store) = store.as_deref()
             {
-                match apply_editor_batch(store, &ops) {
+                match result {
                     Ok(result) if appended => {
                         if let Some((clip, start, take)) =
                             viewer_drawers::appended_clip(store.project(), &result.report)
@@ -1880,6 +1896,18 @@ struct ViewerCache {
     timeline: timeline::Cache,
     captions: inspector::captions::Cache,
     media_sources: viewer_drawers::MediaSources,
+    pane_triggers: viewer_chrome::Triggers,
+}
+
+impl ViewerCache {
+    fn for_app() -> Self {
+        Self {
+            media_sources: viewer_drawers::MediaSources::with_resources(
+                splice_mcp::paths::resources_dir().ok().flatten(),
+            ),
+            ..Self::default()
+        }
+    }
 }
 
 fn paint_viewer(
@@ -1947,6 +1975,20 @@ fn paint_viewer(
     } else {
         events
     };
+    // Build popups before the editor to shield its input. The trigger is from the retained
+    // toolbar, while the vertical anchor uses this frame's titlebar and the page's painted offset.
+    let toolbar_anchor = |ui: &Ui, trigger| {
+        let scroll = if stacked {
+            ui.box_of_key("compact-editor")
+                .map_or(0.0, |page| ui.scroll(&page).painted)
+        } else {
+            0.0
+        };
+        Point::new(
+            cache.pane_triggers.x(ui, trigger),
+            (titlebar.height() + viewer_chrome::PANE_HEIGHT - scroll).max(4.0),
+        )
+    };
     if let Some(sheet) = sheet {
         match sheet {
             EditorSheet::Palette => {
@@ -1980,13 +2022,18 @@ fn paint_viewer(
                 intents.dismiss_sheet |= editor_shortcuts::paint(ui, bindings, size);
             }
             EditorSheet::Zoom(context) => {
+                let (at, max_height) = if let Some(at) = context {
+                    (at, size[1] - 8.0)
+                } else {
+                    let at = toolbar_anchor(ui, viewer_chrome::PaneAction::Zoom);
+                    (at, size[1] - at.y - 4.0)
+                };
                 let result = viewer_zoom::paint(
                     ui,
-                    viewer_width,
-                    size[1],
+                    at,
+                    max_height,
                     canvas.map_or(1.0, |canvas| viewport.display_scale(stage, canvas)),
                     viewport.fitted(),
-                    context,
                 );
                 intents.dismiss_sheet = !result.open || result.action.is_some();
                 if let Some(action) = result.action {
@@ -2006,7 +2053,8 @@ fn paint_viewer(
             }
             EditorSheet::Crop(_) => {}
             EditorSheet::Captions => {
-                let result = viewer_captions::paint(ui, project, size);
+                let at = toolbar_anchor(ui, viewer_chrome::PaneAction::Captions);
+                let result = viewer_captions::paint(ui, project, size, at);
                 intents.dismiss_sheet =
                     !result.open || result.generate.is_some() || result.action.is_some();
                 intents.caption_action = result.action;
@@ -2027,12 +2075,18 @@ fn paint_viewer(
             }
         }
     } else if let Some(drawer) = drawer {
+        let trigger = match drawer {
+            viewer_drawers::Drawer::Media => viewer_chrome::PaneAction::Media,
+            viewer_drawers::Drawer::Effects => viewer_chrome::PaneAction::Effects,
+        };
+        let at = toolbar_anchor(ui, trigger);
         let sources = session.map(|(_, store)| (store.path(), &mut cache.media_sources));
         let result = viewer_drawers::paint(
             ui,
             drawer,
             (project, sources),
             size,
+            at,
             project.map_or_else(viewer_drawers::EffectTargets::default, |project| {
                 drawer_targets(project, &timeline, view.at)
             }),
@@ -2055,6 +2109,7 @@ fn paint_viewer(
                     lab,
                     images,
                     session,
+                    titlebar.height(),
                 );
             } else {
                 intents.view_selection = editor_views::paint_with_parity(
@@ -2091,7 +2146,9 @@ fn paint_viewer(
         let mut paint_program = |ui: &mut Ui, intents: &mut ViewerIntents| {
             ui.column(Node::DEFAULT.w(Size::Grow).h_px(viewer_height), |ui| {
                 let aspect = project.map_or("9:16", |project| project.aspect.label());
-                let pane = viewer_chrome::pane(ui, aspect, viewport.fitted(), zoom_percent, narrow);
+                let (pane, triggers) =
+                    viewer_chrome::pane(ui, aspect, viewport.fitted(), zoom_percent, narrow);
+                cache.pane_triggers = triggers;
                 intents.pane = intents.pane.or(pane);
                 if let Some(EditorSheet::Crop(draft)) = sheet {
                     let name = project
@@ -2489,7 +2546,7 @@ fn drawer_targets(
 fn drawer_operation(action: viewer_drawers::Action, project: &Project, at: i32) -> Option<Json> {
     use viewer_drawers::Action;
     Some(match action {
-        Action::Import => return None,
+        Action::Import | Action::Sample(_) => return None,
         Action::Append(id) => Json::Object(vec![
             ("cmd".into(), Json::String("clip.insert".into())),
             ("media".into(), Json::String(id.to_string())),
@@ -2985,6 +3042,7 @@ mod viewer_tests {
                     lab,
                     &[],
                     None,
+                    0.0,
                 ));
             })
             .unwrap();
@@ -3207,6 +3265,158 @@ mod viewer_tests {
             testing::find(&ui, Role::Button, "Go to end").is_none_or(|after| after.y < transport.y)
         );
         assert!(testing::find(&ui, Role::ScrollArea, "Inspector").is_none());
+        store.close().unwrap();
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn viewer_popups_follow_the_toolbar_when_wrapped_and_scrolled() {
+        use pxui::{Event, testing};
+        use viewer_chrome::PaneAction;
+        use viewer_drawers::Drawer;
+
+        let folder =
+            std::env::temp_dir().join(format!("splice-viewer-popups-{}", std::process::id()));
+        fs::create_dir(&folder).unwrap();
+        let mut store = Store::create(&folder.join("Popups.splice"), &Project::default()).unwrap();
+        store.start_session("fixture", 1).unwrap();
+        let mut session = editor_session::State::default();
+        session.refresh(Some(&store), None);
+        mem_sys::set_peer(pxui::library_counter);
+        for (size, banner, wrapped, scroll) in [
+            ([960.0, 640.0], Some(&session), true, false),
+            ([960.0, 640.0], None, false, false),
+            ([600.0, 240.0], Some(&session), true, true),
+            ([480.0, 640.0], Some(&session), false, true),
+        ] {
+            let mut ui = viewer_ui().unwrap();
+            ui.set_a11y(true);
+            let mut cache = ViewerCache::default();
+            let mut tick = 0;
+            let mut draw = |ui: &mut Ui, layout: &EditorLayout, events: &[Event]| {
+                tick += 1;
+                let mut intents = ViewerIntents::default();
+                let input = FrameIn::new(size[0], size[1])
+                    .time(f64::from(tick) / 60.0)
+                    .events(events);
+                ui.frame(&input, &mut |ui| {
+                    intents.merge(paint_viewer(
+                        ui,
+                        Some("Popups"),
+                        (
+                            Some(store.project()),
+                            None,
+                            None,
+                            banner.map(|state| (state, &store)),
+                            &[],
+                        ),
+                        layout.clone(),
+                        ([None; 3], &[]),
+                        (&mut cache, &[], None),
+                        playbar::View {
+                            at: 0,
+                            end: 0,
+                            fps: 30,
+                            play: splice_kit::CommandState::default(),
+                            rate: 0,
+                            dragging: false,
+                        },
+                    ));
+                })
+                .unwrap();
+                intents
+            };
+            let mut layout = EditorLayout::new(size);
+            draw(&mut ui, &layout, &[]);
+            let initial = draw(&mut ui, &layout, &[]).program_bounds;
+            if wrapped {
+                assert!(initial.y > 64.0, "{size:?} {initial:?}");
+            } else {
+                assert_eq!(initial.y, 64.0, "{size:?} {initial:?}");
+            }
+            if scroll {
+                draw(
+                    &mut ui,
+                    &layout,
+                    &[
+                        Event::pointer(Event::POINTER_MOVED, 0, 240.0, 12.0),
+                        Event::pointer(Event::SCROLLED, 0, 0.0, -1.0),
+                    ],
+                );
+                for _ in 0..24 {
+                    draw(&mut ui, &layout, &[]);
+                }
+            }
+            let stage = draw(&mut ui, &layout, &[]).program_bounds;
+            if scroll {
+                assert!(stage.y < initial.y - 1.0, "{size:?} {stage:?}");
+            }
+            for (label, action, role) in [
+                ("Media", PaneAction::Media, Role::Window),
+                ("Effects", PaneAction::Effects, Role::Window),
+                ("Captions", PaneAction::Captions, Role::Menu),
+                ("Viewer zoom", PaneAction::Zoom, Role::Menu),
+            ] {
+                let button = testing::find(&ui, Role::Button, label).expect(label);
+                let x = f64::from(button.x + button.w / 2.0);
+                let y = f64::from(button.y + button.h / 2.0);
+                assert!(
+                    x < f64::from(size[0]) && y > 0.0,
+                    "{size:?} {label} {button:?}"
+                );
+                let press = Event::pointer(Event::POINTER_PRESSED, 0, x, y);
+                let release = Event::pointer(Event::POINTER_RELEASED, 0, x, y);
+                assert!(draw(&mut ui, &layout, &[press]).pane.is_none());
+                assert_eq!(draw(&mut ui, &layout, &[release]).pane, Some(action));
+                match action {
+                    PaneAction::Media => layout.drawer = Some(Drawer::Media),
+                    PaneAction::Effects => layout.drawer = Some(Drawer::Effects),
+                    PaneAction::Captions => layout.sheet = Some(EditorSheet::Captions),
+                    PaneAction::Zoom => layout.sheet = Some(EditorSheet::Zoom(None)),
+                    PaneAction::Crop => unreachable!(),
+                }
+                draw(&mut ui, &layout, &[]);
+                let popup = testing::find(&ui, role, label).expect(label);
+                assert!(
+                    popup.y >= stage.y && popup.y - stage.y < 1.0 && popup.y + popup.h <= size[1],
+                    "{size:?} {label} {popup:?} above or away from {stage:?}",
+                );
+                if role == Role::Window && size[0] <= 480.0 {
+                    assert_eq!(popup.x, 12.0);
+                } else if action != PaneAction::Zoom {
+                    assert_eq!(popup.x, button.x);
+                } else {
+                    assert!(popup.x <= button.x && button.x < popup.x + popup.w);
+                }
+                splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
+                    .warm(&mut || {
+                        for _ in 0..4 {
+                            draw(&mut ui, &layout, &[]);
+                        }
+                    });
+                let dismissed = draw(&mut ui, &layout, &[press]);
+                assert!(dismissed.pane.is_none());
+                assert!(dismissed.dismiss_drawer || dismissed.dismiss_sheet);
+                layout.drawer = None;
+                layout.sheet = None;
+                assert!(draw(&mut ui, &layout, &[release]).pane.is_none());
+            }
+            if wrapped && !scroll {
+                let point = Point::new(stage.x + 250.0, stage.y + 40.0);
+                let press = Event::pointer(
+                    Event::POINTER_PRESSED,
+                    u32::from(Signal::BUTTON_SECONDARY),
+                    f64::from(point.x),
+                    f64::from(point.y),
+                );
+                let update = draw(&mut ui, &layout, &[press]).update_sheet;
+                assert!(matches!(update, Some(EditorSheet::Zoom(Some(at))) if at == point));
+                layout.sheet = update;
+                draw(&mut ui, &layout, &[]);
+                let popup = testing::find(&ui, Role::Menu, "Viewer zoom").unwrap();
+                assert_eq!((popup.x, popup.y), (point.x, point.y));
+            }
+        }
         store.close().unwrap();
         fs::remove_dir_all(folder).unwrap();
     }

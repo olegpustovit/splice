@@ -438,8 +438,21 @@ pub(super) fn mcp(ui: &mut Ui, width: f32, picked: &mut Option<usize>) {
 }
 
 fn tool_table(ui: &mut Ui, width: f32) {
-    let name = Size::Px(114.0);
-    let hint = Size::Px(if width < 480.0 { 51.3 } else { 60.25 });
+    // v13 gives code its own font metrics. The bundled mono face needs tighter
+    // spacing to match the longest ID's 97.7-point browser advance.
+    const TOOL_ID: Label = TABLE_TEXT.size(10.45).tracking(-0.05);
+    let mut name_width = 113.7_f32;
+    for tool in tool_catalog() {
+        let width = ui
+            .text_service()
+            .measure(tool.name, TOOL_ID, None)
+            .expect("valid MCP identifier")
+            .width;
+        name_width = name_width.max(width + 16.05);
+    }
+    let name = Size::Px(name_width);
+    // The hint column gets 3.93 percent of the measured table-width change.
+    let hint = Size::Px((51.28 + (width - 448.0) * 0.0393).max(42.4));
     let columns = [("Tool", name), ("Hint", hint), ("Purpose", Size::Grow)];
     spec_table(ui, "MCP tools", &columns, &mut |ui| {
         for tool in tool_catalog() {
@@ -449,7 +462,9 @@ fn tool_table(ui: &mut Ui, width: f32) {
                 _ => "edit",
             };
             table_row(ui, &mut |ui| {
-                cell(ui, name, tool.name, MOTION);
+                table_cell(ui, name, &mut |ui| {
+                    doc_label(ui, tool.name, TOOL_ID, MOTION)
+                });
                 cell(ui, hint, mode, MUTED);
                 cell(ui, Size::Grow, tool.description, MUTED);
             });

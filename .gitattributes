@@ -1,0 +1,4 @@
+/fixtures/media/v13-samples/** -text
+/packaging/v13-samples.sha256 text eol=lf
+/packaging/bundle-macos.sh text eol=lf
+/tools/check-macos-bundle.sh text eol=lf

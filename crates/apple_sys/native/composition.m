@@ -873,16 +873,20 @@ static CGImageRef text_bitmap(NSString *text, CGSize size, double font_size, con
     CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, space,
                                                  kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
-    CGColorSpaceRelease(space);
-    if (context == NULL) return NULL;
+    if (context == NULL) {
+        CGColorSpaceRelease(space);
+        return NULL;
+    }
+    // Authored hex colors are sRGB, matching the bitmap's color space.
     CGFloat components[4];
     rgb(style->color, components);
-    CGColorRef color = CGColorCreateGenericRGB(components[0], components[1], components[2], 1);
-    CGColorRef clear = CGColorCreateGenericRGB(0, 0, 0, 0);
+    CGColorRef color = CGColorCreate(space, components);
+    CGColorRef clear = CGColorCreate(space, (CGFloat[]){0, 0, 0, 0});
     rgb(style->stroke, components);
-    CGColorRef stroke = CGColorCreateGenericRGB(components[0], components[1], components[2], 1);
+    CGColorRef stroke = CGColorCreate(space, components);
     rgb(active_rgb, components);
-    CGColorRef active_color = CGColorCreateGenericRGB(components[0], components[1], components[2], 1);
+    CGColorRef active_color = CGColorCreate(space, components);
+    CGColorSpaceRelease(space);
     CTTextAlignment alignment = style->align == 0 ? kCTTextAlignmentLeft
                               : style->align == 2 ? kCTTextAlignmentRight : kCTTextAlignmentCenter;
     CGFloat multiple = style->line_height > 0 ? style->line_height / 1.15 : 1.0;
@@ -1024,16 +1028,20 @@ static uint8_t *positioned_caption(NSString *text, uint32_t width, uint32_t heig
         if (font != NULL) CFRelease(font);
         return NULL;
     }
+    CGColorSpaceRef space_rgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGFloat c[4];
     rgb(style->color, c);
-    CGColorRef fill = CGColorCreateGenericRGB(c[0], c[1], c[2], 1);
+    CGColorRef fill = CGColorCreate(space_rgb, c);
     rgb(active_color, c);
-    CGColorRef highlight = CGColorCreateGenericRGB(c[0], c[1], c[2], 1);
+    CGColorRef highlight = CGColorCreate(space_rgb, c);
     rgb(style->stroke, c);
-    CGColorRef stroke = CGColorCreateGenericRGB(c[0], c[1], c[2], 1);
-    CGColorRef clear = CGColorCreateGenericRGB(0, 0, 0, 0);
-    CGColorRef dark = CGColorCreateGenericRGB(17.0/255, 17.0/255, 17.0/255, 1);
-    CGColorRef backing = CGColorCreateGenericRGB(10.0/255, 10.0/255, 10.0/255, .74);
+    CGColorRef stroke = CGColorCreate(space_rgb, c);
+    CGColorRef clear = CGColorCreate(space_rgb, (CGFloat[]){0, 0, 0, 0});
+    rgb(0x111111, c);
+    CGColorRef dark = CGColorCreate(space_rgb, c);
+    rgb(0x0a0a0a, c);
+    c[3] = .74;
+    CGColorRef backing = CGColorCreate(space_rgb, c);
     CTLineRef space = caption_line(@" ", font, fill, stroke, 0);
     const double gap = CTLineGetTypographicBounds(space, NULL, NULL, NULL);
     CFRelease(space);
@@ -1082,7 +1090,6 @@ static uint8_t *positioned_caption(NSString *text, uint32_t width, uint32_t heig
     rect[2] = (uint32_t)fmax(1, fmin(width, ceil(right)) - rect[0]);
     rect[3] = (uint32_t)fmax(1, fmin(height, ceil(bottom)) - rect[1]);
     uint8_t *pixels = calloc((size_t)rect[2] * rect[3], 4);
-    CGColorSpaceRef space_rgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGContextRef context = pixels == NULL ? NULL : CGBitmapContextCreate(pixels, rect[2], rect[3], 8,
         (size_t)rect[2] * 4, space_rgb, kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
     CGColorSpaceRelease(space_rgb);
@@ -1215,14 +1222,15 @@ uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, dou
 }
 
 uint8_t *splice_program_title_rgba(const char *text, uint32_t width, uint32_t height,
-                                  const double geometry[3], const uint8_t *face, size_t face_size,
+                                  const double geometry[5], const uint8_t *face, size_t face_size,
                                   char **error) {
     @autoreleasepool {
         NSString *string = [NSString stringWithUTF8String:text];
-        const double w = geometry[0], h = geometry[1], font_size = geometry[2];
+        const double x = geometry[0], y = geometry[1], w = geometry[2], h = geometry[3], font_size = geometry[4];
         if (string == nil || width == 0 || height == 0 || width > 16384 || height > 16384 ||
-            !isfinite(w) || !isfinite(h) || !isfinite(font_size) ||
-            w <= 0 || h <= 0 || w > width || h > height || font_size <= 0 || face_size == 0) {
+            !isfinite(x) || !isfinite(y) || !isfinite(w) || !isfinite(h) || !isfinite(font_size) ||
+            x < 0 || x >= 1 || y < 0 || y >= 1 || w <= 0 || h <= 0 ||
+            x + w > width || y + h > height || font_size <= 0 || face_size == 0) {
             splice_set_error(error, "Invalid Program title raster.");
             return NULL;
         }
@@ -1248,7 +1256,7 @@ uint8_t *splice_program_title_rgba(const char *text, uint32_t width, uint32_t he
             return NULL;
         }
 
-        const CGRect plate = CGRectMake(0, height - h, w, h);
+        const CGRect plate = CGRectMake(x, height - y - h, w, h);
         const CGFloat radius = h * 0.18;
         CGPathRef path = CGPathCreateWithRoundedRect(plate, radius, radius, NULL);
         CGContextSetRGBFillColor(context, 11.0 / 255, 11.0 / 255, 11.0 / 255, 0.86);
@@ -1268,7 +1276,7 @@ uint8_t *splice_program_title_rgba(const char *text, uint32_t width, uint32_t he
         }];
         CTLineRef line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)styled);
         CGContextSetRGBFillColor(context, 244.0 / 255, 243.0 / 255, 238.0 / 255, 1);
-        CGContextSetTextPosition(context, w * (0.03 / 0.88), height - h * 0.70);
+        CGContextSetTextPosition(context, x + w * (0.03 / 0.88), height - y - h * 0.70);
         CTLineDraw(line, context);
         CFRelease(line);
         CFRelease(font);

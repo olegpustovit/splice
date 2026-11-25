@@ -76,7 +76,12 @@ pub(super) struct Intents {
     pub action: Option<Action>,
 }
 
-pub(super) fn paint(ui: &mut Ui, project: Option<&Project>, [width, height]: [f32; 2]) -> Intents {
+pub(super) fn paint(
+    ui: &mut Ui,
+    project: Option<&Project>,
+    [width, height]: [f32; 2],
+    at: Point,
+) -> Intents {
     let lane = project.and_then(|project| {
         project
             .lanes
@@ -135,12 +140,11 @@ pub(super) fn paint(ui: &mut Ui, project: Option<&Project>, [width, height]: [f3
         .w_px(208.0)
         .row_h(22.0)
         .padding(4.0)
-        .max_h((height - 8.0).max(1.0))
+        .max_h((height - at.y - 4.0).max(1.0))
         .focus_on_click(true)
         .name("Captions");
-    let x = if width <= 480.0 { 110.0_f32 } else { 239.0_f32 };
-    let x = x.min((width - 212.0).max(4.0));
-    let picked = ui.menu("viewer-captions", Point::new(x, 62.0), &items, &menu);
+    let x = at.x.min((width - 212.0).max(4.0));
+    let picked = ui.menu("viewer-captions", Point::new(x, at.y), &items, &menu);
 
     let mut generate = None;
     let mut action = None;
@@ -493,7 +497,7 @@ mod tests {
 
         let action = Cell::new(None);
         let build = &mut |ui: &mut Ui| {
-            let result = paint(ui, Some(&project), [320.0, 240.0]);
+            let result = paint(ui, Some(&project), [320.0, 240.0], Point::new(108.0, 64.0));
             if let Some(intent) = result.action {
                 assert!(!result.open);
                 action.set(Some(intent));

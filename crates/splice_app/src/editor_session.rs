@@ -623,6 +623,7 @@ mod tests {
                                     &lab,
                                     &[],
                                     Some((state, &store)),
+                                    bar.height(),
                                 );
                             } else {
                                 ui.label("Editor content", BODY);

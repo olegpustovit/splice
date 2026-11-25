@@ -61,6 +61,15 @@ sdl=$app/Contents/Frameworks/libSDL3.0.dylib
 /bin/cp crates/apple_sys/assets/barlow/OFL.txt "$app/Contents/Resources/Barlow-LICENSE.txt"
 /bin/cp crates/apple_sys/assets/ibm-plex/OFL.txt "$app/Contents/Resources/IBM-Plex-LICENSE.txt"
 
+sample_source=fixtures/media/v13-samples
+sample_dir=$app/Contents/Resources/v13-samples
+/bin/mkdir -p "$sample_dir/cursors"
+while read -r checksum file; do
+    [ -f "$sample_source/$file" ] && [ ! -L "$sample_source/$file" ] ||
+        fail "Missing v13 sample resource $sample_source/$file."
+    /bin/cp "$sample_source/$file" "$sample_dir/$file"
+done < packaging/v13-samples.sha256
+
 clear_rpaths() {
     loads=$(/usr/bin/otool -l "$1")
     paths=$(printf '%s\n' "$loads" | /usr/bin/awk '

@@ -9,8 +9,11 @@ use std::path::{Path, PathBuf};
 
 #[path = "viewer_drawers/effects.rs"]
 mod effects;
+#[path = "viewer_drawers/samples.rs"]
+mod samples;
 
 pub(super) use effects::{Effect, EffectTargets, drop_at as effect_drop};
+pub(super) use samples::Sample;
 
 const CONTROL: Rgba = Rgba::rgb(20, 20, 21);
 const LINE: Rgba = Rgba::rgb(37, 37, 39);
@@ -67,6 +70,7 @@ pub(super) enum Drawer {
 pub(super) enum Action {
     Import,
     Append(MediaId),
+    Sample(Sample),
     Overlay(MediaId),
     Effect(Effect),
 }
@@ -81,23 +85,23 @@ pub(super) fn paint(
     drawer: Drawer,
     (project, mut sources): (Option<&Project>, Option<(&Path, &mut MediaSources)>),
     [width, height]: [f32; 2],
+    at: Point,
     targets: EffectTargets,
 ) -> Intents {
     let effects = drawer == Drawer::Effects;
-    let (name, key, desktop_x, desktop_width) = match drawer {
-        Drawer::Media => ("Media", "viewer-media", 8.0, 300.0),
-        Drawer::Effects => ("Effects", "viewer-effects", 83.0, 380.0),
+    let (name, key, desktop_width) = match drawer {
+        Drawer::Media => ("Media", "viewer-media", 300.0),
+        Drawer::Effects => ("Effects", "viewer-effects", 380.0),
     };
     let compact = width <= 480.0;
-    let x = if compact { 12.0 } else { desktop_x };
-    let y = 63.5;
+    let x = if compact { 12.0 } else { at.x };
     let maximum = (width - x - 12.0).max(180.0);
     let drawer_width = if compact {
         maximum
     } else {
         maximum.min(desktop_width)
     };
-    let available_height = (height - y - 8.0).max(1.0);
+    let available_height = (height - at.y - 8.0).max(1.0);
     let max_height = if effects {
         (height * 0.7).min(available_height).max(1.0)
     } else {
@@ -122,7 +126,7 @@ pub(super) fn paint(
     }
     let clear = Rgba::rgba(0, 0, 0, 0);
     let options = Overlay::DEFAULT
-        .at(Point::new(x, y))
+        .at(Point::new(x, at.y))
         .w_px(drawer_width)
         .max_h_px(max_height)
         .padding(1.0)
@@ -210,6 +214,7 @@ pub(super) fn paint(
 pub(super) struct MediaSources {
     source: PathBuf,
     component: PathBuf,
+    samples: samples::Bundle,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -219,9 +224,26 @@ struct MediaAvailability {
 }
 
 impl MediaSources {
+    pub(super) fn with_resources(path: Option<PathBuf>) -> Self {
+        Self {
+            samples: path.map(samples::Bundle::new).unwrap_or_default(),
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn append_sample(
+        &self,
+        store: &mut splice_core::history::Store,
+        sample: Sample,
+        time: u64,
+    ) -> Result<splice_core::history::EditResult, splice_core::history::StoreError> {
+        self.samples.append(store, sample, time)
+    }
+
     pub(super) fn allows(&mut self, project: &Project, package: &Path, action: &Action) -> bool {
         let id = match *action {
             Action::Append(id) | Action::Overlay(id) => id,
+            Action::Sample(sample) => return self.samples.ready(sample),
             _ => return true,
         };
         let Some(file) = project.media.iter().find(|file| file.id == id) else {
@@ -350,14 +372,33 @@ fn media(
             .pad_x(8.0)
             .gap(4.0),
         |ui| {
-            for (key, title, sample) in [
-                ("screen-sample", "+ Screen sample", samples[0]),
-                ("webcam-sample", "+ Webcam sample", samples[1]),
+            for (key, title, id, sample) in [
+                (
+                    "screen-sample",
+                    "+ Screen sample",
+                    samples[0],
+                    Sample::Screen,
+                ),
+                (
+                    "webcam-sample",
+                    "+ Webcam sample",
+                    samples[1],
+                    Sample::Webcam,
+                ),
             ] {
-                if tool(ui, key, title, (Size::Grow, 24.0), 11.0, sample.is_some())
-                    && let Some(id) = sample
-                {
-                    *action = Some(Action::Append(id));
+                let bundled = project.is_some()
+                    && sources
+                        .as_ref()
+                        .is_some_and(|(_, paths)| paths.samples.ready(sample));
+                if tool(
+                    ui,
+                    key,
+                    title,
+                    (Size::Grow, 24.0),
+                    11.0,
+                    id.is_some() || bundled,
+                ) {
+                    *action = Some(id.map_or(Action::Sample(sample), Action::Append));
                 }
             }
         },
@@ -684,6 +725,7 @@ mod tests {
                 Drawer::Media,
                 (Some(&project), None),
                 [320.0, 240.0],
+                Point::new(8.0, 64.0),
                 EffectTargets::default(),
             );
             action.set(intents.action);
@@ -716,6 +758,7 @@ mod tests {
                 Drawer::Media,
                 (Some(project), Some((package, sources))),
                 [width, 640.0],
+                Point::new(8.0, 64.0),
                 EffectTargets::default(),
             );
             result = result.take().or(intents.action);
@@ -918,6 +961,185 @@ mod tests {
     }
 
     #[test]
+    fn bundled_sample_buttons_import_and_append_one_undoable_edit() {
+        use splice_core::history::Store;
+        use splice_model::Probe;
+        use std::fs;
+
+        let folder =
+            std::env::temp_dir().join(format!("splice-bundled-drawer-{}", std::process::id()));
+        fs::create_dir(&folder).unwrap();
+        let package = folder.join("Edit.splice");
+        let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/media");
+        let mut sources = MediaSources::with_resources(Some(resources.clone()));
+        let mut project = Project::default();
+        let unrelated: MediaId = SCREEN_SAMPLE.parse().unwrap();
+        // Both an occupied name on disk and a path offline in the table can be present.
+        project.media.push(Media {
+            id: unrelated,
+            kind: MediaKind::Video,
+            path: "takes/v13-sample-screen-2/screen.mov".into(),
+            bookmark: None,
+            size: 0,
+            mtime: 0,
+            probe: Probe {
+                fps: 30.0,
+                frames: 48,
+                width: 96,
+                height: 64,
+                audio: Vec::new(),
+                codec: None,
+                loudness: None,
+            },
+            take: None,
+        });
+        let mut store = Store::create(&package, &project).unwrap();
+        let occupied = package.join("takes/v13-sample-screen");
+        fs::create_dir_all(&occupied).unwrap();
+        fs::write(occupied.join("screen.mov"), b"unrelated media").unwrap();
+        let paint =
+            |ui: &mut Ui, store: &Store, sources: &mut MediaSources, events: &[pxui::Event]| {
+                draw_media(ui, (store.project(), store.path()), 480.0, events, sources)
+            };
+        for width in [960.0, 800.0, 480.0] {
+            let mut ui = crate::viewer_ui().unwrap();
+            ui.set_a11y(true);
+            for _ in 0..3 {
+                assert!(
+                    draw_media(
+                        &mut ui,
+                        (store.project(), store.path()),
+                        width,
+                        &[],
+                        &mut sources
+                    )
+                    .is_none()
+                );
+            }
+            assert!(media_button(&ui, "+ Screen sample").1);
+            assert!(media_button(&ui, "+ Webcam sample").1);
+            splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
+                .warm(&mut || {
+                    for _ in 0..12 {
+                        assert!(
+                            draw_media(
+                                &mut ui,
+                                (store.project(), store.path()),
+                                width,
+                                &[],
+                                &mut sources
+                            )
+                            .is_none()
+                        );
+                    }
+                });
+        }
+        let mut ui = crate::viewer_ui().unwrap();
+        ui.set_a11y(true);
+        let click = |ui: &mut Ui, store: &Store, sources: &mut MediaSources, label| {
+            assert!(paint(ui, store, sources, &[]).is_none());
+            let (rect, enabled) = media_button(ui, label);
+            assert!(enabled);
+            let x = f64::from(rect.x + rect.w * 0.5);
+            let y = f64::from(rect.y + rect.h * 0.5);
+            assert!(
+                paint(
+                    ui,
+                    store,
+                    sources,
+                    &[pxui::Event::pointer(pxui::Event::POINTER_PRESSED, 0, x, y)]
+                )
+                .is_none()
+            );
+            paint(
+                ui,
+                store,
+                sources,
+                &[pxui::Event::pointer(pxui::Event::POINTER_RELEASED, 0, x, y)],
+            )
+            .unwrap()
+        };
+        let mut screen = None;
+        let mut webcam = None;
+        for (index, (label, sample, start, length)) in [
+            ("+ Screen sample", Sample::Screen, 0, 540),
+            ("+ Screen sample", Sample::Screen, 540, 540),
+            ("+ Webcam sample", Sample::Webcam, 1080, 300),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let action = click(&mut ui, &store, &mut sources, label);
+            assert_eq!(action, Action::Sample(sample));
+            assert!(sources.allows(store.project(), store.path(), &action));
+            let receipt = sources
+                .append_sample(&mut store, sample, index as u64)
+                .unwrap();
+            assert_eq!(receipt.revision, index as u64 + 1);
+            assert_eq!(receipt.report.changes.len(), 1);
+            let (clip, at, take) = appended_clip(store.project(), &receipt.report).unwrap();
+            let slot = store.project().clips.find(clip).unwrap();
+            let data = store.project().clips.data(slot).unwrap();
+            assert_eq!(
+                (at, take, store.project().clips.timing(slot).unwrap().length),
+                (start, true, length)
+            );
+            assert_eq!(data.enabled.camera, Some(true));
+            assert_eq!(data.enabled.mic, Some(true));
+            let is_screen = sample == Sample::Screen;
+            assert_eq!(data.enabled.screen, is_screen.then_some(true));
+            assert_eq!(data.enabled.system, is_screen.then_some(true));
+            assert_eq!(data.enabled.pointer, is_screen.then_some(true));
+            assert_eq!(data.enabled.keys, is_screen.then_some(false));
+            let entry = store
+                .project()
+                .media
+                .iter()
+                .find(|m| Some(m.id) == data.media)
+                .unwrap();
+            assert_eq!(entry.probe.frames, length);
+            if is_screen {
+                assert_eq!(entry.path, "takes/v13-sample-screen-3/screen.mov");
+                assert!(!screen.is_some_and(|id| id != entry.id));
+                screen = Some(entry.id);
+                let contents = package.join("takes/v13-sample-screen-3");
+                assert_eq!(
+                    fs::read(contents.join("events.json")).unwrap(),
+                    fs::read(resources.join("v13-samples/events.json")).unwrap()
+                );
+                assert_eq!(contents.join("cursors").read_dir().unwrap().count(), 2);
+                assert_eq!(entry.probe.audio.len(), 2);
+            } else {
+                assert_eq!(entry.path, "takes/v13-sample-webcam/webcam.mov");
+                assert_eq!(entry.probe.audio.len(), 1);
+                webcam = Some(entry.id);
+            }
+        }
+        assert_eq!(
+            fs::read(occupied.join("screen.mov")).unwrap(),
+            b"unrelated media"
+        );
+        assert!(!package.join("takes/v13-sample-screen-2").exists());
+        assert_eq!(store.project().media.len(), 3);
+        let webcam = webcam.unwrap();
+        let movie = package.join("takes/v13-sample-webcam/webcam.mov");
+        store.human_undo(4).unwrap();
+        assert_eq!(store.project().rev, 4);
+        assert!(!store.project().media.iter().any(|m| m.id == webcam));
+        assert!(movie.is_file());
+        store.human_redo(5).unwrap();
+        assert_eq!(store.project().rev, 5);
+        assert!(store.project().media.iter().any(|m| m.id == webcam));
+        store.close().unwrap();
+        let restored = Store::open(&package).unwrap();
+        assert_eq!(restored.project().rev, 5);
+        assert_eq!(restored.project().media.len(), 3);
+        assert!(restored.verify().is_ok());
+        drop(restored);
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
     fn effects_drawer_measures_the_categories_and_applies_the_project_button() {
         use pxui::{Event, FrameIn};
 
@@ -932,6 +1154,7 @@ mod tests {
                     Drawer::Effects,
                     (Some(&project), None),
                     [width, 640.0],
+                    Point::new(83.0, 64.0),
                     EffectTargets::default(),
                 );
                 if let Some(action) = intents.action {
@@ -1034,6 +1257,7 @@ mod tests {
                         Drawer::Effects,
                         (Some(project), None),
                         [width, 640.0],
+                        Point::new(83.0, 64.0),
                         EffectTargets {
                             selection: Some(Target::Timeline(TimelineId::Clip(clip))),
                             lane: Some(LaneId::SPINE),

@@ -10,7 +10,8 @@ fi
 app=$(cd "$app" && pwd -P)
 root=$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)
 
-python3 -I - "$app" "$root/packaging/designated-requirement.txt" <<'PY'
+python3 -I - "$app" "$root/packaging/designated-requirement.txt" "$root/packaging/v13-samples.sha256" <<'PY'
+import hashlib
 import plistlib
 import re
 import subprocess
@@ -28,6 +29,14 @@ executable = contents / "MacOS/splice"
 frameworks = contents / "Frameworks"
 library_names = {"libpxui.2.dylib", "libSDL3.0.dylib"}
 project_type = "com.olegpustovit.splice.project"
+
+samples = contents / "Resources/v13-samples"
+manifest = Path(sys.argv[3]).read_text(encoding="ascii").splitlines()
+for line in manifest:
+    digest, name = line.split("  ", 1)
+    asset = samples / name
+    require(asset.is_file() and not asset.is_symlink() and hashlib.sha256(asset.read_bytes()).hexdigest() == digest,
+            f"missing or mismatched v13 sample resource {name}")
 
 with (contents / "Info.plist").open("rb") as file:
     info = plistlib.load(file)

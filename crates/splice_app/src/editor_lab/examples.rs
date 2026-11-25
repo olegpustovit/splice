@@ -510,7 +510,9 @@ impl Example {
                     );
                 }
                 need_write?;
-                let session = open?;
+                // An explicit ended session lets the Lab show the server's error without
+                // starting another session through MCP's omitted-session default.
+                let session = key.open.or(key.latest).ok_or(SESSION)?;
                 self.field("sessionId", format_args!(r#""{session}""#));
             }
             "history.list" => {

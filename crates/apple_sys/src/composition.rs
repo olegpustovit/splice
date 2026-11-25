@@ -992,10 +992,15 @@ fn raster_text(
     Ok((rect, bytes))
 }
 
-/// Rasterizes the default Program title and its plate into straight RGBA8 of `size`.
-pub fn program_title_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, Error> {
+/// Rasterizes the default Program title and plate into a canvas-aligned straight RGBA8 bitmap.
+/// Returns its pixel size, offset from the title origin, and pixels.
+pub fn program_title_rgba(layer: &TextLayer) -> Result<([u32; 2], [f64; 2], Vec<u8>), Error> {
     let text = CString::new(layer.text.replace('\0', "\u{FFFD}")).expect("NUL replaced");
-    let geometry = [layer.bounds[2], layer.bounds[3], layer.font];
+    let [x, y, w, h] = layer.bounds;
+    // Render at the final fractional canvas position so a static title is sampled 1:1.
+    let phase = [x - x.floor(), y - y.floor()];
+    let size = [(w + phase[0]).ceil() as u32, (h + phase[1]).ceil() as u32];
+    let geometry = [phase[0], phase[1], w, h, layer.font];
     let mut error = ptr::null_mut();
     // SAFETY: the text and geometry live for the call and the embedded face is static.
     let pixels = unsafe {
@@ -1017,7 +1022,7 @@ pub fn program_title_rgba(layer: &TextLayer, size: [u32; 2]) -> Result<Vec<u8>, 
     let bytes = unsafe { std::slice::from_raw_parts(pixels, length) }.to_vec();
     // SAFETY: the allocation came from calloc and is not used again.
     unsafe { free(pixels.cast()) };
-    Ok(bytes)
+    Ok((size, phase.map(|value| -value), bytes))
 }
 
 /// `Builder::frames`' callback: draws one frame through the borrowed closure.
@@ -1042,5 +1047,43 @@ fn diagnostic(value: *mut c_char) -> Error {
             value,
             "AVFoundation could not build or read the composition.",
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn program_title_raster_preserves_fractional_plate_origin() {
+        let mut title = TextLayer {
+            text: "Build the frame".into(),
+            bounds: [10.0, 20.0, 92.75, 16.75],
+            font: 9.38,
+            opacity: [1.0; 2],
+            color: 0xf4f3ee,
+            style: TextStyle::default(),
+            visible: None,
+            active: None,
+        };
+        let (size, offset, pixels) = program_title_rgba(&title).unwrap();
+        assert_eq!(size, [93, 17]);
+        assert_eq!(offset, [0.0, 0.0]);
+        let edge = pixels[(8 * size[0] as usize) * 4 + 3];
+        assert!(edge > 200);
+
+        title.bounds[0] += 0.625;
+        title.bounds[1] += 0.375;
+        let (size, offset, pixels) = program_title_rgba(&title).unwrap();
+        assert_eq!(size, [94, 18]);
+        assert_eq!(offset, [-0.625, -0.375]);
+        let shifted_edge = pixels[(8 * size[0] as usize) * 4 + 3];
+        assert!((1..edge).contains(&shifted_edge));
+        assert_eq!(pixels.len(), 94 * 18 * 4);
+
+        // Integer canvas movement changes the placement, with the same subpixel raster.
+        title.bounds[0] -= 16.0;
+        title.bounds[1] += 240.0;
+        assert_eq!(program_title_rgba(&title).unwrap(), (size, offset, pixels));
     }
 }

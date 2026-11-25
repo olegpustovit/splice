@@ -3,8 +3,10 @@ use pxui::{
     Button, Fill, Icon, IconButton, Label, Node, Paint, Rect, Stroke, ThemeHandle, Ui,
     geom::{Edges, Rgba},
     theme::ColorToken,
-    ui::{Align, Along, Axis, Justify, Look, Size, States},
+    ui::{Align, Along, Axis, Justify, Key, Look, Size, States},
 };
+
+pub(super) const PANE_HEIGHT: f32 = 30.0;
 
 const PANEL: Rgba = Rgba::rgb(15, 15, 16);
 const LINE: Rgba = Rgba::rgb(37, 37, 39);
@@ -58,6 +60,16 @@ pub(super) enum PaneAction {
     Zoom,
 }
 
+#[derive(Default)]
+pub(super) struct Triggers([i64; PaneAction::Zoom as usize + 1]);
+
+impl Triggers {
+    pub(super) fn x(&self, ui: &Ui, action: PaneAction) -> f32 {
+        ui.box_of_key(Key::Resolved(self.0[action as usize]))
+            .map_or(4.0, |button| ui.rect(&button).x)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TransportAction {
     Start,
@@ -73,13 +85,14 @@ pub(super) fn pane(
     fitted: bool,
     zoom_percent: u32,
     narrow: bool,
-) -> Option<PaneAction> {
+) -> (Option<PaneAction>, Triggers) {
     let mut action = None;
-    bar(ui, 30.0, &mut |ui| {
+    let mut triggers = Triggers::default();
+    bar(ui, PANE_HEIGHT, &mut |ui| {
         ui.row(
             Node {
                 w: Size::Grow,
-                h: Size::Px(29.0),
+                h: Size::Px(PANE_HEIGHT - 1.0),
                 align: Align::Center,
                 padding: PANE_PADDING,
                 gap: 4.0,
@@ -104,10 +117,9 @@ pub(super) fn pane(
                         .icon_size(14.0)
                         .gap(gap)
                         .name(name);
-                    if ui
-                        .button(name, if narrow { "" } else { name }, &command)
-                        .clicked
-                    {
+                    let button = ui.button(name, if narrow { "" } else { name }, &command);
+                    triggers.0[item as usize] = button.handle.box_key;
+                    if button.clicked {
                         action = Some(item);
                     }
                 }
@@ -145,24 +157,23 @@ pub(super) fn pane(
                     .content_align(Along::Start)
                     .pad(Edges::new(9.0, 0.0, 9.0, 0.0))
                     .name("Viewer zoom");
-                if ui
-                    .button_content("viewer-zoom", &zoom, |ui, state| {
-                        let ink = if COMMAND.pick(state).text == INK {
-                            INK_TOKEN
-                        } else {
-                            MUTED_TOKEN
-                        };
-                        ui.label_digits(format_args!("{prefix}{zoom_percent}%"), TEXT.color(ink));
-                    })
-                    .clicked
-                {
+                let button = ui.button_content("viewer-zoom", &zoom, |ui, state| {
+                    let ink = if COMMAND.pick(state).text == INK {
+                        INK_TOKEN
+                    } else {
+                        MUTED_TOKEN
+                    };
+                    ui.label_digits(format_args!("{prefix}{zoom_percent}%"), TEXT.color(ink));
+                });
+                triggers.0[PaneAction::Zoom as usize] = button.handle.box_key;
+                if button.clicked {
                     action = Some(PaneAction::Zoom);
                 }
             },
         );
         rule(ui, "pane-rule");
     });
-    action
+    (action, triggers)
 }
 
 pub(super) fn transport(ui: &mut Ui, view: playbar::View, narrow: bool) -> Option<TransportAction> {

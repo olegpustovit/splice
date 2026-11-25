@@ -111,7 +111,7 @@ pub(super) fn render_layout(
     session.refresh(Some(store), activity);
     let (lab, bindings) = agent.map_or((None, &[][..]), |(lab, bindings)| (Some(lab), bindings));
     let input = FrameIn::new(layout.size[0], layout.size[1]);
-    let mut cache = super::ViewerCache::default();
+    let mut cache = super::ViewerCache::for_app();
     let mut build = |ui: &mut pxui::Ui| {
         paint_viewer(
             ui,

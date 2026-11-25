@@ -4,7 +4,6 @@ use pxui::{
 };
 
 const WIDTH: f32 = 208.0;
-const ZOOM_CHIP_OFFSET: f32 = 83.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Action {
@@ -20,28 +19,20 @@ pub(super) struct Intents {
     pub action: Option<Action>,
 }
 
-pub(super) fn paint(
-    ui: &mut Ui,
-    viewer_width: f32,
-    window_height: f32,
-    scale: f32,
-    fitted: bool,
-    context: Option<Point>,
-) -> Intents {
+pub(super) fn paint(ui: &mut Ui, at: Point, max_height: f32, scale: f32, fitted: bool) -> Intents {
     let bounds = ui.content_rect();
     let width = (bounds.w - 8.0).clamp(1.0, WIDTH);
     let left = bounds.x + 4.0;
     let right = (bounds.x + bounds.w - width - 4.0).max(left);
     let top = bounds.y + 4.0;
     let bottom = (bounds.y + bounds.h - 4.0).max(top);
-    let position = context.unwrap_or(Point::new(viewer_width - ZOOM_CHIP_OFFSET, 62.0));
-    let position = Point::new(position.x.clamp(left, right), position.y.clamp(top, bottom));
+    let position = Point::new(at.x.clamp(left, right), at.y.clamp(top, bottom));
     let is_scale = |preset: f32| !fitted && (scale - preset).abs() < 0.001;
     let menu = Menu::DEFAULT
         .w_px(width)
         .row_h(22.0)
         .padding(4.0)
-        .max_h((window_height - 8.0).max(1.0))
+        .max_h(max_height.max(1.0))
         .focus_on_click(true)
         .name("Viewer zoom");
     let items = [
@@ -87,7 +78,7 @@ mod tests {
         let mut tick = || {
             for _ in 0..10 {
                 testing::frame(&mut ui, &[], &mut |ui| {
-                    let result = paint(ui, 320.0, 240.0, 0.5, false, None);
+                    let result = paint(ui, Point::new(112.0, 8.0), 232.0, 0.5, false);
                     assert!(result.open && result.action.is_none());
                 });
             }
@@ -99,7 +90,7 @@ mod tests {
     fn zoom_menu_returns_selected_percentage_and_dismisses() {
         let intent = Cell::new(None);
         let mut draw = |ui: &mut Ui| {
-            let result = paint(ui, 320.0, 240.0, 0.5, false, None);
+            let result = paint(ui, Point::new(112.0, 8.0), 232.0, 0.5, false);
             if let Some(action) = result.action {
                 assert!(!result.open);
                 intent.set(Some(action));
@@ -120,14 +111,7 @@ mod tests {
     fn zoom_context_menu_uses_real_scale_and_stays_inside_window() {
         let scale = Cell::new(0.254);
         let mut draw = |ui: &mut Ui| {
-            paint(
-                ui,
-                320.0,
-                240.0,
-                scale.get(),
-                false,
-                Some(Point::new(320.0, 238.0)),
-            );
+            paint(ui, Point::new(320.0, 238.0), 232.0, scale.get(), false);
         };
         let mut ui = pxui::doc::frames(2, &mut draw);
         let flags = |ui: &Ui| {

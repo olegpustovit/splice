@@ -294,9 +294,9 @@ uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, dou
                           const SpliceCaptionSpan *spans, size_t span_count, bool center_lines,
                           const double *caption_box, double font_scale, bool clean, uint32_t rect[4], char **error);
 
-// Rasterizes the default Program title to straight RGBA8. The face points to static font bytes.
+// Default Program title to straight RGBA8. Geometry is the plate x, y, width, height, font size.
 uint8_t *splice_program_title_rgba(const char *text, uint32_t width, uint32_t height,
-                                  const double geometry[3], const uint8_t *face, size_t face_size,
+                                  const double geometry[5], const uint8_t *face, size_t face_size,
                                   char **error);
 
 void *splice_image_png(const uint8_t *pixels, size_t length, uint32_t width, uint32_t height,

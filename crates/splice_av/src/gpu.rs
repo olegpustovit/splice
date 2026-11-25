@@ -132,17 +132,21 @@ impl GpuProgram {
                 texts.push((texture, cue.clone(), [px - x, py - y, pw, ph]));
                 continue;
             }
-            let size = [w.ceil().max(1.0) as u32, h.ceil().max(1.0) as u32];
             let default_title = plan
                 .evaluator
                 .as_ref()
                 .zip(cue.item)
                 .is_some_and(|(eval, item)| eval.is_unstyled_title(item));
-            let pixels = if default_title {
-                apple_sys::composition::program_title_rgba(&cue.layer, size)?
-            } else {
-                apple_sys::composition::text_rgba(&cue.layer, size)?
-            };
+            if default_title {
+                let (size, [dx, dy], pixels) =
+                    apple_sys::composition::program_title_rgba(&cue.layer)?;
+                let texture = upload(&pixels, size, "Splice title")?;
+                let [w, h] = size.map(f64::from);
+                texts.push((texture, cue.clone(), [dx, dy, w, h]));
+                continue;
+            }
+            let size = [w.ceil().max(1.0) as u32, h.ceil().max(1.0) as u32];
+            let pixels = apple_sys::composition::text_rgba(&cue.layer, size)?;
             // An animator unit keeps only its own glyphs' pixels: a 120-character animation
             // uploads and composites 120 glyph-sized quads, not 120 full boxes. A unit with no
             // ink draws nothing.

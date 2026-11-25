@@ -1254,6 +1254,7 @@ mod looks {
             "fill {fill}, outline {outline}"
         );
         let pixels = text_rgba(&layer("AB CD", Some(([3, 5], 0xff2020))), size).unwrap();
+        assert!(pixels.chunks_exact(4).any(|p| p == [255, 32, 32, 255]));
         assert!(
             count(&pixels, &red, Some(true)) > 500,
             "active word not red"
@@ -1449,14 +1450,13 @@ mod looks {
         assert!(has(&karaoke, &|p| (125..=129).contains(&p[3])
             && p[0] > 240
             && p[2] > 240));
-        let yellow = |p: &[u8]| p[3] > 245 && p[0] > 220 && p[1] > 170 && p[2] < 90;
+        let yellow = |p: &[u8]| p == [255, 210, 63, 255];
         assert!(has(&karaoke, &yellow));
 
         layer.style.caption.as_mut().unwrap().spans[0].highlight = 2;
         let (boxed, box_pixels) = positioned_caption_rgba(&layer, layout).unwrap();
         assert!(boxed[3] > full[3] && has(&box_pixels, &yellow));
-        assert!(has(&box_pixels, &|p| p[3] > 245
-            && p[..3].iter().all(|&c| c < 35)));
+        assert!(has(&box_pixels, &|p| p == [17, 17, 17, 255]));
 
         layout.clean = true;
         layer.style.weight = 2;

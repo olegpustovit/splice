@@ -35,7 +35,6 @@ const DOCK_RAIL: f32 = 180.0;
 const WIDE_RAIL: f32 = 200.0;
 const WIDE_SIDE: f32 = 320.0;
 const LAB_PAD: f32 = 12.0;
-const TITLEBAR_HEIGHT: f32 = 34.0;
 const TOOL_ROW: f32 = 44.8;
 const TOOL_LOOK: States = States::of(Look::NONE.text(INK))
     .hover(Look::NONE.fill(Rgba::rgb(34, 34, 36)).text(INK))
@@ -897,6 +896,7 @@ pub(super) fn paint(
     lab: &Lab,
     images: &[Option<Image>],
     session: Option<(&editor_session::State, &Store)>,
+    titlebar_height: f32,
 ) -> Intents {
     let size = ui.view_size();
     let tool = &tool_catalog()[lab.selected];
@@ -967,7 +967,7 @@ pub(super) fn paint(
             if !wide {
                 // The dock fills its content up to half the body. Longer logs scroll
                 // independently so both rows of the desktop layout remain reachable.
-                let limit = ((size.height - TITLEBAR_HEIGHT + 1.0) * 0.5).max(0.0);
+                let limit = ((size.height - titlebar_height + 1.0) * 0.5).max(0.0);
                 pane_scroll(
                     ui,
                     ("lab-history", "Session activity"),
@@ -1842,7 +1842,7 @@ mod tests {
             let mut ui = crate::viewer_ui().unwrap();
             ui.set_a11y(true);
             ui.frame(&FrameIn::new(width, 1200.0), &mut |ui| {
-                paint(ui, None, &lab, &[], None);
+                paint(ui, None, &lab, &[], None, 0.0);
             })
             .unwrap();
             let request = testing::find(&ui, Role::TextArea, "Request arguments (JSON)").unwrap();
@@ -1922,11 +1922,8 @@ mod tests {
                 let mut intents = Intents::default();
                 ui.frame(&frame.events(events), &mut |ui| {
                     ui.column(FILL, |ui| {
-                        ui.node(
-                            "titlebar",
-                            Node::DEFAULT.w(Size::Grow).h_px(TITLEBAR_HEIGHT),
-                        );
-                        intents.merge(paint(ui, Some((0, None)), &lab, &[], None));
+                        ui.node("titlebar", Node::DEFAULT.w(Size::Grow).h_px(34.0));
+                        intents.merge(paint(ui, Some((0, None)), &lab, &[], None, 34.0));
                     });
                 })
                 .unwrap();
@@ -2041,6 +2038,35 @@ mod tests {
     }
 
     #[test]
+    fn lab_activity_dock_uses_the_height_below_a_wrapped_titlebar() {
+        use pxui::{FrameIn, testing};
+
+        let mut lab = Lab::new();
+        let args = splice_json::parse(r#"{"projectId":"prj_1"}"#).unwrap();
+        let reply = splice_json::parse(r#"{"revision":"r0","access":"live"}"#).unwrap();
+        for _ in 0..8 {
+            lab.set_reply("project.info", &args, &reply);
+        }
+        let mut ui = crate::viewer_ui().unwrap();
+        ui.set_a11y(true);
+        for (titlebar, dock) in [(34.0, 303.5), (62.0, 289.5)] {
+            ui.frame(&FrameIn::new(960.0, 640.0), &mut |ui| {
+                ui.column(FILL, |ui| {
+                    ui.node("titlebar", Node::DEFAULT.h_px(titlebar));
+                    paint(ui, Some((0, None)), &lab, &[], None, titlebar);
+                });
+            })
+            .unwrap();
+            let rail = testing::find(&ui, Role::ScrollArea, "MCP tools").unwrap();
+            let side = testing::find(&ui, Role::ScrollArea, "Session activity").unwrap();
+            assert_eq!(rail.y, titlebar);
+            assert_eq!(side.h, dock);
+            assert_eq!(rail.y + rail.h, side.y);
+            assert_eq!(side.y + side.h, 640.0);
+        }
+    }
+
+    #[test]
     fn dry_run_and_error_feedback_uses_structured_result() {
         use pxui::{Event, FrameIn, testing};
 
@@ -2062,7 +2088,7 @@ mod tests {
             let frame = FrameIn::new(width, 606.0);
             let mut idle = || {
                 ui.frame(&frame, &mut |ui| {
-                    assert!(!paint(ui, Some((0, None)), &lab, &[], None).changed());
+                    assert!(!paint(ui, Some((0, None)), &lab, &[], None, 0.0).changed());
                 })
                 .unwrap();
             };
@@ -2107,7 +2133,7 @@ mod tests {
         let draw = |ui: &mut Ui, lab: &mut Lab, events: &[Event]| {
             let mut intents = Intents::default();
             ui.frame(&frame.events(events), &mut |ui| {
-                intents.merge(paint(ui, Some((0, None)), lab, &[], None));
+                intents.merge(paint(ui, Some((0, None)), lab, &[], None, 0.0));
             })
             .unwrap();
             lab.apply(intents)
@@ -2316,6 +2342,7 @@ mod tests {
                     lab,
                     &[],
                     Some((state, store)),
+                    0.0,
                 ));
             })
             .unwrap();
@@ -2397,6 +2424,7 @@ mod tests {
             &call.args,
             &splice_mcp::edit_result_json(preview),
         );
+        let dry_run = lab.calls.front().unwrap().id;
         warm(&mut lab, &store, &state);
 
         let typed = format!("  {}  ", lab.draft());
@@ -2415,6 +2443,40 @@ mod tests {
                 .and_then(Json::as_str),
             Some(first.to_string().as_str())
         );
+
+        state.refresh(Some(&store), Some(first));
+        assert_eq!(lab.draft(), typed);
+        assert!(click(&mut ui, &mut lab, &store, &state, "Reset to example").is_none());
+        refresh(&mut lab, &store);
+        let ended = click(&mut ui, &mut lab, &store, &state, "Run call").unwrap();
+        assert_eq!(ended.name, "edit.apply");
+        assert_eq!(
+            ended.args.field("sessionId").and_then(Json::as_str),
+            Some(first.to_string().as_str())
+        );
+        let refused = splice_mcp::apply_batch(
+            &mut store,
+            ended.args.field("ops").unwrap().as_array().unwrap(),
+            &WriteOptions {
+                if_revision: Some(1),
+                dry_run: true,
+                ..options.clone()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, "NO_SESSION");
+        assert_eq!(store.project().rev, 1);
+        let reply = Json::Object(vec![
+            ("isError".into(), Json::Bool(true)),
+            (
+                "structuredContent".into(),
+                splice_mcp::error_payload(refused),
+            ),
+        ]);
+        lab.set_reply(ended.name, &ended.args, &reply);
+        assert!(lab.reply().unwrap().error);
+        assert!(lab.reply().unwrap().summary.starts_with("NO_SESSION:"));
+        lab.set_draft(typed.clone());
 
         let second = store.start_session("second", 2).unwrap().id;
         state.refresh(Some(&store), Some(second));
@@ -2438,10 +2500,9 @@ mod tests {
             Some("marker.set")
         );
 
-        let id = lab.calls.front().unwrap().id;
         assert!(
             lab.apply(Intents {
-                action: Some(Action::Recall(id)),
+                action: Some(Action::Recall(dry_run)),
                 ..Intents::default()
             })
             .is_none()
@@ -2562,7 +2623,7 @@ mod tests {
         let draw = |ui: &mut Ui, lab: &mut Lab, events: &[Event]| {
             let mut intents = Intents::default();
             ui.frame(&frame.events(events), &mut |ui| {
-                intents.merge(paint(ui, Some((0, None)), lab, &[], None));
+                intents.merge(paint(ui, Some((0, None)), lab, &[], None, 0.0));
             })
             .unwrap();
             assert!(lab.apply(intents).is_none());
@@ -2745,7 +2806,7 @@ mod tests {
             let warm_frame = FrameIn::new(width, 640.0);
             let mut idle = || {
                 ui.frame(&warm_frame, &mut |ui| {
-                    assert!(!paint(ui, context, &lab, &[], activity).changed())
+                    assert!(!paint(ui, context, &lab, &[], activity, 0.0).changed())
                 })
                 .unwrap();
             };
@@ -2760,14 +2821,14 @@ mod tests {
                 });
             if width == 960.0 {
                 let dock = testing::find(&ui, Role::ScrollArea, "Session activity").unwrap();
-                assert_eq!(dock.h, 303.5);
+                assert_eq!(dock.h, 320.5);
             }
             // Keep the compact page tall for hit-testing the stacked panel.
             let frame = FrameIn::new(width, if width < 820.0 { 1400.0 } else { 640.0 });
             let draw = |ui: &mut Ui, lab: &mut Lab, events: &[Event]| {
                 let mut intents = Intents::default();
                 ui.frame(&frame.events(events), &mut |ui| {
-                    intents.merge(paint(ui, context, lab, &[], activity));
+                    intents.merge(paint(ui, context, lab, &[], activity, 0.0));
                 })
                 .unwrap();
                 lab.apply(intents)
@@ -2856,7 +2917,7 @@ mod tests {
         ui.set_a11y(true);
         let input = FrameIn::new(960.0, 606.0);
         let mut draw = |ui: &mut Ui| {
-            assert!(!paint(ui, Some((0, None)), &lab, &images, None).changed());
+            assert!(!paint(ui, Some((0, None)), &lab, &images, None, 0.0).changed());
         };
         mem_sys::set_peer(pxui::library_counter);
         for _ in 0..8 {
@@ -2917,7 +2978,7 @@ mod tests {
             ui.frame(&FrameIn::new(960.0, 640.0).events(events), &mut |ui| {
                 ui.column(FILL, |ui| {
                     ui.node("titlebar", Node::DEFAULT.w(Size::Grow).h_px(34.0));
-                    intents.merge(paint(ui, context, lab, &images, activity));
+                    intents.merge(paint(ui, context, lab, &images, activity, 0.0));
                 });
             })
             .unwrap();

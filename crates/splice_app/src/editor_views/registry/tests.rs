@@ -215,6 +215,31 @@ fn verify(width: f32) {
     assert!((mcp.w - usable).abs() < 0.1);
     assert!(mcp.y > mcp_heading.y);
     assert!(doc.find(Role::Cell, "session.end").y > mcp.y);
+    for tool in tool_catalog() {
+        let rect = doc
+            .ui
+            .a11y_nodes()
+            .iter()
+            .find(|node| {
+                node.is_role(Role::Cell)
+                    && node.rect.y > mcp.y
+                    && node.rect.y < mcp.y + mcp.h
+                    && (node.rect.x - mcp.x - 8.0).abs() < 0.1
+                    && doc.ui.a11y_name_of(node) == tool.name
+            })
+            .unwrap_or_else(|| panic!("missing MCP row for {}", tool.name))
+            .rect;
+        assert!((rect.h - 15.4).abs() < 0.1, "{}: {rect:?}", tool.name);
+    }
+    let purpose = doc.find(Role::ColumnHeader, "PURPOSE");
+    let reference_x = match width {
+        960.0 => 433.922,
+        800.0 => 201.531,
+        480.0 => 188.969,
+        _ => unreachable!(),
+    };
+    assert!((purpose.x - reference_x).abs() < 0.5, "{purpose:?}");
+
     let headings = [
         "Transport and hosting",
         "Addressing and time",
