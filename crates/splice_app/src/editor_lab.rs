@@ -19,7 +19,12 @@ use splice_model::{
     Access, ClipId, ItemId, LaneId, MarkerId, MediaId, MediaKind, Project, SessionId, TimelineId,
     WordId, timing,
 };
-use std::{borrow::Cow, collections::VecDeque, os::unix::ffi::OsStringExt, path::PathBuf};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, VecDeque},
+    os::unix::ffi::OsStringExt,
+    path::PathBuf,
+};
 
 const BG: Rgba = Rgba::rgb(9, 9, 10);
 const PANEL: Rgba = Rgba::rgb(15, 15, 16);
@@ -105,8 +110,6 @@ const REQUEST: Look = Look::NONE
 const MAX_DRAFT_BYTES: usize = 16 << 20;
 // ponytail: cap the on-screen reply at 32 KiB until large replies need virtualized viewing.
 const REPLY_PREVIEW_BYTES: usize = 32 << 10;
-// ponytail: cap prepared rows until large dry-run diffs need virtualized viewing.
-const REPLY_DIFF_ROWS: usize = 32;
 const CALL_LOG_LIMIT: usize = 30;
 const CALL_LOG_ARG_BYTES: usize = 32 << 20;
 
@@ -139,7 +142,6 @@ struct Reply {
     error: bool,
     summary: String,
     diff: Vec<String>,
-    remaining: usize,
     preview: String,
     truncated: bool,
     frames: Vec<ReplyFrame>,
@@ -535,8 +537,7 @@ impl Lab {
                 )
             }
         };
-        let (summary, diff, remaining) =
-            result_feedback(name, error, payload, &compact, args, project);
+        let (summary, diff) = result_feedback(name, error, payload, &compact, args, project);
         let frames = if name == "view.frames" && !error {
             reply_frames(payload)
         } else {
@@ -570,7 +571,6 @@ impl Lab {
                 error,
                 summary,
                 diff,
-                remaining,
                 preview,
                 truncated,
                 frames,
@@ -583,6 +583,7 @@ impl Lab {
         self.calls.iter().find(|call| Some(call.id) == self.shown)
     }
 
+    #[cfg(test)]
     fn reply(&self) -> Option<&Reply> {
         self.shown_call().map(|call| &call.reply)
     }
@@ -1372,7 +1373,7 @@ fn detail(
             }
         });
         let schema_open = request(ui, context, lab, tool, intents);
-        paint_reply(ui, lab.reply(), images);
+        paint_reply(ui, lab.shown_call(), images);
         if schema_open {
             reference(ui, tool);
         }
@@ -1678,8 +1679,9 @@ fn paint_frames(ui: &mut Ui, frames: &[ReplyFrame], images: &[Option<Image>]) {
     );
 }
 
-fn paint_reply(ui: &mut Ui, reply: Option<&Reply>, images: &[Option<Image>]) {
-    let (text, ink) = if let Some(reply) = reply {
+fn paint_reply(ui: &mut Ui, call: Option<&LoggedCall>, images: &[Option<Image>]) {
+    let (text, ink) = if let Some(call) = call {
+        let reply = &call.reply;
         let (status, ink) = if reply.error {
             ("Error", ERROR)
         } else {
@@ -1696,20 +1698,19 @@ fn paint_reply(ui: &mut Ui, reply: Option<&Reply>, images: &[Option<Image>]) {
         );
         paint_frames(ui, &reply.frames, images);
         if !reply.diff.is_empty() {
-            ui.column(Node::column().w(Size::Grow).gap(2.0), |ui| {
-                let label = ui.label("Dry-run diff", SECTION);
-                tint(ui, label, QUIET);
-                for change in &reply.diff {
-                    ui.column(
-                        REPLY_NOTE.look(Look::NONE.fill(PANEL).border(MOTION, 2.0).sides(LEFT)),
-                        |ui| {
-                            ui.label(change, CAPTION);
-                        },
-                    );
-                }
-                if reply.remaining != 0 {
-                    ui.label_fmt(format_args!("{} more diff rows", reply.remaining), CAPTION);
-                }
+            ui.view_of("lab-dry-run-diff", &call.id, |ui| {
+                ui.column(Node::column().w(Size::Grow).gap(2.0), |ui| {
+                    let label = ui.label("Dry-run diff", SECTION);
+                    tint(ui, label, QUIET);
+                    for change in &reply.diff {
+                        ui.column(
+                            REPLY_NOTE.look(Look::NONE.fill(PANEL).border(MOTION, 2.0).sides(LEFT)),
+                            |ui| {
+                                ui.label(change, CAPTION);
+                            },
+                        );
+                    }
+                });
             });
         }
         if reply.truncated {
@@ -1746,7 +1747,7 @@ fn result_feedback(
     compact: &str,
     args: &Json,
     project: Option<&Project>,
-) -> (String, Vec<String>, usize) {
+) -> (String, Vec<String>) {
     let snippet = |text: &str, bytes| text[..text.floor_char_boundary(bytes)].to_owned();
     if error {
         let problem = payload.field("error").unwrap_or(payload);
@@ -1759,12 +1760,12 @@ fn result_feedback(
             |message| format!("{code}: {}", snippet(message, 250)),
         );
         if let Some(fix) = problem.field("fix").and_then(Json::as_str) {
-            return (format!("{summary} {}", snippet(fix, 160)), Vec::new(), 0);
+            return (format!("{summary} {}", snippet(fix, 160)), Vec::new());
         }
-        return (summary, Vec::new(), 0);
+        return (summary, Vec::new());
     }
     if name != "edit.apply" {
-        return (snippet(compact, 120), Vec::new(), 0);
+        return (snippet(compact, 120), Vec::new());
     }
     let dry = payload.field("dryRun").and_then(Json::as_bool) == Some(true);
     let revision = payload.field("revision").and_then(Json::as_str);
@@ -1775,19 +1776,21 @@ fn result_feedback(
     } else {
         "Edit result".to_owned()
     };
-    if let Some(changes) = payload.field("changes").and_then(Json::as_array) {
-        if let Some(text) = changes
-            .first()
-            .and_then(|change| change.field("summary"))
-            .and_then(Json::as_str)
-        {
-            summary.push_str(": ");
-            summary.push_str(&snippet(text, 230));
-        }
-        if changes.len() > 1 {
-            use std::fmt::Write;
-            let _ = write!(summary, " (+{} more)", changes.len() - 1);
-        }
+    let changes = payload
+        .field("changes")
+        .and_then(Json::as_array)
+        .unwrap_or(&[]);
+    if let Some(text) = changes
+        .first()
+        .and_then(|change| change.field("summary"))
+        .and_then(Json::as_str)
+    {
+        summary.push_str(": ");
+        summary.push_str(&snippet(text, 230));
+    }
+    if changes.len() > 1 {
+        use std::fmt::Write;
+        let _ = write!(summary, " (+{} more)", changes.len() - 1);
     }
     if let Some(effects) = payload
         .field("sideEffects")
@@ -1805,17 +1808,42 @@ fn result_feedback(
     } else {
         &[]
     };
-    let diff: Vec<_> = rows
+    if rows.is_empty() {
+        return (summary, Vec::new());
+    }
+    let ops = args.field("ops").and_then(Json::as_array).unwrap_or(&[]);
+    let mut created = BTreeMap::new();
+    for change in changes {
+        let Some(op) = change
+            .field("op")
+            .and_then(Json::as_i64)
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| ops.get(index))
+        else {
+            continue;
+        };
+        if let Some(ids) = change.field("created").and_then(Json::as_array) {
+            for id in ids.iter().filter_map(Json::as_str) {
+                created.entry(id).or_insert(op);
+            }
+        }
+    }
+    let diff = rows
         .iter()
-        .take(REPLY_DIFF_ROWS)
-        .filter_map(|row| diff_line(row, payload, args, project))
+        .filter_map(|row| {
+            let id = row.field("id")?.as_str()?;
+            diff_line(id, row, created.get(id).copied(), project)
+        })
         .collect();
-    let remaining = rows.len().saturating_sub(diff.len());
-    (summary, diff, remaining)
+    (summary, diff)
 }
 
-fn diff_line(row: &Json, payload: &Json, args: &Json, project: Option<&Project>) -> Option<String> {
-    let id = row.field("id")?.as_str()?;
+fn diff_line(
+    id: &str,
+    row: &Json,
+    creator: Option<&Json>,
+    project: Option<&Project>,
+) -> Option<String> {
     let before = row.field("before")?;
     let after = row.field("after")?;
     let change = if before == after {
@@ -1834,7 +1862,7 @@ fn diff_line(row: &Json, payload: &Json, args: &Json, project: Option<&Project>)
         .and_then(|project| {
             live_diff_name(project, id).or_else(|| {
                 (*before == Json::Null)
-                    .then(|| created_diff_name(project, id, payload, args))
+                    .then(|| creator.and_then(|op| created_diff_name(project, op)))
                     .flatten()
             })
         })
@@ -1866,19 +1894,7 @@ fn live_diff_name(project: &Project, id: &str) -> Option<String> {
         .map(|item| item.name.clone())
 }
 
-fn created_diff_name(project: &Project, id: &str, payload: &Json, args: &Json) -> Option<String> {
-    let change = payload
-        .field("changes")?
-        .as_array()?
-        .iter()
-        .find(|change| {
-            change
-                .field("created")
-                .and_then(Json::as_array)
-                .is_some_and(|ids| ids.iter().any(|created| created.as_str() == Some(id)))
-        })?;
-    let index = usize::try_from(change.field("op")?.as_i64()?).ok()?;
-    let op = args.field("ops")?.as_array()?.get(index)?;
+fn created_diff_name(project: &Project, op: &Json) -> Option<String> {
     match op.field("cmd")?.as_str()? {
         "item.split" => live_diff_name(project, op.field("item")?.as_str()?),
         "overlay.add" if op.field("kind")?.as_str()? == "media" => {
@@ -2251,6 +2267,100 @@ mod tests {
             assert_eq!(rail.y + rail.h, side.y);
             assert_eq!(side.y + side.h, 640.0);
         }
+    }
+
+    #[test]
+    fn long_dry_run_keeps_the_last_row_reachable_without_warm_allocations() {
+        use pxui::{FrameIn, testing};
+        use splice_mcp::live::Viewer;
+
+        let folder = std::env::temp_dir().join(format!("splice-lab-diff-{}", std::process::id()));
+        std::fs::create_dir(&folder).unwrap();
+        let mut store = Store::create(&folder.join("Diff.splice"), &Project::default()).unwrap();
+        let session = store.start_session("fixture", 1).unwrap().id;
+        let mut viewer = Viewer::new(store, None);
+        let edits = (1..=128)
+            .map(|at| {
+                splice_json::parse(&format!(
+                    r#"{{"cmd":"marker.add","at":{at},"name":"Beat {at}"}}"#
+                ))
+                .unwrap()
+            })
+            .collect();
+        let args = Json::Object(vec![
+            ("projectId".into(), Json::String("prj_1".into())),
+            ("sessionId".into(), Json::String(session.to_string())),
+            ("ifRevision".into(), Json::String("r0".into())),
+            ("dryRun".into(), Json::Bool(true)),
+            ("ops".into(), Json::Array(edits)),
+        ]);
+        let request = Json::Object(vec![
+            ("command".into(), Json::String("tool".into())),
+            ("name".into(), Json::String("edit.apply".into())),
+            ("args".into(), args.clone()),
+            ("client".into(), Json::String("lab-long-diff".into())),
+        ]);
+        let output = viewer.handle(&request, 0, &mut |_, _| panic!("unexpected viewer command"));
+        let (payload, error) = tool_reply(&output);
+        assert!(!error, "{payload:?}");
+        assert_eq!(
+            payload
+                .field("diff")
+                .and_then(Json::as_array)
+                .unwrap()
+                .len(),
+            128
+        );
+        let mut lab = Lab::new();
+        lab.set_reply_with_project("edit.apply", &args, &output, Some(viewer.store().project()));
+        let reply = lab.reply().unwrap();
+        assert_eq!(reply.diff.len(), 128);
+        let last = reply
+            .diff
+            .iter()
+            .find(|line| line.starts_with("Beat 128 "))
+            .unwrap();
+        let context = Some((viewer.store().project().rev, Some(session)));
+        mem_sys::set_peer(pxui::library_counter);
+
+        for width in [960.0, 800.0, 480.0] {
+            let mut ui = crate::viewer_ui().unwrap();
+            ui.set_a11y(true);
+            let frame = FrameIn::new(width, 640.0);
+            let draw = |ui: &mut Ui| {
+                let mut pane = None;
+                ui.frame(&frame, &mut |ui| {
+                    pane = paint(ui, context, &lab, &[], None, 0.0).viewport;
+                })
+                .unwrap();
+                pane.unwrap().0
+            };
+            for _ in 0..3 {
+                draw(&mut ui);
+            }
+            let pane = draw(&mut ui);
+            let bounds = ui.rect(&pane);
+            let tail = testing::find(&ui, Role::Label, last).unwrap();
+            assert!(tail.y > bounds.y + bounds.h);
+            ui.set_scroll_offset(&pane, tail.y - bounds.y - 8.0);
+            for _ in 0..3 {
+                draw(&mut ui);
+            }
+            let tail = testing::find(&ui, Role::Label, last).unwrap();
+            assert!(
+                tail.y >= bounds.y && tail.y + tail.h <= bounds.y + bounds.h,
+                "{width}: final diff row {tail:?} is outside {bounds:?}"
+            );
+            splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
+                .warm(&mut || {
+                    draw(&mut ui);
+                });
+        }
+
+        assert_eq!(viewer.store().project().rev, 0);
+        assert!(viewer.store().project().markers.is_empty());
+        viewer.close().unwrap();
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]
@@ -2644,7 +2754,6 @@ mod tests {
         let wire_rows = reply.field("diff").and_then(Json::as_array).unwrap();
         assert!(wire_rows.len() > 4);
         assert_eq!(shown.diff.len(), wire_rows.len());
-        assert_eq!(shown.remaining, 0);
         assert_eq!(
             shown.diff[0],
             "Screen take 01 clp_take · 00:04:00–00:18:00 → 00:04:00–00:12:12"
