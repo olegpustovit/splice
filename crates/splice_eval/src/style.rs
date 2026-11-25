@@ -158,6 +158,29 @@ pub struct Keys {
     pub hold: f64,
 }
 
+impl Keys {
+    /// Maximum chip box in canvas pixels, the Menlo font size, and horizontal alignment.
+    /// Short labels hug the chosen edge of the box. Vertical placement uses the whole chip.
+    pub fn chip_layout(self, canvas: [u32; 2]) -> ([f64; 4], f64, u32) {
+        let [width, height] = canvas.map(f64::from);
+        let font = width.min(height) * 0.045 * self.scale;
+        let chip_h = font * 1.9;
+        let max_w = width * 0.6;
+        let [column, row] = self.position.cell();
+        let x = match column {
+            0 => width * 0.06,
+            1 => (width - max_w) / 2.0,
+            _ => width * 0.94 - max_w,
+        };
+        let y = match row {
+            0 => height * 0.06,
+            1 => (height - chip_h) / 2.0,
+            _ => height * 0.93 - chip_h,
+        };
+        ([x, y, max_w, chip_h], font, u32::from(column))
+    }
+}
+
 /// Preset used to lay out and highlight caption words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptionPreset {

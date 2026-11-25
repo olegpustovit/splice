@@ -1221,6 +1221,79 @@ uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, dou
     }
 }
 
+uint8_t *splice_key_chip_rgba(const char *text, const double geometry[5], uint32_t align,
+                              uint32_t ink, uint32_t backing, uint32_t rect[4], char **error) {
+    @autoreleasepool {
+        NSString *string = [NSString stringWithUTF8String:text];
+        const double x = geometry[0], y = geometry[1], max_width = geometry[2], h = geometry[3], size = geometry[4];
+        if (string == nil || !isfinite(x) || !isfinite(y) || !isfinite(max_width) || !isfinite(h) ||
+            !isfinite(size) || x < 0 || y < 0 || max_width <= 0 || h <= 0 || size <= 0 ||
+            x + max_width > 16384 || y + h > 16384 || align > 2) {
+            splice_set_error(error, "Invalid keystroke chip raster.");
+            return NULL;
+        }
+        CTFontRef font = CTFontCreateWithName(CFSTR("Menlo-Regular"), size, NULL);
+        if (font == NULL) {
+            splice_set_error(error, "Could not create the keystroke chip font.");
+            return NULL;
+        }
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGFloat components[4];
+        rgb(ink, components);
+        CGColorRef fill = CGColorCreate(space, components);
+        CTLineRef line = caption_line(string, font, fill, NULL, 0);
+        CGColorRelease(fill);
+        CFRelease(font);
+
+        double pad = size * .6;
+        double natural_width = CTLineGetTypographicBounds(line, NULL, NULL, NULL) + 2 * pad;
+        double w = MIN(natural_width, max_width);
+        double fit = w / natural_width;
+        double left = x + (max_width - w) * (align * .5);
+        // Paint at the final fractional coordinates and upload only the enclosing pixels.
+        rect[0] = (uint32_t)floor(left);
+        rect[1] = (uint32_t)floor(y);
+        rect[2] = (uint32_t)ceil(left + w) - rect[0];
+        rect[3] = (uint32_t)ceil(y + h) - rect[1];
+        uint32_t width = rect[2], height = rect[3];
+        uint8_t *pixels = calloc((size_t)width * height, 4);
+        CGContextRef context = pixels == NULL ? NULL : CGBitmapContextCreate(pixels, width, height, 8, width * 4,
+            space, kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+        CGColorSpaceRelease(space);
+        if (context == NULL) {
+            free(pixels);
+            CFRelease(line);
+            splice_set_error(error, "Could not rasterize the keystroke chip.");
+            return NULL;
+        }
+
+        const CGRect plate = CGRectMake(left - rect[0], rect[1] + height - y - h, w, h);
+        const CGFloat radius = MIN(size * .3, w * .5);
+        CGPathRef path = CGPathCreateWithRoundedRect(plate, radius, radius, NULL);
+        rgb(backing, components);
+        CGContextSetRGBFillColor(context, components[0], components[1], components[2], 1);
+        CGContextAddPath(context, path);
+        CGContextFillPath(context);
+        CGContextAddPath(context, path);
+        CGContextClip(context);
+        CGPathRelease(path);
+
+        // Long Recorder bursts fit the existing width cap without changing their grid anchor.
+        double baseline = CGRectGetMidY(plate) - size * .35 * fit;
+        CGContextTranslateCTM(context, CGRectGetMinX(plate) + pad * fit, baseline);
+        CGContextScaleCTM(context, fit, fit);
+        CGContextSetTextPosition(context, 0, 0);
+        CTLineDraw(line, context);
+        CFRelease(line);
+        CGContextRelease(context);
+        for (size_t i = 0; i < (size_t)width * height * 4; i += 4) {
+            uint8_t a = pixels[i + 3];
+            if (a != 0 && a != 255) for (int c = 0; c < 3; c++) pixels[i + c] = (uint8_t)MIN(255, pixels[i + c] * 255 / a);
+        }
+        return pixels;
+    }
+}
+
 uint8_t *splice_program_title_rgba(const char *text, uint32_t width, uint32_t height,
                                   const double geometry[5], const uint8_t *face, size_t face_size,
                                   char **error) {

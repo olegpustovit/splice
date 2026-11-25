@@ -345,6 +345,127 @@ mod native {
 
     /// T12.2–T12.3 on a take with recorded events: the cursor draws where the events put it, scaled
     /// by the Cursor effect, and a camera segment on the click zooms the picture in toward it.
+    pub(super) fn native_keystroke_chip_matches_v13_plate_and_redacts() {
+        let scratch =
+            Output(std::env::temp_dir().join(format!("splice-key-chip-{}", std::process::id())));
+        let take = scratch.0.join("takes/med_1");
+        fs::create_dir_all(&take).unwrap();
+        fs::copy(fixture().join("probe.mov"), take.join("screen.mov")).unwrap();
+        fs::write(
+            take.join("events.json"),
+            r#"{"t0":0,"source":{"kind":"display","rect":{"x":0,"y":0,"width":96,"height":64},"scale":1},
+                "events":[{"t":0.1,"k":"key","ch":"frame study","mods":0}]}"#,
+        )
+        .unwrap();
+        let mut media = video();
+        media.kind = MediaKind::Take;
+        media.path = "takes/med_1".into();
+        media.take = Some(TakeComponents {
+            screen: Some("screen.mov".into()),
+            events: Some("events.json".into()),
+            ..Default::default()
+        });
+        let mut project = Project {
+            size: [540, 960],
+            media: vec![media],
+            ..Project::default()
+        };
+        project
+            .clips
+            .insert(Clip {
+                id: ClipId::from_serial(1),
+                timing: ClipTiming {
+                    start: 0,
+                    length: 30,
+                    source: 0,
+                    speed: 1.0,
+                },
+                data: ClipData {
+                    media: Some(MediaId::from_serial(1)),
+                    enabled: ComponentStates {
+                        keys: Some(false),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let frame = |composition: &Composition, at| {
+            let mut rgba = vec![0; 540 * 960 * 4];
+            composition.read_frame(at, &mut rgba).unwrap();
+            rgba
+        };
+        let off = Composition::prepare_for_viewer(&project, &scratch.0).unwrap();
+        let plain = frame(&off, 5);
+        assert!(off.text_at(5).is_empty());
+
+        let slot = project.clips.order()[0];
+        project.clips.data_mut(slot).unwrap().enabled.keys = Some(true);
+        let viewer = Composition::prepare_for_viewer(&project, &scratch.0).unwrap();
+        let agent = Composition::prepare_for_agent(&project, &scratch.0).unwrap();
+        assert_eq!(viewer.text_at(5).len(), 1);
+        assert_eq!(agent.text_at(5).len(), 1);
+        assert_eq!(viewer.text_at(5)[0].layer.text, "frame study");
+        assert_eq!(agent.text_at(5)[0].layer.text, "•••••••••••");
+        let normal = frame(&viewer, 5);
+        let private = frame(&agent, 5);
+
+        // Font 24.3, chip x32.4, y846.63, width about 190.1, bottom 892.8.
+        // The solid (non-antialiased) plate extrema fit within one pixel of the nominal box.
+        let plate_bounds = |rgba: &[u8]| {
+            let mut found = [540, 960, 0, 0];
+            for (i, pixel) in rgba.chunks_exact(4).enumerate() {
+                let (x, y) = (i % 540, i / 540);
+                if (810..920).contains(&y)
+                    && [229u8, 220, 236]
+                        .iter()
+                        .zip(pixel)
+                        .all(|(&want, &got)| want.abs_diff(got) <= 1)
+                {
+                    found = [
+                        found[0].min(x),
+                        found[1].min(y),
+                        found[2].max(x),
+                        found[3].max(y),
+                    ];
+                }
+            }
+            found
+        };
+        for rgba in [&normal, &private] {
+            let bounds = plate_bounds(rgba);
+            assert!(
+                bounds
+                    .iter()
+                    .zip([33usize, 847, 221, 891])
+                    .all(|(&got, want)| got.abs_diff(want) <= 1),
+                "plate bounds {bounds:?}"
+            );
+            assert_eq!(&rgba[(855 * 540 + 145) * 4..][..3], [229, 220, 236]);
+        }
+        assert_eq!(plate_bounds(&plain), [540, 960, 0, 0]);
+        let mut differences = 0;
+        for (i, (a, b)) in normal
+            .chunks_exact(4)
+            .zip(private.chunks_exact(4))
+            .enumerate()
+        {
+            if a != b {
+                let (x, y) = (i % 540, i / 540);
+                assert!((31..224).contains(&x) && (846..894).contains(&y));
+                differences += 1;
+            }
+        }
+        assert!(differences > 200, "typed ink is distinct from dots");
+        let dark_ink = |rgba: &[u8]| {
+            (856..882)
+                .flat_map(|y| (46..208).map(move |x| (y * 540 + x) * 4))
+                .filter(|&i| rgba[i..i + 3].iter().all(|&c| c.abs_diff(8) <= 1))
+                .count()
+        };
+        assert!(dark_ink(&normal) > 100 && dark_ink(&private) > 30);
+    }
+
     pub(super) fn native_take_draws_the_recorded_cursor_and_zooms_on_click() {
         let scratch =
             Output(std::env::temp_dir().join(format!("splice-av-take-{}", std::process::id())));
@@ -890,6 +1011,10 @@ fn main() {
         (
             "animated_title_keeps_its_box",
             native::animated_title_keeps_its_box,
+        ),
+        (
+            "native_keystroke_chip_matches_v13_plate_and_redacts",
+            native::native_keystroke_chip_matches_v13_plate_and_redacts,
         ),
         (
             "native_take_draws_the_recorded_cursor_and_zooms_on_click",

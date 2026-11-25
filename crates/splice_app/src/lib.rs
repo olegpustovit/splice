@@ -2806,9 +2806,7 @@ mod viewer_tests {
     fn selection_shortcuts_use_live_store_timing_and_lane_targets() {
         use splice_model::{ItemId, TimelineId, timing};
 
-        let reference =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/sample.splice");
-        let (_, project) = splice_core::package::Package::open(&reference).unwrap();
+        let project = editor_views::load_sample().unwrap();
         let folder = std::env::temp_dir().join(format!("splice-selection-{}", std::process::id()));
         fs::create_dir(&folder).unwrap();
         let mut store = Store::create(&folder.join("Selection.splice"), &project).unwrap();

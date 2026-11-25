@@ -15,6 +15,8 @@ use std::sync::OnceLock;
 
 mod check;
 pub(crate) use check::Parity;
+#[cfg(test)]
+pub(crate) use check::load_sample;
 
 const PROSE: f32 = 561.6;
 const LIST_INSET: f32 = 20.0;

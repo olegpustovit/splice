@@ -1152,6 +1152,7 @@ struct BlockDecor {
     behind: bool,
     speed: Option<f64>,
     duration: Option<(i32, u32)>,
+    placement: Option<&'static str>,
     motion: bool,
 }
 
@@ -4587,6 +4588,12 @@ fn overlay_lane(
                         behind: matches!(data.kind, ItemKind::Media(overlay) if overlay.behind_presenter),
                         speed: None,
                         duration: None,
+                        placement: match data.kind {
+                            ItemKind::Media(overlay) => PLACEMENTS
+                                .iter()
+                                .find_map(|&(place, name)| (place == overlay.placement).then_some(name)),
+                            _ => None,
+                        },
                         motion: matches!(data.kind, ItemKind::Motion(_) | ItemKind::Zoom(_)),
                     },
                     item.fx.as_ref(),
@@ -5653,7 +5660,11 @@ fn block(
         } else {
             6.0
         },
-        if decor.motion { 14.0 } else { 6.0 },
+        if decor.motion || decor.fade_handles && width >= 34.0 {
+            14.0
+        } else {
+            6.0
+        },
     );
     let separate_header = narrow_caption
         || video
@@ -5661,6 +5672,7 @@ fn block(
         || fx.is_some_and(|badge| width >= insets.0 + badge.width() + insets.1)
         || decor.pinned
         || decor.behind
+        || decor.placement.is_some()
         || decor.fades != [0; 2];
     ui.stack(
         Node::DEFAULT
@@ -6275,18 +6287,111 @@ fn block_header(
     (leading, trailing): (f32, f32),
 ) {
     const BADGE_HEIGHT: f32 = 12.0;
-    let mut right = width - trailing;
-    if let Some(fx) = fx.filter(|fx| right - fx.width() >= leading) {
-        let x = right - fx.width();
-        paint_fx_badge(ui, owner, fx, (x, (height - FX_BADGE_HEIGHT) * 0.5), ink);
-        right = x - 3.0;
+    const GAP: f32 = 6.0;
+    const PIN: f32 = 25.0;
+    const BEHIND: f32 = 44.0;
+    let mut available = width - leading - trailing;
+    let mut reserve = |width: f32| {
+        if width > available {
+            return false;
+        }
+        available -= width + GAP;
+        true
+    };
+    let fx = fx.filter(|badge| reserve(badge.width()));
+    let pinned = decor.pinned && reserve(PIN);
+    let behind = decor.behind && reserve(BEHIND);
+    let speed = decor
+        .speed
+        .map(|speed| {
+            let hundredths = (speed * 100.0).round() as u64;
+            let whole = hundredths / 100;
+            let fraction = hundredths % 100;
+            let digits = whole.checked_ilog10().unwrap_or(0) as f32 + 1.0;
+            let decimals = match fraction {
+                0 => 0.0,
+                n if n % 10 == 0 => 13.0,
+                _ => 19.0,
+            };
+            (whole, fraction, 7.0 * (digits + 1.0) + 6.0 + decimals)
+        })
+        .filter(|&(_, _, width)| reserve(width));
+
+    let mut x = leading;
+    if available >= 10.0 {
+        let duration = decor.duration.and_then(|(frames, fps)| {
+            let centiseconds =
+                (u64::try_from(frames).ok()? * 100 + u64::from(fps) / 2) / u64::from(fps.max(1));
+            Some((centiseconds / 100, centiseconds % 100))
+        });
+        let detail_style = CAPTION.pad(0.0);
+        let detail_width = match (duration, decor.placement) {
+            (Some((seconds, _)), _) => {
+                let digits = seconds.checked_ilog10().unwrap_or(0) + 1;
+                f32::from((digits + 4) as u16) * 6.5
+            }
+            (None, Some(placement)) => ui
+                .text_service()
+                .measure(placement, detail_style, None)
+                .map_or(0.0, |metrics| metrics.width.ceil()),
+            (None, None) => 0.0,
+        };
+        let detail_width = if available >= detail_width + 26.0 {
+            detail_width
+        } else {
+            0.0
+        };
+        let name_style = SMALL.pad(0.0);
+        let budget = available
+            - if detail_width > 0.0 {
+                detail_width + GAP
+            } else {
+                0.0
+            };
+        let name_width = ui
+            .text_service()
+            .measure(name, name_style, None)
+            .map_or(budget, |metrics| metrics.width.ceil().min(budget));
+        ui.row(
+            Node::DEFAULT
+                .at(leading, 0.0)
+                .w_px(available)
+                .h_px(height)
+                .gap(GAP)
+                .align(Align::Center),
+            |ui| {
+                let label = ui.label(
+                    name,
+                    name_style.ellipsis().w_px(name_width).role(Role::Unknown),
+                );
+                ui.style(
+                    &label,
+                    &States::of(Look::NONE.text(ink)),
+                    pxui::ui::State::default(),
+                );
+                if detail_width > 0.0 {
+                    let style = detail_style.w_px(detail_width);
+                    let label = match duration {
+                        Some((secs, hundredths)) => {
+                            ui.label_fmt(format_args!("{secs}.{hundredths:02}s"), style)
+                        }
+                        None => ui.label(decor.placement.unwrap_or_default(), style),
+                    };
+                    let quiet = Rgba::rgba(ink.r, ink.g, ink.b, 153);
+                    ui.style(
+                        &label,
+                        &States::of(Look::NONE.text(quiet)),
+                        pxui::ui::State::default(),
+                    );
+                }
+            },
+        );
+        x += name_width + GAP;
+        if detail_width > 0.0 {
+            x += detail_width + GAP;
+        }
     }
     let mut badge = |text: std::fmt::Arguments, width, background, foreground| {
-        let x = right - width;
-        if x < leading {
-            return;
-        }
-        right = x - 3.0;
         ui.row(
             plate(background)
                 .at(x, (height - BADGE_HEIGHT) * 0.5)
@@ -6303,88 +6408,36 @@ fn block_header(
                 );
             },
         );
+        x += width + GAP;
     };
-    if decor.pinned {
-        badge(format_args!("PIN"), 25.0, WARN, SURFACE);
-    }
-    if decor.behind {
-        badge(format_args!("BEHIND"), 44.0, blend(tone, 22), ink);
-    }
-    if let Some(speed) = decor.speed {
-        let hundredths = (speed * 100.0).round() as u64;
-        let whole = hundredths / 100;
-        let fraction = hundredths % 100;
-        let digits = whole.checked_ilog10().unwrap_or(0) as f32 + 1.0;
-        let unit_width = 7.0 * (digits + 1.0) + 6.0;
+    if let Some((whole, fraction, width)) = speed {
         let background = blend(tone, 22);
         if fraction == 0 {
-            badge(format_args!("{whole}×"), unit_width, background, ink);
+            badge(format_args!("{whole}×"), width, background, ink);
         } else if fraction % 10 == 0 {
             badge(
                 format_args!("{whole}.{}×", fraction / 10),
-                unit_width + 13.0,
+                width,
                 background,
                 ink,
             );
         } else {
             badge(
                 format_args!("{whole}.{fraction:02}×"),
-                unit_width + 19.0,
+                width,
                 background,
                 ink,
             );
         }
     }
-    let width = right - leading;
-    if width >= 10.0 {
-        let detail = decor.duration.and_then(|(frames, fps)| {
-            let centiseconds =
-                (u64::try_from(frames).ok()? * 100 + u64::from(fps) / 2) / u64::from(fps.max(1));
-            let seconds = centiseconds / 100;
-            let digits = seconds.checked_ilog10().unwrap_or(0) + 1;
-            let w = f32::from((digits + 4) as u16) * 6.5;
-            (width >= w + 26.0).then_some((seconds, centiseconds % 100, w))
-        });
-        let name_width = detail.map_or(width, |(_, _, detail_width)| {
-            let budget = width - detail_width - 6.0;
-            let glyphs = name.chars().take((budget / 7.0).ceil() as usize).count();
-            (glyphs as f32 * 7.0).min(budget)
-        });
-        ui.row(
-            Node::DEFAULT
-                .at(leading, 0.0)
-                .w_px(width)
-                .h_px(height)
-                .gap(6.0)
-                .align(Align::Center),
-            |ui| {
-                let label = ui.label(
-                    name,
-                    SMALL
-                        .pad(0.0)
-                        .ellipsis()
-                        .w_px(name_width)
-                        .role(Role::Unknown),
-                );
-                ui.style(
-                    &label,
-                    &States::of(Look::NONE.text(ink)),
-                    pxui::ui::State::default(),
-                );
-                if let Some((secs, hundredths, w)) = detail {
-                    let label = ui.label_fmt(
-                        format_args!("{secs}.{hundredths:02}s"),
-                        CAPTION.pad(0.0).w_px(w),
-                    );
-                    let quiet = Rgba::rgba(ink.r, ink.g, ink.b, 153);
-                    ui.style(
-                        &label,
-                        &States::of(Look::NONE.text(quiet)),
-                        pxui::ui::State::default(),
-                    );
-                }
-            },
-        );
+    if pinned {
+        badge(format_args!("PIN"), PIN, WARN, SURFACE);
+    }
+    if behind {
+        badge(format_args!("BEHIND"), BEHIND, blend(tone, 22), ink);
+    }
+    if let Some(fx) = fx {
+        paint_fx_badge(ui, owner, fx, (x, (height - FX_BADGE_HEIGHT) * 0.5), ink);
     }
 }
 
@@ -6657,11 +6710,9 @@ mod tests {
     fn camera_only_take_paints_spine_overlay_and_camera_strip_without_warm_allocations() {
         use pxui::{FrameIn, UiDesc, draw::kind};
         use splice_core::history::{Store, WriteOptions};
-        use std::{fs, path::Path};
+        use std::fs;
 
-        let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/sample.splice");
-        let (_, sample) = splice_core::package::Package::open(&fixture).unwrap();
+        let sample = crate::editor_views::load_sample().unwrap();
         let media: MediaId = "med_webcam".parse().unwrap();
         let mut project = Project::default();
         project.media.push(
@@ -6762,9 +6813,7 @@ mod tests {
 
     #[test]
     fn edit_points_use_overlay_ends_and_fresh_markers_without_allocating() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/projects/sample.splice");
-        let (_, mut project) = splice_core::package::Package::open(&path).unwrap();
+        let mut project = crate::editor_views::load_sample().unwrap();
         let mut cache = Cache::default();
         let check = |cache: &Cache, project: &Project| {
             assert_eq!(cache.edit_point(project, 192, 660, false), Some(180));
@@ -10502,7 +10551,7 @@ mod tests {
                 dragging: false,
                 history: (false, false),
                 state: State {
-                    scale: 2.0,
+                    scale: 2.25,
                     ..State::default()
                 },
             };
@@ -10562,13 +10611,20 @@ mod tests {
             ui.frame(&input, build).unwrap();
             let take = testing::find(&ui, Role::Button, "Take").unwrap();
             let file = testing::find(&ui, Role::Button, "File").unwrap();
-            let take_fx = [
-                take.x + take.w - 33.0,
-                take.y + 3.0,
-                take.x + take.w - 7.0,
-                take.y + 15.0,
-            ];
-            let file_fx = Rect::new(file.x + file.w - 27.0, file.y + 3.0, 20.0, 12.0);
+            let mut after_duration = |rect: Rect, name| {
+                let name_width = ui
+                    .text_service()
+                    .measure(name, SMALL.pad(0.0), None)
+                    .unwrap()
+                    .width
+                    .ceil();
+                (rect.x + 17.0 + name_width + 6.0 + 32.5 + 6.0).floor()
+            };
+            let take_fx_x = after_duration(take, "Take");
+            let take_fx = [take_fx_x, take.y + 3.0, take_fx_x + 26.0, take.y + 15.0];
+            let file_fx = Rect::new(after_duration(file, "File"), file.y + 3.0, 20.0, 12.0);
+            assert!(take_fx[2] < take.x + take.w - 9.0 - FADE_HANDLE * 0.5);
+            assert!(file_fx.x + file_fx.w < file.x + file.w - 9.0 - FADE_HANDLE * 0.5);
             let shapes = || ui.layers().flat_map(|layer| layer.instances);
             assert!(
                 shapes().any(|shape| shape.rect == take_fx && shape.color == [191, 224, 234, 255]),

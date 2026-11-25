@@ -116,6 +116,14 @@ impl GpuProgram {
         let mut texts = Vec::with_capacity(text.len());
         for cue in text {
             let [x, y, w, h] = cue.layer.bounds;
+            // Keystroke chips are the only cues with no graphics item.
+            if cue.item.is_none() {
+                let (rect, pixels) = apple_sys::composition::key_chip_rgba(&cue.layer)?;
+                let [px, py, pw, ph] = rect.map(f64::from);
+                let texture = upload(&pixels, [rect[2], rect[3]], "Splice keystroke chip")?;
+                texts.push((texture, cue.clone(), [px - x, py - y, pw, ph]));
+                continue;
+            }
             if let Some(layout) = cue
                 .layer
                 .style

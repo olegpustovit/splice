@@ -294,6 +294,11 @@ uint8_t *splice_text_rgba(const char *text, uint32_t width, uint32_t height, dou
                           const SpliceCaptionSpan *spans, size_t span_count, bool center_lines,
                           const double *caption_box, double font_scale, bool clean, uint32_t rect[4], char **error);
 
+// A prepared keystroke chip. Geometry is the x, y, max width, height and font size.
+// The returned rect gives the pixel-aligned bounds in canvas coordinates.
+uint8_t *splice_key_chip_rgba(const char *text, const double geometry[5], uint32_t align,
+                              uint32_t ink, uint32_t backing, uint32_t rect[4], char **error);
+
 // Default Program title to straight RGBA8. Geometry is the plate x, y, width, height, font size.
 uint8_t *splice_program_title_rgba(const char *text, uint32_t width, uint32_t height,
                                   const double geometry[5], const uint8_t *face, size_t face_size,

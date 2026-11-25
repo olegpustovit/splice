@@ -385,6 +385,15 @@ unsafe extern "C" {
         error: *mut *mut c_char,
     ) -> bool;
     fn splice_av_finish(composition: *mut c_void, error: *mut *mut c_char) -> bool;
+    fn splice_key_chip_rgba(
+        text: *const c_char,
+        geometry: *const f64,
+        align: u32,
+        ink: u32,
+        backing: u32,
+        rect: *mut u32,
+        error: *mut *mut c_char,
+    ) -> *mut u8;
     fn splice_program_title_rgba(
         text: *const c_char,
         width: u32,
@@ -986,6 +995,36 @@ fn raster_text(
     }
     let length = rect[2] as usize * rect[3] as usize * 4;
     // SAFETY: the buffer holds `length` initialized bytes until freed below.
+    let bytes = unsafe { std::slice::from_raw_parts(pixels, length) }.to_vec();
+    // SAFETY: the allocation came from calloc and is not used again.
+    unsafe { free(pixels.cast()) };
+    Ok((rect, bytes))
+}
+
+/// Rasterizes one prepared chip in Menlo and returns its canvas rect and straight RGBA8 pixels.
+pub fn key_chip_rgba(layer: &TextLayer) -> Result<([u32; 4], Vec<u8>), Error> {
+    let text = CString::new(layer.text.replace('\0', "\u{FFFD}")).expect("NUL replaced");
+    let [x, y, width, height] = layer.bounds;
+    let geometry = [x, y, width, height, layer.font];
+    let mut rect = [0; 4];
+    let mut error = ptr::null_mut();
+    // SAFETY: the text, geometry, and result slots live for the call.
+    let pixels = unsafe {
+        splice_key_chip_rgba(
+            text.as_ptr(),
+            geometry.as_ptr(),
+            layer.style.align,
+            layer.color,
+            layer.style.box_color,
+            rect.as_mut_ptr(),
+            &mut error,
+        )
+    };
+    if pixels.is_null() {
+        return Err(diagnostic(error));
+    }
+    let length = rect[2] as usize * rect[3] as usize * 4;
+    // SAFETY: native returns length initialized bytes owned by the caller.
     let bytes = unsafe { std::slice::from_raw_parts(pixels, length) }.to_vec();
     // SAFETY: the allocation came from calloc and is not used again.
     unsafe { free(pixels.cast()) };

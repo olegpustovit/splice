@@ -811,6 +811,23 @@ mod tests {
         meter.warm(&mut || {
             ui.frame(&input, &mut paint).unwrap();
         });
+        click(&mut ui, Role::TextField, "Word emoji", &mut paint);
+        assert!(ui.text_input_focused());
+        let mut now = ui.now();
+        for _ in 0..24 {
+            now += 1.0 / 60.0;
+            ui.frame(&input.time(now), &mut paint).unwrap();
+        }
+        mem_sys::local_reset();
+        for _ in 0..60 {
+            now += 1.0 / 60.0;
+            ui.frame(&input.time(now), &mut paint).unwrap();
+            assert!(ui.text_input_focused());
+        }
+        assert_eq!(mem_sys::local_alloc_count(), 0, "focused Word emoji frames");
+        assert!(op.take().is_none());
+        testing::key(&mut ui, KeyCode::Escape, &mut paint);
+        settle(&mut ui, &mut paint);
         replace_field(&mut ui, "Word emoji", "🧪🧪🧪🧪a", &mut paint);
         assert!(op.take().is_none());
         assert_eq!(word_edit().unwrap().emoji.as_deref(), Some("🧪🧪🧪🧪"));

@@ -13,6 +13,8 @@ mod engineering;
 mod plan;
 mod registry;
 pub(super) use registry::Parity;
+#[cfg(test)]
+pub(super) use registry::load_sample;
 
 const PANEL: Rgba = Rgba::rgb(15, 15, 16);
 const BG: Rgba = Rgba::rgb(9, 9, 10);

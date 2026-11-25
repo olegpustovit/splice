@@ -520,20 +520,7 @@ impl Lowering {
         };
         let fps = Self::media(project, media)?.probe.fps;
         let hidden = evaluator.hidden_keys(clip).unwrap_or(&[]).to_vec();
-        let [width, height] = project.size.map(f64::from);
-        let chip_h = height * 0.045 * style.scale;
-        let chip_w = width * 0.6;
-        let [column, row] = style.position.cell();
-        let x = match column {
-            0 => width * 0.06,
-            1 => (width - chip_w) / 2.0,
-            _ => width * 0.94 - chip_w,
-        };
-        let y = match row {
-            0 => height * 0.08,
-            1 => (height - chip_h) / 2.0,
-            _ => height * 0.86 - chip_h,
-        };
+        let (bounds, font, align) = style.chip_layout(project.size);
         let frame =
             |t: f64| (f64::from(span.start) + (t * fps - span.source) / span.step).round() as Frame;
         // Keys closer than this join the chip still showing.
@@ -577,14 +564,16 @@ impl Lowering {
                     None,
                     TextLayer {
                         text,
-                        bounds: [x, y, width * 0.6, chip_h],
-                        font: chip_h * 0.62,
+                        bounds,
+                        font,
                         opacity: [1.0; 2],
-                        color: 0xffffff,
+                        color: 0x080808,
                         style: apple_sys::composition::TextStyle {
+                            weight: 0,
                             boxed: 2,
-                            box_color: 0x1c1c1e,
-                            align: u32::from(column),
+                            box_color: 0xe5dcec,
+                            align,
+                            wrap: false,
                             ..Default::default()
                         },
                         visible: None,

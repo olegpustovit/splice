@@ -357,7 +357,7 @@ fn temporary_path(name: &str) -> PathBuf {
     ))
 }
 
-pub(super) fn load_sample() -> Result<Project, String> {
+pub(crate) fn load_sample() -> Result<Project, String> {
     let path = temporary_path("sample");
     fs::create_dir(&path).map_err(|error| error.to_string())?;
     let loaded = (|| -> Result<Project, Box<dyn std::error::Error>> {

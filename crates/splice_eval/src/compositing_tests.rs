@@ -19,6 +19,68 @@ fn frame(project: &Project, at: Frame) -> FramePlan {
     plan
 }
 
+#[test]
+fn key_chip_layout_tracks_short_side_and_keeps_all_nine_positions() {
+    let project = applied(
+        r#"[{"cmd":"keys.set","clip":"clp_take","show":"all","position":"bottom-left","hold":0.7,"size":1}]"#,
+    );
+    let plan = frame(&project, 242);
+    let mut style = plan
+        .layers
+        .iter()
+        .find_map(|layer| match *layer {
+            Layer::Keystrokes { style, .. } => Some(style),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(style.hold, 0.7);
+    assert_eq!(style.position, KeyPosition::BottomLeft);
+    let close = |a: f64, b: f64| assert!((a - b).abs() < 1e-9, "{a} != {b}");
+
+    let aspects = [
+        [1080, 1920],
+        [1080, 1350],
+        [1080, 1080],
+        [1440, 1080],
+        [1920, 1080],
+        [1728, 1080],
+        [1620, 1080],
+    ];
+    for canvas in aspects {
+        let [width, height] = canvas.map(f64::from);
+        for (index, &(_, position)) in KEY_POSITIONS.iter().enumerate() {
+            style.position = position;
+            let ([x, y, w, h], font, align) = style.chip_layout(canvas);
+            close(font, 48.6);
+            close(h, 92.34);
+            close(w, width * 0.6);
+            assert_eq!(align, (index % 3) as u32);
+            match align {
+                0 => close(x, width * 0.06),
+                1 => close(x + w / 2.0, width / 2.0),
+                _ => close(x + w, width * 0.94),
+            }
+            match index / 3 {
+                0 => close(y, height * 0.06),
+                1 => close(y + h / 2.0, height / 2.0),
+                _ => close(y + h, height * 0.93),
+            }
+        }
+    }
+    splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset).warm(
+        &mut || {
+            for _ in 0..100 {
+                for canvas in aspects {
+                    for (_, position) in KEY_POSITIONS {
+                        let style = Keys { position, ..style };
+                        std::hint::black_box(style.chip_layout(canvas));
+                    }
+                }
+            }
+        },
+    );
+}
+
 /// Bounds, radius, shadow, opacity and mirror of the camera bubble.
 fn bubble(plan: &FramePlan) -> (Rect, f64, f64, f64, bool) {
     plan.layers

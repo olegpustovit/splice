@@ -480,14 +480,14 @@ enum MediaGlyph {
     Shapes,
 }
 
-fn media_chrome(file: &Media) -> (&str, &'static str, MediaGlyph) {
+fn catalog_media(file: &Media) -> Option<(&'static str, &'static str, MediaGlyph)> {
     use MediaGlyph::*;
     if let Some(sample) = Sample::identify(file) {
         let glyph = match sample {
             Sample::Screen => Screen,
             Sample::Webcam => Webcam,
         };
-        return (sample.title(), "sync take", glyph);
+        return Some((sample.title(), "sync take", glyph));
     }
     for (id, kind, name, label, glyph) in [
         (
@@ -528,8 +528,16 @@ fn media_chrome(file: &Media) -> (&str, &'static str, MediaGlyph) {
         ("med_logo", MediaKind::Image, "Logo bug", "image", Image),
     ] {
         if file.kind == kind && id.parse().ok() == Some(file.id) {
-            return (name, label, glyph);
+            return Some((name, label, glyph));
         }
+    }
+    None
+}
+
+fn media_chrome(file: &Media) -> (&str, &'static str, MediaGlyph) {
+    use MediaGlyph::*;
+    if let Some(chrome) = catalog_media(file) {
+        return chrome;
     }
     let (label, glyph) = match file.kind {
         MediaKind::Video => ("local video", Film),
@@ -646,8 +654,8 @@ fn file_name(file: &Media) -> &str {
 }
 
 pub(super) fn media_title(file: &Media) -> Option<&str> {
-    Sample::identify(file)
-        .map(Sample::title)
+    catalog_media(file)
+        .map(|(name, ..)| name)
         .or_else(|| Path::new(&file.path).file_stem()?.to_str())
 }
 
@@ -796,7 +804,19 @@ mod tests {
     fn media_drawer_uses_the_reference_labels_columns_and_responsive_footer() {
         let bundle =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/sample.splice");
-        let (_, project) = splice_core::package::Package::open(&bundle).unwrap();
+        let project = crate::editor_views::load_sample().unwrap();
+        for (id, name) in [
+            ("med_opener", "Opening motion"),
+            ("med_screen", "Screen take 01"),
+            ("med_webcam", "Webcam take 01"),
+            ("med_endcard", "End card"),
+            ("med_broll", "Desk b-roll"),
+            ("med_logo", "Logo bug"),
+        ] {
+            let id = id.parse().unwrap();
+            let entry = project.media.iter().find(|entry| entry.id == id).unwrap();
+            assert_eq!(media_title(entry), Some(name));
+        }
         mem_sys::set_peer(pxui::library_counter);
         for (width, left, extent) in [(960.0, 8.0, 300.0), (480.0, 12.0, 456.0)] {
             let mut sources = MediaSources::default();
@@ -1422,7 +1442,7 @@ mod tests {
         };
         ready(&mut ui, store.project());
         let from = find(&ui, "Window");
-        let screen = find(&ui, "screen");
+        let screen = find(&ui, "Screen take 01");
         let watermark = find(&ui, "Watermark");
         let overlay_lane = find(&ui, "Overlay 1");
         let captions = find(&ui, "Captions");
