@@ -197,6 +197,38 @@ fn shortcut_help_lists_effective_keymap_bindings_without_allocating() {
     );
 }
 
+#[test]
+fn keymap_rejects_core_commands_without_a_window_route() {
+    let path = std::env::temp_dir().join(format!("splice-unrouted-keymap-{}", std::process::id()));
+    fs::write(&path, "F5 = item.split\nBackspace = lane.rename\n").unwrap();
+    let mut responders = Responders::new(1);
+    responders.responds(WINDOW, 0, &IDS);
+    assert!(matches!(
+        load_keymap(&path, &mut responders),
+        Err(KeymapError::UnknownCommand { line: 2 })
+    ));
+    fs::remove_file(path).unwrap();
+    assert_eq!(
+        responders
+            .resolve(
+                WINDOW,
+                Shortcut::new(Key::Backspace, Modifiers::NONE),
+                &VIEW
+            )
+            .unwrap()
+            .id,
+        DELETE
+    );
+    assert!(
+        responders
+            .resolve(
+                WINDOW,
+                Shortcut::new(Key::Function(5), Modifiers::NONE),
+                &VIEW
+            )
+            .is_none()
+    );
+}
 fn shortcut_project() -> Project {
     use splice_model::Clip;
     let mut project = Project {

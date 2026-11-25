@@ -80,6 +80,9 @@ pub(super) const SELECTION_SHORTCUTS: [CommandId; 12] = [
     ZOOM_TIMELINE_OUT,
 ];
 
+mod shortcuts;
+pub(super) use shortcuts::{GROUPS as SHORTCUT_GROUPS, ShortcutRow};
+
 const WINDOW: u64 = 1;
 const CATALOG: [(Command, &str); 50] = [
     binding(
@@ -574,6 +577,7 @@ pub(super) struct BindingDescription {
 pub(super) struct Keys {
     responders: Responders,
     bindings: Vec<BindingDescription>,
+    shortcuts: Vec<ShortcutRow>,
     modifiers: Modifiers,
     held_play_keys: Vec<HostKey>,
 }
@@ -590,8 +594,10 @@ impl Keys {
                 Err(error) => eprintln!("splice: {}: {error}", path.display()),
             }
         }
+        let bindings = describe_bindings(&responders, &custom);
         Self {
-            bindings: describe_bindings(&responders, &custom),
+            shortcuts: shortcuts::describe(&bindings),
+            bindings,
             responders,
             modifiers: Modifiers::NONE,
             held_play_keys: Vec::with_capacity(4),
@@ -600,6 +606,10 @@ impl Keys {
 
     pub(super) fn bindings(&self) -> &[BindingDescription] {
         &self.bindings
+    }
+
+    pub(super) fn shortcuts(&self) -> &[ShortcutRow] {
+        &self.shortcuts
     }
 
     pub(super) fn play_button(&self) -> Invoked {
@@ -652,20 +662,7 @@ impl Keys {
 
 fn load_keymap(path: &Path, responders: &mut Responders) -> Result<String, KeymapError> {
     let text = fs::read_to_string(path).map_err(KeymapError::Io)?;
-    let mut table = Vec::from(VIEW);
-    for row in splice_core::commands::COMMANDS {
-        if VIEW.iter().any(|command| command.name == row.id) {
-            continue;
-        }
-        table.push(Command {
-            id: CommandId(table.len() as u32),
-            name: row.id,
-            title: row.title,
-            keys: &[],
-            group: row.group,
-        });
-    }
-    responders.set_keymap(Keymap::parse(&text, &table)?);
+    responders.set_keymap(Keymap::parse(&text, &VIEW)?);
     Ok(text)
 }
 

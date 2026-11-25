@@ -1,45 +1,66 @@
 use super::super::{Selection, paint_spec, tests::paint_spec_titlebar};
 use super::*;
+use crate::commands::BindingDescription;
 use pxui::{Event, FrameIn, geom::Rect, testing};
 use splice_testkit::alloc::Meter;
 
 #[test]
-fn keymap_draws_one_keycap_per_chord() {
-    let mut ui = crate::viewer_ui().unwrap();
-    ui.set_a11y(true);
-    let bindings = [
-        BindingDescription {
-            id: commands::DELETE,
-            group: "Edit",
-            title: "Delete",
-            keys: "⌫ · ⌦".into(),
-        },
-        BindingDescription {
-            id: commands::SHORTCUTS,
-            group: "View",
-            title: "Keyboard shortcuts",
-            keys: "?".into(),
-        },
-    ];
-    let frame = FrameIn::new(480.0, 140.0);
-    ui.frame(&frame, &mut |ui| keymap(ui, &bindings, 480.0))
-        .unwrap();
-    let label = testing::find(&ui, Role::Cell, "⌫ · ⌦").unwrap();
-    let fills = ui
-        .layers()
-        .flat_map(|layer| layer.instances)
-        .filter(|instance| {
-            instance.color == [SURFACE.r, SURFACE.g, SURFACE.b, SURFACE.a]
-                && (instance.rect[3] - instance.rect[1] - 16.0).abs() < 0.1
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(fills.len(), 3);
-    assert!((fills[0].rect[1] - label.y).abs() < 0.1);
-    assert_eq!(fills[0].rect[1], fills[1].rect[1]);
-    assert!((fills[1].rect[0] - fills[0].rect[2] - 3.0).abs() < 0.1);
-    assert!(fills[2].rect[1] > fills[1].rect[1]);
+fn keymap_groups_live_chords_into_one_keycap_per_authored_row() {
+    let path = std::env::temp_dir().join(format!("splice-spec-keycap-{}.keys", std::process::id()));
+    std::fs::write(&path, "F5 = item.split\nBackspace = history.undo\n").unwrap();
+    let custom = commands::Keys::new(Some(&path));
+    std::fs::remove_file(path).unwrap();
+    let defaults = commands::Keys::new(None);
+    mem_sys::set_peer(pxui::library_counter);
+    for (viewport, width, key_width) in [
+        (960.0, 676.0, 104.219),
+        (800.0, 768.0, 115.016),
+        (480.0, 448.0, 77.453),
+    ] {
+        for (keys, split, delete, undo) in [
+            (&defaults, "C", "⌫ · ⇧⌫", "⌘Z ⇧⌘Z"),
+            (&custom, "C · F5", "⌦ · ⇧⌫", "⌘Z · ⌫ ⇧⌘Z"),
+        ] {
+            let mut ui = crate::viewer_ui().unwrap();
+            ui.set_a11y(true);
+            let frame = FrameIn::new(viewport, 1600.0);
+            let mut build = |ui: &mut Ui| {
+                ui.column(Node::column().w_px(width), |ui| {
+                    keymap(ui, keys.shortcuts(), width)
+                });
+            };
+            for _ in 0..4 {
+                ui.frame(&frame, &mut build).unwrap();
+            }
+            let keys_at = testing::find(&ui, Role::ColumnHeader, "KEYS").unwrap();
+            let action_at = testing::find(&ui, Role::ColumnHeader, "ACTION").unwrap();
+            let command_at = testing::find(&ui, Role::ColumnHeader, "COMMAND").unwrap();
+            assert!((action_at.x - keys_at.x - key_width).abs() < 0.05);
+            assert!((command_at.x - keys_at.x - width + 130.938).abs() < 0.05);
+            let cells: Vec<_> = ui
+                .a11y_nodes()
+                .iter()
+                .filter(|node| node.is_role(Role::Cell))
+                .map(|node| ui.a11y_name_of(node))
+                .collect();
+            assert_eq!(cells.len(), 34 * 3);
+            let names: Vec<_> = cells.chunks_exact(3).map(|row| row[0]).collect();
+            assert_eq!(names[10], split);
+            assert_eq!(names[12], delete);
+            assert_eq!(names[18], undo);
+            assert_eq!(names[29..], ["⇧C", "F", "⌘ scroll · pinch", "?", "Esc"]);
+            let keycaps = ui
+                .layers()
+                .flat_map(|layer| layer.instances)
+                .filter(|instance| instance.color == [SURFACE.r, SURFACE.g, SURFACE.b, SURFACE.a])
+                .count();
+            assert_eq!(keycaps, 34);
+            Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset).warm(&mut || {
+                ui.frame(&frame, &mut build).unwrap();
+            });
+        }
+    }
 }
-
 #[test]
 fn fixture_operations_and_live_catalog_checks() {
     let missing = BindingDescription {
@@ -318,6 +339,7 @@ fn verify(width: f32) {
     let examples = report.examples.len();
     assert_eq!(examples, built());
     assert_eq!(passed, examples);
+    assert_eq!(report.keymap, doc.keys.bindings().len());
     assert!(report.problems.is_empty());
     assert!(doc.find(Role::Label, "PASS").y > button.y);
     assert!(testing::find(&doc.ui, Role::Table, "Parity problems").is_none());
@@ -353,7 +375,7 @@ impl Document {
                     next = paint_spec(
                         ui,
                         self.selection,
-                        (self.keys.bindings(), &self.parity),
+                        (self.keys.shortcuts(), &self.parity),
                         &mut paint_spec_titlebar,
                     )
                     .or(next);

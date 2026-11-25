@@ -1,4 +1,4 @@
-use super::commands::{self, BindingDescription};
+use super::commands::{SHORTCUT_GROUPS, ShortcutRow};
 use pxui::{
     Button, Label, Node, Overlay, TextAlign, Ui,
     geom::Rgba,
@@ -6,7 +6,6 @@ use pxui::{
 };
 
 const TITLE: &str = "Keyboard shortcuts";
-const GROUPS: [&str; 6] = ["PLAYBACK", "TOOLS", "EDIT", "LANES", "ADD", "VIEW"];
 const HEADER: f32 = 46.0;
 const PAD: f32 = 12.0;
 const COLUMN_GAP: f32 = 20.0;
@@ -26,11 +25,7 @@ const BODY: Label = Label::BODY.size(11.0);
 const CHORD: Label = Label::MONO.size(11.0);
 const TAG: Label = Label::MONO.size(10.0);
 
-pub(super) fn paint(
-    ui: &mut Ui,
-    bindings: &[BindingDescription],
-    [width, height]: [f32; 2],
-) -> bool {
+pub(super) fn paint(ui: &mut Ui, shortcuts: &[ShortcutRow], [width, height]: [f32; 2]) -> bool {
     let width = (width - 32.0).clamp(0.0, 720.0);
     let height = (height * 0.8).max(0.0);
     // PXUI adds its 1pt modal stroke around the body, plus our header rule.
@@ -43,14 +38,11 @@ pub(super) fn paint(
     let columns = (((inner + COLUMN_GAP) / (MIN_COLUMN + COLUMN_GAP)) as usize).clamp(1, 3);
     let column_width = (inner - (columns - 1) as f32 * COLUMN_GAP) / columns as f32;
 
-    let mut groups = [0; GROUPS.len()];
+    let mut groups = SHORTCUT_GROUPS;
     let mut count = 0;
-    for group in 0..GROUPS.len() {
-        if bindings
-            .iter()
-            .any(|row| !row.keys.is_empty() && group_of(row) == group)
-        {
-            groups[count] = group;
+    for (group, name) in SHORTCUT_GROUPS {
+        if shortcuts.iter().any(|row| row.group == group) {
+            groups[count] = (group, name);
             count += 1;
         }
     }
@@ -106,33 +98,25 @@ pub(super) fn paint(
                                             .gap(COLUMN_GAP)
                                             .align(Align::Start),
                                         |ui| {
-                                            for &group in band {
+                                            for &(group, name) in band {
                                                 ui.id(group as u64, |ui| {
                                                     ui.column(
                                                         Node::column().w_px(column_width),
                                                         |ui| {
                                                             text(
                                                                 ui,
-                                                                GROUPS[group],
+                                                                name,
                                                                 TAG.h_px(18.0).role(Role::Heading),
                                                                 QUIET,
                                                             );
-                                                            for binding in
-                                                                bindings.iter().filter(|row| {
-                                                                    !row.keys.is_empty()
-                                                                        && group_of(row) == group
-                                                                })
+                                                            for (index, shortcut) in
+                                                                shortcuts.iter().enumerate().filter(
+                                                                    |(_, row)| row.group == group,
+                                                                )
                                                             {
-                                                                ui.id(
-                                                                    u64::from(binding.id.0),
-                                                                    |ui| {
-                                                                        row(
-                                                                            ui,
-                                                                            binding,
-                                                                            column_width,
-                                                                        )
-                                                                    },
-                                                                );
+                                                                ui.id(index as u64, |ui| {
+                                                                    row(ui, shortcut, column_width)
+                                                                });
                                                             }
                                                         },
                                                     );
@@ -151,63 +135,17 @@ pub(super) fn paint(
     closed || !modal.open
 }
 
-fn group_of(binding: &BindingDescription) -> usize {
-    match binding.group {
-        "Transport" => 0,
-        "Tools" => 1,
-        "Editor" if binding.id == commands::PALETTE => 1,
-        "Edit" | "History" => 2,
-        "Lanes" => 3,
-        "Add" => 4,
-        _ => 5,
-    }
-}
-
-fn route(binding: &BindingDescription) -> &'static str {
-    let Some(command) = commands::catalog().get(binding.id.0 as usize) else {
-        return "";
-    };
-    match command.name {
-        "transport.stepBack"
-        | "transport.step"
-        | "transport.stepBackSecond"
-        | "transport.stepSecond"
-        | "transport.start"
-        | "transport.end"
-        | "transport.previousEdit"
-        | "transport.nextEdit"
-        | "view.zoomIn"
-        | "view.zoomOut"
-        | "timeline.zoomIn"
-        | "timeline.zoomOut"
-        | "timeline.zoomSelection"
-        | "timeline.selectLaneItems"
-        | "timeline.escape"
-        | "view.fit" => "ui.show",
-        "timeline.nudgeBack"
-        | "timeline.nudgeForward"
-        | "timeline.nudgeBackTen"
-        | "timeline.nudgeForwardTen" => "item.move",
-        "item.laneUp" | "item.laneDown" => "item.lane",
-        "item.trimEnd" => "item.trim",
-        "item.deleteLeavingGap" => "item.delete",
-        "ui.cut" | "ui.copy" | "ui.paste" => "ui.clipboard",
-        "history.undoSession" => "history.undo",
-        name => name,
-    }
-}
-
-fn row(ui: &mut Ui, binding: &BindingDescription, width: f32) {
+fn row(ui: &mut Ui, shortcut: &ShortcutRow, width: f32) {
     let measure = |ui: &mut Ui, label: &str, style: Label| {
         ui.text_service()
             .measure(label, style, None)
             .map_or(width, |m| m.width.ceil())
     };
-    let chord_width = measure(ui, &binding.keys, CHORD).min(width * 0.45);
+    let chord_width = measure(ui, &shortcut.keys, CHORD).min(width * 0.45);
     let gap = 8.0_f32.min(width * 0.1);
     let left = (width - chord_width - gap).max(0.0);
-    let title_width = measure(ui, binding.title, BODY);
-    let route = route(binding);
+    let title_width = measure(ui, shortcut.title, BODY);
+    let route = shortcut.command;
     let tag_width = measure(ui, route, TAG);
 
     ui.row(
@@ -217,22 +155,20 @@ fn row(ui: &mut Ui, binding: &BindingDescription, width: f32) {
             .pad_y(3.0)
             .align(Align::Start),
         |ui| {
-            if !route.is_empty() && title_width + 4.0 + tag_width <= left {
+            if title_width + 4.0 + tag_width <= left {
                 ui.row(Node::row().w_px(left).gap(4.0).align(Align::Center), |ui| {
-                    text(ui, binding.title, BODY.w_px(title_width), INK);
+                    text(ui, shortcut.title, BODY.w_px(title_width), INK);
                     text(ui, route, TAG.w_px(tag_width), TAG_INK);
                 });
             } else {
                 ui.column(Node::column().w_px(left), |ui| {
-                    text(ui, binding.title, BODY.w_px(left).wrap_glyph(), INK);
-                    if !route.is_empty() {
-                        text(ui, route, TAG.w_px(left).wrap_glyph(), TAG_INK);
-                    }
+                    text(ui, shortcut.title, BODY.w_px(left).wrap_glyph(), INK);
+                    text(ui, route, TAG.w_px(left).wrap_glyph(), TAG_INK);
                 });
             }
             text(
                 ui,
-                &binding.keys,
+                &shortcut.keys,
                 CHORD.w_px(chord_width).wrap_glyph().align(TextAlign::End),
                 MUTED,
             );
@@ -263,6 +199,7 @@ fn text(ui: &mut Ui, value: &str, style: Label, color: Rgba) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands;
     use pxui::{Event, FontData, FrameIn, KeyCode, Rect, UiDesc, testing};
 
     fn headless() -> Ui {
@@ -291,35 +228,17 @@ mod tests {
              Ctrl+Alt+Shift+Cmd+PageUp = transport.play\n\
              Ctrl+Alt+Shift+Cmd+F11 = transport.play\n\
              Ctrl+Alt+Shift+Cmd+F12 = transport.play\n\
-             Backspace = history.undo\n",
+             F5 = item.split\nBackspace = history.undo\n",
         )
         .unwrap();
         let keys = commands::Keys::new(Some(&path));
         std::fs::remove_file(path).unwrap();
-        let bindings = keys.bindings();
-        let play = bindings
+        let shortcuts = keys.shortcuts();
+        let play = shortcuts
             .iter()
-            .find(|row| row.id == commands::PLAY)
+            .find(|row| row.title == "Play / pause")
             .unwrap();
         assert!(play.keys.contains("PageDown") && play.keys.starts_with("Space"));
-        assert!(
-            bindings
-                .iter()
-                .find(|row| row.id == commands::DELETE)
-                .unwrap()
-                .keys
-                .len()
-                < 5
-        );
-        assert!(
-            bindings
-                .iter()
-                .find(|row| row.id == commands::UNDO)
-                .unwrap()
-                .keys
-                .len()
-                > 5
-        );
         mem_sys::set_peer(pxui::library_counter);
         for (width, sheet_width, columns) in [
             (960.0, 720.0, 3),
@@ -330,7 +249,7 @@ mod tests {
             let height = 940.0;
             let mut ui = headless();
             let input = FrameIn::new(width, height);
-            let mut build = |ui: &mut Ui| assert!(!paint(ui, bindings, [width, height]));
+            let mut build = |ui: &mut Ui| assert!(!paint(ui, shortcuts, [width, height]));
             for _ in 0..4 {
                 ui.frame(&input, &mut build).unwrap();
             }
@@ -357,19 +276,22 @@ mod tests {
                     assert!(edit.x > tools.x && (edit.y - tools.y).abs() < 1.0);
                 }
             }
-            for group in GROUPS {
+            for (_, group) in SHORTCUT_GROUPS {
                 assert_eq!(ui.a11y_nodes().iter().filter(|node|
                     node.is_role(Role::Heading) && ui.a11y_name_of(node) == group).count(), 1);
             }
             let title = bounds(&ui, Role::Label, play.title);
             let chord = bounds(&ui, Role::Label, &play.keys);
-            let tag = bounds(&ui, Role::Label, "transport.play");
+            let tag = bounds(&ui, Role::Label, "ui.play");
             assert!(
                 title.x + title.w <= chord.x && tag.x + tag.w <= chord.x,
                 "title {title:?}, tag {tag:?}, chord {chord:?}"
             );
             assert!(chord.x + chord.w <= dialog.x + dialog.w - 10.0);
             assert!(chord.h > 14.0, "{chord:?}");
+            bounds(&ui, Role::Label, "C · F5");
+            bounds(&ui, Role::Label, "⌦ · ⇧⌫");
+            bounds(&ui, Role::Label, "⌘Z · ⌫ ⇧⌘Z");
             splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
                 .warm(&mut || {
                     ui.frame(&input, &mut build).unwrap();
@@ -382,7 +304,7 @@ mod tests {
         let keys = commands::Keys::new(None);
         for action in [None, Some(KeyCode::Enter), Some(KeyCode::Escape)] {
             let mut closed = false;
-            let build = &mut |ui: &mut Ui| closed |= paint(ui, keys.bindings(), [320.0, 240.0]);
+            let build = &mut |ui: &mut Ui| closed |= paint(ui, keys.shortcuts(), [320.0, 240.0]);
             let mut ui = headless();
             for _ in 0..3 {
                 testing::frame(&mut ui, &[], build);

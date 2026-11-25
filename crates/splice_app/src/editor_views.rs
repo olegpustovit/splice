@@ -1,4 +1,4 @@
-use super::{commands::BindingDescription, editor_titlebar::View};
+use super::{commands::ShortcutRow, editor_titlebar::View};
 use pxui::{
     Button, Label, Node, Pressable, Role, Stroke, TextSpan, Ui,
     draw::flags::rect::{BOTTOM, LEFT},
@@ -116,9 +116,9 @@ fn paint(
     project: Option<&Project>,
     view: View,
     selection: Selection,
-    bindings: &[BindingDescription],
+    shortcuts: &[ShortcutRow],
 ) -> Option<Selection> {
-    paint_with_parity(ui, project, view, selection, bindings, &Parity::default())
+    paint_with_parity(ui, project, view, selection, shortcuts, &Parity::default())
 }
 
 pub(super) fn paint_with_parity(
@@ -126,7 +126,7 @@ pub(super) fn paint_with_parity(
     project: Option<&Project>,
     view: View,
     selection: Selection,
-    bindings: &[BindingDescription],
+    shortcuts: &[ShortcutRow],
     parity: &Parity,
 ) -> Option<Selection> {
     match view {
@@ -134,7 +134,7 @@ pub(super) fn paint_with_parity(
         View::Agent => {
             agent(ui, project, selection.tool).map(|tool| Selection { tool, ..selection })
         }
-        View::Spec => paint_spec(ui, selection, (bindings, parity), &mut |_| {}),
+        View::Spec => paint_spec(ui, selection, (shortcuts, parity), &mut |_| {}),
     }
 }
 
@@ -215,14 +215,14 @@ fn agent(ui: &mut Ui, project: Option<&Project>, selected: usize) -> Option<usiz
 }
 
 #[cfg(test)]
-fn spec(ui: &mut Ui, selection: Selection, bindings: &[BindingDescription]) -> Option<Selection> {
-    paint_spec(ui, selection, (bindings, &Parity::default()), &mut |_| {})
+fn spec(ui: &mut Ui, selection: Selection, shortcuts: &[ShortcutRow]) -> Option<Selection> {
+    paint_spec(ui, selection, (shortcuts, &Parity::default()), &mut |_| {})
 }
 
 pub(super) fn paint_spec(
     ui: &mut Ui,
     selection: Selection,
-    context: (&[BindingDescription], &Parity),
+    context: (&[ShortcutRow], &Parity),
     titlebar: &mut dyn FnMut(&mut Ui),
 ) -> Option<Selection> {
     let selected = selection.section;
@@ -337,7 +337,7 @@ fn compact_rail_travel(ui: &mut Ui, rail: i64) -> f32 {
 
 fn spec_document(
     ui: &mut Ui,
-    (bindings, parity): (&[BindingDescription], &Parity),
+    (shortcuts, parity): (&[ShortcutRow], &Parity),
     selection: &mut Selection,
     picked: &mut Option<usize>,
     mut titlebar: Option<&mut dyn FnMut(&mut Ui)>,
@@ -445,7 +445,9 @@ fn spec_document(
                             "s-registry" | "s-mcp" | "s-parity" => {
                                 let width = spec_table_width(ui, narrow);
                                 ui.column(Node::column().w(Size::Grow), |ui| match anchor {
-                                    "s-registry" => registry::command_registry(ui, width, bindings),
+                                    "s-registry" => {
+                                        registry::command_registry(ui, width, shortcuts)
+                                    }
                                     "s-mcp" => registry::mcp(ui, width, picked),
                                     _ => registry::parity(
                                         ui,

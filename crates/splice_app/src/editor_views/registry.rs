@@ -3,7 +3,7 @@ use super::{
     SECTION_CAPTION, SUBHEADING, SURFACE, TABLE_EDGE, TABLE_TEXT, doc_label, model_link,
     spec_table, table_cell, table_row, table_tag,
 };
-use crate::commands::{self, BindingDescription};
+use crate::commands::{self, ShortcutRow};
 use pxui::{
     Button, Label, Node, Role, TextSpan, Ui,
     geom::{Edges, Rgba},
@@ -169,7 +169,7 @@ fn built() -> usize {
         .count()
 }
 
-pub(super) fn command_registry(ui: &mut Ui, width: f32, bindings: &[BindingDescription]) {
+pub(super) fn command_registry(ui: &mut Ui, width: f32, shortcuts: &[ShortcutRow]) {
     ui.view_of("registry-command-map", &width.to_bits(), |ui| {
         code(ui, "Registry command descriptor", DESCRIPTOR);
         inset(ui, 8.0, 0.0, &mut |ui| points(ui, width, REGISTRY_RULES, false));
@@ -219,7 +219,7 @@ pub(super) fn command_registry(ui: &mut Ui, width: f32, bindings: &[BindingDescr
             ),
         )
     });
-    keymap(ui, bindings, width);
+    keymap(ui, shortcuts, width);
 
     ui.view_of("registry-gestures", &width.to_bits(), |ui| {
         heading(ui, "Gestures");
@@ -357,55 +357,43 @@ fn view_commands(ui: &mut Ui) {
     );
 }
 
-fn keymap(ui: &mut Ui, bindings: &[BindingDescription], width: f32) {
-    let key = Size::Px((width * 0.17).min(124.0));
-    let command = Size::Px((width * 0.31).min(196.0));
+fn keymap(ui: &mut Ui, shortcuts: &[ShortcutRow], width: f32) {
+    // The v13 table keeps the command column fixed as the key and action columns grow.
+    let key_width = (77.453 + (width - 448.0) * 0.1174).min(width * 0.25);
+    let key = Size::Px(key_width);
+    let command = Size::Px(130.938_f32.min(width * 0.45));
     let columns = [("Keys", key), ("Action", Size::Grow), ("Command", command)];
     spec_table(ui, "Keymap", &columns, &mut |ui| {
-        let catalog = commands::catalog();
-        for binding in bindings.iter().filter(|binding| !binding.keys.is_empty()) {
-            let id = catalog
-                .iter()
-                .find(|entry| entry.id == binding.id)
-                .map_or("—", |entry| entry.name);
+        for shortcut in shortcuts {
             table_row(ui, &mut |ui| {
                 table_cell(ui, key, &mut |ui| {
+                    let style = CAPTION.line_height(14.0).role(Role::Unknown);
+                    let available = (key_width - 24.0).max(1.0);
+                    let label_width = ui
+                        .text_service()
+                        .measure(&shortcut.keys, style, None)
+                        .map_or(available, |metrics| metrics.width.ceil().min(available));
+                    let style = style.w_px(label_width).align(pxui::TextAlign::Center);
                     let cell = ui.row(
-                        Node::row().w(Size::Grow).role(Role::Cell).gap(3.0).wrap(),
-                        |ui| {
-                            for chord in binding.keys.split(commands::CHORD_SEPARATOR) {
-                                ui.row(
-                                    Node::row()
-                                        .w(Size::Fit)
-                                        .min_w(16.0)
-                                        .h_px(16.0)
-                                        .center()
-                                        .pad_x(3.0)
-                                        .look(Look::NONE.fill(SURFACE).border(TABLE_EDGE, 1.0)),
-                                    |ui| {
-                                        doc_label(
-                                            ui,
-                                            chord,
-                                            CAPTION
-                                                .w(Size::Fit)
-                                                .line_height(14.0)
-                                                .role(Role::Unknown),
-                                            MUTED,
-                                        )
-                                    },
-                                );
-                            }
-                        },
+                        Node::row()
+                            .w(Size::Fit)
+                            .min_w(16.0)
+                            .min_h(16.0)
+                            .role(Role::Cell)
+                            .center()
+                            .pad_x(4.0)
+                            .pad_y(1.0)
+                            .look(Look::NONE.fill(SURFACE).border(TABLE_EDGE, 1.0)),
+                        |ui| doc_label(ui, &shortcut.keys, style, MUTED),
                     );
-                    ui.a11y_name(&cell, &binding.keys);
+                    ui.a11y_name(&cell, &shortcut.keys);
                 });
-                cell(ui, Size::Grow, binding.title, MUTED);
-                cell(ui, command, id, MOTION);
+                cell(ui, Size::Grow, shortcut.title, MUTED);
+                cell(ui, command, shortcut.command, MOTION);
             });
         }
     });
 }
-
 pub(super) fn mcp(ui: &mut Ui, width: f32, picked: &mut Option<usize>) {
     ui.view_of("native-mcp-surface", &width.to_bits(), |ui| {
         static INTRO: OnceLock<String> = OnceLock::new();

@@ -320,7 +320,7 @@ fn run_surface(
                     program.as_mut(),
                     store,
                     command,
-                    Some((&lab, keys.bindings())),
+                    Some((&lab, &keys)),
                     Some((surface.device(), &previews, media_key)),
                 )
             });
@@ -644,7 +644,7 @@ fn run_surface(
                         Some((&lab, surface.lab_images())),
                         Some(&palette),
                         store.as_deref().map(|store| (&session, store)),
-                        keys.bindings(),
+                        Some(&keys),
                     ),
                     EditorLayout {
                         timeline: intents.timeline.state.clone(),
@@ -1140,7 +1140,7 @@ fn run_surface(
                     program.as_mut(),
                     store,
                     command,
-                    Some((&lab, keys.bindings())),
+                    Some((&lab, &keys)),
                     Some((surface.device(), &previews, media_key)),
                 )
             });
@@ -1217,7 +1217,7 @@ fn write_snapshot_output(
     at: i32,
     output: &Path,
     layout: EditorLayout,
-    agent: Option<(&editor_lab::Lab, &[commands::BindingDescription])>,
+    agent: Option<(&editor_lab::Lab, &commands::Keys)>,
     media: Option<(&Device, &[timeline::MediaPreview])>,
 ) -> Result<Json, StoreError> {
     let mut offline = Vec::new();
@@ -1243,7 +1243,7 @@ fn apply_view_command(
     program: Option<&mut program::Program>,
     store: &Store,
     command: ViewCommand,
-    agent: Option<(&editor_lab::Lab, &[commands::BindingDescription])>,
+    agent: Option<(&editor_lab::Lab, &commands::Keys)>,
     media: Option<(&Device, &[timeline::MediaPreview], Option<u64>)>,
 ) -> Result<Json, StoreError> {
     match command {
@@ -1914,12 +1914,12 @@ impl ViewerCache {
 fn paint_viewer(
     ui: &mut Ui,
     name: Option<&str>,
-    (project, lab, palette, session, bindings): (
+    (project, lab, palette, session, keys): (
         Option<&Project>,
         Option<(&editor_lab::Lab, &[Option<Image>])>,
         Option<&PaletteState>,
         Option<(&editor_session::State, &Store)>,
-        &[commands::BindingDescription],
+        Option<&commands::Keys>,
     ),
     layout: EditorLayout,
     ([matte, image, crop_preview], events): ([Option<Image>; 3], &[Event]),
@@ -1990,6 +1990,7 @@ fn paint_viewer(
             (titlebar.height() + viewer_chrome::PANE_HEIGHT - scroll).max(4.0),
         )
     };
+    let shortcuts = keys.map_or(&[][..], commands::Keys::shortcuts);
     if let Some(sheet) = sheet {
         match sheet {
             EditorSheet::Palette => {
@@ -2001,7 +2002,10 @@ fn paint_viewer(
                         let result = editor_palette::paint(
                             ui,
                             &palette.query,
-                            (&palette.states, bindings),
+                            (
+                                &palette.states,
+                                keys.map_or(&[][..], commands::Keys::bindings),
+                            ),
                             palette.selected,
                             palette.focus_search,
                         );
@@ -2020,7 +2024,7 @@ fn paint_viewer(
                 }
             }
             EditorSheet::Shortcuts => {
-                intents.dismiss_sheet |= editor_shortcuts::paint(ui, bindings, size);
+                intents.dismiss_sheet |= editor_shortcuts::paint(ui, shortcuts, size);
             }
             EditorSheet::Zoom(context) => {
                 let (at, max_height) = if let Some(at) = context {
@@ -2105,7 +2109,7 @@ fn paint_viewer(
             intents.view_selection = editor_views::paint_spec(
                 ui,
                 view_selection,
-                (bindings, &cache.parity),
+                (shortcuts, &cache.parity),
                 &mut paint_titlebar,
             );
             intents.timeline.state = timeline.clone();
@@ -2131,7 +2135,7 @@ fn paint_viewer(
                     project,
                     active_view,
                     view_selection,
-                    bindings,
+                    shortcuts,
                     &cache.parity,
                 );
             }
@@ -3108,7 +3112,7 @@ mod viewer_tests {
                     let next = paint_viewer(
                         ui,
                         Some("Editor fixture"),
-                        (Some(&project), None, None, None, &[]),
+                        (Some(&project), None, None, None, None),
                         EditorLayout::new(size),
                         ([None, None, None], &[]),
                         (&mut cache, &[], None),
@@ -3202,7 +3206,7 @@ mod viewer_tests {
                         None,
                         None,
                         Some((&session, store)),
-                        &[],
+                        None,
                     ),
                     EditorLayout::new(size),
                     ([None, None, None], &[]),
@@ -3320,7 +3324,7 @@ mod viewer_tests {
                             None,
                             None,
                             banner.map(|state| (state, &store)),
-                            &[],
+                            None,
                         ),
                         layout.clone(),
                         ([None; 3], &[]),
@@ -3460,7 +3464,7 @@ mod viewer_tests {
                     paint_viewer(
                         ui,
                         Some("Editor fixture"),
-                        (Some(&project), None, None, None, &[]),
+                        (Some(&project), None, None, None, None),
                         EditorLayout::new(size),
                         ([None, None, None], &[]),
                         (&mut cache, &[], None),

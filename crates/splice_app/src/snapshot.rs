@@ -30,7 +30,7 @@ pub(super) fn render_layout(
     store: &Store,
     at: i32,
     mut layout: super::EditorLayout,
-    agent: Option<(&editor_lab::Lab, &[commands::BindingDescription])>,
+    agent: Option<(&editor_lab::Lab, &commands::Keys)>,
     media: Option<(&be::Device, &[timeline::MediaPreview])>,
 ) -> Result<(Vec<u8>, Vec<(&'static str, Json)>), StoreError> {
     let size = layout.size.map(|extent| extent.round().max(1.0) as u32);
@@ -109,7 +109,7 @@ pub(super) fn render_layout(
         None
     };
     session.refresh(Some(store), activity);
-    let (lab, bindings) = agent.map_or((None, &[][..]), |(lab, bindings)| (Some(lab), bindings));
+    let (lab, keys) = agent.unzip();
     let input = FrameIn::new(layout.size[0], layout.size[1]);
     let mut cache = super::ViewerCache::for_app();
     let mut build = |ui: &mut pxui::Ui| {
@@ -121,7 +121,7 @@ pub(super) fn render_layout(
                 lab.map(|lab| (lab, gpu.lab_frames.images.as_slice())),
                 None,
                 Some((&session, store)),
-                bindings,
+                keys,
             ),
             layout.clone(),
             ([matte, image, None], &[]),
