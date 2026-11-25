@@ -1,3 +1,5 @@
+mod preview;
+
 use super::{surface::Surface, viewer_captions::Guide, viewer_error};
 use pxui::{
     Fill, Flags, Handle, Image, ImageStyle, KeyCode, Node, Point, Rect, Rgba, Signal, Ui,
@@ -15,6 +17,7 @@ pub(super) struct Program {
     pending: Option<i32>,
     rate: i8,
     scrub_origin: Option<i32>,
+    raster: preview::Raster,
 }
 
 impl Program {
@@ -30,6 +33,7 @@ impl Program {
             pending: None,
             rate: 0,
             scrub_origin: None,
+            raster: preview::Raster::default(),
         }))
     }
 
@@ -41,7 +45,31 @@ impl Program {
         self.composition.evaluator()
     }
 
-    pub(super) fn sample(&mut self, surface: &mut Surface) -> Result<(), StoreError> {
+    pub(super) fn update_raster(
+        &mut self,
+        surface: &mut Surface,
+        view: View,
+        stage: Option<[f32; 2]>,
+        dpr: f32,
+        now: f64,
+    ) -> Result<(), StoreError> {
+        let canvas = self.size();
+        // Keep the displayed frame's raster until the seek delivers its own frame.
+        let desired = stage
+            .filter(|_| self.pending.is_none())
+            .map(|stage| preview::size(canvas, view.display_scale(stage, canvas), dpr));
+        let initial = surface
+            .preview_size()
+            .unwrap_or_else(|| preview::size(canvas, 0.0, dpr));
+        if let Some(size) = self.raster.update(desired, initial, now) {
+            surface.resize_preview(&self.composition, size)?;
+        }
+        Ok(())
+    }
+
+    /// Samples the player and asks for a new layout pass when a seek finishes.
+    pub(super) fn sample(&mut self, surface: &mut Surface) -> Result<bool, StoreError> {
+        let seeking = self.pending.is_some();
         if let Some(at) = surface.sample(&self.composition, &mut self.player)? {
             self.shown = Some(at);
             if self.pending == Some(at) || self.playing() {
@@ -55,7 +83,7 @@ impl Program {
                 self.seek(boundary)?;
             }
         }
-        Ok(())
+        Ok(seeking && self.pending.is_none())
     }
 
     pub(super) fn at(&self) -> i32 {
@@ -79,7 +107,7 @@ impl Program {
     }
 
     pub(super) fn wants_frame(&self) -> bool {
-        self.playing() || self.pending.is_some() || self.shown.is_none()
+        self.playing() || self.pending.is_some() || self.shown.is_none() || self.raster.settling()
     }
 
     pub(super) fn set_rate(&mut self, rate: i8) {
@@ -332,7 +360,7 @@ pub(super) fn paint(
         if let (Some(canvas), Some(image)) = (canvas, image) {
             let destination = view.destination(rect, canvas);
             paint
-                .image(destination, &image, &ImageStyle::DEFAULT)
+                .image(destination, &image, &ImageStyle::DEFAULT.fit(Fit::Fill))
                 .expect("valid live program image");
             if let Some(guide) = guide {
                 guide.paint(paint, destination);

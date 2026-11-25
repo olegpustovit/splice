@@ -1,6 +1,8 @@
 //! The OGPU compositor's frame path (PLAN.md T12.7): evaluates the lowered layer plan at one frame
 //! into `splice_gpu` layers over the decoded sources. The viewer, frame grabs and export all draw
 //! through `GpuProgram::draw`.
+mod preview;
+
 use crate::{
     Composition, Error, TimedText,
     lower::{Plan, Role, Slot},
@@ -11,6 +13,8 @@ use ogpu_core::types::{Extent, Origin, TextureDescriptor, TextureFormat, Texture
 use splice_eval::{Animate, FramePlan, Look, MaskMode, MaskShape};
 use splice_gpu::{Bound, Compositor, Layer, MAX_LAYERS, rgb};
 use splice_model::{Frame, ItemId, ShapeKind};
+
+use preview::Projection;
 
 /// Per-viewer GPU state: the compositor, per-layer source copies and cursor textures.
 pub struct GpuProgram {
@@ -43,6 +47,10 @@ pub struct GpuProgram {
     luts: Vec<(Texture, f32)>,
     /// The evaluated frame (reused: allocation-free per frame).
     frame: FramePlan,
+    projection: Option<Projection>,
+    /// Which complete player frame the owned source copies contain.
+    cached: Option<(Frame, usize)>,
+    raster_dirty: bool,
     /// Matte textures bound this frame, by the role of the layer they belong to.
     mattes: Vec<(Role, Texture)>,
     /// Leave out the black base (alpha exports).
@@ -69,11 +77,184 @@ fn gpu(error: ogpu_core::error::Error) -> Error {
     Error::Input(ogpu_core::error::to_string(&error))
 }
 
+fn upload(device: &Device, pixels: &[u8], [w, h]: [u32; 2], label: &str) -> Result<Texture, Error> {
+    let texture = b::create_texture(
+        device,
+        TextureDescriptor {
+            label: Some(label.into()),
+            width: i64::from(w),
+            height: i64::from(h),
+            depth: 1,
+            mip_levels: 1,
+            sample_count: 1,
+            format: TextureFormat::Rgba8Unorm,
+            usage: vec![TextureUsage::TextureBinding, TextureUsage::TextureCopyDst],
+        },
+    )
+    .map_err(gpu)?;
+    b::write_texture(
+        &texture,
+        None,
+        Origin { x: 0, y: 0, z: 0 },
+        Extent {
+            width: i64::from(w),
+            height: i64::from(h),
+            depth: 1,
+        },
+        i64::from(w) * 4,
+        pixels,
+    )
+    .map_err(gpu)?;
+    Ok(texture)
+}
+
+fn raster_text(cue: &TimedText, projection: Projection) -> TimedText {
+    let mut cue = cue.clone();
+    let layer = &mut cue.layer;
+    layer.bounds = projection.box_pixels(layer.bounds);
+    if let Some(caption) = &mut layer.style.caption {
+        layer.font = (layer.font * projection.x).max(7.0);
+        if let Some(layout) = &mut caption.layout {
+            let [cx, cy, top, bottom, width] = layout.box_pixels;
+            layout.box_pixels = [
+                cx * projection.x,
+                cy * projection.y,
+                top * projection.y,
+                bottom * projection.y,
+                width * projection.x,
+            ];
+            layout.canvas = projection.size;
+        }
+    } else {
+        layer.font *= projection.short;
+    }
+    cue
+}
+
+fn text_textures(
+    device: &Device,
+    plan: &Plan,
+    text: &[TimedText],
+    projection: Option<Projection>,
+) -> Result<Vec<(Texture, TimedText, [f64; 4])>, Error> {
+    let mut texts = Vec::with_capacity(text.len());
+    for cue in text {
+        let cue = projection.map_or_else(|| cue.clone(), |projection| raster_text(cue, projection));
+        let [x, y, w, h] = cue.layer.bounds;
+        // Keystroke chips are the only cues with no graphics item.
+        if cue.item.is_none() {
+            let (rect, pixels) = apple_sys::composition::key_chip_rgba(&cue.layer)?;
+            let [px, py, pw, ph] = rect.map(f64::from);
+            let texture = upload(device, &pixels, [rect[2], rect[3]], "Splice keystroke chip")?;
+            texts.push((texture, cue, [px - x, py - y, pw, ph]));
+            continue;
+        }
+        if let Some(layout) = cue
+            .layer
+            .style
+            .caption
+            .as_ref()
+            .and_then(|caption| caption.layout)
+        {
+            let (rect, pixels) =
+                apple_sys::composition::positioned_caption_rgba(&cue.layer, layout)?;
+            let [px, py, pw, ph] = rect.map(f64::from);
+            let texture = upload(device, &pixels, [rect[2], rect[3]], "Splice caption")?;
+            texts.push((texture, cue, [px - x, py - y, pw, ph]));
+            continue;
+        }
+        let default_title = plan
+            .evaluator
+            .as_ref()
+            .zip(cue.item)
+            .is_some_and(|(eval, item)| eval.is_unstyled_title(item));
+        if default_title {
+            let (size, [dx, dy], pixels) = apple_sys::composition::program_title_rgba(&cue.layer)?;
+            let texture = upload(device, &pixels, size, "Splice title")?;
+            let [w, h] = size.map(f64::from);
+            texts.push((texture, cue, [dx, dy, w, h]));
+            continue;
+        }
+        let size = [w.ceil().max(1.0) as u32, h.ceil().max(1.0) as u32];
+        let pixels = apple_sys::composition::text_rgba(&cue.layer, size)?;
+        // An animator unit keeps only its own glyphs' pixels: a 120-character animation
+        // uploads and composites 120 glyph-sized quads, not 120 full boxes. A unit with no
+        // ink draws nothing.
+        if cue.layer.visible.is_some() {
+            if let Some((rect, ink)) = splice_eval::ink_crop(&pixels, size) {
+                let texture = upload(device, &ink, [rect[2], rect[3]], "Splice glyphs")?;
+                texts.push((texture, cue, rect.map(f64::from)));
+            }
+            continue;
+        }
+        let whole = [0.0, 0.0, f64::from(size[0]), f64::from(size[1])];
+        texts.push((upload(device, &pixels, size, "Splice text")?, cue, whole));
+    }
+    Ok(texts)
+}
+
 impl GpuProgram {
     /// Prepares the viewer's compositor for `composition` on `device`, titles and captions
     /// rasterized exactly as export draws them (one text renderer: emoji, styles, animators).
     pub fn new(device: &Device, composition: &Composition) -> Result<Self, Error> {
         Self::with_plan(device, &composition.plan, &composition.text)
+    }
+
+    /// Prepares the human viewport compositor at a different backing size from the project.
+    /// The original composition supplies its decoder, layer plan and colors.
+    pub fn for_preview(
+        device: &Device,
+        composition: &Composition,
+        size: [u32; 2],
+    ) -> Result<Self, Error> {
+        if size.contains(&0) {
+            return Err(Error::Input("Preview dimensions must be positive.".into()));
+        }
+        Self::build(
+            device,
+            &composition.plan,
+            &composition.text,
+            Projection::new(composition.size, size),
+        )
+    }
+
+    /// Changes the output raster and text atlases after the caller drains submitted GPU work.
+    /// Retains the last decoded sources so a paused viewport can repaint without an AV seek.
+    pub fn resize_preview(
+        &mut self,
+        composition: &Composition,
+        size: [u32; 2],
+    ) -> Result<(), Error> {
+        if size.contains(&0) {
+            return Err(Error::Input("Preview dimensions must be positive.".into()));
+        }
+        if size
+            == self
+                .projection
+                .map_or(composition.size, |projection| projection.size)
+        {
+            return Ok(());
+        }
+        let projection = Projection::new(composition.size, size);
+        let texts = text_textures(
+            &self.device,
+            &composition.plan,
+            &composition.text,
+            projection,
+        )?;
+        self.textures.clear();
+        self.group_textures.clear();
+        if let Some((texture, target, _)) = self.group_target.take() {
+            drop(target);
+            b::destroy_texture(&texture).map_err(gpu)?;
+        }
+        for (texture, ..) in self.texts.drain(..) {
+            b::destroy_texture(&texture).map_err(gpu)?;
+        }
+        self.texts = texts;
+        self.projection = projection;
+        self.raster_dirty = true;
+        Ok(())
     }
 
     /// Prepares a compositor for `plan`, uploading its cursor images and rasterizing `text`.
@@ -82,101 +263,28 @@ impl GpuProgram {
         plan: &Plan,
         text: &[TimedText],
     ) -> Result<Self, Error> {
+        Self::build(device, plan, text, None)
+    }
+
+    fn build(
+        device: &Device,
+        plan: &Plan,
+        text: &[TimedText],
+        projection: Option<Projection>,
+    ) -> Result<Self, Error> {
         let mtl_device = b::native(device).map_err(gpu)?.mtl_device;
-        let upload = |pixels: &[u8], [w, h]: [u32; 2], label: &str| -> Result<Texture, Error> {
-            let texture = b::create_texture(
-                device,
-                TextureDescriptor {
-                    label: Some(label.into()),
-                    width: i64::from(w),
-                    height: i64::from(h),
-                    depth: 1,
-                    mip_levels: 1,
-                    sample_count: 1,
-                    format: TextureFormat::Rgba8Unorm,
-                    usage: vec![TextureUsage::TextureBinding, TextureUsage::TextureCopyDst],
-                },
-            )
-            .map_err(gpu)?;
-            b::write_texture(
-                &texture,
-                None,
-                Origin { x: 0, y: 0, z: 0 },
-                Extent {
-                    width: i64::from(w),
-                    height: i64::from(h),
-                    depth: 1,
-                },
-                i64::from(w) * 4,
-                pixels,
-            )
-            .map_err(gpu)?;
-            Ok(texture)
-        };
-        let mut texts = Vec::with_capacity(text.len());
-        for cue in text {
-            let [x, y, w, h] = cue.layer.bounds;
-            // Keystroke chips are the only cues with no graphics item.
-            if cue.item.is_none() {
-                let (rect, pixels) = apple_sys::composition::key_chip_rgba(&cue.layer)?;
-                let [px, py, pw, ph] = rect.map(f64::from);
-                let texture = upload(&pixels, [rect[2], rect[3]], "Splice keystroke chip")?;
-                texts.push((texture, cue.clone(), [px - x, py - y, pw, ph]));
-                continue;
-            }
-            if let Some(layout) = cue
-                .layer
-                .style
-                .caption
-                .as_ref()
-                .and_then(|caption| caption.layout)
-            {
-                let (rect, pixels) =
-                    apple_sys::composition::positioned_caption_rgba(&cue.layer, layout)?;
-                let [px, py, pw, ph] = rect.map(f64::from);
-                let texture = upload(&pixels, [rect[2], rect[3]], "Splice caption")?;
-                texts.push((texture, cue.clone(), [px - x, py - y, pw, ph]));
-                continue;
-            }
-            let default_title = plan
-                .evaluator
-                .as_ref()
-                .zip(cue.item)
-                .is_some_and(|(eval, item)| eval.is_unstyled_title(item));
-            if default_title {
-                let (size, [dx, dy], pixels) =
-                    apple_sys::composition::program_title_rgba(&cue.layer)?;
-                let texture = upload(&pixels, size, "Splice title")?;
-                let [w, h] = size.map(f64::from);
-                texts.push((texture, cue.clone(), [dx, dy, w, h]));
-                continue;
-            }
-            let size = [w.ceil().max(1.0) as u32, h.ceil().max(1.0) as u32];
-            let pixels = apple_sys::composition::text_rgba(&cue.layer, size)?;
-            // An animator unit keeps only its own glyphs' pixels: a 120-character animation
-            // uploads and composites 120 glyph-sized quads, not 120 full boxes. A unit with no
-            // ink draws nothing.
-            if cue.layer.visible.is_some() {
-                if let Some((rect, ink)) = splice_eval::ink_crop(&pixels, size) {
-                    let texture = upload(&ink, [rect[2], rect[3]], "Splice glyphs")?;
-                    texts.push((texture, cue.clone(), rect.map(f64::from)));
-                }
-                continue;
-            }
-            let whole = [0.0, 0.0, f64::from(size[0]), f64::from(size[1])];
-            texts.push((upload(&pixels, size, "Splice text")?, cue.clone(), whole));
-        }
+        let texts = text_textures(device, plan, text, projection)?;
         let mut luts = Vec::with_capacity(plan.luts.len());
         for path in &plan.luts {
             let (pixels, n) = crate::lut::atlas(path)?;
-            luts.push((upload(&pixels, [n * n, n], "Splice LUT")?, n as f32));
+            luts.push((upload(device, &pixels, [n * n, n], "Splice LUT")?, n as f32));
         }
         let mut cursors = Vec::with_capacity(plan.cursors.len());
         for images in plan.cursors.iter().map(|table| &table.images) {
             let mut table = Vec::with_capacity(images.len());
             for image in images {
                 let (pixels, [w, h]) = apple_sys::image::decode_rgba(&image.path)?;
-                let texture = upload(&pixels, [w, h], "Splice cursor")?;
+                let texture = upload(device, &pixels, [w, h], "Splice cursor")?;
                 table.push((texture, [f64::from(w), f64::from(h)]));
             }
             cursors.push(table);
@@ -203,6 +311,9 @@ impl GpuProgram {
                 .as_ref()
                 .map(|e| e.buffer())
                 .unwrap_or_default(),
+            projection,
+            cached: None,
+            raster_dirty: false,
             mattes: Vec::with_capacity(4),
             transparent: false,
         })
@@ -231,19 +342,28 @@ impl GpuProgram {
         commands: &Commands,
         target: &mut PreparedRenderTarget,
     ) -> Result<Option<Frame>, Error> {
-        let Some((at, count)) = player.sources(self.mtl_device, slot, &mut self.sources)? else {
+        let fresh = player.sources(self.mtl_device, slot, &mut self.sources)?;
+        let Some((at, count)) = fresh.or(self.cached.filter(|_| self.raster_dirty)) else {
             return Ok(None);
         };
-        let drawn = self.draw(
+        if fresh.is_some() {
+            self.copy_sources(count, native_commands)?;
+        }
+        // The player's empty reply leaves sources untouched. Repaint the owned GPU copies
+        // without using any borrowed video texture handles again.
+        let drawn = self.paint(
             &composition.plan,
             composition.size,
             at,
             count,
-            native_commands,
             commands,
             target,
             false,
         )?;
+        if drawn {
+            self.cached = Some((at, count));
+            self.raster_dirty = false;
+        }
         Ok(drawn.then_some(at))
     }
 
@@ -263,6 +383,15 @@ impl GpuProgram {
         target: &mut PreparedRenderTarget,
         bgra: bool,
     ) -> Result<bool, Error> {
+        self.copy_sources(count, native_commands)?;
+        self.paint(plan, size, at, count, commands, target, bgra)
+    }
+
+    fn copy_sources(
+        &mut self,
+        count: usize,
+        native_commands: *mut std::ffi::c_void,
+    ) -> Result<(), Error> {
         self.blit_from.clear();
         self.blit_to.clear();
         for i in 0..count {
@@ -309,6 +438,20 @@ impl GpuProgram {
             self.blit_to.push(*native as *mut std::ffi::c_void);
         }
         apple_sys::composition::blit(native_commands, &self.blit_from, &self.blit_to)?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint(
+        &mut self,
+        plan: &Plan,
+        size: [u32; 2],
+        at: Frame,
+        count: usize,
+        commands: &Commands,
+        target: &mut PreparedRenderTarget,
+        bgra: bool,
+    ) -> Result<bool, Error> {
         let intervals = &plan.intervals;
         let index = intervals.partition_point(|(range, _)| range[1] <= at);
         let Some((_, layers)) = intervals.get(index) else {
@@ -323,6 +466,10 @@ impl GpuProgram {
         if let Some(evaluator) = &plan.evaluator {
             evaluator.frame(at, &mut self.frame);
         }
+        let size = self.projection.map_or(size, |projection| {
+            projection.frame(&mut self.frame);
+            projection.size
+        });
         self.layers.clear();
         self.textures.clear();
         self.depths.clear();

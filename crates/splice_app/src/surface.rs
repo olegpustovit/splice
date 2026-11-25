@@ -26,6 +26,7 @@ pub(super) struct Surface {
     frames: Option<Frames>,
     renderer: Option<Renderer>,
     slots: Vec<Slot>,
+    raster: Option<[u32; 2]>,
     images: Images,
     matte: Option<StageImage>,
     crop: Option<StageImage>,
@@ -60,6 +61,7 @@ impl Surface {
             frames: None,
             renderer: None,
             slots: Vec::with_capacity(3),
+            raster: None,
             images: Images::default(),
             matte: None,
             crop: None,
@@ -74,42 +76,95 @@ impl Surface {
         let native = be::native_leased(&surface.device).map_err(gpu_error)?;
         surface.renderer = Some(open_renderer(ui, native, 2)?);
         surface.matte = Some(StageImage::matte(&surface.device)?);
-        if let Some([width, height]) = size {
-            for id in 1..=3 {
-                // The compositor draws into these and PXUI samples them: no copies.
-                let texture = be::create_texture(
-                    &surface.device,
-                    TextureDescriptor {
-                        label: Some("Splice program".into()),
-                        width: i64::from(width),
-                        height: i64::from(height),
-                        depth: 1,
-                        mip_levels: 1,
-                        sample_count: 1,
-                        format: TextureFormat::Rgba8Unorm,
-                        usage: vec![
-                            TextureUsage::TextureBinding,
-                            TextureUsage::RenderAttachment,
-                            TextureUsage::TextureCopySrc,
-                        ],
-                    },
-                )
-                .map_err(gpu_error)?;
-                surface.slots.push(Slot {
-                    texture,
-                    target: None,
-                    sampled: 0,
-                });
-                let texture = &surface.slots.last().expect("created slot").texture;
-                let image = be::native_texture(texture).map_err(gpu_error)?.mtl_texture;
-                surface.images.store(
-                    Want::new(id, 1024).expect("fixed video image identity"),
-                    Some(Image::rgba8(width, height, std::ptr::null_mut(), image)),
-                );
+        if let Some(size) = size {
+            surface.allocate_slots(size)?;
+        }
+        Ok(surface)
+    }
+
+    fn allocate_slots(&mut self, [width, height]: [u32; 2]) -> Result<(), StoreError> {
+        for id in 1..=3 {
+            // The compositor draws into these and PXUI samples them: no copies.
+            let texture = be::create_texture(
+                &self.device,
+                TextureDescriptor {
+                    label: Some("Splice program".into()),
+                    width: i64::from(width),
+                    height: i64::from(height),
+                    depth: 1,
+                    mip_levels: 1,
+                    sample_count: 1,
+                    format: TextureFormat::Rgba8Unorm,
+                    usage: vec![
+                        TextureUsage::TextureBinding,
+                        TextureUsage::RenderAttachment,
+                        TextureUsage::TextureCopySrc,
+                    ],
+                },
+            )
+            .map_err(gpu_error)?;
+            self.slots.push(Slot {
+                texture,
+                target: None,
+                sampled: 0,
+            });
+            let texture = &self.slots.last().expect("created slot").texture;
+            let image = be::native_texture(texture).map_err(gpu_error)?.mtl_texture;
+            self.images.store(
+                Want::new(id, 1024).expect("fixed video image identity"),
+                Some(Image::rgba8(width, height, std::ptr::null_mut(), image)),
+            );
+        }
+        self.prepare_targets()?;
+        self.raster = Some([width, height]);
+        Ok(())
+    }
+
+    /// Replace the three Program textures after the old draws complete, before beginning
+    /// a new frame. The compositor retains its source copies and non-text resources.
+    pub(super) fn resize_preview(
+        &mut self,
+        composition: &Rc<Composition>,
+        size: [u32; 2],
+    ) -> Result<(), StoreError> {
+        if self.raster == Some(size) {
+            return Ok(());
+        }
+        let frames = self.frames.as_mut().expect("open surface");
+        frames.wait().map_err(|error| viewer_error(&error))?;
+        let completed = frames.completed();
+        let renderer = self.renderer.as_mut().expect("open renderer");
+        for index in 0..self.slots.len() {
+            if let Some(image) = self.images.get(index + 1, "program", 1.0, None) {
+                forget_completed_image(renderer, &image, completed)?;
             }
         }
-        surface.prepare_targets()?;
-        Ok(surface)
+        self.current = None;
+        self.images.clear();
+        // The last adopted command buffer can still own the textures referenced by
+        // any prepared slot or group pass, even after the host completed the frame.
+        for slot in &mut self.slots {
+            slot.target = None;
+        }
+        self.commands = None;
+        if let Some((key, program)) = &mut self.program
+            && *key == Rc::as_ptr(composition)
+        {
+            program
+                .resize_preview(composition, size)
+                .map_err(|error| viewer_error(&error))?;
+        } else {
+            self.program = None;
+        }
+        for slot in &self.slots {
+            be::destroy_texture(&slot.texture).map_err(gpu_error)?;
+        }
+        self.slots.clear();
+        self.allocate_slots(size)
+    }
+
+    pub(super) fn preview_size(&self) -> Option<[u32; 2]> {
+        self.raster
     }
 
     pub(super) fn matte(&self) -> Option<Image> {
@@ -124,12 +179,14 @@ impl Surface {
         &mut self,
         preview: Option<(&[u8], [u32; 2])>,
     ) -> Result<(), StoreError> {
-        if self.crop.is_some() {
-            self.frames
-                .as_mut()
-                .expect("open surface")
-                .wait()
-                .map_err(|error| viewer_error(&error))?;
+        if let Some(crop) = &self.crop {
+            let frames = self.frames.as_mut().expect("open surface");
+            frames.wait().map_err(|error| viewer_error(&error))?;
+            forget_completed_image(
+                self.renderer.as_mut().expect("open renderer"),
+                &crop.image(),
+                frames.completed(),
+            )?;
         }
         self.crop = preview
             .map(|(pixels, size)| StageImage::upload(&self.device, size, pixels))
@@ -204,8 +261,13 @@ impl Surface {
         let key = Rc::as_ptr(composition);
         if self.program.as_ref().is_none_or(|(known, _)| *known != key) {
             self.clear_program()?;
-            let program =
-                GpuProgram::new(&self.device, composition).map_err(|error| viewer_error(&error))?;
+            let size = self.raster.expect("Program raster selected before sample");
+            let program = if size == composition.size() {
+                GpuProgram::new(&self.device, composition)
+            } else {
+                GpuProgram::for_preview(&self.device, composition, size)
+            }
+            .map_err(|error| viewer_error(&error))?;
             self.program = Some((key, program));
         }
         // Frames::begin has waited for the reused in-flight slot. A paused frame can
@@ -390,6 +452,19 @@ impl Drop for Surface {
         if let Err(error) = be::destroy_device(&self.device) {
             eprintln!("splice: could not release the viewer GPU device: {error:?}");
         }
+    }
+}
+
+fn forget_completed_image(
+    renderer: &mut Renderer,
+    image: &Image,
+    completed: u64,
+) -> Result<(), StoreError> {
+    match renderer.forget_image(image, completed) {
+        // The frame host supplies a monotonic completion serial. An image the
+        // renderer never sampled has no resident identity to forget.
+        Ok(()) | Err(pxui::Error::InvalidInput) => Ok(()),
+        Err(error) => Err(viewer_error(&error)),
     }
 }
 

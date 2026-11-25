@@ -271,8 +271,7 @@ fn run_surface(
     let keymap = state.map(|dir| dir.join("keymap"));
     let mut keys = commands::Keys::new(keymap.as_deref());
     let mut ui = viewer_ui()?;
-    let mut surface =
-        surface::Surface::open(window, &ui, program.as_ref().map(program::Program::size))?;
+    let mut surface = surface::Surface::open(window, &ui, None)?;
     let mut accessibility = Accessibility::open(window).map_err(|error| viewer_error(&error))?;
     let mut platform = Platform::default();
     let mut encoded = Events::default();
@@ -472,7 +471,7 @@ fn run_surface(
                 }
             } else {
                 surface.close()?;
-                surface = surface::Surface::open(window, &ui, size)?;
+                surface = surface::Surface::open(window, &ui, None)?;
             }
             if !same_surface || media_key != Some(new_media_key) {
                 previews.clear();
@@ -532,11 +531,26 @@ fn run_surface(
                     .map(|((id, files), store)| (id, files, store.path())),
             )?;
         }
+        if let Some(program) = &mut program {
+            let [w, h] = [layout.program_bounds.w, layout.program_bounds.h];
+            let stage = (layout.view == editor_titlebar::View::Editor
+                && !matches!(layout.sheet, Some(EditorSheet::Crop(_)))
+                && w > 0.0
+                && h > 0.0)
+                .then_some([w, h]);
+            program.update_raster(
+                &mut surface,
+                layout.program,
+                stage,
+                window.scale() as f32,
+                window.time(),
+            )?;
+        }
         if surface.begin(window)? {
             let fps = store.as_deref().map_or(30, |store| store.project().fps);
             if let Some(program) = &mut program {
                 let rate = program.rate();
-                program.sample(&mut surface)?;
+                repaint |= program.sample(&mut surface)?;
                 if rate != 0 {
                     if rate != last_follow_rate {
                         layout.timeline.resume_follow();
@@ -685,6 +699,9 @@ fn run_surface(
                 }
                 repaint = true;
             }
+            repaint |= program.is_some()
+                && (layout.program_bounds.w != intents.program_bounds.w
+                    || layout.program_bounds.h != intents.program_bounds.h);
             layout.program_bounds = intents.program_bounds;
             layout.timeline_bounds = intents.timeline.bounds;
             repaint |= inspector::reveal_focus(&mut ui, &intents.inspector);
