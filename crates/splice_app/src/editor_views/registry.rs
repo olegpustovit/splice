@@ -208,12 +208,12 @@ pub(super) fn command_registry(ui: &mut Ui, width: f32, shortcuts: &[ShortcutRow
     });
 
     heading(ui, "Keymap");
-    inset(ui, 6.0, 6.0, &mut |ui| {
+    inset(ui, 1.0, 6.0, &mut |ui| {
         prose(
             ui,
             width,
             &Paragraph(
-                "The keyboard handler, shortcut dialog and this table use the effective bindings for this window, including overrides.",
+                "One table drives the keyboard handler, the shortcut dialog and the parity check.",
                 "",
                 &[],
             ),
@@ -358,10 +358,10 @@ fn view_commands(ui: &mut Ui) {
 }
 
 fn keymap(ui: &mut Ui, shortcuts: &[ShortcutRow], width: f32) {
-    // The v13 table keeps the command column fixed as the key and action columns grow.
-    let key_width = (77.453 + (width - 448.0) * 0.1174).min(width * 0.25);
+    // macOS Chromium sizes the command column to Menlo code and grows the key and action columns.
+    let key_width = (75.078 + (width - 448.0) * 0.10947).min(width * 0.25);
     let key = Size::Px(key_width);
-    let command = Size::Px(130.938_f32.min(width * 0.45));
+    let command = Size::Px(141.859_f32.min(width * 0.45));
     let columns = [("Keys", key), ("Action", Size::Grow), ("Command", command)];
     spec_table(ui, "Keymap", &columns, &mut |ui| {
         for shortcut in shortcuts {

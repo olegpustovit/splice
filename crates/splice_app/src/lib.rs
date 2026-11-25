@@ -1148,10 +1148,11 @@ fn run_surface(
                 .field("result")
                 .and_then(|result| result.field("structuredContent"));
             if matches!(target, ReplyTarget::Lab | ReplyTarget::Demo) {
-                lab.set_reply(
+                lab.set_reply_with_project(
                     call.name,
                     body.field("args").expect("Lab call arguments"),
                     &reply,
+                    Some(viewer.store().project()),
                 );
                 if target == ReplyTarget::Demo {
                     lab.demo_replied(window.time(), &reply);
@@ -3090,7 +3091,7 @@ mod viewer_tests {
         assert!(
             testing::find(&ui, Role::Label, "Dry run: Added marker mrk_1 at frame 8").is_some()
         );
-        assert!(testing::find(&ui, Role::Label, "mrk_1 · — → 8–8 f").is_some());
+        assert!(testing::find(&ui, Role::Label, "mrk_1 · absent → 00:00:08–00:00:08").is_some());
         assert_eq!(viewer.store().project().rev, 0);
         assert!(viewer.store().project().markers.is_empty());
         viewer.close().unwrap();

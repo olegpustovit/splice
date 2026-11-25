@@ -4851,7 +4851,7 @@ fn spine_lane(
     track_grid(ui, &row, geo, fps);
 }
 
-fn clip_name(project: &Project, slot: Slot) -> &str {
+pub(super) fn clip_name(project: &Project, slot: Slot) -> &str {
     let data = project.clips.data(slot).expect("live clip has data");
     data.appearance.name.as_deref().unwrap_or_else(|| {
         data.media
@@ -4860,9 +4860,33 @@ fn clip_name(project: &Project, slot: Slot) -> &str {
     })
 }
 
-fn media_stem(project: &Project, id: MediaId) -> Option<&str> {
+pub(super) fn media_stem(project: &Project, id: MediaId) -> Option<&str> {
     let media = project.media.iter().find(|media| media.id == id)?;
     viewer_drawers::media_title(media)
+}
+
+pub(super) fn item_title(project: &Project, id: ItemId) -> Option<std::borrow::Cow<'_, str>> {
+    use std::borrow::Cow;
+
+    let slot = project.items.find(id)?;
+    let data = project.items.data(slot)?;
+    if let Some(name) = data.appearance.name.as_deref() {
+        return Some(Cow::Borrowed(name));
+    }
+    match &data.kind {
+        ItemKind::Title { text }
+        | ItemKind::Caption {
+            text: Some(text), ..
+        } => Some(Cow::Borrowed(text)),
+        ItemKind::Sound(sound) => media_stem(project, sound.media).map(Cow::Borrowed),
+        _ => {
+            let timing = project.items.timing(slot)?;
+            let start = anchor_start(project, timing.anchor).ok();
+            resolved_item_chrome(project, data, timing, start)
+                .0
+                .map(Cow::Owned)
+        }
+    }
 }
 
 fn resolved_item_chrome(

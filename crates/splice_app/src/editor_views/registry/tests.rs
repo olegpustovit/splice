@@ -13,9 +13,9 @@ fn keymap_groups_live_chords_into_one_keycap_per_authored_row() {
     let defaults = commands::Keys::new(None);
     mem_sys::set_peer(pxui::library_counter);
     for (viewport, width, key_width) in [
-        (960.0, 676.0, 104.219),
-        (800.0, 768.0, 115.016),
-        (480.0, 448.0, 77.453),
+        (960.0, 676.0, 100.031),
+        (800.0, 768.0, 110.109),
+        (480.0, 448.0, 75.078),
     ] {
         for (keys, split, delete, undo) in [
             (&defaults, "C", "⌫ · ⇧⌫", "⌘Z ⇧⌘Z"),
@@ -36,7 +36,7 @@ fn keymap_groups_live_chords_into_one_keycap_per_authored_row() {
             let action_at = testing::find(&ui, Role::ColumnHeader, "ACTION").unwrap();
             let command_at = testing::find(&ui, Role::ColumnHeader, "COMMAND").unwrap();
             assert!((action_at.x - keys_at.x - key_width).abs() < 0.05);
-            assert!((command_at.x - keys_at.x - width + 130.938).abs() < 0.05);
+            assert!((command_at.x - keys_at.x - width + 141.859).abs() < 0.05);
             let cells: Vec<_> = ui
                 .a11y_nodes()
                 .iter()

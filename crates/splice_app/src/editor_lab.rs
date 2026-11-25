@@ -1,4 +1,4 @@
-use super::{editor_session, surface::ReplyFrame};
+use super::{editor_session, surface::ReplyFrame, timeline};
 
 mod examples;
 use pxui::{
@@ -16,8 +16,8 @@ use splice_core::{
 use splice_json::{Kind, Value as Json};
 use splice_mcp::{Tool, tool_catalog};
 use splice_model::{
-    Access, ClipId, LaneId, MarkerId, MediaId, MediaKind, Project, SessionId, TimelineId, WordId,
-    timing,
+    Access, ClipId, ItemId, LaneId, MarkerId, MediaId, MediaKind, Project, SessionId, TimelineId,
+    WordId, timing,
 };
 use std::{borrow::Cow, collections::VecDeque, os::unix::ffi::OsStringExt, path::PathBuf};
 
@@ -105,6 +105,8 @@ const REQUEST: Look = Look::NONE
 const MAX_DRAFT_BYTES: usize = 16 << 20;
 // ponytail: cap the on-screen reply at 32 KiB until large replies need virtualized viewing.
 const REPLY_PREVIEW_BYTES: usize = 32 << 10;
+// ponytail: cap prepared rows until large dry-run diffs need virtualized viewing.
+const REPLY_DIFF_ROWS: usize = 32;
 const CALL_LOG_LIMIT: usize = 30;
 const CALL_LOG_ARG_BYTES: usize = 32 << 20;
 
@@ -480,7 +482,18 @@ impl Lab {
     }
 
     // Accept the public tool result and the window thread's private reply envelope.
+    #[cfg(test)]
     pub(super) fn set_reply(&mut self, name: &'static str, args: &Json, reply: &Json) {
+        self.set_reply_with_project(name, args, reply, None);
+    }
+
+    pub(super) fn set_reply_with_project(
+        &mut self,
+        name: &'static str,
+        args: &Json,
+        reply: &Json,
+        project: Option<&Project>,
+    ) {
         let (payload, mut error) = tool_reply(reply);
         if !error {
             self.examples.observe_jobs(name, payload);
@@ -496,7 +509,8 @@ impl Lab {
                 )
             }
         };
-        let (summary, diff, remaining) = result_feedback(name, error, payload, &compact);
+        let (summary, diff, remaining) =
+            result_feedback(name, error, payload, &compact, args, project);
         let frames = if name == "view.frames" && !error {
             reply_frames(payload)
         } else {
@@ -1635,24 +1649,21 @@ fn paint_reply(ui: &mut Ui, reply: Option<&Reply>, images: &[Option<Image>]) {
         );
         paint_frames(ui, &reply.frames, images);
         if !reply.diff.is_empty() {
-            ui.column(
-                REPLY_NOTE
-                    .gap(2.0)
-                    .look(Look::NONE.fill(PANEL).border(LINE, 1.0)),
-                |ui| {
-                    let label = ui.label("Dry-run diff", SECTION);
-                    tint(ui, label, QUIET);
-                    for change in &reply.diff {
-                        ui.label(change, CAPTION);
-                    }
-                    if reply.remaining != 0 {
-                        ui.label_fmt(
-                            format_args!("{} more in the structured reply", reply.remaining),
-                            CAPTION,
-                        );
-                    }
-                },
-            );
+            ui.column(Node::column().w(Size::Grow).gap(2.0), |ui| {
+                let label = ui.label("Dry-run diff", SECTION);
+                tint(ui, label, QUIET);
+                for change in &reply.diff {
+                    ui.column(
+                        REPLY_NOTE.look(Look::NONE.fill(PANEL).border(MOTION, 2.0).sides(LEFT)),
+                        |ui| {
+                            ui.label(change, CAPTION);
+                        },
+                    );
+                }
+                if reply.remaining != 0 {
+                    ui.label_fmt(format_args!("{} more diff rows", reply.remaining), CAPTION);
+                }
+            });
         }
         if reply.truncated {
             let label = ui.label("Showing the first 32 KiB of the structured reply.", BODY);
@@ -1686,6 +1697,8 @@ fn result_feedback(
     error: bool,
     payload: &Json,
     compact: &str,
+    args: &Json,
+    project: Option<&Project>,
 ) -> (String, Vec<String>, usize) {
     let snippet = |text: &str, bytes| text[..text.floor_char_boundary(bytes)].to_owned();
     if error {
@@ -1745,28 +1758,103 @@ fn result_feedback(
     } else {
         &[]
     };
-    let mut diff = Vec::new();
-    for row in rows.iter().take(4) {
-        let Some(id) = row.field("id").and_then(Json::as_str) else {
-            continue;
-        };
-        let before = row.field("before").and_then(diff_span);
-        let after = row.field("after").and_then(diff_span);
-        diff.push(format!(
-            "{} · {} → {}",
-            snippet(id, 32),
-            before.as_deref().unwrap_or("—"),
-            after.as_deref().unwrap_or("—")
-        ));
-    }
+    let diff: Vec<_> = rows
+        .iter()
+        .take(REPLY_DIFF_ROWS)
+        .filter_map(|row| diff_line(row, payload, args, project))
+        .collect();
     let remaining = rows.len().saturating_sub(diff.len());
     (summary, diff, remaining)
 }
 
-fn diff_span(span: &Json) -> Option<String> {
-    let from = span.field("from")?.as_i64()?;
-    let to = span.field("to")?.as_i64()?;
-    Some(format!("{from}–{to} f"))
+fn diff_line(row: &Json, payload: &Json, args: &Json, project: Option<&Project>) -> Option<String> {
+    let id = row.field("id")?.as_str()?;
+    let before = row.field("before")?;
+    let after = row.field("after")?;
+    let change = if before == after {
+        "properties changed".to_owned()
+    } else {
+        let fps = project.map_or(30, |project| project.fps).max(1);
+        let before = diff_span(before, fps, "absent")?;
+        let after = diff_span(after, fps, "removed")?;
+        if before != after {
+            format!("{before} → {after}")
+        } else {
+            "lane changed".to_owned()
+        }
+    };
+    let label = project
+        .and_then(|project| {
+            live_diff_name(project, id).or_else(|| {
+                (*before == Json::Null)
+                    .then(|| created_diff_name(project, id, payload, args))
+                    .flatten()
+            })
+        })
+        .filter(|label| !label.is_empty());
+    let id = &id[..id.floor_char_boundary(32)];
+    Some(if let Some(label) = label {
+        let label = &label[..label.floor_char_boundary(80)];
+        format!("{label} {id} · {change}")
+    } else {
+        format!("{id} · {change}")
+    })
+}
+
+fn live_diff_name(project: &Project, id: &str) -> Option<String> {
+    if let Ok(clip) = id.parse::<ClipId>() {
+        return project
+            .clips
+            .find(clip)
+            .map(|slot| timeline::clip_name(project, slot).to_owned());
+    }
+    if let Ok(item) = id.parse::<ItemId>() {
+        return timeline::item_title(project, item).map(Cow::into_owned);
+    }
+    let marker = id.parse::<MarkerId>().ok()?;
+    project
+        .markers
+        .iter()
+        .find(|item| item.id == marker)
+        .map(|item| item.name.clone())
+}
+
+fn created_diff_name(project: &Project, id: &str, payload: &Json, args: &Json) -> Option<String> {
+    let change = payload
+        .field("changes")?
+        .as_array()?
+        .iter()
+        .find(|change| {
+            change
+                .field("created")
+                .and_then(Json::as_array)
+                .is_some_and(|ids| ids.iter().any(|created| created.as_str() == Some(id)))
+        })?;
+    let index = usize::try_from(change.field("op")?.as_i64()?).ok()?;
+    let op = args.field("ops")?.as_array()?.get(index)?;
+    match op.field("cmd")?.as_str()? {
+        "item.split" => live_diff_name(project, op.field("item")?.as_str()?),
+        "overlay.add" if op.field("kind")?.as_str()? == "media" => {
+            let media = op.field("media")?.as_str()?.parse().ok()?;
+            timeline::media_stem(project, media).map(str::to_owned)
+        }
+        "marker.add" => op.field("name")?.as_str().map(str::to_owned),
+        "title.add" => op.field("text")?.as_str().map(str::to_owned),
+        _ => None,
+    }
+}
+
+fn diff_span(span: &Json, fps: u32, empty: &str) -> Option<String> {
+    if *span == Json::Null {
+        return Some(empty.to_owned());
+    }
+    let clock = |frame| {
+        let [minutes, seconds, frames] = super::playbar::clock(frame, fps);
+        format!("{minutes:02}:{seconds:02}:{frames:02}")
+    };
+    let from = i32::try_from(span.field("from")?.as_i64()?).ok()?;
+    let to = i32::try_from(span.field("to")?.as_i64()?).ok()?;
+    Some(format!("{}–{}", clock(from), clock(to)))
 }
 
 fn parse_request(draft: &str) -> Result<Json, String> {
@@ -2131,7 +2219,7 @@ mod tests {
         lab.set_reply("edit.apply", &args, &dry);
         let reply = lab.reply().unwrap();
         assert_eq!(reply.summary, "Dry run: Added marker Beat");
-        let diff = "mrk_1 · — → 8–8 f";
+        let diff = "mrk_1 · absent → 00:00:08–00:00:08";
         assert_eq!(reply.diff, [diff]);
         mem_sys::set_peer(pxui::library_counter);
         for width in [960.0, 480.0] {
@@ -2420,7 +2508,7 @@ mod tests {
         };
         let warm = |lab: &mut Lab, store: &Store, state: &editor_session::State| {
             mem_sys::set_peer(pxui::library_counter);
-            for width in [960.0, 480.0] {
+            for width in [960.0, 800.0, 480.0] {
                 let mut ui = crate::viewer_ui().unwrap();
                 let frame = FrameIn::new(width, 606.0);
                 let mut idle = || {
@@ -2503,10 +2591,35 @@ mod tests {
             ["item.split", "overlay.add", "item.delete"]
         );
         assert_eq!(store.project().rev, 0);
-        lab.set_reply(
-            call.name,
-            &call.args,
-            &splice_mcp::edit_result_json(preview),
+        let reply = splice_mcp::edit_result_json(preview);
+        lab.set_reply_with_project(call.name, &call.args, &reply, Some(store.project()));
+        let shown = lab.reply().unwrap();
+        let wire_rows = reply.field("diff").and_then(Json::as_array).unwrap();
+        assert!(wire_rows.len() > 4);
+        assert_eq!(shown.diff.len(), wire_rows.len());
+        assert_eq!(shown.remaining, 0);
+        assert_eq!(
+            shown.diff[0],
+            "Screen take 01 clp_take · 00:04:00–00:18:00 → 00:04:00–00:12:12"
+        );
+        assert!(
+            shown
+                .diff
+                .iter()
+                .any(|row| row.starts_with("01 / Build the frame ovl_label")
+                    && row.ends_with("→ removed"))
+        );
+        assert!(
+            shown
+                .diff
+                .iter()
+                .any(|row| row.starts_with("Screen take 01 clp_") && row.contains("absent →"))
+        );
+        assert!(
+            shown
+                .diff
+                .iter()
+                .any(|row| row.starts_with("Desk b-roll ovl_") && row.contains("absent →"))
         );
         let dry_run = lab.calls.front().unwrap().id;
         warm(&mut lab, &store, &state);
