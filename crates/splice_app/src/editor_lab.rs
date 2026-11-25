@@ -9,14 +9,17 @@ use pxui::{
     theme::Font,
     ui::{Align, Along, Bar, Grid, Look, Size, State, States, Track},
 };
-use splice_core::history::Store;
+use splice_core::{
+    history::Store,
+    package::journal::{Change, Source},
+};
 use splice_json::{Kind, Value as Json};
 use splice_mcp::{Tool, tool_catalog};
 use splice_model::{
     Access, ClipId, LaneId, MarkerId, MediaId, MediaKind, Project, SessionId, TimelineId, WordId,
     timing,
 };
-use std::{collections::VecDeque, os::unix::ffi::OsStringExt, path::PathBuf};
+use std::{borrow::Cow, collections::VecDeque, os::unix::ffi::OsStringExt, path::PathBuf};
 
 const BG: Rgba = Rgba::rgb(9, 9, 10);
 const PANEL: Rgba = Rgba::rgb(15, 15, 16);
@@ -117,7 +120,7 @@ pub(super) struct Lab {
     demo_ready: bool,
     demo_start: Option<bool>,
     demo: Option<Demo>,
-    demo_note: Option<&'static str>,
+    demo_note: Option<Cow<'static, str>>,
     demo_unavailable: Option<&'static str>,
     demo_error: Option<String>,
 }
@@ -391,7 +394,7 @@ impl Lab {
         let Some(store) = store else {
             self.demo_start = None;
             if self.demo.take().is_some() {
-                self.demo_note = Some("Demo stopped because the project closed.");
+                self.demo_note = Some("Demo stopped because the project closed.".into());
             }
             return None;
         };
@@ -400,34 +403,48 @@ impl Lab {
         {
             self.demo_error = None;
             if let Some(reason) = demo_blocked(store) {
-                self.demo_note = Some(reason);
+                self.demo_note = Some(reason.into());
             } else if let Some(seed) = demo_seed(store.project()) {
-                self.demo = Some(Demo::new(seed, store.project().rev, now, watch));
+                let resume = latest_open_session(store).map(|id| {
+                    let earlier = store
+                        .records()
+                        .iter()
+                        .filter(|record| {
+                            record.batch.session == Some(id)
+                                && record.batch.source == Source::Agent
+                                && matches!(&record.batch.change, Change::Edit { .. })
+                                && store.is_active(record.rev)
+                        })
+                        .count();
+                    (id, earlier)
+                });
+                self.demo_note = Some(match resume {
+                    Some((id, earlier)) => resumed_demo_note(id, earlier, false),
+                    None => "Demo running".into(),
+                });
+                self.demo = Some(Demo::new(seed, store.project().rev, now, watch, resume));
                 self.demo_ready = false;
-                self.demo_note = Some("Demo running");
             } else {
-                self.demo_note = Some(DEMO_SEED_MISSING);
+                self.demo_note = Some(DEMO_SEED_MISSING.into());
             }
         }
         let demo = self.demo.as_mut()?;
         if !demo.due.is_some_and(|due| due <= now) {
             return None;
         }
-        let mut open = store.sessions().iter().filter(|session| session.open);
         if store.project().access != Access::Live
             || store.problem().is_some()
             || store.project().rev != demo.revision
-            || open.next().map(|session| session.id) != demo.session
-            || open.next().is_some()
+            || latest_open_session(store) != demo.session
         {
             self.demo = None;
-            self.demo_note = Some("Demo stopped because the project or session changed.");
+            self.demo_note = Some("Demo stopped because the project or session changed.".into());
             return None;
         }
         let call = demo.call(end);
         if call.is_none() {
             self.demo = None;
-            self.demo_note = Some("Demo stopped because a frame or session is unavailable.");
+            self.demo_note = Some("Demo stopped because a frame or session is unavailable.".into());
         }
         call
     }
@@ -439,7 +456,7 @@ impl Lab {
         let (payload, error) = tool_reply(reply);
         if error {
             self.demo = None;
-            self.demo_note = Some("Demo stopped. See Call log for the tool reply.");
+            self.demo_note = Some("Demo stopped. See Call log for the tool reply.".into());
             if let Some(call) = self.calls.front().filter(|call| call.reply.error) {
                 self.demo_error = Some(format!("Demo stopped. {}", call.reply.summary));
             }
@@ -448,14 +465,17 @@ impl Lab {
         {
             self.demo = None;
             self.demo_note =
-                Some("Demo stopped because the start call resumed an existing session.");
+                Some("Demo stopped because the start call resumed an existing session.".into());
         } else if !demo.advance(now, payload) {
             self.demo = None;
-            self.demo_note = Some("Demo stopped because a tool returned an unexpected result.");
-        } else if demo.step == DemoStep::Done {
-            self.demo = None;
             self.demo_note =
-                Some("Demo complete. Undo in the session banner reverts both batches.");
+                Some("Demo stopped because a tool returned an unexpected result.".into());
+        } else if demo.step == DemoStep::Done {
+            self.demo_note = Some(match demo.session.zip(demo.earlier_batches) {
+                Some((id, earlier)) => resumed_demo_note(id, earlier, true),
+                None => "Demo complete. Undo in the session banner reverts both batches.".into(),
+            });
+            self.demo = None;
         }
     }
 
@@ -631,13 +651,29 @@ fn demo_blocked(store: &Store) -> Option<&'static str> {
         Some("The demo requires a writable project. Inspect its journal first.")
     } else if store.project().access != Access::Live {
         Some("The demo requires Live agent access.")
-    } else if store.sessions().iter().any(|session| session.open) {
-        Some(
-            "End the open agent session before running the demo. The demo uses its own undo history.",
-        )
     } else {
         None
     }
+}
+
+fn latest_open_session(store: &Store) -> Option<SessionId> {
+    store
+        .sessions()
+        .iter()
+        .rfind(|session| session.open)
+        .map(|session| session.id)
+}
+
+fn resumed_demo_note(id: SessionId, earlier: usize, complete: bool) -> Cow<'static, str> {
+    let action = if complete {
+        "Demo added two live batches to"
+    } else {
+        "Demo running in"
+    };
+    format!(
+        "{action} {id}. Undo all agent edits reverts this session's live batches, including {earlier} from before the demo."
+    )
+    .into()
 }
 
 fn demo_seed(project: &Project) -> Option<DemoSeed> {
@@ -725,21 +761,31 @@ struct Demo {
     revision: u64,
     step: DemoStep,
     session: Option<SessionId>,
+    earlier_batches: Option<usize>,
     playhead: Option<i32>,
     due: Option<f64>,
 }
 
 impl Demo {
-    fn new(seed: DemoSeed, revision: u64, now: f64, watch: bool) -> Self {
+    fn new(
+        seed: DemoSeed,
+        revision: u64,
+        now: f64,
+        watch: bool,
+        resume: Option<(SessionId, usize)>,
+    ) -> Self {
         Self {
             seed,
             revision,
             step: if watch {
                 DemoStep::Watch
+            } else if resume.is_some() {
+                DemoStep::Transcript
             } else {
                 DemoStep::Start
             },
-            session: None,
+            session: resume.map(|(id, _)| id),
+            earlier_batches: resume.map(|(_, count)| count),
             playhead: None,
             due: Some(now),
         }
@@ -825,6 +871,7 @@ impl Demo {
         let applied = payload.field("applied").and_then(Json::as_bool) == Some(true);
         let dry_run = payload.field("dryRun").and_then(Json::as_bool);
         let (next, pause) = match self.step {
+            DemoStep::Watch if applied && self.session.is_some() => (DemoStep::Transcript, 0.0),
             DemoStep::Watch if applied => (DemoStep::Start, 0.0),
             DemoStep::Start
                 if revision == Some(self.revision)
@@ -1248,10 +1295,12 @@ fn detail(
         let description = ui.label(summary, BODY);
         tint(ui, description, MUTED);
         ui.row(Node::row().w(Size::Grow).gap(4.0).row_gap(4.0).wrap(), |ui| {
-            let hint = match capability(tool.name) {
-                "read" => "readOnlyHint",
-                "edit" if tool.name == "edit.apply" => "destructiveHint: per op",
-                other => other,
+            let hint = if tool.name == "edit.apply" {
+                "destructiveHint: per op"
+            } else if capability(tool.name).starts_with("read") {
+                "readOnlyHint"
+            } else {
+                "destructiveHint: false"
             };
             annotation(ui, format_args!("{hint}"));
             if tool.input.iter().any(|(key, _)| *key == "idempotencyKey") {
@@ -1290,20 +1339,11 @@ fn request(
     let mut reset = false;
     let mut revise = false;
     let mut start_demo = None;
-    let sync_revision = tool.input.iter().any(|(field, _)| *field == "ifRevision");
     let run_width = 75.6;
     let reset_width = 133.2;
     let revision_width = 162.0;
     let demo_width = 133.2;
-    let first_demo_fit = run_width
-        + reset_width
-        + demo_width
-        + 24.0
-        + if sync_revision {
-            revision_width + 8.0
-        } else {
-            0.0
-        };
+    let first_demo_fit = run_width + reset_width + revision_width + demo_width + 32.0;
     ui.row(
         Node::row().w(Size::Grow).gap(8.0).row_gap(8.0).wrap(),
         |ui| {
@@ -1326,18 +1366,16 @@ fn request(
                         .label(BODY.w(Size::Fit)),
                 )
                 .clicked;
-            if sync_revision {
-                revise = ui
-                    .button(
-                        "lab-revision",
-                        "Use current revision",
-                        &Button::sized(revision_width, 24.0)
-                            .look(&ACTION_LOOK)
-                            .label(SMALL)
-                            .disabled(context.is_none() || missing.is_some()),
-                    )
-                    .clicked;
-            }
+            revise = ui
+                .button(
+                    "lab-revision",
+                    "Use current revision",
+                    &Button::sized(revision_width, 24.0)
+                        .look(&ACTION_LOOK)
+                        .label(SMALL)
+                        .disabled(context.is_none()),
+                )
+                .clicked;
             if work_width(ui.view_size().width) >= first_demo_fit {
                 ui.node("lab-demo-spacer", Node::DEFAULT.w(Size::Grow));
             }
@@ -1364,7 +1402,7 @@ fn request(
     if let Some(note) = lab
         .demo_error
         .as_deref()
-        .or(lab.demo_note)
+        .or(lab.demo_note.as_deref())
         .or(lab.demo_unavailable)
     {
         let label = ui.label(note, CAPTION);
@@ -1452,11 +1490,18 @@ fn request(
     } else if reset {
         Some(Action::Reset)
     } else if revise && let Some((revision, session)) = context {
-        let session = session.filter(|_| tool.input.iter().any(|(field, _)| *field == "sessionId"));
-        Some(match with_revision(draft, revision, session) {
-            Ok(draft) => Action::Replace(draft),
-            Err(error) => Action::Invalid(error),
-        })
+        let accepts = |arg| tool.input.iter().any(|(field, _)| *field == arg);
+        let revision = accepts("ifRevision").then_some(revision);
+        let session = session.filter(|_| accepts("sessionId"));
+        if revision.is_none() && session.is_none() {
+            None
+        } else {
+            match with_revision(draft, revision, session) {
+                Ok(updated) if updated != draft => Some(Action::Replace(updated)),
+                Ok(_) => None,
+                Err(error) => Some(Action::Invalid(error)),
+            }
+        }
     } else if run && (missing.is_none() || intents.draft.is_some()) {
         Some(match parse_request(draft) {
             Ok(args) => Action::Run(Call {
@@ -1736,8 +1781,15 @@ fn parse_request(draft: &str) -> Result<Json, String> {
     Ok(args)
 }
 
-fn with_revision(draft: &str, revision: u64, session: Option<SessionId>) -> Result<String, String> {
-    let mut updated = with_field(draft, "ifRevision", &format!("\"r{revision}\""))?;
+fn with_revision(
+    draft: &str,
+    revision: Option<u64>,
+    session: Option<SessionId>,
+) -> Result<String, String> {
+    let mut updated = match revision {
+        Some(revision) => with_field(draft, "ifRevision", &format!("\"r{revision}\""))?,
+        None => draft.to_owned(),
+    };
     if let Some(session) = session {
         let mut encoded = String::new();
         splice_json::write(&Json::String(session.to_string()), &mut encoded)
@@ -2166,7 +2218,7 @@ mod tests {
         let mut intents = Intents::default();
         assert!(!intents.changed());
         let session = SessionId::from_serial(2);
-        let draft = with_revision(lab.draft(), 7, Some(session)).unwrap();
+        let draft = with_revision(lab.draft(), Some(7), Some(session)).unwrap();
         let args = parse_request(&draft).unwrap();
         assert_eq!(
             args.field("sessionId"),
@@ -2583,6 +2635,7 @@ mod tests {
                 7,
                 0.0,
                 false,
+                None,
             )
         };
 
@@ -2607,7 +2660,7 @@ mod tests {
         lab.demo_replied(0.0, &resumed);
         assert!(lab.demo.is_none());
         assert_eq!(
-            lab.demo_note,
+            lab.demo_note.as_deref(),
             Some("Demo stopped because the start call resumed an existing session.")
         );
 
@@ -2624,22 +2677,31 @@ mod tests {
         );
     }
 
+    fn copy_demo_sample(label: &str) -> PathBuf {
+        use std::{fs, path::Path};
+
+        let sample =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/sample.splice");
+        let path = std::env::temp_dir().join(format!(
+            "splice-lab-demo-{label}-{}.splice",
+            std::process::id(),
+        ));
+        fs::create_dir_all(path.join("transcripts")).unwrap();
+        for file in ["project.json", "media.json", "transcripts/med_screen.json"] {
+            fs::copy(sample.join(file), path.join(file)).unwrap();
+        }
+        path
+    }
+
     #[test]
     fn demo_paces_real_store_batches_and_preserves_session_undo() {
         use crate::{EditorLayout, apply_view_command, editor_titlebar::View};
         use pxui::{Event, FrameIn, testing};
         use splice_core::history::{Scope, WriteOptions};
         use splice_mcp::live::Viewer;
-        use std::{fs, path::Path};
+        use std::fs;
 
-        let sample =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/sample.splice");
-        let path =
-            std::env::temp_dir().join(format!("splice-lab-demo-{}.splice", std::process::id()));
-        fs::create_dir_all(path.join("transcripts")).unwrap();
-        for file in ["project.json", "media.json", "transcripts/med_screen.json"] {
-            fs::copy(sample.join(file), path.join(file)).unwrap();
-        }
+        let path = copy_demo_sample("fresh");
         let mut viewer = Viewer::new(Store::open(&path).unwrap(), None);
         let base_items = viewer.store().project().items.order().len();
         let mut lab = Lab::new();
@@ -2758,7 +2820,7 @@ mod tests {
         assert!(lab.demo_deadline().is_none());
         assert_eq!(lab.calls.len(), expected.len());
         assert_eq!(
-            lab.demo_note,
+            lab.demo_note.as_deref(),
             Some("Demo complete. Undo in the session banner reverts both batches.")
         );
         let store = viewer.store_mut();
@@ -2785,17 +2847,309 @@ mod tests {
                 .any(|marker| marker.name == "Save beat")
         );
         lab.refresh_demo(Some(store));
-        assert!(!lab.demo_ready);
+        assert!(lab.demo_ready);
         lab.apply(Intents {
             action: Some(Action::Demo(false)),
             ..Intents::default()
         });
-        assert!(lab.poll_demo(now, Some(store), 600).is_none());
+        assert_eq!(
+            lab.poll_demo(now, Some(store), 600).unwrap().name,
+            "transcript.get"
+        );
+        assert_eq!(lab.demo.as_ref().unwrap().session, session);
+        assert_eq!(lab.demo.as_ref().unwrap().earlier_batches, Some(0));
         assert_eq!(store.sessions().len(), 1);
         assert!(store.sessions()[0].open);
         assert_eq!(store.project().rev, 3);
         viewer.close().unwrap();
         fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn demo_reuses_the_latest_open_session_and_reports_its_earlier_live_batches() {
+        use crate::{EditorLayout, apply_view_command, editor_titlebar::View};
+        use pxui::{Event, FrameIn, testing};
+        use splice_core::history::{Scope, WriteOptions};
+        use splice_mcp::live::Viewer;
+
+        fn request(call: Call) -> Json {
+            Json::Object(vec![
+                ("command".into(), Json::String("tool".into())),
+                ("name".into(), Json::String(call.name.into())),
+                ("args".into(), call.args),
+            ])
+        }
+
+        fn call_tool(viewer: &mut Viewer, layout: &mut EditorLayout, request: &Json) -> Json {
+            let reply = viewer.handle(request, 0, &mut |store, view| {
+                apply_view_command(layout, None, store, view, None, None)
+            });
+            let (payload, error) = tool_reply(&reply);
+            assert!(!error, "{payload:?}");
+            reply
+        }
+
+        fn start(viewer: &mut Viewer, layout: &mut EditorLayout, agent: &str) -> SessionId {
+            let args =
+                splice_json::parse(&format!(r#"{{"projectId":"prj_1","agent":"{agent}"}}"#,))
+                    .unwrap();
+            let reply = call_tool(
+                viewer,
+                layout,
+                &request(Call {
+                    name: "session.start",
+                    args,
+                }),
+            );
+            tool_reply(&reply)
+                .0
+                .field("sessionId")
+                .and_then(Json::as_str)
+                .unwrap()
+                .parse()
+                .unwrap()
+        }
+
+        let path = copy_demo_sample("resume");
+        let mut viewer = Viewer::new(Store::open(&path).unwrap(), None);
+        let mut layout = EditorLayout::new([960.0, 640.0]);
+        layout.view = View::Agent;
+        let unrelated = start(&mut viewer, &mut layout, "Earlier session");
+        let session = start(&mut viewer, &mut layout, "Manually started");
+        assert_ne!(unrelated, session);
+
+        let store = viewer.store_mut();
+        for (id, at, name) in [
+            (unrelated, 14, "Other session marker"),
+            (session, 16, "Earlier live batch"),
+            (session, 18, "Already reverted batch"),
+        ] {
+            let marker = splice_json::parse(&format!(
+                r#"{{"cmd":"marker.add","at":{at},"name":"{name}"}}"#,
+            ))
+            .unwrap();
+            store
+                .apply(
+                    &[marker],
+                    &WriteOptions {
+                        source: Source::Agent,
+                        session: Some(id),
+                        if_revision: Some(store.project().rev),
+                        ..WriteOptions::default()
+                    },
+                )
+                .unwrap();
+        }
+        let undo = WriteOptions {
+            session: Some(session),
+            ..WriteOptions::default()
+        };
+        assert_eq!(store.undo(Scope::Last, &undo).unwrap().reverted, [3]);
+        let revision = store.project().rev;
+        assert_eq!(revision, 4);
+        let base_items = store.project().items.order().len();
+
+        let mut lab = Lab::new();
+        lab.refresh_demo(Some(store));
+        assert!(lab.demo_ready);
+        let mut state = editor_session::State::default();
+        state.refresh(Some(store), Some(session));
+        let draw = |ui: &mut Ui,
+                    width,
+                    events: &[Event],
+                    lab: &Lab,
+                    store: &Store,
+                    state: &editor_session::State| {
+            let mut intents = Intents::default();
+            ui.frame(&FrameIn::new(width, 640.0).events(events), &mut |ui| {
+                intents.merge(paint(
+                    ui,
+                    Some((store.project().rev, Some(session))),
+                    lab,
+                    &[],
+                    Some((state, store)),
+                    0.0,
+                ));
+            })
+            .unwrap();
+            intents
+        };
+        let mut ui = crate::viewer_ui().unwrap();
+        ui.set_a11y(true);
+        for _ in 0..3 {
+            draw(&mut ui, 960.0, &[], &lab, store, &state);
+        }
+        let button = testing::find(&ui, Role::Button, "Run demo session").unwrap();
+        for kind in [Event::POINTER_PRESSED, Event::POINTER_RELEASED] {
+            let event = Event::pointer(
+                kind,
+                0,
+                (button.x + button.w / 2.0).into(),
+                (button.y + button.h / 2.0).into(),
+            );
+            let intents = draw(&mut ui, 960.0, &[event], &lab, store, &state);
+            assert!(lab.apply(intents).is_none());
+        }
+        assert_eq!(lab.demo_start, Some(false));
+
+        let session_text = session.to_string();
+        let running = format!(
+            "Demo running in {session}. Undo all agent edits reverts this session's live batches, including 1 from before the demo."
+        );
+        let complete = format!(
+            "Demo added two live batches to {session}. Undo all agent edits reverts this session's live batches, including 1 from before the demo."
+        );
+        let expected = [
+            ("transcript.get", 0.5, 4),
+            ("edit.apply", 0.7, 4),
+            ("edit.apply", 0.9, 5),
+            ("edit.apply", 0.7, 6),
+            ("ui.show", 0.3, 6),
+            ("view.frames", 0.0, 6),
+        ];
+        let mut now = 10.0;
+        for (index, (tool, pause, expected_revision)) in expected.into_iter().enumerate() {
+            let call = lab.poll_demo(now, Some(viewer.store()), 600).unwrap();
+            assert_eq!(tool, call.name);
+            assert!(lab.poll_demo(now, Some(viewer.store()), 600).is_none());
+            if index == 0 {
+                assert_eq!(lab.demo_note.as_deref(), Some(running.as_str()));
+            }
+            let body = request(call);
+            let args = body.field("args").unwrap();
+            if tool == "edit.apply" {
+                assert_eq!(
+                    args.field("sessionId").and_then(Json::as_str),
+                    Some(session_text.as_str())
+                );
+                let base = if index == 3 { "r5" } else { "r4" };
+                assert_eq!(args.field("ifRevision").and_then(Json::as_str), Some(base));
+            }
+            if index == 1 {
+                assert!(args.field("idempotencyKey").is_none());
+                assert_eq!(args.field("dryRun").and_then(Json::as_bool), Some(true));
+            }
+            if index == 2 {
+                assert_eq!(
+                    args.field("idempotencyKey").and_then(Json::as_str),
+                    Some("demo-callouts-4")
+                );
+            }
+            let reply = if tool == "view.frames" {
+                assert_eq!(
+                    args.field("at"),
+                    Some(&splice_json::parse("[276,366]").unwrap())
+                );
+                // Only the window renderer needs a platform frame receipt in the headless test.
+                splice_json::parse(
+                    r#"{"result":{"isError":false,"structuredContent":{"revision":"r6","frames":[{"frame":276},{"frame":366}]}}}"#,
+                )
+                .unwrap()
+            } else {
+                call_tool(&mut viewer, &mut layout, &body)
+            };
+            assert_eq!(viewer.store().project().rev, expected_revision);
+            assert_eq!(layout.view, View::Agent);
+            lab.set_reply(tool, args, &reply);
+            lab.demo_replied(now, &reply);
+            if index + 1 < expected.len() {
+                assert_eq!(lab.demo_deadline(), Some(now + pause));
+                assert!(
+                    lab.poll_demo(now + pause - 0.0001, Some(viewer.store()), 600)
+                        .is_none()
+                );
+            }
+            now += pause;
+        }
+        assert!(lab.demo.is_none() && lab.demo_deadline().is_none());
+        assert_eq!(lab.calls.len(), expected.len());
+        assert_eq!(lab.demo_note.as_deref(), Some(complete.as_str()));
+        let store = viewer.store_mut();
+        assert_eq!(
+            store
+                .sessions()
+                .iter()
+                .filter(|session| session.open)
+                .count(),
+            2
+        );
+        assert_eq!(store.project().items.order().len(), base_items + 2);
+
+        state.refresh(Some(store), Some(session));
+        mem_sys::set_peer(pxui::library_counter);
+        for width in [960.0, 480.0] {
+            let mut ui = crate::viewer_ui().unwrap();
+            ui.set_a11y(true);
+            let mut tick = || assert!(!draw(&mut ui, width, &[], &lab, store, &state).changed());
+            for _ in 0..8 {
+                tick();
+            }
+            splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
+                .warm(&mut tick);
+            assert!(testing::find(&ui, Role::Label, &complete).is_some());
+            println!("RESUMED-DEMO-WARM|{width}|0 allocations");
+        }
+        viewer.close().unwrap();
+        let mut viewer = Viewer::new(Store::open(&path).unwrap(), None);
+        let store = viewer.store_mut();
+        assert_eq!(store.project().rev, 6);
+        assert_eq!(store.project().items.order().len(), base_items + 2);
+        assert_eq!(latest_open_session(store), Some(session));
+        assert_eq!(
+            store.undo(Scope::Session, &undo).unwrap().reverted,
+            [2, 5, 6]
+        );
+        assert!(store.is_active(1) && !store.is_active(2) && !store.is_active(3));
+        assert_eq!(store.project().items.order().len(), base_items);
+        assert!(
+            store
+                .project()
+                .markers
+                .iter()
+                .any(|m| m.name == "Other session marker")
+        );
+        assert!(
+            !store
+                .project()
+                .markers
+                .iter()
+                .any(|m| m.name == "Earlier live batch" || m.name == "Save beat")
+        );
+
+        // Watch uses the Editor route and still skips session.start when it has an owner.
+        lab.refresh_demo(Some(store));
+        assert!(lab.demo_ready);
+        lab.apply(Intents {
+            action: Some(Action::Demo(true)),
+            ..Intents::default()
+        });
+        let watch = lab.poll_demo(now, Some(viewer.store()), 600).unwrap();
+        assert_eq!(watch.name, "ui.show");
+        let watch = request(watch);
+        let reply = call_tool(&mut viewer, &mut layout, &watch);
+        assert_eq!(layout.view, View::Editor);
+        lab.demo_replied(now, &reply);
+        let transcript = lab.poll_demo(now, Some(viewer.store()), 600).unwrap();
+        assert_eq!(transcript.name, "transcript.get");
+        let reply = call_tool(&mut viewer, &mut layout, &request(transcript));
+        lab.demo_replied(now, &reply);
+
+        // A newer open session invalidates the pinned owner even at the same Store revision.
+        let newer = start(&mut viewer, &mut layout, "New session during demo");
+        assert_ne!(newer, session);
+        assert_eq!(viewer.store().project().rev, 7);
+        assert!(
+            lab.poll_demo(now + 0.5, Some(viewer.store()), 600)
+                .is_none()
+        );
+        assert!(lab.demo.is_none());
+        assert_eq!(
+            lab.demo_note.as_deref(),
+            Some("Demo stopped because the project or session changed.")
+        );
+        assert_eq!(viewer.store().project().rev, 7);
+        viewer.close().unwrap();
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
@@ -2814,7 +3168,7 @@ mod tests {
         let context = Some((revision, Some(session)));
         let info = splice_json::parse(r#"{"projectId":"prj_1","details":["scope",3]}"#).unwrap();
         let edit =
-            splice_json::parse(&with_revision(lab.draft(), revision, Some(session)).unwrap())
+            splice_json::parse(&with_revision(lab.draft(), Some(revision), Some(session)).unwrap())
                 .unwrap();
         let error =
             splice_json::parse(r#"{"structuredContent":{"code":"STALE_REVISION"},"isError":true}"#)
@@ -2981,7 +3335,8 @@ mod tests {
         let activity = Some((&state, &store));
         let context = Some((store.project().rev, Some(session)));
         let mut lab = Lab::new();
-        lab.demo_note = Some("Demo complete. Undo in the session banner reverts both batches.");
+        lab.demo_note =
+            Some("Demo complete. Undo in the session banner reverts both batches.".into());
         let args = splice_json::parse(r#"{"projectId":"prj_1","at":[276,366]}"#).unwrap();
         let reply = splice_json::parse(
             r#"{"structuredContent":{"frames":[
@@ -3127,12 +3482,12 @@ mod tests {
         let mut lab = Lab::new();
         lab.choose(tool("edit.apply"));
         let draft = r#"{"ops":[{"ifRevision":"r3","weight":2.0}], "\u0069fRevision" : null }"#;
-        let updated = with_revision(draft, 42, None).unwrap();
+        let updated = with_revision(draft, Some(42), None).unwrap();
         assert_eq!(updated, draft.replace("null", "\"r42\""));
         assert!(parse_request("[]").is_err());
         assert!(parse_request("{").is_err());
         assert_eq!(
-            parse_request(&with_revision("{}", 4, None).unwrap())
+            parse_request(&with_revision("{}", Some(4), None).unwrap())
                 .unwrap()
                 .field("ifRevision")
                 .and_then(Json::as_str),
@@ -3168,5 +3523,80 @@ mod tests {
                 .and_then(Json::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn revision_control_refreshes_only_arguments_the_tool_accepts() {
+        use pxui::{Event, FrameIn, testing};
+
+        let context = Some((42, Some(SessionId::from_serial(2))));
+        let cases = [
+            (
+                "history.list",
+                "readOnlyHint",
+                r#"{"sessionId":"ses_1", "limit":24}"#,
+                r#"{"sessionId":"ses_2", "limit":24}"#,
+            ),
+            (
+                "history.undo",
+                "destructiveHint: false",
+                r#"{"sessionId":"ses_1", "ifRevision":"r1", "scope":"last"}"#,
+                r#"{"sessionId":"ses_2", "ifRevision":"r42", "scope":"last"}"#,
+            ),
+            (
+                "session.end",
+                "destructiveHint: false",
+                r#"{"sessionId":"ses_1"}"#,
+                r#"{"sessionId":"ses_2"}"#,
+            ),
+            (
+                "edit.apply",
+                "destructiveHint: per op",
+                r#"{"sessionId":"ses_1", "ifRevision":"r1", "dryRun":true}"#,
+                r#"{"sessionId":"ses_2", "ifRevision":"r42", "dryRun":true}"#,
+            ),
+            ("project.info", "readOnlyHint", "{}", "{}"),
+        ];
+        for width in [960.0, 800.0, 480.0] {
+            let mut ui = crate::viewer_ui().unwrap();
+            ui.set_a11y(true);
+            let frame = FrameIn::new(width, 640.0);
+            let mut lab = Lab::new();
+            for (name, hint, before, after) in cases {
+                let index = tool_catalog()
+                    .iter()
+                    .position(|tool| tool.name == name)
+                    .unwrap();
+                let tool = &tool_catalog()[index];
+                lab.choose(index);
+                lab.set_draft(before.into());
+                let draw = |ui: &mut Ui, lab: &mut Lab, events: &[Event]| {
+                    let mut intents = Intents::default();
+                    ui.frame(&frame.events(events), &mut |ui| {
+                        let mut next = Intents::default();
+                        detail(ui, context, lab, tool, &[], &mut next);
+                        intents.merge(next);
+                    })
+                    .unwrap();
+                    let changed = intents.changed();
+                    assert!(lab.apply(intents).is_none());
+                    changed
+                };
+                for _ in 0..2 {
+                    assert!(!draw(&mut ui, &mut lab, &[]));
+                }
+                assert!(testing::find(&ui, Role::Label, hint).is_some(), "{name}");
+                let button = testing::find(&ui, Role::Button, "Use current revision").unwrap();
+                assert!(button.x >= 0.0 && button.x + button.w <= width);
+                let x = f64::from(button.x + button.w / 2.0);
+                let y = f64::from(button.y + button.h / 2.0);
+                for kind in [Event::POINTER_PRESSED, Event::POINTER_RELEASED] {
+                    draw(&mut ui, &mut lab, &[Event::pointer(kind, 0, x, y)]);
+                }
+                assert_eq!(lab.draft(), after, "{name} at {width}");
+                assert!(!draw(&mut ui, &mut lab, &[]));
+                assert!(lab.calls.is_empty());
+            }
+        }
     }
 }

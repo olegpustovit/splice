@@ -2167,7 +2167,7 @@ impl WheelInput {
         const SHIFT: u8 = 1;
         const CTRL: u8 = 2;
         const META: u8 = 4;
-        let (delta, lines, momentum) = match *event {
+        let (delta, lines, momentum, pinch) = match *event {
             Event::PointerMoved((x, y))
             | Event::PointerPressed(_, (x, y))
             | Event::PointerReleased(_, (x, y)) => {
@@ -2194,9 +2194,16 @@ impl WheelInput {
                 self.modifiers = 0;
                 return false;
             }
-            Event::Scrolled(delta) => (delta, true, false),
+            Event::Scrolled(delta) => (delta, true, false, None),
             Event::TrackpadScrolled { delta, phase, .. } if phase != ScrollPhase::Lifted => {
-                (delta, false, phase == ScrollPhase::Momentum)
+                (delta, false, phase == ScrollPhase::Momentum, None)
+            }
+            Event::Pinched(scale) => {
+                let scale = scale as f32;
+                if !scale.is_finite() || scale <= 0.0 {
+                    return false;
+                }
+                ((0.0, 0.0), false, false, Some(scale))
             }
             _ => return false,
         };
@@ -2214,10 +2221,10 @@ impl WheelInput {
 
         // The macOS host reports SDL deltas: positive right and up.
         let (dx, dy) = (delta.0 as f32, -delta.1 as f32);
-        if !dx.is_finite() || !dy.is_finite() || (dx == 0.0 && dy == 0.0) {
+        if pinch.is_none() && (!dx.is_finite() || !dy.is_finite() || (dx == 0.0 && dy == 0.0)) {
             return false;
         }
-        if self.modifiers & (CTRL | META) != 0 {
+        if pinch.is_some() || self.modifiers & (CTRL | META) != 0 {
             let geo = Geometry::new(area.width, area.fps, area.end, state);
             let x = pointer.x - ui.rect(&area.ruler).x - geo.labels;
             let sensitivity = if lines {
@@ -2227,7 +2234,8 @@ impl WheelInput {
             } else {
                 0.012
             };
-            geo.zoom_at_x(state, geo.scale * (-dy * sensitivity).exp(), x);
+            let scale = pinch.unwrap_or_else(|| (-dy * sensitivity).exp());
+            geo.zoom_at_x(state, geo.scale * scale, x);
             state.origin = state.origin.clamp(0.0, geo.max_origin(state.scale));
             return true;
         }
@@ -7329,6 +7337,44 @@ mod tests {
                 assert_eq!(scene.vertical_offset(), max_scroll);
                 assert_eq!(scene.geometry().origin, panned);
             }
+        }
+    }
+
+    #[test]
+    fn timeline_pinch_anchors_to_the_pointer_without_warm_allocations() {
+        mem_sys::set_peer(pxui::library_counter);
+        for width in [480.0, 800.0, 960.0] {
+            let mut scene = WheelTest::new(width, 10);
+            let x = 113.25;
+            let track_x = scene.geometry().labels + x;
+            let anchored = scene.geometry().origin + x / scene.geometry().scale;
+            let y = scene.vertical_offset();
+            let mut scale = scene.geometry().scale;
+            for (ruler, factor) in [(true, 1.2), (false, 0.9)] {
+                let pointer = scene.pointer(ruler, track_x);
+                scene.frame(&[pointer, Event::Pinched(factor)]);
+                let geo = scene.geometry();
+                scale *= factor as f32;
+                assert!((geo.scale - scale).abs() < 0.00001);
+                assert!((geo.x(anchored) - x).abs() < 0.0001);
+                assert_eq!(scene.vertical_offset(), y);
+                assert!(!scene.view.state.manual_pan);
+            }
+
+            scene.frame(&[Event::PointerMoved((200.0, 1.0)), Event::Pinched(1.3)]);
+            assert_eq!(scene.geometry().scale, scale);
+            assert_eq!(scene.vertical_offset(), y);
+            let pointer = scene.pointer(false, track_x);
+            scene.frame(&[pointer, Event::Pinched(0.0)]);
+            assert_eq!(scene.geometry().scale, scale);
+            splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
+                .warm(&mut || {
+                    for _ in 0..12 {
+                        scene.frame(&[Event::Pinched(1.1)]);
+                        scene.frame(&[Event::Pinched(1.0 / 1.1)]);
+                    }
+                });
+            assert!((scene.geometry().x(anchored) - x).abs() < 0.001);
         }
     }
 
