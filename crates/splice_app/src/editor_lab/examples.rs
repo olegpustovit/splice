@@ -3,9 +3,10 @@ use splice_core::{
     package::journal::{Change, Source},
 };
 use splice_json::Value as Json;
-use splice_mcp::tool_catalog;
+use splice_mcp::{take_events_available, tool_catalog};
 use splice_model::{
-    Access, ClipTiming, JobId, LaneId, Media, MediaKind, Project, SessionId, TimelineId,
+    Access, ClipId, ClipTiming, ItemId, JobId, LaneId, Media, MediaId, MediaKind, Project,
+    SessionId, TimelineId,
 };
 use std::{
     collections::VecDeque,
@@ -18,6 +19,31 @@ const OPEN: &str = "Open a project in the editor to run this example.";
 const LIVE: &str = "This example requires a writable project with Live agent access.";
 const SESSION: &str = "Start an agent session to run this example.";
 const JOB_LIMIT: usize = 30;
+const SAMPLE_EDIT_OPS: &str = r#"[
+    {
+      "cmd": "item.split",
+      "item": "clp_take",
+      "at": 372,
+      "ref": "$cut"
+    },
+    {
+      "cmd": "overlay.add",
+      "kind": "media",
+      "media": "med_broll",
+      "anchor": {
+        "item": "$cut.right",
+        "edge": "start"
+      },
+      "length": 90
+    },
+    {
+      "cmd": "item.delete",
+      "items": [
+        "ovl_label"
+      ],
+      "ripple": false
+    }
+  ]"#;
 
 pub(super) struct Examples {
     key: Option<Key>,
@@ -218,6 +244,7 @@ struct Subjects {
     take: Option<(TimelineId, ClipTiming)>,
     transcript: Option<TimelineId>,
     media_clip: Option<TimelineId>,
+    sample_edit: bool,
     live_batch: bool,
     spine_end: Option<i32>,
     marker_at: i32,
@@ -268,15 +295,8 @@ impl Subjects {
             };
             let slot = project.clips.find(clip)?;
             let media = media(project, id)?;
-            let events = media.take.as_ref()?.events.as_deref()?;
-            (media.kind == MediaKind::Take
-                && store
-                    .path()
-                    .join("takes")
-                    .join(media.id.to_string())
-                    .join(events)
-                    .is_file())
-            .then(|| (id, project.clips.timing(slot).expect("live clip")))
+            take_events_available(store.path(), media)
+                .then(|| (id, project.clips.timing(slot).expect("live clip")))
         });
         let transcript = selected
             .into_iter()
@@ -314,6 +334,7 @@ impl Subjects {
             take,
             transcript,
             media_clip,
+            sample_edit: sample_edit(project),
             live_batch,
             spine_end,
             fps,
@@ -329,6 +350,23 @@ impl Subjects {
             .find(|marker| marker.at == self.marker_at)
             .map(|marker| TimelineId::Marker(marker.id));
     }
+}
+
+fn sample_edit(project: &Project) -> bool {
+    let clip = "clp_take".parse::<ClipId>().expect("sample clip ID");
+    let label = "ovl_label".parse::<ItemId>().expect("sample title ID");
+    let broll = "med_broll".parse::<MediaId>().expect("sample b-roll ID");
+    project
+        .clips
+        .find(clip)
+        .and_then(|slot| project.clips.timing(slot))
+        .is_some_and(|timing| timing.start < 372 && timing.end().is_some_and(|end| 372 < end))
+        && project.items.find(label).is_some()
+        && project.media.iter().any(|media| {
+            media.id == broll
+                && media.kind == MediaKind::Video
+                && f64::from(media.probe.frames) * f64::from(project.fps) >= 90.0 * media.probe.fps
+        })
 }
 
 fn media(project: &Project, id: TimelineId) -> Option<&Media> {
@@ -496,9 +534,18 @@ impl Example {
                 self.field("sessionId", format_args!(r#""{session}""#));
             }
             "edit.apply" => {
+                // Serial zero is unassigned. An explicit ID lets a fresh sample report the
+                // server's session lookup error without opening a session as a side effect.
+                let session = key
+                    .open
+                    .or(key.latest)
+                    .unwrap_or_else(|| SessionId::from_serial(0));
+                self.field("sessionId", format_args!(r#""{session}""#));
                 self.field("ifRevision", format_args!(r#""r{}""#, key.revision));
                 self.field("dryRun", format_args!("true"));
-                if let Some(id) = subjects.marker {
+                if subjects.sample_edit {
+                    self.field("ops", format_args!("{SAMPLE_EDIT_OPS}"));
+                } else if let Some(id) = subjects.marker {
                     self.field("ops", format_args!(r#"[{{"cmd": "marker.set", "marker": "{id}", "name": "Example marker"}}]"#));
                 } else {
                     self.field(
@@ -510,10 +557,6 @@ impl Example {
                     );
                 }
                 need_write?;
-                // An explicit ended session lets the Lab show the server's error without
-                // starting another session through MCP's omitted-session default.
-                let session = key.open.or(key.latest).ok_or(SESSION)?;
-                self.field("sessionId", format_args!(r#""{session}""#));
             }
             "history.list" => {
                 if let Some(session) = key.open.or(key.latest) {

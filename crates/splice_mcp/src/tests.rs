@@ -1543,13 +1543,24 @@ fn takes_events_follows_the_registered_primary_and_preserves_legacy_logs() {
         object(vec![("path", text(package.to_str().unwrap()))]),
     );
     let project_id = info.field("projectId").unwrap();
-    let mut events = |clip: &str| {
+    let events = |projects: &mut project::Projects, clip: &str| {
         call(
-            &mut projects,
+            projects,
             "takes.events",
             object(vec![
                 ("projectId", project_id.clone()),
                 ("clip", text(clip)),
+            ]),
+        )
+    };
+    let activity = |projects: &mut project::Projects, clip: &str| {
+        call(
+            projects,
+            "media.analyze",
+            object(vec![
+                ("projectId", project_id.clone()),
+                ("clip", text(clip)),
+                ("kinds", Json::Array(vec![text("activity")])),
             ]),
         )
     };
@@ -1585,25 +1596,41 @@ fn takes_events_follows_the_registered_primary_and_preserves_legacy_logs() {
     write_log(&package.join(directory).join("events.json"), 2.0);
     fs::write(&bundled, b"media").unwrap();
     fs::write(&linked, b"media").unwrap();
-    assert_click(events(&bundled_clip), 30);
-    assert_click(events(&linked_clip), 45);
-    assert_click(events(&directory_clip), 60);
+    for (clip, source, start) in [
+        (&bundled_clip, 30, 0),
+        (&linked_clip, 45, 90),
+        (&directory_clip, 60, 180),
+    ] {
+        assert_click(events(&mut projects, clip), source);
+        let reply = activity(&mut projects, clip);
+        let clicks = reply
+            .field("activity")
+            .and_then(|value| value.field("clicks"))
+            .and_then(Json::as_array)
+            .unwrap_or_else(|| panic!("{reply:?}"));
+        assert_eq!(clicks.len(), 1);
+        let from = clicks[0].field("from").and_then(Json::as_i64).unwrap();
+        let to = clicks[0].field("to").and_then(Json::as_i64).unwrap();
+        assert!((from..to).contains(&(start + source)), "{reply:?}");
+    }
 
     let legacy = package
         .join("takes")
         .join(bundled_id.to_string())
         .join("events.json");
     write_log(&legacy, 0.5);
-    assert_click(events(&bundled_clip), 30);
+    assert_click(events(&mut projects, &bundled_clip), 30);
     fs::remove_file(&bundled_log).unwrap();
-    assert_click(events(&bundled_clip), 15);
+    assert_click(events(&mut projects, &bundled_clip), 15);
 
     // A declared sidecar must resolve inside its own take, even when a legacy copy exists.
     std::os::unix::fs::symlink(&linked_log, &bundled_log).unwrap();
-    assert_error(events(&bundled_clip), "BAD_PACKAGE");
+    assert_error(events(&mut projects, &bundled_clip), "BAD_PACKAGE");
+    assert_error(activity(&mut projects, &bundled_clip), "BAD_PACKAGE");
     fs::remove_file(&bundled_log).unwrap();
     fs::remove_file(&legacy).unwrap();
-    assert_error(events(&bundled_clip), "MEDIA_OFFLINE");
+    assert_error(events(&mut projects, &bundled_clip), "MEDIA_OFFLINE");
+    assert_error(activity(&mut projects, &bundled_clip), "MEDIA_OFFLINE");
     projects.close().unwrap();
 }
 

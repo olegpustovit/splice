@@ -491,7 +491,13 @@ mod tests {
         .unwrap();
         edit::apply(&mut project, ops.as_array().unwrap(), Source::Agent, false).unwrap();
         let dir = std::env::temp_dir().join(format!("splice-follow-check-{}", std::process::id()));
-        let take = dir.join("takes/med_screen");
+        let media = project
+            .media
+            .iter_mut()
+            .find(|media| media.id.to_string() == "med_screen")
+            .unwrap();
+        media.path = "takes/registered/screen.mov".into();
+        let take = dir.join("takes/registered");
         std::fs::create_dir_all(&take).unwrap();
         // Rests left until 6 s, then a hand move across the screen in 0.1 s.
         let mut events = String::new();

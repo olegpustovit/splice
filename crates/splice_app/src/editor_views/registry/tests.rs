@@ -4,6 +4,43 @@ use pxui::{Event, FrameIn, geom::Rect, testing};
 use splice_testkit::alloc::Meter;
 
 #[test]
+fn keymap_draws_one_keycap_per_chord() {
+    let mut ui = crate::viewer_ui().unwrap();
+    ui.set_a11y(true);
+    let bindings = [
+        BindingDescription {
+            id: commands::DELETE,
+            group: "Edit",
+            title: "Delete",
+            keys: "⌫ · ⌦".into(),
+        },
+        BindingDescription {
+            id: commands::SHORTCUTS,
+            group: "View",
+            title: "Keyboard shortcuts",
+            keys: "?".into(),
+        },
+    ];
+    let frame = FrameIn::new(480.0, 140.0);
+    ui.frame(&frame, &mut |ui| keymap(ui, &bindings, 480.0))
+        .unwrap();
+    let label = testing::find(&ui, Role::Cell, "⌫ · ⌦").unwrap();
+    let fills = ui
+        .layers()
+        .flat_map(|layer| layer.instances)
+        .filter(|instance| {
+            instance.color == [SURFACE.r, SURFACE.g, SURFACE.b, SURFACE.a]
+                && (instance.rect[3] - instance.rect[1] - 16.0).abs() < 0.1
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(fills.len(), 3);
+    assert!((fills[0].rect[1] - label.y).abs() < 0.1);
+    assert_eq!(fills[0].rect[1], fills[1].rect[1]);
+    assert!((fills[1].rect[0] - fills[0].rect[2] - 3.0).abs() < 0.1);
+    assert!(fills[2].rect[1] > fills[1].rect[1]);
+}
+
+#[test]
 fn fixture_operations_and_live_catalog_checks() {
     let missing = BindingDescription {
         id: splice_kit::CommandId(u32::MAX),

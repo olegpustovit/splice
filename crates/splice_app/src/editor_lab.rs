@@ -2202,12 +2202,9 @@ mod tests {
         for file in ["project.json", "media.json", "transcripts/med_screen.json"] {
             fs::copy(sample.join(file), path.join(file)).unwrap();
         }
-        fs::create_dir_all(path.join("takes/med_screen")).unwrap();
-        fs::write(
-            path.join("takes/med_screen/events.json"),
-            r#"{"events":[]}"#,
-        )
-        .unwrap();
+        // The sample descriptor names assets/screen.mov, with its event log beside it.
+        fs::create_dir_all(path.join("assets")).unwrap();
+        fs::write(path.join("assets/events.json"), r#"{"events":[]}"#).unwrap();
         let mut store = Store::open(&path).unwrap();
         let mut lab = Lab::new();
         let selected = Some(TimelineId::Clip("clp_take".parse().unwrap()));
@@ -2224,8 +2221,29 @@ mod tests {
         };
         let args = |lab: &Lab, name| parse_request(&lab.examples.get(index(name)).text).unwrap();
         refresh(&mut lab, &store);
-        assert!(lab.example_problem().is_some());
-        assert!(args(&lab, "edit.apply").field("sessionId").is_none());
+        assert!(lab.example_problem().is_none());
+        let initial = args(&lab, "edit.apply");
+        let missing_session = initial.field("sessionId").and_then(Json::as_str).unwrap();
+        assert_eq!(missing_session, "ses_0");
+        let refused = splice_mcp::apply_batch(
+            &mut store,
+            initial.field("ops").unwrap().as_array().unwrap(),
+            &WriteOptions {
+                source: Source::Agent,
+                session: Some(missing_session.parse().unwrap()),
+                if_revision: Some(0),
+                dry_run: true,
+                ..WriteOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, "NOT_FOUND");
+        assert_eq!(
+            refused.fix,
+            "Call session.start to obtain a session ID for this project."
+        );
+        assert_eq!(store.project().rev, 0);
+        assert!(store.sessions().is_empty());
         assert!(lab.examples.get(index("record.stop")).missing.is_some());
         assert!(args(&lab, "record.stop").field("jobId").is_none());
         assert_eq!(
@@ -2406,9 +2424,14 @@ mod tests {
             Some(first.to_string().as_str())
         );
         let ops = call.args.field("ops").unwrap().as_array().unwrap();
+        assert_eq!(ops.len(), 3);
+        assert_eq!(ops[0].field("at").and_then(Json::as_i64), Some(372));
         assert_eq!(
-            ops[0].field("at").and_then(Json::as_i64),
-            Some(i64::from(playhead))
+            ops[1]
+                .field("anchor")
+                .and_then(|anchor| anchor.field("item"))
+                .and_then(Json::as_str),
+            Some("$cut.right")
         );
         let mut options = WriteOptions {
             source: Source::Agent,
@@ -2418,6 +2441,15 @@ mod tests {
             ..WriteOptions::default()
         };
         let preview = splice_mcp::apply_batch(&mut store, ops, &options).unwrap();
+        assert_eq!(
+            preview
+                .report
+                .changes
+                .iter()
+                .map(|edit| edit.cmd)
+                .collect::<Vec<_>>(),
+            ["item.split", "overlay.add", "item.delete"]
+        );
         assert_eq!(store.project().rev, 0);
         lab.set_reply(
             call.name,
@@ -2497,7 +2529,7 @@ mod tests {
             current.field("ops").unwrap().as_array().unwrap()[0]
                 .field("cmd")
                 .and_then(Json::as_str),
-            Some("marker.set")
+            Some("marker.add")
         );
 
         assert!(

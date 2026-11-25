@@ -49,7 +49,6 @@ impl TimelineKey {
 
 /// Decode timeline input from the same recorded log used by native playback.
 pub fn load_timeline_events(path: &Path, fps: f64) -> Result<TimelineEvents, Error> {
-    use splice_eval::chips;
     let take = load(path, None)?;
     let clicks = take
         .samples
@@ -62,7 +61,7 @@ pub fn load_timeline_events(path: &Path, fps: f64) -> Result<TimelineEvents, Err
         .into_iter()
         .filter_map(|key| {
             let tap = key.index.is_none();
-            let label = chips::chip_text(&key.text, key.code, key.mods, tap, true);
+            let label = key.chip_text(true);
             let category = if tap {
                 chips::MODIFIERS
             } else {
@@ -130,6 +129,22 @@ struct Key {
     code: Option<u64>,
     /// Modifier flags (a tap: the modifiers pressed).
     mods: u64,
+}
+
+impl Key {
+    fn chip_text(&self, redact: bool) -> String {
+        if self.chip_until.is_some() {
+            chips::authored_chip_text(&self.text, self.code, self.mods, redact)
+        } else {
+            chips::chip_text(
+                &self.text,
+                self.code,
+                self.mods,
+                self.index.is_none(),
+                redact,
+            )
+        }
+    }
 }
 
 pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, Error> {
@@ -269,7 +284,7 @@ impl TakeEvents {
             if key.index.is_some_and(|n| hidden.contains(&n)) || style.show & category == 0 {
                 continue;
             }
-            let text = chips::chip_text(&key.text, key.code, key.mods, key.index.is_none(), redact);
+            let text = key.chip_text(redact);
             if let Some(end) = key.chip_until {
                 let range = chip_frames(span, speed_map, fps, [key.t, end]);
                 if range[0] < range[1] {

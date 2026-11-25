@@ -373,7 +373,7 @@ fn keymap(ui: &mut Ui, bindings: &[BindingDescription], width: f32) {
                     let cell = ui.row(
                         Node::row().w(Size::Grow).role(Role::Cell).gap(3.0).wrap(),
                         |ui| {
-                            for chord in binding.keys.split(" ? ") {
+                            for chord in binding.keys.split(commands::CHORD_SEPARATOR) {
                                 ui.row(
                                     Node::row()
                                         .w(Size::Fit)

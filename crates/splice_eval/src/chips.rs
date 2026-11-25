@@ -159,9 +159,12 @@ pub fn visible(code: Option<u64>, text: &str) -> bool {
         || text == " "
 }
 
-fn modifier_glyphs(mods: u64, chip: &mut String) {
+fn modifier_glyphs(mods: u64, chip: &mut String, spaced: bool) {
     for (bit, glyph) in [(18, '⌃'), (19, '⌥'), (17, '⇧'), (20, '⌘')] {
         if mods & (1 << bit) != 0 {
+            if spaced && !chip.is_empty() {
+                chip.push(' ');
+            }
             chip.push(glyph);
         }
     }
@@ -172,21 +175,43 @@ fn modifier_glyphs(mods: u64, chip: &mut String) {
 /// Redacted (renders an agent sees, D19) every typed character is a dot, so the chip keeps its
 /// place, timing and rough width without the text; glyphs are not typed text and stay.
 pub fn chip_text(text: &str, code: Option<u64>, mods: u64, tap: bool, redact: bool) -> String {
+    format_chip(text, code, mods, tap, redact, false)
+}
+
+/// An authored dwell's label, with v13's token spacing and Return glyph.
+/// Typed characters follow the same redaction as [`chip_text`].
+pub fn authored_chip_text(text: &str, code: Option<u64>, mods: u64, redact: bool) -> String {
+    format_chip(text, code, mods, false, redact, true)
+}
+
+fn format_chip(
+    text: &str,
+    code: Option<u64>,
+    mods: u64,
+    tap: bool,
+    redact: bool,
+    authored: bool,
+) -> String {
     let mut chip = String::new();
     if tap {
-        modifier_glyphs(mods, &mut chip);
+        modifier_glyphs(mods, &mut chip, false);
         return chip;
     }
     let shortcut = mods & SHORTCUT_MODIFIERS != 0;
-    if let Some(glyph) = navigation_glyph(code, text) {
-        modifier_glyphs(mods, &mut chip);
-        chip.push_str(glyph);
-        return chip;
+    let navigation = navigation_glyph(code, text);
+    if shortcut || navigation.is_some() {
+        modifier_glyphs(mods, &mut chip, authored);
     }
-    if shortcut {
-        modifier_glyphs(mods, &mut chip);
+    if authored && !chip.is_empty() && (navigation.is_some() || !text.is_empty()) {
+        chip.push(' ');
     }
-    if redact {
+    if let Some(glyph) = navigation {
+        chip.push_str(if authored && glyph == "⏎" {
+            "↩"
+        } else {
+            glyph
+        });
+    } else if redact {
         chip.extend(text.chars().map(|_| '•'));
     } else if !shortcut {
         chip.push_str(text);
@@ -259,6 +284,45 @@ mod tests {
         assert_eq!(chip_text("\t", Some(48), SHIFT, false, true), "⇧⇥");
         assert_eq!(chip_text("\u{1c}", Some(123), COMMAND, false, false), "⌘←");
         assert_eq!(chip_text("", Some(55), COMMAND, true, true), "⌘");
+    }
+
+    #[test]
+    fn authored_labels_match_v13_and_keep_the_recorder_redaction_rules() {
+        let events = [
+            ("k", Some(40), COMMAND, "⌘ K", "⌘K", "⌘ •"),
+            (
+                "frame study",
+                None,
+                0,
+                "frame study",
+                "frame study",
+                "•••••••••••",
+            ),
+            ("s", Some(1), COMMAND, "⌘ S", "⌘S", "⌘ •"),
+            ("p", Some(35), SHIFT | COMMAND, "⇧ ⌘ P", "⇧⌘P", "⇧ ⌘ •"),
+            ("\r", Some(36), 0, "↩", "⏎", "↩"),
+            ("rotate 15", None, 0, "rotate 15", "rotate 15", "•••••••••"),
+            ("z", Some(6), COMMAND, "⌘ Z", "⌘Z", "⌘ •"),
+        ];
+        for (text, code, mods, authored, recorder, private) in events {
+            assert_eq!(authored_chip_text(text, code, mods, false), authored);
+            assert_eq!(authored_chip_text(text, code, mods, true), private);
+            assert_eq!(chip_text(text, code, mods, false, false), recorder);
+        }
+
+        assert_eq!(
+            chip_text("p", Some(35), SHIFT | COMMAND, false, true),
+            "⇧⌘•"
+        );
+        assert_eq!(chip_text("\r", Some(36), 0, false, true), "⏎");
+        assert_eq!(authored_chip_text("\r", None, 0, true), "↩");
+        assert_eq!(authored_chip_text("\r", Some(76), 0, true), "⌤");
+        // A typed arrow lookalike is still typed text, even on an authored cue.
+        assert_eq!(authored_chip_text("↩", None, 0, true), "•");
+        assert_eq!(authored_chip_text(" ", Some(49), 0, false), " ");
+        assert_eq!(authored_chip_text(" ", Some(49), 0, true), "•");
+        assert_eq!(chip_text(" ", Some(49), 0, false, false), " ");
+        assert_eq!(chip_text(" ", Some(49), 0, false, true), "•");
     }
 
     #[test]

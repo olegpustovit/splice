@@ -2565,9 +2565,31 @@ fn paint_lane_context(
     let state = &mut intents.state;
     let name = "Timeline lane actions";
     if id == project.spine.id {
+        // Public v13 EFFECT_TYPES order. Core decides which of those effects the spine accepts.
+        const EFFECTS: [(&str, &str); 6] = [
+            ("window", "Add Window"),
+            ("cursor", "Add Cursor"),
+            ("clickZoom", "Add Click Zoom"),
+            ("camera", "Add Camera Layout"),
+            ("captions", "Add Caption Style"),
+            ("keystrokes", "Add Keystroke Chips"),
+        ];
+        let target = Target::Lane(id);
+        let mut effects = [MenuItem::new(""); EFFECTS.len()];
+        let mut count = 0;
+        for (index, (kind, label)) in EFFECTS.iter().copied().enumerate() {
+            if effect_target_allowed(project, &target, kind) {
+                effects[count] = MenuItem::new(label).id(5 + index as i64).checked(
+                    project
+                        .spine
+                        .effects
+                        .iter()
+                        .any(|effect| effect.kind == kind),
+                );
+                count += 1;
+            }
+        }
         let entries = [
-            MenuItem::new("Select All Clips").id(0).shortcut("⌘A"),
-            MenuItem::new("New Overlay Lane").id(1),
             MenuItem::new(if state.all_components || state.expanded.is_some() {
                 "Hide All Components"
             } else {
@@ -2575,8 +2597,10 @@ fn paint_lane_context(
             })
             .id(2)
             .disabled(!cache.has_components),
-            MenuItem::new(""),
-            MenuItem::new("Delete Lane").id(3).disabled(true).danger(),
+            MenuItem::new("Select All Clips").id(0).shortcut("⌘A"),
+            MenuItem::new("Lane Effects").submenu(&effects[..count]),
+            MenuItem::new("Edit Lane Effects…").id(4),
+            MenuItem::new("New Overlay Lane").id(1),
         ];
         match context_choice(ui, state, anchor, &entries, name) {
             Some(0) => select_lane(project, state, id),
@@ -2584,6 +2608,15 @@ fn paint_lane_context(
             Some(2) => {
                 state.all_components = !state.all_components && state.expanded.is_none();
                 state.expanded = None;
+            }
+            Some(4) => {
+                state.set_selection(None, Some(id));
+                intents.inspect_selection = true;
+            }
+            Some(row) if row >= 5 => {
+                intents.toolbar = EFFECTS
+                    .get((row - 5) as usize)
+                    .map(|&(kind, _)| ToolbarCommand::AddEffect(target, kind));
             }
             _ => {}
         }
@@ -9658,7 +9691,12 @@ mod tests {
     fn lane_header_menu_matches_v13_and_opens_the_lane_in_selection_scope() {
         use crate::inspector::{self, Scope, Selection};
         use pxui::{Event, FrameIn, testing};
-        use splice_core::{edit, package::journal::Source};
+        use splice_core::{
+            edit,
+            history::{Store, WriteOptions},
+            package::journal::Source,
+        };
+        use splice_json::Value as Json;
 
         mem_sys::set_peer(pxui::library_counter);
         for width in [960.0, 800.0, 480.0] {
@@ -9724,11 +9762,11 @@ mod tests {
             let mut inspector_ui = crate::viewer_ui().unwrap();
             inspector_ui.set_a11y(true);
             let input = FrameIn::new(268.0, 640.0);
-            let draw_inspector = |ui: &mut Ui, scope, selection| {
+            let draw_inspector = |ui: &mut Ui, project: &Project, scope, selection| {
                 ui.frame(&input, &mut |ui| {
                     inspector::paint(
                         ui,
-                        Some(&project),
+                        Some(project),
                         selection,
                         scope,
                         600,
@@ -9739,7 +9777,7 @@ mod tests {
                 .unwrap();
             };
             let mut scope = Scope::Canvas;
-            draw_inspector(&mut inspector_ui, scope, Selection::None);
+            draw_inspector(&mut inspector_ui, &project, scope, Selection::None);
             assert!(testing::find(&inspector_ui, Role::TextField, "Lane name").is_none());
             let intent = pane.choose(&project, "Edit Lane Effects…");
             if intent.inspect_selection {
@@ -9748,7 +9786,7 @@ mod tests {
             assert_eq!(scope, Scope::Selection);
             assert_eq!(pane.view.state.lane(), Some(lane));
             assert!(pane.view.state.selected().is_empty() && intent.toolbar.is_none());
-            draw_inspector(&mut inspector_ui, scope, Selection::Lane(lane));
+            draw_inspector(&mut inspector_ui, &project, scope, Selection::Lane(lane));
             assert!(testing::find(&inspector_ui, Role::Heading, "Overlay 1").is_some());
 
             pane.click(&project, pane.button("Overlay 1"), 0);
@@ -9844,7 +9882,148 @@ mod tests {
                 assert_eq!(right.state.lane(), click.state.lane());
                 pane.find(Role::MenuItem, "New Graphics Lane");
                 assert!(testing::find(&pane.ui, Role::MenuItem, "Lane Effects").is_none());
+                pane.key(&project, Key::Escape);
             }
+            if width == 800.0 {
+                continue;
+            }
+
+            let path = std::env::temp_dir().join(format!(
+                "splice-spine-menu-{}-{width}.splice",
+                std::process::id(),
+            ));
+            let mut store = Store::create(&path, &project).unwrap();
+            let project = store.project();
+            let spine = project.spine.id;
+            let open_spine = |pane: &mut LaneMenuUi, project: &Project| {
+                pane.click(project, pane.find(Role::Button, "Video · spine"), 1);
+            };
+            open_spine(&mut pane, project);
+            let rows = pane
+                .ui
+                .a11y_nodes()
+                .iter()
+                .filter(|node| node.is_role(Role::MenuItem))
+                .map(|node| pane.ui.a11y_name_of(node))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                rows,
+                [
+                    "Show All Components",
+                    "Select All Clips",
+                    "Lane Effects",
+                    "Edit Lane Effects…",
+                    "New Overlay Lane",
+                ]
+            );
+            pane.warm(project);
+            assert!(
+                pane.choose(project, "Show All Components")
+                    .state
+                    .all_components
+            );
+            open_spine(&mut pane, project);
+            assert!(
+                !pane
+                    .choose(project, "Hide All Components")
+                    .state
+                    .all_components
+            );
+            open_spine(&mut pane, project);
+            assert_eq!(
+                pane.choose(project, "Select All Clips")
+                    .state
+                    .selected()
+                    .len(),
+                project.clips.order().len()
+            );
+
+            open_spine(&mut pane, project);
+            let inspected = pane.choose(project, "Edit Lane Effects…");
+            assert!(inspected.inspect_selection && inspected.toolbar.is_none());
+            assert_eq!(inspected.state.lane(), Some(spine));
+            assert!(inspected.state.selected().is_empty());
+            draw_inspector(
+                &mut inspector_ui,
+                project,
+                Scope::Selection,
+                Selection::Lane(inspected.state.lane().unwrap()),
+            );
+            assert!(testing::find(&inspector_ui, Role::Heading, "Video").is_some());
+
+            let open_effects = |pane: &mut LaneMenuUi, project: &Project| {
+                open_spine(pane, project);
+                let row = pane.find(Role::MenuItem, "Lane Effects");
+                pane.frame(
+                    project,
+                    &[Event::pointer(
+                        Event::POINTER_MOVED,
+                        0,
+                        f64::from(row.x + 10.0),
+                        f64::from(row.y + row.h * 0.5),
+                    )],
+                );
+                pane.frame(project, &[]);
+            };
+            let cursor_checked = |pane: &LaneMenuUi| {
+                pane.ui
+                    .a11y_nodes()
+                    .iter()
+                    .find(|node| {
+                        node.is_role(Role::MenuItem) && pane.ui.a11y_name_of(node) == "Add Cursor"
+                    })
+                    .unwrap()
+                    .states
+                    & pxui::A11yStates::CHECKED.bits()
+                    != 0
+            };
+            assert!(project.effects.iter().any(|effect| effect.kind == "cursor"));
+            open_effects(&mut pane, project);
+            let rows = pane
+                .ui
+                .a11y_nodes()
+                .iter()
+                .filter(|node| node.is_role(Role::MenuItem))
+                .map(|node| pane.ui.a11y_name_of(node))
+                .filter(|label| label.starts_with("Add "))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                rows,
+                [
+                    "Add Window",
+                    "Add Cursor",
+                    "Add Camera Layout",
+                    "Add Keystroke Chips"
+                ]
+            );
+            assert!(!cursor_checked(&pane));
+            pane.warm(project);
+            let op = pane
+                .choose(project, "Add Cursor")
+                .toolbar
+                .unwrap()
+                .operation();
+            assert_eq!(op.field("cmd").and_then(Json::as_str), Some("effect.add"));
+            assert_eq!(op.field("target").and_then(Json::as_str), Some("lan_spine"));
+            assert_eq!(op.field("type").and_then(Json::as_str), Some("cursor"));
+            store.apply(&[op], &WriteOptions::default()).unwrap();
+            store.close().unwrap();
+            let reopened = Store::open(&path).unwrap();
+            assert!(reopened.verify().is_ok());
+            assert!(
+                reopened
+                    .project()
+                    .spine
+                    .effects
+                    .iter()
+                    .any(|effect| effect.kind == "cursor")
+            );
+            pane.frame(reopened.project(), &[]);
+            open_effects(&mut pane, reopened.project());
+            assert!(cursor_checked(&pane));
+            pane.warm(reopened.project());
+            reopened.close().unwrap();
+            std::fs::remove_dir_all(path).unwrap();
         }
     }
 

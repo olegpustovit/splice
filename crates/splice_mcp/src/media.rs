@@ -10,7 +10,10 @@ use splice_core::{
 };
 use splice_eval::cursor::{self, Motion, Recorded, Sample};
 use splice_model::{timing, *};
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 struct ClipClock {
     timing: ClipTiming,
@@ -548,16 +551,7 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
     let mut caret = Vec::new();
     let mut key_index = 0;
     if let Some(events_name) = media.take.as_ref().and_then(|take| take.events.as_deref()) {
-        let mut take_dir = dir.join(&media.path);
-        if !take_dir.is_dir() {
-            take_dir.pop();
-        }
-        // Older packages keep sidecars under their media ID even if the primary moved.
-        if fs::symlink_metadata(take_dir.join(events_name))
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-        {
-            take_dir = dir.join("takes").join(media.id.to_string());
-        }
+        let take_dir = take_event_dir(dir, media, events_name);
         for_each_event(&take_dir, events_name, &mut |event| {
             let kind = event
                 .field("k")
@@ -742,6 +736,52 @@ fn events_format() -> StoreError {
     )
 }
 
+fn events_offline() -> StoreError {
+    failure(
+        "MEDIA_OFFLINE",
+        "The take's event file is offline.",
+        "Restore the take's event file under its takes directory.",
+    )
+}
+
+fn take_event_dir(package: &Path, media: &Media, name: &str) -> PathBuf {
+    let mut dir = package.join(&media.path);
+    if !dir.is_dir() {
+        dir.pop();
+    }
+    // Older packages keep sidecars under their media ID even if the primary moved.
+    if fs::symlink_metadata(dir.join(name))
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        dir = package.join("takes").join(media.id.to_string());
+    }
+    dir
+}
+
+fn event_path(dir: &Path, name: &str) -> Result<PathBuf, StoreError> {
+    let path = fs::canonicalize(dir.join(name)).map_err(|_| events_offline())?;
+    // Compare canonical with canonical: on macOS /tmp and /var/folders are symlinks into
+    // /private, so a raw dir never contains the resolved file.
+    let dir = fs::canonicalize(dir).map_err(|_| events_offline())?;
+    if !path.starts_with(&dir) || !path.is_file() {
+        return Err(events_format());
+    }
+    Ok(path)
+}
+
+/// Checks whether the descriptor resolves to a readable event log for `takes.events`.
+pub fn take_events_available(package: &Path, media: &Media) -> bool {
+    media.kind == MediaKind::Take
+        && media
+            .take
+            .as_ref()
+            .and_then(|take| take.events.as_deref())
+            .is_some_and(|name| {
+                event_path(&take_event_dir(package, media, name), name)
+                    .is_ok_and(|path| fs::File::open(path).is_ok())
+            })
+}
+
 /// The recorded pointers of the project's takes for zooms that follow the cursor (T46.2), read
 /// the way the renderer reads them (splice_av `takes::load`): moves, drags and presses, plus a
 /// sample wherever the cursor image changes to one whose PNG exists. Empty when no zoom follows;
@@ -760,8 +800,9 @@ pub(super) fn pointers(dir: &Path, p: &Project) -> Vec<Recorded> {
 fn pointer_log(dir: &Path, media: &Media) -> Option<Recorded> {
     let take = media.take.as_ref()?;
     let events = take.events.as_deref()?;
-    let base = dir.join("takes").join(media.id.to_string());
-    let root = splice_json::parse(&fs::read_to_string(base.join(events)).ok()?).ok()?;
+    let base = take_event_dir(dir, media, events);
+    let path = event_path(&base, events).ok()?;
+    let root = splice_json::parse(&fs::read_to_string(path).ok()?).ok()?;
     let rect = |key| {
         root.field("source")
             .and_then(|s| s.field("rect"))
@@ -831,22 +872,11 @@ fn for_each_event(
     visit: &mut dyn FnMut(&Json) -> Result<(), StoreError>,
 ) -> Result<(), StoreError> {
     use std::io::BufRead;
-    let offline = || {
-        failure(
-            "MEDIA_OFFLINE",
-            "The take's event file is offline.",
-            "Restore the take's event file under its takes directory.",
-        )
-    };
-    let path = fs::canonicalize(dir.join(name)).map_err(|_| offline())?;
-    // Compare canonical with canonical: on macOS /tmp and /var/folders are symlinks into
-    // /private, so a raw `dir` never contains the resolved file.
-    let dir = fs::canonicalize(dir).map_err(|_| offline())?;
-    if !path.starts_with(&dir) || !path.is_file() {
-        return Err(events_format());
-    }
-    let mut reader =
-        std::io::BufReader::with_capacity(65536, fs::File::open(path).map_err(|_| offline())?);
+    let path = event_path(dir, name)?;
+    let mut reader = std::io::BufReader::with_capacity(
+        65536,
+        fs::File::open(path).map_err(|_| events_offline())?,
+    );
     // Skip to the events array: the key, then `:` and `[` with any JSON whitespace around.
     let key = b"\"events\"";
     let (mut matched, mut colon, mut found) = (0, false, false);
@@ -954,7 +984,7 @@ pub(super) fn activity(
     }
     let mut events = Vec::new();
     if let Some(name) = media.take.as_ref().and_then(|take| take.events.as_deref()) {
-        let dir = dir.join("takes").join(media.id.to_string());
+        let dir = take_event_dir(dir, media, name);
         for_each_event(&dir, name, &mut |event| {
             let kind = event
                 .field("k")

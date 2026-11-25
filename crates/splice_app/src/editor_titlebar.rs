@@ -19,6 +19,7 @@ const TABS: [(&str, View, f32, u32); 3] = [
 ];
 const TOOL_WIDTH: f32 = 26.0;
 const ROW_HEIGHT: f32 = 33.0;
+const COMPACT_TAB_TEXT_HEIGHT: f32 = 16.8;
 const ROW_GAP: f32 = 2.0;
 const WRAPPED_COMPACT_PAD: f32 = 3.0;
 const TAB_INSET: f32 = 12.0;
@@ -166,6 +167,25 @@ pub(super) fn paint(
     let mut action = None;
     let row_height = layout.row_height();
     let vertical_pad = layout.vertical_pad();
+    let hit_height = row_height - 1.0;
+    let icon_size = if layout.icons_only { 16.0 } else { 14.0 };
+    let mut tab_label = Label::MONO.size(12.0);
+    let underline_y = if layout.compact {
+        tab_label = tab_label.line_height(COMPACT_TAB_TEXT_HEIGHT);
+        let content_height = if layout.icons_only {
+            icon_size
+        } else {
+            COMPACT_TAB_TEXT_HEIGHT
+        };
+        (hit_height + content_height) * 0.5
+    } else {
+        hit_height
+    };
+    let tab_icon = if layout.compact && !layout.icons_only {
+        compact_labeled_icon
+    } else {
+        icon
+    };
     let bar = Node::DEFAULT.w(Size::Grow).look(Look::NONE.fill(PANEL));
     let doc = name.filter(|_| layout.name_max >= 18.0).map(|name| {
         let measured = ui
@@ -260,14 +280,17 @@ pub(super) fn paint(
                                 let active = view == target;
                                 let width =
                                     tab_width(full_width, layout.compact, layout.icons_only);
-                                ui.column(Node::DEFAULT.w_px(width).h_px(row_height), |ui| {
-                                    let tab = Button::sized(width, row_height - 1.0)
+                                ui.stack(Node::DEFAULT.w_px(width).h_px(row_height), |ui| {
+                                    let tab = Button::sized(width, hit_height)
                                         .look(&TAB)
                                         .selected(active)
                                         .name(name)
-                                        .label(Label::MONO.size(12.0))
-                                        .icon(Icon::draw(icon, word + if active { 8 } else { 0 }))
-                                        .icon_size(if layout.icons_only { 16.0 } else { 14.0 })
+                                        .label(tab_label)
+                                        .icon(Icon::draw(
+                                            tab_icon,
+                                            word + if active { 8 } else { 0 },
+                                        ))
+                                        .icon_size(icon_size)
                                         .gap(6.0);
                                     if ui
                                         .button(
@@ -279,14 +302,16 @@ pub(super) fn paint(
                                     {
                                         action = Some(Action::View(target));
                                     }
-                                    let ink = if active { ACCENT } else { PANEL };
-                                    ui.node(
-                                        "tab-underline",
-                                        Node::DEFAULT
-                                            .w_px(width)
-                                            .h_px(1.0)
-                                            .look(Look::NONE.fill(ink)),
-                                    );
+                                    if active {
+                                        ui.node(
+                                            "tab-underline",
+                                            Node::DEFAULT
+                                                .at(0.0, underline_y)
+                                                .w_px(width)
+                                                .h_px(1.0)
+                                                .look(Look::NONE.fill(ACCENT)),
+                                        );
+                                    }
                                 });
                             }
                         },
@@ -368,6 +393,14 @@ fn controls(
         },
     );
     action
+}
+
+fn compact_labeled_icon(paint: &mut Paint<'_>, rect: Rect, ink: Rgba, word: u32) {
+    // PXUI supplies a 20-point box to the icon drawing callback.
+    let side = 14.0;
+    let x = rect.x + (rect.w - side) * 0.5;
+    let y = rect.y + (rect.h - side) * 0.5;
+    icon(paint, Rect::new(x, y, side, side), ink, word);
 }
 
 fn icon(paint: &mut Paint<'_>, rect: Rect, ink: Rgba, word: u32) {
@@ -508,6 +541,29 @@ mod tests {
             );
             assert_eq!(picked.get(), Some(expected));
         }
+    }
+
+    #[test]
+    fn compact_tabs_put_the_active_rule_below_the_icon_and_keep_the_hit_area() {
+        let mut ui = super::super::viewer_ui().unwrap();
+        ui.set_a11y(true);
+        let layout = Layout::new(480.0, None, None);
+        let input = pxui::FrameIn::new(480.0, 640.0);
+        for _ in 0..2 {
+            ui.frame(&input, &mut |ui| {
+                paint(ui, None, None, View::Editor, &layout, None);
+            })
+            .unwrap();
+        }
+
+        let hit = testing::find(&ui, Role::Button, "Editor").unwrap();
+        assert_eq!((hit.x, hit.y, hit.w, hit.h), (36.0, 0.0, 28.0, 32.0));
+        assert!(ui.layers().flat_map(|layer| layer.instances).any(|shape| {
+            shape.kind == pxui::draw::kind::RECT
+                && shape.color == [ACCENT.r, ACCENT.g, ACCENT.b, 255]
+                && shape.rect == [36.0, 24.0, 64.0, 25.0]
+        }));
+        assert_eq!(layout.height(), 34.0);
     }
 
     #[test]

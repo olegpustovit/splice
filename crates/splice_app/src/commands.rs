@@ -562,6 +562,8 @@ pub(super) fn catalog() -> &'static [Command] {
     &VIEW
 }
 
+pub(super) const CHORD_SEPARATOR: &str = " · ";
+
 pub(super) struct BindingDescription {
     pub(super) id: CommandId,
     pub(super) group: &'static str,
@@ -684,7 +686,12 @@ fn describe_bindings(responders: &Responders, custom: &str) -> Vec<BindingDescri
                 }
             }
         } else if matches!(command.id, DELETE | DELETE_GAP) {
-            for (key, label) in command.keys.iter().copied().zip(label.split(" · ")) {
+            for (key, label) in command
+                .keys
+                .iter()
+                .copied()
+                .zip(label.split(CHORD_SEPARATOR))
+            {
                 if owns(key) {
                     append_label(&mut keys, label);
                 }
@@ -729,10 +736,9 @@ fn describe_bindings(responders: &Responders, custom: &str) -> Vec<BindingDescri
 }
 
 fn append_label(keys: &mut String, label: &str) {
-    const SEPARATOR: &str = " · ";
-    if !keys.split(SEPARATOR).any(|key| key == label) {
+    if !keys.split(CHORD_SEPARATOR).any(|key| key == label) {
         if !keys.is_empty() {
-            keys.push_str(SEPARATOR);
+            keys.push_str(CHORD_SEPARATOR);
         }
         keys.push_str(label);
     }
