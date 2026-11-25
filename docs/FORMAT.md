@@ -298,6 +298,13 @@ Rules:
   (`all`, `bottom-left`, 1.2 s); older readers refuse the new values. `all` now draws navigation
   glyphs and modifier taps too, and left and right chips align to their edge.
 
+  A `key` event may carry `chipUntil`, its exclusive end in source seconds. A finite
+  end after `t` and at most five seconds later opts that event into the source interval
+  `[t, chipUntil)`. The first visible timed event in log order draws during an overlap,
+  and Recorder bursts resume outside timed chips. Missing or invalid ends use the Recorder
+  behavior. The timeline and Program use the same trimmed source interval. Timed chips honor
+  the clip's key visibility and the existing text redaction rules.
+
 - **Declared pointer marks (T39.4).** A take's `components` may carry
   `"pointer":[{"t":2.0,"x":0.6,"y":0.4,"click":true}]` (source seconds, positions normalized to the
   captured source, time order), written by `take.pointer`. They merge with the recorded cursor

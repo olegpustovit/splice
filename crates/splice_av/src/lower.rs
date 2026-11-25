@@ -498,8 +498,7 @@ impl Lowering {
             .map(|_| self.takes.len() - 1))
     }
 
-    /// Keystroke chips as timed text: keys in quick succession merge into one chip, shown for
-    /// the style's `hold` after the last of them, at its place on the 3×3 grid.
+    /// Recorded keystroke chips and authored source dwells, as prepared timed text.
     #[allow(clippy::too_many_arguments)]
     fn chips(
         &mut self,
@@ -511,76 +510,41 @@ impl Lowering {
         package: &Path,
         evaluator: &Evaluator,
     ) -> Result<(), Error> {
-        use splice_eval::chips;
         let Some(index) = self.take(project, package, media)? else {
             return Ok(());
         };
-        let Some(span) = evaluator.source_span(TimelineId::Clip(clip)) else {
+        let (Some(span), Some(take)) = (
+            evaluator.source_span(TimelineId::Clip(clip)),
+            self.takes[index].1.as_ref(),
+        ) else {
             return Ok(());
         };
         let fps = Self::media(project, media)?.probe.fps;
-        let hidden = evaluator.hidden_keys(clip).unwrap_or(&[]).to_vec();
+        let hidden = evaluator.hidden_keys(clip).unwrap_or_default();
+        let speed_map = evaluator.speed_map(clip).unwrap_or_default();
         let (bounds, font, align) = style.chip_layout(project.size);
-        let frame =
-            |t: f64| (f64::from(span.start) + (t * fps - span.source) / span.step).round() as Frame;
-        // Keys closer than this join the chip still showing.
-        let join = style.hold.min(0.6);
-        // (first key, last key, text, last category)
-        let mut bursts: Vec<(f64, f64, String, u8)> = Vec::new();
-        let keys = self.takes[index]
-            .1
-            .as_ref()
-            .map_or(&[][..], |e| e.keys.as_slice());
-        for key in keys {
-            let category = match key.index {
-                None => chips::MODIFIERS,
-                Some(_) => chips::category(key.code, key.mods, &key.text),
-            };
-            if key.index.is_some_and(|n| hidden.contains(&n)) || style.show & category == 0 {
-                continue;
-            }
-            let chip = chips::chip_text(&key.text, key.code, key.mods, key.index.is_none(), redact);
-            match bursts.last_mut() {
-                Some(last) if key.t - last.1 < join && last.2.chars().count() < 24 => {
-                    last.1 = key.t;
-                    // Typing runs together; shortcuts and glyphs stand apart (`⌘C ⌘V`).
-                    if (category != chips::TYPING || last.3 != chips::TYPING)
-                        && !last.2.ends_with(' ')
-                    {
-                        last.2.push(' ');
-                    }
-                    last.2.push_str(&chip);
-                    last.3 = category;
-                }
-                _ => bursts.push((key.t, key.t, chip, category)),
-            }
-        }
-        for (start, end, text, _) in bursts {
-            let from = frame(start).max(span.start);
-            let to = frame(end + style.hold).min(span.end);
-            if to - from >= 2 && !text.trim().is_empty() {
-                self.add_text(
-                    [from, to],
-                    None,
-                    TextLayer {
-                        text,
-                        bounds,
-                        font,
-                        opacity: [1.0; 2],
-                        color: 0x080808,
-                        style: apple_sys::composition::TextStyle {
-                            weight: 0,
-                            boxed: 2,
-                            box_color: 0xe5dcec,
-                            align,
-                            wrap: false,
-                            ..Default::default()
-                        },
-                        visible: None,
-                        active: None,
+        for (range, text) in take.chip_cues(style, hidden, span, speed_map, fps, redact) {
+            self.add_text(
+                range,
+                None,
+                TextLayer {
+                    text,
+                    bounds,
+                    font,
+                    opacity: [1.0; 2],
+                    color: 0x080808,
+                    style: apple_sys::composition::TextStyle {
+                        weight: 0,
+                        boxed: 2,
+                        box_color: 0xe5dcec,
+                        align,
+                        wrap: false,
+                        ..Default::default()
                     },
-                );
-            }
+                    visible: None,
+                    active: None,
+                },
+            );
         }
         Ok(())
     }

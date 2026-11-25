@@ -2616,18 +2616,21 @@ mod tests {
                     index: Some(13),
                     category: 1,
                     label: "Trimmed earlier".into(),
+                    chip_until: None,
                 },
                 TimelineKey {
                     t: 1.25,
                     index: Some(44),
                     category: 1,
                     label: "Redacted key".into(),
+                    chip_until: None,
                 },
                 TimelineKey {
                     t: 11.0,
                     index: Some(51),
                     category: 1,
                     label: "Trimmed later".into(),
+                    chip_until: None,
                 },
             ],
             ..TimelineEvents::default()
@@ -2797,6 +2800,7 @@ mod tests {
                     index: Some(index),
                     category: 1,
                     label: format!("Redacted {index}"),
+                    chip_until: None,
                 })
                 .collect(),
             ..TimelineEvents::default()

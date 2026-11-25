@@ -548,8 +548,17 @@ pub(super) fn events(dir: &Path, p: &Project, args: &Json) -> Result<Json, Store
     let mut caret = Vec::new();
     let mut key_index = 0;
     if let Some(events_name) = media.take.as_ref().and_then(|take| take.events.as_deref()) {
-        let dir = dir.join("takes").join(media.id.to_string());
-        for_each_event(&dir, events_name, &mut |event| {
+        let mut take_dir = dir.join(&media.path);
+        if !take_dir.is_dir() {
+            take_dir.pop();
+        }
+        // Older packages keep sidecars under their media ID even if the primary moved.
+        if fs::symlink_metadata(take_dir.join(events_name))
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            take_dir = dir.join("takes").join(media.id.to_string());
+        }
+        for_each_event(&take_dir, events_name, &mut |event| {
             let kind = event
                 .field("k")
                 .and_then(Json::as_str)

@@ -1475,6 +1475,138 @@ fn save_as_copies_the_package_and_opens_the_copy() {
     assert!(copied.is_ok() && reopened.project().clips.order().len() == 3);
 }
 
+/// A bundled take uses clip.insert's descriptor provider and a folder independent of its ID.
+#[test]
+fn takes_events_follows_the_registered_primary_and_preserves_legacy_logs() {
+    use splice_core::{commands::Target, history::Store};
+    use splice_model::{Media, MediaId, MediaKind, Probe, TakeComponents, TimelineId};
+
+    let root = TestDirectory::new("take-events-primary");
+    let package = root.0.join("registered.splice");
+    let mut store = Store::create(&package, &Default::default()).unwrap();
+    let mut register = |path: &Path| {
+        let path = path.to_str().unwrap();
+        let media = Media {
+            id: MediaId::from_serial(0),
+            kind: MediaKind::Take,
+            path: path.into(),
+            bookmark: None,
+            size: 5,
+            mtime: 0,
+            probe: Probe {
+                fps: 30.0,
+                frames: 90,
+                width: 640,
+                height: 400,
+                audio: Vec::new(),
+                codec: None,
+                loudness: None,
+            },
+            take: Some(TakeComponents {
+                events: Some("events.json".into()),
+                ..TakeComponents::default()
+            }),
+        };
+        let op = object(vec![("cmd", text("clip.insert")), ("path", text(path))]);
+        let edit = store
+            .apply_with_media(&[op], &Default::default(), &mut |request| {
+                assert_eq!(request, path);
+                Ok(media.clone())
+            })
+            .unwrap();
+        let Target::Timeline(TimelineId::Clip(clip)) = edit.report.changes[0].created[0] else {
+            panic!("clip.insert did not create a clip");
+        };
+        let media = store.project().media.last().unwrap();
+        assert_eq!(media.path, path);
+        (clip.to_string(), media.id)
+    };
+    let bundled = Path::new("takes/v13-sample-screen-2/screen.mov");
+    let linked = root.0.join("external/screen.mov");
+    let directory = Path::new("takes/directory-reference");
+    let (bundled_clip, bundled_id) = register(bundled);
+    let (linked_clip, _) = register(&linked);
+    let (directory_clip, _) = register(directory);
+    store.close().unwrap();
+
+    let mut projects = project::Projects::default();
+    let call = |projects: &mut project::Projects, tool, args: Json| {
+        tools::call(projects, tool, &args)
+            .unwrap()
+            .field("structuredContent")
+            .unwrap()
+            .clone()
+    };
+    let info = call(
+        &mut projects,
+        "project.info",
+        object(vec![("path", text(package.to_str().unwrap()))]),
+    );
+    let project_id = info.field("projectId").unwrap();
+    let mut events = |clip: &str| {
+        call(
+            &mut projects,
+            "takes.events",
+            object(vec![
+                ("projectId", project_id.clone()),
+                ("clip", text(clip)),
+            ]),
+        )
+    };
+
+    let write_log = |path: &Path, at: f64| {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, format!(r#"{{"events":[{{"t":{at},"k":"down"}}]}}"#)).unwrap();
+    };
+    let assert_click = |reply: Json, source: i64| {
+        let clicks = reply.field("clicks").unwrap_or_else(|| panic!("{reply:?}"));
+        let clicks = clicks.as_array().unwrap();
+        assert_eq!(clicks.len(), 1);
+        assert_eq!(
+            clicks[0].field("sourceFrame").and_then(Json::as_i64),
+            Some(source)
+        );
+    };
+    let assert_error = |reply: Json, code: &str| {
+        assert_eq!(
+            reply
+                .field("error")
+                .and_then(|e| e.field("code"))
+                .and_then(Json::as_str),
+            Some(code),
+            "{reply:?}",
+        );
+    };
+    let bundled = package.join(bundled);
+    let bundled_log = bundled.with_file_name("events.json");
+    let linked_log = linked.with_file_name("events.json");
+    write_log(&bundled_log, 1.0);
+    write_log(&linked_log, 1.5);
+    write_log(&package.join(directory).join("events.json"), 2.0);
+    fs::write(&bundled, b"media").unwrap();
+    fs::write(&linked, b"media").unwrap();
+    assert_click(events(&bundled_clip), 30);
+    assert_click(events(&linked_clip), 45);
+    assert_click(events(&directory_clip), 60);
+
+    let legacy = package
+        .join("takes")
+        .join(bundled_id.to_string())
+        .join("events.json");
+    write_log(&legacy, 0.5);
+    assert_click(events(&bundled_clip), 30);
+    fs::remove_file(&bundled_log).unwrap();
+    assert_click(events(&bundled_clip), 15);
+
+    // A declared sidecar must resolve inside its own take, even when a legacy copy exists.
+    std::os::unix::fs::symlink(&linked_log, &bundled_log).unwrap();
+    assert_error(events(&bundled_clip), "BAD_PACKAGE");
+    fs::remove_file(&bundled_log).unwrap();
+    fs::remove_file(&legacy).unwrap();
+    assert_error(events(&bundled_clip), "MEDIA_OFFLINE");
+    projects.close().unwrap();
+}
+
 #[test]
 fn takes_events_stream_logs_past_the_old_16_mib_cap() {
     let root = TestDirectory::new("long-events");

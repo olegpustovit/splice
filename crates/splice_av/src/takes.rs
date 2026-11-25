@@ -2,9 +2,10 @@
 //! Parsed once per composition build, never per frame; splice_eval::cursor smooths them.
 use crate::Error;
 use apple_sys::composition::CursorImage;
-use splice_eval::cursor::Sample;
+use splice_eval::{Keys, SourceSpan, chips, cursor::Sample};
 use splice_json::Value as Json;
-use std::{fs, path::Path};
+use splice_model::Frame;
+use std::{collections::BTreeMap, fs, path::Path};
 
 /// Recorded input events for the editor timeline, sorted by source seconds.
 #[derive(Default)]
@@ -15,6 +16,8 @@ pub struct TimelineEvents {
     pub clicks: Vec<f64>,
     /// Displayable keys and modifier taps.
     pub keys: Vec<TimelineKey>,
+    /// Longest authored key dwell in source seconds for timeline range queries.
+    pub key_lookback: f64,
 }
 
 /// One redacted key or modifier tap from a recorded take.
@@ -27,6 +30,21 @@ pub struct TimelineKey {
     pub category: u8,
     /// Display text with typed characters redacted.
     pub label: String,
+    /// Exclusive source timestamp of an authored chip.
+    pub chip_until: Option<f64>,
+}
+
+impl TimelineKey {
+    /// Frames where this authored chip intersects the clip's sampled source clock.
+    pub fn authored_frames(
+        &self,
+        span: SourceSpan,
+        speed_map: &[f64],
+        fps: f64,
+    ) -> Option<[Frame; 2]> {
+        let end = self.chip_until?;
+        Some(chip_frames(span, speed_map, fps, [self.t, end]))
+    }
 }
 
 /// Decode timeline input from the same recorded log used by native playback.
@@ -55,11 +73,21 @@ pub fn load_timeline_events(path: &Path, fps: f64) -> Result<TimelineEvents, Err
                 index: key.index,
                 category,
                 label,
+                chip_until: key.chip_until,
             })
         })
         .collect::<Vec<_>>();
     keys.sort_by(|left, right| left.t.total_cmp(&right.t));
-    Ok(TimelineEvents { fps, clicks, keys })
+    let key_lookback = keys
+        .iter()
+        .filter_map(|key| key.chip_until.map(|end| end - key.t))
+        .fold(0.0_f64, f64::max);
+    Ok(TimelineEvents {
+        fps,
+        clicks,
+        keys,
+        key_lookback,
+    })
 }
 
 /// Resolve whether click rings are active and which key categories are visible.
@@ -84,22 +112,24 @@ pub(crate) struct TakeEvents {
     pub size: [f64; 2],
     pub samples: Vec<Sample>,
     pub images: Vec<CursorImage>,
-    /// Keys that can make a chip, and modifier taps, in time order.
-    pub keys: Vec<Key>,
+    /// Keys that can make a chip, and modifier taps, in log order.
+    keys: Vec<Key>,
 }
 
 /// A recorded key (or a modifier pressed alone) on the source clock.
-pub(crate) struct Key {
+struct Key {
     /// Source seconds (a tap: when the modifier went down).
-    pub t: f64,
+    t: f64,
+    /// Exclusive source timestamp for an authored chip dwell.
+    chip_until: Option<f64>,
     /// Index among the log's key events (`keys.hide`); `None` for a modifier tap.
-    pub index: Option<u32>,
+    index: Option<u32>,
     /// Typed text as recorded.
-    pub text: String,
+    text: String,
     /// macOS virtual key code, when the log has it.
-    pub code: Option<u64>,
+    code: Option<u64>,
     /// Modifier flags (a tap: the modifiers pressed).
-    pub mods: u64,
+    mods: u64,
 }
 
 pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, Error> {
@@ -188,6 +218,7 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
                 if splice_eval::chips::visible(code, ch) {
                     out.keys.push(Key {
                         t,
+                        chip_until: number("chipUntil").filter(|&end| t < end && end <= t + 5.0),
                         index: Some(index),
                         text: ch.to_owned(),
                         code,
@@ -200,6 +231,7 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
                 if let Some((pressed, mods)) = taps.flags(t, mods) {
                     out.keys.push(Key {
                         t: pressed,
+                        chip_until: None,
                         index: None,
                         text: String::new(),
                         code: None,
@@ -211,6 +243,131 @@ pub(crate) fn load(events: &Path, cursors: Option<&Path>) -> Result<TakeEvents, 
         }
     }
     Ok(out)
+}
+
+impl TakeEvents {
+    /// Prepares visible chip intervals once. Explicit source dwells take precedence over
+    /// Recorder bursts; the latter keep their original hold, joining and draw order.
+    pub(crate) fn chip_cues(
+        &self,
+        style: Keys,
+        hidden: &[u32],
+        span: SourceSpan,
+        speed_map: &[f64],
+        fps: f64,
+        redact: bool,
+    ) -> Vec<([Frame; 2], String)> {
+        let join = style.hold.min(0.6);
+        // (first key, last key, text, last category)
+        let mut bursts: Vec<(f64, f64, String, u8)> = Vec::new();
+        let mut dwells = Vec::new();
+        for key in &self.keys {
+            let category = match key.index {
+                None => chips::MODIFIERS,
+                Some(_) => chips::category(key.code, key.mods, &key.text),
+            };
+            if key.index.is_some_and(|n| hidden.contains(&n)) || style.show & category == 0 {
+                continue;
+            }
+            let text = chips::chip_text(&key.text, key.code, key.mods, key.index.is_none(), redact);
+            if let Some(end) = key.chip_until {
+                let range = chip_frames(span, speed_map, fps, [key.t, end]);
+                if range[0] < range[1] {
+                    dwells.push((range, text));
+                }
+                continue;
+            }
+            match bursts.last_mut() {
+                Some(last) if key.t - last.1 < join && last.2.chars().count() < 24 => {
+                    last.1 = key.t;
+                    // Typing runs together; shortcuts and glyphs stand apart (`⌘C ⌘V`).
+                    if (category != chips::TYPING || last.3 != chips::TYPING)
+                        && !last.2.ends_with(' ')
+                    {
+                        last.2.push(' ');
+                    }
+                    last.2.push_str(&text);
+                    last.3 = category;
+                }
+                _ => bursts.push((key.t, key.t, text, category)),
+            }
+        }
+
+        // Recorder retains its rounded constant-rate placement and minimum cue length.
+        let frame =
+            |t: f64| (f64::from(span.start) + (t * fps - span.source) / span.step).round() as Frame;
+        let recorder = bursts.into_iter().filter_map(|(start, end, text, _)| {
+            let from = frame(start).max(span.start);
+            let to = frame(end + style.hold).min(span.end);
+            (to.saturating_sub(from) >= 2 && !text.trim().is_empty()).then_some(([from, to], text))
+        });
+        if dwells.is_empty() {
+            return recorder.collect();
+        }
+
+        let winner = first_dwells(&dwells);
+        let mut cues = Vec::new();
+        for ([mut from, to], text) in recorder {
+            let mut gap = winner.partition_point(|(range, _)| range[1] <= from);
+            for &([start, end], _) in &winner[gap..] {
+                if start >= to || from >= to {
+                    break;
+                }
+                if from < start {
+                    cues.push((gap * 2, [from, start], text.clone()));
+                }
+                from = end;
+                gap += 1;
+            }
+            if from < to {
+                cues.push((gap * 2, [from, to], text));
+            }
+        }
+        for (i, (range, index)) in winner.into_iter().enumerate() {
+            cues.push((i * 2 + 1, range, dwells[index].1.clone()));
+        }
+        // Sort by the gap between dwells, keeping Recorder's stacking within each gap.
+        cues.sort_by_key(|cue| cue.0);
+        cues.into_iter()
+            .map(|(_, range, text)| (range, text))
+            .collect()
+    }
+}
+
+fn chip_frames(span: SourceSpan, speed_map: &[f64], fps: f64, range: [f64; 2]) -> [Frame; 2] {
+    range.map(|seconds| first_frame_at(span, speed_map, fps, seconds))
+}
+
+/// The first sampled timeline frame at or after the source seconds, or the clip's end.
+fn first_frame_at(span: SourceSpan, speed_map: &[f64], fps: f64, seconds: f64) -> Frame {
+    let (mut lo, mut hi) = (span.start, span.end);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if span.source_at(f64::from(mid), speed_map) / fps < seconds {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// Paint in reverse log order so the first visible event owns each overlapping interval.
+fn first_dwells(dwells: &[([Frame; 2], String)]) -> Vec<([Frame; 2], usize)> {
+    let mut edges = BTreeMap::new();
+    for (index, &([from, to], _)) in dwells.iter().enumerate().rev() {
+        let after = edges.range(..=to).next_back().and_then(|(_, &value)| value);
+        while let Some((&boundary, _)) = edges.range(from..to).next() {
+            edges.remove(&boundary);
+        }
+        edges.insert(from, Some(index));
+        edges.insert(to, after);
+    }
+    edges
+        .iter()
+        .zip(edges.iter().skip(1))
+        .filter_map(|((&from, &winner), (&to, _))| Some(([from, to], winner?)))
+        .collect()
 }
 
 fn push(samples: &mut Vec<Sample>, t: f64, x: f64, y: f64, image: i32, click: bool) {

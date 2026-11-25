@@ -938,7 +938,7 @@ fn run_surface(
                 intents.timeline.state.set_selection(None, Some(lane));
                 layout.scope = inspector::Scope::Selection;
                 repaint = true;
-            } else if intents.timeline.component_selected {
+            } else if intents.timeline.inspect_selection {
                 layout.scope = inspector::Scope::Selection;
                 repaint = true;
             }

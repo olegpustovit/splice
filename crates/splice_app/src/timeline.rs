@@ -5,15 +5,16 @@ use super::{
 use input::{Event, Key, ScrollPhase};
 use pxui::{
     Button, Fill, Flags, Handle, Icon, IconButton, Image, ImageStyle, KeyCode, Label, Node, Paint,
-    Point, Pressable, Rect, Role, Scrubber, Signal, Stroke, Ui,
+    Point, Pressable, Rect, Role, Scrubber, Signal, Stroke, Ui, ValueCallbacks, ValueField,
     draw::flags::rect::{BOTTOM, TOP},
     geom::{Edges, Rgba},
+    theme::ColorToken,
     ui::{Align, Along, Bar, Cursor, Look, Menu, MenuItem, Size, State as UiState, States},
 };
 use splice_av::{Evaluator, SourceSpan};
 use splice_core::{
     commands::{Component as TakeComponent, Target},
-    edit::EditChange,
+    edit::{EditChange, effect_target_allowed},
     history::StoreError,
 };
 use splice_kit::{CommandId, Phase};
@@ -31,6 +32,7 @@ const COMPACT_LABEL_WIDTH: f32 = 98.0;
 const TOOLBAR_HEIGHT: f32 = 32.0;
 const RULER_HEIGHT: f32 = 24.0;
 const LANE_HEIGHT: f32 = 26.0;
+const LANE_CONTROL_SIZE: f32 = 18.0;
 const SPINE_HEIGHT: f32 = 46.0;
 const TAKE_HEAD_HEIGHT: f32 = 18.0;
 const COMPONENT_HEIGHT: f32 = 24.0;
@@ -98,7 +100,7 @@ pub(super) enum ToolbarCommand {
     MergeCaptions(Rc<[TimelineId]>),
     SetCaptionStyle(ItemId, &'static str),
     SetCaptionEmphasis(ItemId, WordId, bool),
-    AddEffect(TimelineId, &'static str),
+    AddEffect(Target, &'static str),
     RemoveEffects(TimelineId),
     DeleteKeepOverlays(ClipId),
     Delete(TimelineId, bool),
@@ -109,6 +111,7 @@ pub(super) enum ToolbarCommand {
     Duplicate(Rc<[TimelineId]>),
     LaneStep(Rc<[TimelineId]>, &'static str),
     NewLane(LaneKind),
+    RenameLane(LaneId, String),
     DeleteLane(LaneId),
     AddTitleInLane(i32, LaneId),
     AddMotionInLane(i32, LaneId),
@@ -273,10 +276,17 @@ impl ToolbarCommand {
                     ),
                 ],
             ),
-            Self::AddEffect(id, kind) => (
+            Self::AddEffect(target, kind) => (
                 "effect.add",
                 vec![
-                    ("target".into(), Json::String(id.to_string())),
+                    (
+                        "target".into(),
+                        Json::String(match target {
+                            Target::Lane(id) => id.to_string(),
+                            Target::Timeline(id) => id.to_string(),
+                            _ => unreachable!("timeline effect menu target"),
+                        }),
+                    ),
                     ("type".into(), Json::String(kind.into())),
                 ],
             ),
@@ -364,6 +374,13 @@ impl ToolbarCommand {
                     ),
                 )],
             ),
+            Self::RenameLane(id, name) => (
+                "lane.rename",
+                vec![
+                    ("lane".into(), Json::String(id.to_string())),
+                    ("name".into(), Json::String(name)),
+                ],
+            ),
             Self::DeleteLane(id) => (
                 "lane.delete",
                 vec![("lane".into(), Json::String(id.to_string()))],
@@ -438,6 +455,12 @@ struct Clipboard {
     cut: bool,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+struct LaneRename {
+    id: LaneId,
+    begin: bool,
+}
+
 #[derive(Clone, Default, PartialEq)]
 pub(super) struct State {
     scale: f32,
@@ -453,6 +476,7 @@ pub(super) struct State {
     overview_drag: Option<OverviewDrag>,
     context: Option<ContextMenu>,
     lane: Option<LaneId>,
+    lane_rename: Option<LaneRename>,
     scrubbing: bool,
     blade: bool,
     expanded: Option<ClipId>,
@@ -993,6 +1017,10 @@ impl State {
         });
     }
 
+    fn begin_lane_rename(&mut self, id: LaneId) {
+        self.lane_rename = Some(LaneRename { id, begin: true });
+    }
+
     pub(super) fn frame_range(&mut self, range: [i32; 2]) {
         self.framed_range = Some(range);
     }
@@ -1042,9 +1070,10 @@ pub(super) struct Intents {
     overview_seen: Option<OverviewDrag>,
     drag_seen: bool,
     fade_seen: bool,
+    rename_painted: bool,
     blade_hover: Option<(i32, f32, f32)>,
     pub component: Option<(ClipId, &'static str, bool)>,
-    pub component_selected: bool,
+    pub inspect_selection: bool,
     pub inspector_focus: Option<super::inspector::Focus>,
     pub effect: Option<viewer_drawers::Effect>,
     pub state: State,
@@ -1064,11 +1093,17 @@ impl Intents {
         self.marquee_seen |= next.marquee_seen;
         self.overview_seen = next.overview_seen.or(self.overview_seen);
         self.component = next.component.or(self.component);
-        self.component_selected |= next.component_selected;
+        self.inspect_selection |= next.inspect_selection;
         self.inspector_focus = next.inspector_focus.or(self.inspector_focus);
         self.effect = next.effect.or_else(|| self.effect.take());
         self.bounds = next.bounds;
+        let requested_rename = self.state.lane_rename.filter(|rename| rename.begin);
         self.state = next.state;
+        // A menu choice or double-click can request the next frame's editor
+        // before a settling pass rebuilds the unedited header with no input.
+        if !next.rename_painted {
+            self.state.lane_rename = self.state.lane_rename.or(requested_rename);
+        }
     }
 
     pub(super) fn escape(&mut self, prior: &State, at: i32) -> bool {
@@ -1117,7 +1152,7 @@ impl Intents {
 
     fn inspect_component(&mut self, clip: ClipId, part: TakeComponent, key: Option<u32>) {
         self.state.select_component(clip, part, key);
-        self.component_selected = true;
+        self.inspect_selection = true;
     }
 }
 
@@ -2368,6 +2403,9 @@ pub(super) fn paint(
     if !intents.fade_seen {
         intents.state.fade_drag = None;
     }
+    if !intents.rename_painted && intents.state.lane_rename == view.state.lane_rename {
+        intents.state.lane_rename = None;
+    }
     intents.bounds = ui.rect(&pane);
     intents
 }
@@ -2430,56 +2468,7 @@ fn paint_context(
             }
         }
         ContextTarget::Lane(id) => {
-            let lane = project.lanes.iter().find(|lane| lane.id == id);
-            let spine = id == project.spine.id;
-            let can_delete = lane.is_some_and(|lane| {
-                cache.lane(id).is_empty()
-                    || project
-                        .lanes
-                        .iter()
-                        .any(|other| other.kind == lane.kind && other.id != id)
-            });
-            let entries = [
-                MenuItem::new(if spine {
-                    "Select All Clips"
-                } else {
-                    "Select All in Lane"
-                })
-                .id(0)
-                .shortcut("⌘A"),
-                MenuItem::new(if spine {
-                    "New Overlay Lane"
-                } else {
-                    "New Lane of Same Kind"
-                })
-                .id(1),
-                MenuItem::new(if state.all_components || state.expanded.is_some() {
-                    "Hide All Components"
-                } else {
-                    "Show All Components"
-                })
-                .id(2)
-                .disabled(!spine || !cache.has_components),
-                MenuItem::new(""),
-                MenuItem::new("Delete Lane")
-                    .id(3)
-                    .disabled(!can_delete)
-                    .danger(),
-            ];
-            match context_choice(ui, state, context.anchor, &entries, "Timeline lane actions") {
-                Some(0) => select_lane(project, state, id),
-                Some(1) => {
-                    intents.toolbar = Some(ToolbarCommand::NewLane(
-                        lane.map_or(LaneKind::Overlay, |lane| lane.kind),
-                    ))
-                }
-                Some(2) => {
-                    state.all_components = !state.all_components && state.expanded.is_none();
-                    state.expanded = None;
-                }
-                Some(3) => intents.toolbar = Some(ToolbarCommand::DeleteLane(id)),
-                _ => {}
-            }
+            paint_lane_context(ui, project, cache, intents, id, context.anchor);
         }
         ContextTarget::Background(at, lane) => {
             let graphics = lane.is_some_and(|id| {
@@ -2562,6 +2551,94 @@ fn paint_context(
                 _ => {}
             }
         }
+    }
+}
+
+fn paint_lane_context(
+    ui: &mut Ui,
+    project: &Project,
+    cache: &Cache,
+    intents: &mut Intents,
+    id: LaneId,
+    anchor: Point,
+) {
+    let state = &mut intents.state;
+    let name = "Timeline lane actions";
+    if id == project.spine.id {
+        let entries = [
+            MenuItem::new("Select All Clips").id(0).shortcut("⌘A"),
+            MenuItem::new("New Overlay Lane").id(1),
+            MenuItem::new(if state.all_components || state.expanded.is_some() {
+                "Hide All Components"
+            } else {
+                "Show All Components"
+            })
+            .id(2)
+            .disabled(!cache.has_components),
+            MenuItem::new(""),
+            MenuItem::new("Delete Lane").id(3).disabled(true).danger(),
+        ];
+        match context_choice(ui, state, anchor, &entries, name) {
+            Some(0) => select_lane(project, state, id),
+            Some(1) => intents.toolbar = Some(ToolbarCommand::NewLane(LaneKind::Overlay)),
+            Some(2) => {
+                state.all_components = !state.all_components && state.expanded.is_none();
+                state.expanded = None;
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    let Some(lane) = project.lanes.iter().find(|lane| lane.id == id) else {
+        state.context = None;
+        return;
+    };
+    let target = Target::Lane(id);
+    let effect = BLOCK_EFFECTS.iter().find(|&&(kind, _, _)| {
+        matches!(
+            (lane.kind, kind),
+            (LaneKind::Overlay, "window") | (LaneKind::Captions, "captions")
+        ) && effect_target_allowed(project, &target, kind)
+    });
+    let effects = [MenuItem::new(effect.map_or("", |entry| entry.1)).id(5)];
+    let new_lane = match lane.kind {
+        LaneKind::Overlay => "New Overlay Lane",
+        LaneKind::Graphics => "New Graphics Lane",
+        LaneKind::Captions => "New Captions Lane",
+        LaneKind::Camera => "New Motion Lane",
+        LaneKind::Audio => "New Audio Lane",
+    };
+    let can_delete = cache.lane(id).is_empty()
+        || project
+            .lanes
+            .iter()
+            .any(|other| other.kind == lane.kind && other.id != id);
+    let entries = [
+        MenuItem::new("Lane Effects").submenu(&effects),
+        MenuItem::new("Edit Lane Effects…").id(4),
+        MenuItem::new(""),
+        MenuItem::new(new_lane).id(1),
+        MenuItem::new("Rename…").id(2),
+        MenuItem::new("Select All in Lane").id(0).shortcut("⌘A"),
+        MenuItem::new(""),
+        MenuItem::new("Delete Lane")
+            .id(3)
+            .disabled(!can_delete)
+            .danger(),
+    ];
+    let first = if effect.is_some() { 0 } else { 3 };
+    match context_choice(ui, state, anchor, &entries[first..], name) {
+        Some(0) => select_lane(project, state, id),
+        Some(1) => intents.toolbar = Some(ToolbarCommand::NewLane(lane.kind)),
+        Some(2) => state.begin_lane_rename(id),
+        Some(3) => intents.toolbar = Some(ToolbarCommand::DeleteLane(id)),
+        Some(4) => {
+            state.set_selection(None, Some(id));
+            intents.inspect_selection = true;
+        }
+        Some(5) => intents.toolbar = effect.map(|entry| ToolbarCommand::AddEffect(target, entry.0)),
+        _ => {}
     }
 }
 
@@ -3248,7 +3325,10 @@ fn paint_block_context(
                 }
                 row if (EFFECT..EFFECT + BLOCK_EFFECTS.len() as i64).contains(&row) => {
                     single.map(|id| {
-                        ToolbarCommand::AddEffect(id, BLOCK_EFFECTS[(row - EFFECT) as usize].0)
+                        ToolbarCommand::AddEffect(
+                            Target::Timeline(id),
+                            BLOCK_EFFECTS[(row - EFFECT) as usize].0,
+                        )
                     })
                 }
                 row if row >= WORD => {
@@ -3738,7 +3818,7 @@ fn clock(ui: &mut Ui, at: i32, fps: u32) {
     let seconds = at / fps;
     ui.label_digits(
         format_args!("{:02}:{:02}:{:02}", seconds / 60, seconds % 60, at % fps),
-        SMALL,
+        SMALL.color(ColorToken::ACCENT),
     );
 }
 
@@ -5317,13 +5397,15 @@ fn take_event_marks(
     let mark_width = if pointer { 9.0 } else { 18.0 };
     let from = source_at(f64::from(x) - f64::from(mark_width));
     let to = source_at(f64::from(x) + f64::from(width) + if pointer { 4.5 } else { 0.0 });
-    if !from.is_finite() || !to.is_finite() || from >= to {
+    if !from.is_finite()
+        || !to.is_finite()
+        || from > to
+        || from == to && (pointer || events.key_lookback == 0.0)
+    {
         return;
     }
-    let pixel = |seconds| {
-        span.frame_at(seconds * events.fps, map)
-            .map(|frame| (origin + (frame - start) * scale - f64::from(x)) as f32)
-    };
+    let position = |frame| (origin + (frame - start) * scale - f64::from(x)) as f32;
+    let pixel = |seconds| span.frame_at(seconds * events.fps, map).map(position);
     let height = component.height() - 4.0;
     let layer = ui.node(
         "recorded-events",
@@ -5373,23 +5455,44 @@ fn take_event_marks(
                 }
             }
         } else {
-            let from = events.keys.partition_point(|key| key.t * events.fps < from);
+            let first = events
+                .keys
+                .partition_point(|key| (key.t + events.key_lookback) * events.fps < from);
             let mut next = -mark_width;
             for (index, key) in events
                 .keys
                 .iter()
                 .enumerate()
-                .skip(from)
-                .take_while(|(_, key)| key.t * events.fps < to)
+                .skip(first)
+                .take_while(|(_, key)| key.t * events.fps <= to)
             {
                 if categories & key.category == 0 {
                     continue;
                 }
-                let Some(x) = pixel(key.t) else { continue };
-                if x + mark_width <= 0.0 || x < next {
+                let (x, key_width, authored_start) =
+                    if let Some([at, end]) = key.authored_frames(span, map, events.fps) {
+                        if at >= end {
+                            continue;
+                        }
+                        (
+                            position(f64::from(at)),
+                            ((end - at) as f32 * geo.scale).max(mark_width),
+                            Some(at),
+                        )
+                    } else {
+                        if !(from..to).contains(&(key.t * events.fps)) {
+                            continue;
+                        }
+                        let Some(x) = pixel(key.t) else { continue };
+                        if x < next {
+                            continue;
+                        }
+                        next = x + mark_width;
+                        (x, mark_width, None)
+                    };
+                if x + key_width <= 0.0 || x >= width {
                     continue;
                 }
-                next = x + mark_width;
                 let is_hidden = key
                     .index
                     .is_some_and(|id| hidden.binary_search(&id).is_ok());
@@ -5407,14 +5510,14 @@ fn take_event_marks(
                     index as u64,
                     Node::row()
                         .at(x, 2.0)
-                        .w_px(mark_width)
+                        .w_px(key_width)
                         .h_px(height - 4.0)
                         .align(Align::Center)
                         .role(Role::Button),
                     &Pressable::DEFAULT.look(&looks).selected(chosen),
                     |ui, _| {
                         let label =
-                            ui.label(&key.label, CAPTION.pad(2.0).ellipsis().w_px(mark_width));
+                            ui.label(&key.label, CAPTION.pad(2.0).ellipsis().w_px(key_width));
                         ui.style(
                             &label,
                             &States::of(Look::NONE.text(ink)),
@@ -5426,7 +5529,9 @@ fn take_event_marks(
                 if press.clicked || press.secondary {
                     intents.inspect_component(clip, TakeComponent::Keys, key.index);
                     if press.clicked {
-                        if let Some(at) = span.seek_at(key.t * events.fps, map) {
+                        if let Some(at) =
+                            authored_start.or_else(|| span.seek_at(key.t * events.fps, map))
+                        {
                             intents.scrub = Some((Phase::Ended, at));
                         }
                     } else {
@@ -5453,7 +5558,7 @@ fn track_head(
     intents: &mut Intents,
 ) {
     let state = &mut intents.state;
-    ui.stack(
+    let head = ui.stack(
         Node::DEFAULT.w_px(width).h_px(height).flags(Flags::CLIP),
         |ui| {
             let background = if kind.is_some() {
@@ -5474,10 +5579,20 @@ fn track_head(
                 |_, _| {},
             );
             ui.a11y_name(&response.handle, name);
-            if let Some(effect) =
-                viewer_drawers::effect_drop(ui, &response.handle, project, Target::Lane(id))
-            {
-                intents.effect = Some(effect);
+            let rename = state.lane_rename.filter(|rename| rename.id == id);
+            if kind.is_some() && rename.is_none() && (response.held || response.clicked) {
+                let signal = ui.signal(&response.handle);
+                // The double-click count arrives on the press. Rename only on its matching click.
+                if signal.pressed {
+                    ui.set_state(&response.handle, i64::from(signal.double_clicked));
+                }
+                if response.clicked {
+                    let double = signal.released && ui.state(&response.handle, 0) != 0;
+                    ui.set_state(&response.handle, 0);
+                    if double {
+                        state.begin_lane_rename(id);
+                    }
+                }
             }
             if response.clicked || response.secondary {
                 state.set_selection(None, Some(id));
@@ -5514,12 +5629,38 @@ fn track_head(
                 19.0 + leading
             };
             let show_count = width >= LABEL_WIDTH;
-            let mut right = width
-                - if kind.is_some() && show_count {
-                    30.0
-                } else {
-                    6.0
-                };
+            let control_y = (height - 1.0 - LANE_CONTROL_SIZE) * 0.5;
+            let mut right = width - 6.0;
+            if kind.is_some() {
+                let menu_x = width - 7.0 - LANE_CONTROL_SIZE;
+                let container = Node::DEFAULT
+                    .at(menu_x, control_y)
+                    .w_px(LANE_CONTROL_SIZE)
+                    .h_px(LANE_CONTROL_SIZE);
+                ui.stack(container, |ui| {
+                    let idle = if response.hovered {
+                        QUIET
+                    } else {
+                        QUIET.alpha(128)
+                    };
+                    let look = States::of(Look::NONE.text(idle))
+                        .hover(Look::NONE.text(INK))
+                        .focus(Look::NONE.text(INK).border(ACCENT, 1.0));
+                    let button =
+                        IconButton::sized(LANE_CONTROL_SIZE, LANE_CONTROL_SIZE).look(&look);
+                    let menu =
+                        ui.icon_button("lane-menu", Icon::draw(lane_more, 0), "Lane menu", &button);
+                    if menu.secondary {
+                        let point = ui.signal(&menu.handle).press_point;
+                        state.set_selection(None, Some(id));
+                        state.open_menu(ContextTarget::Lane(id), point);
+                    } else if menu.clicked {
+                        let rect = ui.rect(&menu.handle);
+                        state.open_menu(ContextTarget::Lane(id), (rect.x, rect.y + rect.h));
+                    }
+                });
+                right = menu_x - 6.0;
+            }
             if let Some(fx) = fx.filter(|fx| right >= labels_start + fx.width()) {
                 right -= fx.width();
                 paint_fx_badge(
@@ -5533,7 +5674,7 @@ fn track_head(
             }
             if show_count {
                 let digits = count.checked_ilog10().unwrap_or(0) + 1;
-                let w = digits as f32 * 6.5;
+                let w = digits as f32 * if kind.is_some() { 6.0 } else { 6.5 };
                 right -= w;
                 ui.stack(Node::DEFAULT.at(right, (height - 12.0) * 0.5), |ui| {
                     let count = ui.label_digits(format_args!("{count}"), CAPTION.pad(0.0).w_px(w));
@@ -5545,7 +5686,32 @@ fn track_head(
                 });
                 right -= 6.0;
             }
-            if right > labels_start {
+            if let Some(rename) = rename {
+                let rect = Rect::new(
+                    labels_start,
+                    control_y,
+                    (right - labels_start).max(1.0),
+                    LANE_CONTROL_SIZE,
+                );
+                let field = ValueField::DEFAULT.size(11).left(true).name("Lane name");
+                let response = pxui::ext::value_field(
+                    ui,
+                    "lane-rename",
+                    name,
+                    rect,
+                    &field.edit(rename.begin),
+                    &ValueCallbacks::DEFAULT,
+                );
+                intents.rename_painted = true;
+                state.lane_rename = response.editing.then_some(LaneRename { id, begin: false });
+                if let Some(name) = response.changed.map(str::trim).filter(|value| {
+                    !value.is_empty() && *value != name && !value.chars().any(char::is_control)
+                }) {
+                    intents.toolbar = Some(ToolbarCommand::RenameLane(id, name.to_owned()));
+                }
+                let handle = response.response.handle;
+                ui.set_role(&handle, Role::TextField, pxui::A11yStates::EDITABLE);
+            } else if right > labels_start {
                 ui.row(
                     Node::DEFAULT
                         .at(labels_start, 0.0)
@@ -5566,12 +5732,27 @@ fn track_head(
             }
         },
     );
+    if let Some(effect) = viewer_drawers::effect_drop(ui, &head, project, Target::Lane(id)) {
+        intents.effect = Some(effect);
+    }
+}
+
+fn lane_more(paint: &mut Paint<'_>, rect: Rect, ink: Rgba, _: u32) {
+    let (x, y) = (rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
+    let fill = Fill::new(ink);
+    for dx in [-3.0, 0.0, 3.0] {
+        paint.circle((x + dx, y), 0.425, Some(fill), None);
+    }
 }
 
 fn lane_icon(paint: &mut Paint, rect: Rect, kind: LaneKind) {
     let tone = lane_tone(kind);
     let ink = Rgba::rgba(tone.r, tone.g, tone.b, 230);
-    let stroke = Stroke::new(ink).width(0.85);
+    let stroke = Stroke::new(ink).width(if kind == LaneKind::Graphics {
+        1.0
+    } else {
+        0.85
+    });
     let point = |(x, y): (f32, f32)| (rect.x + x * 0.5, rect.y + y * 0.5);
     let paths: &[&[(f32, f32)]] = match kind {
         LaneKind::Graphics => &[
@@ -9323,6 +9504,539 @@ mod tests {
         testing::frame(&mut ui, &[], build);
         assert_eq!(result.borrow().split, None);
     }
+    struct LaneMenuUi {
+        ui: Ui,
+        cache: Cache,
+        view: View,
+        tick: f64,
+    }
+
+    impl LaneMenuUi {
+        fn new(width: f32) -> Self {
+            let mut ui = crate::viewer_ui().unwrap();
+            ui.set_a11y(true);
+            Self {
+                ui,
+                cache: Cache::default(),
+                view: View {
+                    width,
+                    height: 420.0,
+                    at: 192,
+                    end: 600,
+                    dragging: false,
+                    history: (false, false),
+                    state: State::default(),
+                },
+                tick: 1.0,
+            }
+        }
+
+        fn frame(&mut self, project: &Project, events: &[pxui::Event]) -> Intents {
+            self.frame_with_drawer(project, events, false)
+        }
+
+        fn frame_with_drawer(
+            &mut self,
+            project: &Project,
+            events: &[pxui::Event],
+            drawer: bool,
+        ) -> Intents {
+            let mut intents = Intents::default();
+            let input = pxui::FrameIn::new(self.view.width, 640.0)
+                .time(self.tick)
+                .events(events);
+            self.tick += 0.016;
+            self.ui
+                .frame(&input, &mut |ui| {
+                    if drawer {
+                        viewer_drawers::paint(
+                            ui,
+                            viewer_drawers::Drawer::Effects,
+                            (Some(project), None),
+                            [self.view.width, 640.0],
+                            Point::new(12.0, 210.0),
+                            viewer_drawers::EffectTargets::default(),
+                        );
+                    }
+                    intents.merge(paint(
+                        ui,
+                        Some(project),
+                        self.view.clone(),
+                        &mut self.cache,
+                        (&[], None),
+                    ));
+                })
+                .unwrap();
+            self.view.state = intents.state.clone();
+            intents
+        }
+
+        fn find(&self, role: Role, text: &str) -> Rect {
+            pxui::testing::find(&self.ui, role, text).unwrap_or_else(|| panic!("missing {text}"))
+        }
+
+        fn button(&self, lane: &str) -> Rect {
+            let head = self.find(Role::Button, lane);
+            self.ui
+                .a11y_nodes()
+                .iter()
+                .find(|node| {
+                    node.is_role(Role::Button)
+                        && self.ui.a11y_name_of(node) == "Lane menu"
+                        && node.rect.y >= head.y
+                        && node.rect.y < head.y + head.h
+                })
+                .unwrap()
+                .rect
+        }
+
+        fn click(&mut self, project: &Project, rect: Rect, button: u32) -> Intents {
+            let x = f64::from(rect.x + rect.w * 0.5);
+            let y = f64::from(rect.y + rect.h * 0.5);
+            self.frame(
+                project,
+                &[pxui::Event::pointer(
+                    pxui::Event::POINTER_PRESSED,
+                    button,
+                    x,
+                    y,
+                )],
+            );
+            let release = self.frame(
+                project,
+                &[pxui::Event::pointer(
+                    pxui::Event::POINTER_RELEASED,
+                    button,
+                    x,
+                    y,
+                )],
+            );
+            self.frame(project, &[]);
+            release
+        }
+
+        fn choose(&mut self, project: &Project, row: &str) -> Intents {
+            self.click(project, self.find(Role::MenuItem, row), 0)
+        }
+
+        fn key(&mut self, project: &Project, key: Key) -> Intents {
+            let mut events = pxui_host::Events::default();
+            self.frame(
+                project,
+                events.encode(&[
+                    input::Event::KeyPressed(key),
+                    input::Event::KeyReleased(key),
+                ]),
+            )
+        }
+
+        fn type_text(&mut self, project: &Project, text: &'static str) -> Intents {
+            self.frame(
+                project,
+                &[pxui::Event {
+                    kind: pxui::Event::TEXT_INPUT,
+                    text: pxui::Str::from(text),
+                    ..Default::default()
+                }],
+            )
+        }
+
+        fn warm(&mut self, project: &Project) {
+            for _ in 0..8 {
+                self.frame(project, &[]);
+            }
+            splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
+                .warm(&mut || {
+                    for _ in 0..8 {
+                        self.frame(project, &[]);
+                    }
+                });
+        }
+    }
+
+    #[test]
+    fn lane_header_menu_matches_v13_and_opens_the_lane_in_selection_scope() {
+        use crate::inspector::{self, Scope, Selection};
+        use pxui::{Event, FrameIn, testing};
+        use splice_core::{edit, package::journal::Source};
+
+        mem_sys::set_peer(pxui::library_counter);
+        for width in [960.0, 800.0, 480.0] {
+            let mut project = crate::editor_views::load_sample().unwrap();
+            let lane = project
+                .lanes
+                .iter()
+                .find(|lane| lane.name == "Overlay 1")
+                .unwrap()
+                .id;
+            let caption = project
+                .lanes
+                .iter()
+                .find(|lane| lane.kind == LaneKind::Captions)
+                .unwrap()
+                .id;
+            let mut pane = LaneMenuUi::new(width);
+            let group: Vec<_> = project.clips.order()[..2]
+                .iter()
+                .filter_map(|&slot| project.clips.id(slot).map(TimelineId::Clip))
+                .collect();
+            pane.view.state.set_selected(group.clone());
+            pane.frame(&project, &[]);
+            pane.frame(&project, &[]);
+            let head = pane.find(Role::Button, "Overlay 1");
+            let button = pane.button("Overlay 1");
+            let x = if width == 480.0 { 73.0 } else { 131.0 };
+            assert_eq!(
+                (button.x - head.x, button.y - head.y, button.w, button.h),
+                (x, 3.5, 18.0, 18.0)
+            );
+            pane.warm(&project);
+            println!(
+                "LANE-MENU|{width}|offset {:?}|{}x{}|warm zero allocations",
+                (button.x - head.x, button.y - head.y),
+                button.w,
+                button.h
+            );
+
+            pane.click(&project, button, 0);
+            assert_eq!(pane.view.state.selected(), group);
+            assert!(pane.view.state.menu_open());
+            let entries: Vec<_> = pane
+                .ui
+                .a11y_nodes()
+                .iter()
+                .filter(|node| node.is_role(Role::MenuItem))
+                .map(|node| pane.ui.a11y_name_of(node))
+                .collect();
+            assert_eq!(
+                entries,
+                [
+                    "Lane Effects",
+                    "Edit Lane Effects…",
+                    "New Overlay Lane",
+                    "Rename…",
+                    "Select All in Lane",
+                    "Delete Lane",
+                ]
+            );
+            pane.warm(&project);
+
+            let mut inspector_ui = crate::viewer_ui().unwrap();
+            inspector_ui.set_a11y(true);
+            let input = FrameIn::new(268.0, 640.0);
+            let draw_inspector = |ui: &mut Ui, scope, selection| {
+                ui.frame(&input, &mut |ui| {
+                    inspector::paint(
+                        ui,
+                        Some(&project),
+                        selection,
+                        scope,
+                        600,
+                        (268.0, false),
+                        (&[], true, None, None, None),
+                    );
+                })
+                .unwrap();
+            };
+            let mut scope = Scope::Canvas;
+            draw_inspector(&mut inspector_ui, scope, Selection::None);
+            assert!(testing::find(&inspector_ui, Role::TextField, "Lane name").is_none());
+            let intent = pane.choose(&project, "Edit Lane Effects…");
+            if intent.inspect_selection {
+                scope = Scope::Selection;
+            }
+            assert_eq!(scope, Scope::Selection);
+            assert_eq!(pane.view.state.lane(), Some(lane));
+            assert!(pane.view.state.selected().is_empty() && intent.toolbar.is_none());
+            draw_inspector(&mut inspector_ui, scope, Selection::Lane(lane));
+            assert!(testing::find(&inspector_ui, Role::Heading, "Overlay 1").is_some());
+
+            pane.click(&project, pane.button("Overlay 1"), 0);
+            let submenu = pane.find(Role::MenuItem, "Lane Effects");
+            pane.frame(
+                &project,
+                &[Event::pointer(
+                    Event::POINTER_MOVED,
+                    0,
+                    f64::from(submenu.x + 10.0),
+                    f64::from(submenu.y + submenu.h * 0.5),
+                )],
+            );
+            pane.frame(&project, &[]);
+            let add = pane
+                .choose(&project, "Add Window")
+                .toolbar
+                .unwrap()
+                .operation();
+            assert_eq!(
+                add.field("cmd").and_then(splice_json::Value::as_str),
+                Some("effect.add")
+            );
+            assert_eq!(
+                add.field("target").and_then(splice_json::Value::as_str),
+                Some("lan_ov1")
+            );
+            edit::apply(&mut project, &[add], Source::Human, false).unwrap();
+            project.rev += 1;
+            assert!(
+                project
+                    .lanes
+                    .iter()
+                    .find(|l| l.id == lane)
+                    .unwrap()
+                    .effects
+                    .iter()
+                    .any(|fx| fx.kind == "window")
+            );
+            pane.frame(&project, &[]);
+
+            if width == 480.0 {
+                // Keyboard activation of the overflow button, plus the unchanged right-click route.
+                for _ in 0..60 {
+                    pane.key(&project, Key::Tab);
+                    if pane.ui.a11y_nodes().iter().any(|node| {
+                        node.rect == pane.button("Captions")
+                            && node.states & pxui::A11yStates::FOCUSED.bits() != 0
+                    }) {
+                        break;
+                    }
+                }
+                pane.key(&project, Key::Enter);
+                pane.frame(&project, &[]);
+                assert!(pane.view.state.menu_open());
+                assert_eq!(pane.find(Role::MenuItem, "New Captions Lane").h, 22.0);
+                let edit = pane.choose(&project, "Edit Lane Effects…");
+                assert!(edit.inspect_selection && edit.state.lane() == Some(caption));
+                pane.click(&project, pane.button("Captions"), 0);
+                let submenu = pane.find(Role::MenuItem, "Lane Effects");
+                let pos = Event::pointer(
+                    Event::POINTER_MOVED,
+                    0,
+                    f64::from(submenu.x + 10.0),
+                    f64::from(submenu.y + submenu.h * 0.5),
+                );
+                pane.frame(&project, &[pos]);
+                pane.frame(&project, &[]);
+                let add = pane
+                    .choose(&project, "Add Caption Style")
+                    .toolbar
+                    .unwrap()
+                    .operation();
+                assert_eq!(
+                    add.field("target").and_then(splice_json::Value::as_str),
+                    Some("lan_cap")
+                );
+                assert_eq!(
+                    add.field("type").and_then(splice_json::Value::as_str),
+                    Some("captions")
+                );
+                edit::apply(&mut project, &[add], Source::Human, false).unwrap();
+                project.rev += 1;
+
+                pane.click(&project, pane.find(Role::Button, "Video · spine"), 1);
+                pane.find(Role::MenuItem, "Select All Clips");
+                pane.find(Role::MenuItem, "Show All Components");
+                pane.key(&project, Key::Escape);
+                pane.frame(&project, &[]);
+                let click = pane.click(&project, pane.find(Role::Button, "Graphics"), 0);
+                assert!(click.state.lane().is_some() && !click.inspect_selection);
+                let right = pane.click(&project, pane.find(Role::Button, "Graphics"), 1);
+                assert_eq!(right.state.lane(), click.state.lane());
+                pane.find(Role::MenuItem, "New Graphics Lane");
+                assert!(testing::find(&pane.ui, Role::MenuItem, "Lane Effects").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn lane_header_rename_commits_once_and_escape_restores_the_name() {
+        use pxui::{Event, testing};
+        use splice_core::history::{Store, WriteOptions};
+
+        mem_sys::set_peer(pxui::library_counter);
+        for width in [960.0, 800.0, 480.0] {
+            let path = std::env::temp_dir().join(format!(
+                "splice-lane-header-{}-{width}.splice",
+                std::process::id(),
+            ));
+            let sample = crate::editor_views::load_sample().unwrap();
+            let mut store = Store::create(&path, &sample).unwrap();
+            let mut pane = LaneMenuUi::new(width);
+            pane.frame(store.project(), &[]);
+            pane.frame(store.project(), &[]);
+            pane.click(store.project(), pane.button("Overlay 2"), 0);
+            let opened = pane.choose(store.project(), "Rename…");
+            assert!(opened.toolbar.is_none());
+            assert!(pane.ui.text_input_focused());
+            let field = pane.find(Role::TextField, "Lane name");
+            let head = pane.find(Role::Button, "Overlay 2");
+            assert_eq!(
+                (field.x - head.x, field.y - head.y, field.h),
+                (28.0, 3.5, 18.0)
+            );
+            assert_eq!(field.w, if width == 480.0 { 13.0 } else { 59.0 });
+            assert!(field.x + field.w < pane.button("Overlay 2").x);
+            pane.warm(store.project());
+            println!(
+                "LANE-FOCUS|{width}|{}x{}|warm zero allocations",
+                field.w, field.h
+            );
+
+            let rev = store.project().rev;
+            assert!(
+                pane.type_text(store.project(), "  B-roll  ")
+                    .toolbar
+                    .is_none()
+            );
+            pane.warm(store.project());
+            assert_eq!(store.project().rev, rev);
+            let commit = pane.key(store.project(), Key::Enter).toolbar.unwrap();
+            let op = commit.operation();
+            assert_eq!(
+                op.field("cmd").and_then(splice_json::Value::as_str),
+                Some("lane.rename")
+            );
+            assert_eq!(
+                op.field("lane").and_then(splice_json::Value::as_str),
+                Some("lan_ov2")
+            );
+            assert_eq!(
+                op.field("name").and_then(splice_json::Value::as_str),
+                Some("B-roll")
+            );
+            store.apply(&[op], &WriteOptions::default()).unwrap();
+            assert_eq!(store.project().rev, rev + 1);
+            assert!(pane.frame(store.project(), &[]).toolbar.is_none());
+            assert!(testing::find(&pane.ui, Role::TextField, "Lane name").is_none());
+            let head = pane.find(Role::Button, "B-roll");
+
+            pane.click(store.project(), head, 0);
+            let x = f64::from(head.x + 32.0);
+            let y = f64::from(head.y + head.h * 0.5);
+            // Both presses must hit the same position for the retained click count.
+            pane.tick += 0.5;
+            for kind in [Event::POINTER_PRESSED, Event::POINTER_RELEASED] {
+                pane.frame(store.project(), &[Event::pointer(kind, 0, x, y)]);
+            }
+            pane.frame(
+                store.project(),
+                &[Event::pointer(Event::POINTER_PRESSED, 0, x, y)],
+            );
+            assert!(!pane.ui.text_input_focused());
+            pane.frame(
+                store.project(),
+                &[Event::pointer(Event::POINTER_RELEASED, 0, x, y)],
+            );
+            pane.frame(store.project(), &[]);
+            assert!(pane.ui.text_input_focused());
+            assert!(
+                pane.type_text(store.project(), "Discard me")
+                    .toolbar
+                    .is_none()
+            );
+            assert!(pane.key(store.project(), Key::Escape).toolbar.is_none());
+            assert!(pane.frame(store.project(), &[]).toolbar.is_none());
+            pane.find(Role::Button, "B-roll");
+            assert!(!pane.ui.text_input_focused());
+            assert_eq!(store.project().rev, rev + 1);
+
+            if width == 480.0 {
+                pane.click(store.project(), pane.button("B-roll"), 0);
+                pane.choose(store.project(), "Rename…");
+                assert!(pane.type_text(store.project(), "  ").toolbar.is_none());
+                assert!(pane.key(store.project(), Key::Enter).toolbar.is_none());
+                pane.frame(store.project(), &[]);
+                assert!(!pane.ui.text_input_focused());
+
+                pane.click(store.project(), pane.button("B-roll"), 0);
+                pane.choose(store.project(), "Rename…");
+                pane.type_text(store.project(), "Cutaways");
+                let graphics = pane.find(Role::Button, "Graphics");
+                let blur = pane.frame(
+                    store.project(),
+                    &[Event::pointer(
+                        Event::POINTER_PRESSED,
+                        0,
+                        f64::from(graphics.x + 32.0),
+                        f64::from(graphics.y + graphics.h * 0.5),
+                    )],
+                );
+                let op = blur.toolbar.unwrap().operation();
+                assert_eq!(
+                    op.field("name").and_then(splice_json::Value::as_str),
+                    Some("Cutaways")
+                );
+                store.apply(&[op], &WriteOptions::default()).unwrap();
+                assert_eq!(store.project().rev, rev + 2);
+                assert!(pane.frame(store.project(), &[]).toolbar.is_none());
+            }
+            drop(store);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn lane_header_menu_keeps_the_dots_in_the_effect_drop_target() {
+        use pxui::Event;
+        use splice_core::{edit, package::journal::Source};
+
+        let mut project = crate::editor_views::load_sample().unwrap();
+        let lane = project
+            .lanes
+            .iter()
+            .find(|lane| lane.name == "Overlay 1")
+            .unwrap()
+            .id;
+        let mut pane = LaneMenuUi::new(480.0);
+        for _ in 0..3 {
+            pane.frame_with_drawer(&project, &[], true);
+        }
+        let from = pane.find(Role::Button, "Window");
+        let target = pane.button("Overlay 1");
+        let (x, y) = (
+            f64::from(from.x + from.w * 0.5),
+            f64::from(from.y + from.h * 0.5),
+        );
+        let (to_x, to_y) = (f64::from(target.x + 9.0), f64::from(target.y + 9.0));
+        for event in [
+            Event::pointer(Event::POINTER_PRESSED, 0, x, y),
+            Event::pointer(Event::POINTER_MOVED, 0, to_x, to_y),
+        ] {
+            let preview = pane.frame_with_drawer(&project, &[event], true);
+            assert!(preview.effect.is_none() && !preview.state.menu_open());
+        }
+        assert!(pane.ui.carrying().is_some());
+        for _ in 0..8 {
+            pane.frame_with_drawer(&project, &[], true);
+        }
+        mem_sys::set_peer(pxui::library_counter);
+        splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset).warm(
+            &mut || {
+                let preview = pane.frame_with_drawer(&project, &[], true);
+                assert!(preview.effect.is_none() && !preview.state.menu_open());
+            },
+        );
+        let release = Event::pointer(Event::POINTER_RELEASED, 0, to_x, to_y);
+        let dropped = pane.frame_with_drawer(&project, &[release], true);
+        assert!(dropped.toolbar.is_none() && !dropped.state.menu_open());
+        let change = dropped
+            .effect
+            .expect("the lane header owns its menu button's drop area");
+        assert_eq!(change.target, Target::Lane(lane));
+        let operation = change.operation(&project).unwrap();
+        edit::apply(&mut project, &[operation], Source::Human, false).unwrap();
+        assert!(
+            project
+                .lanes
+                .iter()
+                .find(|row| row.id == lane)
+                .unwrap()
+                .effects
+                .iter()
+                .any(|fx| fx.kind == "window")
+        );
+    }
+
     #[test]
     fn native_lane_chrome_clips_and_scales_at_desktop_and_compact_widths() {
         use pxui::{FrameIn, UiDesc, draw::kind};
@@ -9615,7 +10329,7 @@ mod tests {
         ));
         std::fs::write(&path, r#"{"t0":0,"source":{"kind":"display","rect":{"x":0,"y":0,"width":96,"height":64},"scale":1},"events":[
             {"t":0,"k":"move","x":0.25,"y":0.25},
-            {"t":0.02,"k":"key","ch":"Q","keyCode":12},
+            {"t":0.02,"k":"key","ch":"QQ","keyCode":12,"chipUntil":0.85},
             {"t":0.1,"k":"key","ch":"W","keyCode":13},
             {"t":0.6,"k":"down","x":0.75,"y":0.5,"b":0},{"t":0.65,"k":"up","x":0.75,"y":0.5,"b":0},
             {"t":0.75,"k":"key","ch":"E","keyCode":14},
@@ -9628,6 +10342,20 @@ mod tests {
         assert_eq!(
             (events.keys[1].index, events.keys[1].label.as_str()),
             (Some(1), "•")
+        );
+        assert_eq!(events.keys[0].chip_until, Some(0.85));
+        assert_eq!(
+            events.keys[0].authored_frames(
+                SourceSpan {
+                    start: 5,
+                    end: 15,
+                    source: 3.0,
+                    step: 0.0,
+                },
+                &[],
+                30.0,
+            ),
+            Some([5, 15]),
         );
 
         let mut project = Project::default();
@@ -9745,6 +10473,8 @@ mod tests {
             chips, 2,
             "trimmed, offscreen, and excluded categories are omitted"
         );
+        let authored = testing::find(&ui, Role::Button, "••").unwrap();
+        assert_eq!((authored.x, authored.w), (COMPACT_LABEL_WIDTH, 36.0));
         let muted = shapes()
             .filter(|shape| shape.color2 == [QUIET.r, QUIET.g, QUIET.b, 255])
             .map(|shape| shape.rect)
@@ -9793,7 +10523,7 @@ mod tests {
             selected.state.component(),
             Some((id, TakeComponent::Keys, Some(2)))
         );
-        assert!(selected.component_selected);
+        assert!(selected.inspect_selection);
         assert_eq!(selected.scrub, Some((Phase::Ended, 16)));
         let (_, hide) = component_visibility(&project, &selected.state, false).unwrap();
         let op = hide.operation();
@@ -9805,6 +10535,19 @@ mod tests {
             op.field("hidden").and_then(splice_json::Value::as_bool),
             Some(false)
         );
+        drop(selected);
+        clear_actions(&result);
+        testing::click(
+            &mut ui,
+            f64::from(authored.x + 24.0),
+            f64::from(authored.y + authored.h * 0.5),
+            build,
+        );
+        assert_eq!(
+            result.borrow().state.component(),
+            Some((id, TakeComponent::Keys, Some(0)))
+        );
+        assert_eq!(result.borrow().scrub, Some((Phase::Ended, 0)));
     }
 
     #[test]

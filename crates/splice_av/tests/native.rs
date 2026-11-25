@@ -354,7 +354,9 @@ mod native {
         fs::write(
             take.join("events.json"),
             r#"{"t0":0,"source":{"kind":"display","rect":{"x":0,"y":0,"width":96,"height":64},"scale":1},
-                "events":[{"t":0.1,"k":"key","ch":"frame study","mods":0}]}"#,
+                "events":[{"t":0.1,"k":"key","ch":"frame study","mods":0,"chipUntil":0.4},
+                    {"t":0.2,"k":"key","ch":"L","mods":0},
+                    {"t":0.3,"k":"key","ch":"X","mods":0,"chipUntil":0.4}]}"#,
         )
         .unwrap();
         let mut media = video();
@@ -376,9 +378,9 @@ mod native {
                 id: ClipId::from_serial(1),
                 timing: ClipTiming {
                     start: 0,
-                    length: 30,
+                    length: 15,
                     source: 0,
-                    speed: 1.0,
+                    speed: 2.0,
                 },
                 data: ClipData {
                     media: Some(MediaId::from_serial(1)),
@@ -464,6 +466,25 @@ mod native {
                 .count()
         };
         assert!(dark_ink(&normal) > 100 && dark_ink(&private) > 30);
+
+        // At 2×, source 0.1 s starts on timeline frame 2 and 0.4 s ends on frame 6.
+        // At frame 5 the later timed key and Recorder run overlap the first dwell.
+        for (composition, long, resumed) in
+            [(&viewer, "frame study", "L"), (&agent, "•••••••••••", "•")]
+        {
+            assert!(composition.text_at(1).is_empty());
+            assert_eq!(composition.text_at(2)[0].layer.text, long);
+            assert_eq!(composition.text_at(6).len(), 1);
+            assert_eq!(composition.text_at(6)[0].layer.text, resumed);
+            let after = plate_bounds(&frame(composition, 6));
+            assert_ne!(after, [540, 960, 0, 0]);
+            assert!(
+                after[2] < 90,
+                "the one-key burst resumes at the exclusive end: {after:?}"
+            );
+            let sought = frame(composition, 5);
+            assert!(plate_bounds(&sought)[2] > 215);
+        }
     }
 
     pub(super) fn native_take_draws_the_recorded_cursor_and_zooms_on_click() {
