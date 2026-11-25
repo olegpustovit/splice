@@ -2,8 +2,8 @@ use super::{editor_session, surface::ReplyFrame, timeline};
 
 mod examples;
 use pxui::{
-    A11yStates, AreaCallbacks, Button, Fill, Flags, Handle, Image, ImageStyle, Label, Node, Rect,
-    Role, TextArea, Ui,
+    A11yStates, AreaCallbacks, Button, Fill, Flags, Handle, Image, ImageStyle, KeyCode, Label,
+    Mods, Node, Rect, Role, TextArea, Ui,
     draw::flags::rect::{BOTTOM, LEFT, TOP},
     geom::{Edges, Rgba},
     theme::Font,
@@ -151,7 +151,7 @@ pub(super) struct Call {
 }
 
 // The request/reply pane is independent of the tool rail and activity dock. On compact
-// layouts the whole Lab body is the corresponding scroll area.
+// layouts the whole page scrolls, including the titlebar.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Scroll {
     offset: f32,
@@ -238,6 +238,32 @@ impl Intents {
         }
         self.viewport = next.viewport.or(self.viewport);
         self.request = next.request.or(self.request);
+    }
+
+    pub(super) fn route_scroll_keys(&self, ui: &mut Ui) {
+        let Some((pane, true)) = self.viewport else {
+            return;
+        };
+        if ui.text_input_focused() {
+            return;
+        }
+        let home = ui.key_pressed(KeyCode::Home, Mods::NONE);
+        let end = ui.key_pressed(KeyCode::End, Mods::NONE);
+        let up = ui.key_pressed(KeyCode::PageUp, Mods::NONE);
+        let down = ui.key_pressed(KeyCode::PageDown, Mods::NONE);
+        let target = if home {
+            0.0
+        } else if end {
+            f32::MAX
+        } else if up != down {
+            let scroll = ui.scroll(&pane).settled;
+            let page = ui.rect(&pane).h;
+            (scroll + if down { page } else { -page }).max(0.0)
+        } else {
+            return;
+        };
+        ui.set_scroll_offset(&pane, target);
+        ui.repaint_after(0.0);
     }
 
     pub(super) fn changed(&self) -> bool {
@@ -951,6 +977,7 @@ impl Demo {
     }
 }
 
+#[cfg(test)]
 pub(super) fn paint(
     ui: &mut Ui,
     context: Option<(u64, Option<SessionId>)>,
@@ -959,6 +986,24 @@ pub(super) fn paint(
     session: Option<(&editor_session::State, &Store)>,
     titlebar_height: f32,
 ) -> Intents {
+    paint_with_titlebar(
+        ui,
+        context,
+        lab,
+        images,
+        session,
+        (titlebar_height, &mut |_| {}),
+    )
+}
+
+pub(super) fn paint_with_titlebar(
+    ui: &mut Ui,
+    context: Option<(u64, Option<SessionId>)>,
+    lab: &Lab,
+    images: &[Option<Image>],
+    session: Option<(&editor_session::State, &Store)>,
+    (titlebar_height, titlebar): (f32, &mut dyn FnMut(&mut Ui)),
+) -> Intents {
     let size = ui.view_size();
     let tool = &tool_catalog()[lab.selected];
     let mut intents = Intents::default();
@@ -966,6 +1011,7 @@ pub(super) fn paint(
     let pane = Look::NONE.fill(PANEL);
     if size.width <= COMPACT_MAX {
         let view = pane_scroll(ui, ("lab-compact", "Agent Lab"), FILL, &mut |ui| {
+            titlebar(ui);
             ui.column(Node::column().w(Size::Grow).look(pane), |ui| {
                 rail_header(ui);
                 chosen = tool_list(ui, lab.selected, true);
@@ -991,6 +1037,7 @@ pub(super) fn paint(
         });
         intents.viewport = Some((view, true));
     } else {
+        titlebar(ui);
         let wide = size.width > DOCK_MAX;
         let rail = if wide { WIDE_RAIL } else { DOCK_RAIL };
         ui.column(FILL, |ui| {

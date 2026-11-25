@@ -3713,8 +3713,16 @@ fn tool(ui: &mut Ui, icon: u32, name: &str, selected: bool, enabled: bool) -> bo
     } else {
         button
     };
-    ui.icon_button(u64::from(icon), Icon::draw(tool_icon, icon), name, &button)
-        .clicked
+    let response = ui.icon_button(u64::from(icon), Icon::draw(tool_icon, icon), name, &button);
+    if icon <= 3 && selected {
+        ui.canvas_over(&response.handle, |paint, rect| {
+            paint.fill(
+                Rect::new(rect.x + 8.0, rect.y, rect.w - 16.0, 1.0),
+                Fill::new(INK),
+            );
+        });
+    }
+    response.clicked
 }
 
 fn tool_separator(ui: &mut Ui, key: &'static str) {
@@ -5735,7 +5743,12 @@ fn track_head(
                     (right, (height - FX_BADGE_HEIGHT) * 0.5),
                     INK,
                 );
-                right -= 6.0;
+                // Leave room for an initial and the ellipsis in a compact lane name.
+                right -= if kind.is_some() && !show_count {
+                    5.0
+                } else {
+                    6.0
+                };
             }
             if show_count {
                 let digits = count.checked_ilog10().unwrap_or(0) + 1;
@@ -10099,7 +10112,7 @@ mod tests {
 
     #[test]
     fn lane_header_rename_commits_once_and_escape_restores_the_name() {
-        use pxui::{Event, testing};
+        use pxui::{Event, draw::kind, testing};
         use splice_core::history::{Store, WriteOptions};
 
         mem_sys::set_peer(pxui::library_counter);
@@ -10113,6 +10126,81 @@ mod tests {
             let mut pane = LaneMenuUi::new(width);
             pane.frame(store.project(), &[]);
             pane.frame(store.project(), &[]);
+            let check_marks = |pane: &LaneMenuUi, pressed: [bool; 5]| {
+                let tools = [
+                    "Select tool",
+                    "Blade tool",
+                    "Snapping",
+                    "Magnetic ripple",
+                    "Split at playhead",
+                ];
+                for (name, pressed) in tools.into_iter().zip(pressed) {
+                    let r = pane.find(Role::Button, name);
+                    assert_eq!((r.w, r.h), (26.0, 26.0));
+                    let y = r.y.round_ties_even();
+                    let mark = [r.x + 8.0, y, r.x + 18.0, y + 1.0];
+                    assert_eq!(
+                        pane.ui
+                            .layers()
+                            .flat_map(|layer| layer.instances)
+                            .any(|shape| {
+                                shape.kind == kind::RECT
+                                    && shape.color == [244, 243, 238, 255]
+                                    && shape.rect == mark
+                            }),
+                        pressed,
+                        "{width}: {name} mark at {mark:?}"
+                    );
+                }
+            };
+            check_marks(&pane, [true, false, true, true, false]);
+            for name in ["Blade tool", "Snapping", "Magnetic ripple"] {
+                let r = pane.find(Role::Button, name);
+                pane.click(store.project(), Rect::new(r.x, r.y, r.w, 1.0), 0);
+            }
+            check_marks(&pane, [false, true, false, false, false]);
+            pane.warm(store.project());
+            for name in ["Select tool", "Snapping", "Magnetic ripple"] {
+                pane.click(store.project(), pane.find(Role::Button, name), 0);
+            }
+            check_marks(&pane, [true, false, true, true, false]);
+            pane.warm(store.project());
+
+            for name in ["Captions", "Overlay 2"] {
+                let head = pane.find(Role::Button, name);
+                let menu = pane.button(name);
+                assert_eq!(
+                    menu,
+                    Rect::new(head.x + head.w - 25.0, head.y + 3.5, 18.0, 18.0)
+                );
+                let badge = [menu.x - 26.0, head.y + 7.0, menu.x - 6.0, head.y + 19.0];
+                let shapes = || pane.ui.layers().flat_map(|layer| layer.instances);
+                assert!(shapes().any(|shape| shape.kind == kind::RECT
+                    && shape.rect == badge
+                    && shape.color == [191, 224, 234, 255]));
+                if width == 480.0 {
+                    let glyphs = shapes()
+                        .filter(|shape| {
+                            shape.kind == kind::MASK
+                                && shape.rect[0] >= head.x + 28.0
+                                && shape.rect[0] < badge[0]
+                                && shape.rect[1] >= head.y
+                                && shape.rect[1] < head.y + head.h
+                        })
+                        .count();
+                    assert_eq!(glyphs, 2, "{name} needs its initial and an ellipsis");
+                    let pointer = Event::pointer(
+                        Event::POINTER_MOVED,
+                        0,
+                        f64::from(badge[0] + 10.0),
+                        f64::from(badge[1] + 6.0),
+                    );
+                    pane.frame(store.project(), &[pointer]);
+                    pane.tick += 1.0;
+                    pane.frame(store.project(), &[]);
+                    pane.find(Role::Tooltip, "1 lane effect(s)");
+                }
+            }
             pane.click(store.project(), pane.button("Overlay 2"), 0);
             let opened = pane.choose(store.project(), "Rename…");
             assert!(opened.toolbar.is_none());
@@ -10123,7 +10211,7 @@ mod tests {
                 (field.x - head.x, field.y - head.y, field.h),
                 (28.0, 3.5, 18.0)
             );
-            assert_eq!(field.w, if width == 480.0 { 13.0 } else { 59.0 });
+            assert_eq!(field.w, if width == 480.0 { 14.0 } else { 59.0 });
             assert!(field.x + field.w < pane.button("Overlay 2").x);
             pane.warm(store.project());
             println!(

@@ -1,15 +1,17 @@
 use super::commands::{SHORTCUT_GROUPS, ShortcutRow};
 use pxui::{
     Button, Label, Node, Overlay, TextAlign, Ui,
-    geom::Rgba,
+    geom::{Edges, Rgba},
     ui::{Align, Look, Role, Size, State, States},
 };
 
 const TITLE: &str = "Keyboard shortcuts";
-const HEADER: f32 = 46.0;
+const HEADER: f32 = 43.0;
 const PAD: f32 = 12.0;
 const COLUMN_GAP: f32 = 20.0;
 const MIN_COLUMN: f32 = 200.0;
+const ROW_LINE: f32 = 15.4;
+const TAG_GAP: f32 = 6.6;
 
 const CONTROL: Rgba = Rgba::rgb(20, 20, 21);
 const LINE: Rgba = Rgba::rgb(37, 37, 39);
@@ -21,8 +23,8 @@ const TAG_INK: Rgba = Rgba::rgb(191, 224, 234);
 const CLOSE_BORDER: Look = Look::NONE.fill(CONTROL).border(LINE, 1.0).text(INK);
 const CLOSE_LOOK: States = States::of(CLOSE_BORDER).hover(CLOSE_BORDER.border(STRONG_LINE, 1.0));
 
-const BODY: Label = Label::BODY.size(11.0);
-const CHORD: Label = Label::MONO.size(11.0);
+const BODY: Label = Label::BODY.size(11.0).line_height(ROW_LINE);
+const CHORD: Label = Label::MONO.size(11.0).line_height(ROW_LINE);
 const TAG: Label = Label::MONO.size(10.0);
 
 pub(super) fn paint(ui: &mut Ui, shortcuts: &[ShortcutRow], [width, height]: [f32; 2]) -> bool {
@@ -35,8 +37,11 @@ pub(super) fn paint(ui: &mut Ui, shortcuts: &[ShortcutRow], [width, height]: [f3
     let pad = PAD.min(width * 0.1);
     let inner = width - 2.0 * pad;
     let close_width = 56.0_f32.min(inner);
-    let columns = (((inner + COLUMN_GAP) / (MIN_COLUMN + COLUMN_GAP)) as usize).clamp(1, 3);
-    let column_width = (inner - (columns - 1) as f32 * COLUMN_GAP) / columns as f32;
+    // The modal's stroke reserves one point on each side in the reference grid.
+    let grid_inner = (inner - 2.0).max(0.0);
+    let columns = (((grid_inner + COLUMN_GAP) / (MIN_COLUMN + COLUMN_GAP)) as usize).clamp(1, 3);
+    let column_width = (grid_inner - (columns - 1) as f32 * COLUMN_GAP) / columns as f32;
+    let grid_side = (pad - 1.0).max(0.0);
 
     let mut groups = SHORTCUT_GROUPS;
     let mut count = 0;
@@ -86,11 +91,15 @@ pub(super) fn paint(ui: &mut Ui, shortcuts: &[ShortcutRow], [width, height]: [f3
                 );
                 line(ui, "shortcut-heading-rule");
                 if grid_height > 0.0 && count > 0 {
+                    let grid = Node::column()
+                        .w(Size::Grow)
+                        .padding(Edges::new(grid_side, pad, grid_side, pad))
+                        .gap(PAD);
                     ui.scroll_view(
                         "effective-bindings",
                         Node::DEFAULT.w(Size::Grow).max_h(grid_height),
                         |ui| {
-                            ui.column(Node::column().w(Size::Grow).pad(pad).gap(PAD), |ui| {
+                            ui.column(grid, |ui| {
                                 for band in groups[..count].chunks(columns) {
                                     ui.row(
                                         Node::row()
@@ -106,7 +115,7 @@ pub(super) fn paint(ui: &mut Ui, shortcuts: &[ShortcutRow], [width, height]: [f3
                                                             text(
                                                                 ui,
                                                                 name,
-                                                                TAG.h_px(18.0).role(Role::Heading),
+                                                                TAG.h_px(17.0).role(Role::Heading),
                                                                 QUIET,
                                                             );
                                                             for (index, shortcut) in
@@ -136,17 +145,9 @@ pub(super) fn paint(ui: &mut Ui, shortcuts: &[ShortcutRow], [width, height]: [f3
 }
 
 fn row(ui: &mut Ui, shortcut: &ShortcutRow, width: f32) {
-    let measure = |ui: &mut Ui, label: &str, style: Label| {
-        ui.text_service()
-            .measure(label, style, None)
-            .map_or(width, |m| m.width.ceil())
-    };
-    let chord_width = measure(ui, &shortcut.keys, CHORD).min(width * 0.45);
+    let chord_width = measure(ui, &shortcut.keys, CHORD).ceil().min(width * 0.45);
     let gap = 8.0_f32.min(width * 0.1);
     let left = (width - chord_width - gap).max(0.0);
-    let title_width = measure(ui, shortcut.title, BODY);
-    let route = shortcut.command;
-    let tag_width = measure(ui, route, TAG);
 
     ui.row(
         Node::row()
@@ -155,17 +156,10 @@ fn row(ui: &mut Ui, shortcut: &ShortcutRow, width: f32) {
             .pad_y(3.0)
             .align(Align::Start),
         |ui| {
-            if title_width + 4.0 + tag_width <= left {
-                ui.row(Node::row().w_px(left).gap(4.0).align(Align::Center), |ui| {
-                    text(ui, shortcut.title, BODY.w_px(title_width), INK);
-                    text(ui, route, TAG.w_px(tag_width), TAG_INK);
-                });
-            } else {
-                ui.column(Node::column().w_px(left), |ui| {
-                    text(ui, shortcut.title, BODY.w_px(left).wrap_glyph(), INK);
-                    text(ui, route, TAG.w_px(left).wrap_glyph(), TAG_INK);
-                });
-            }
+            let label = ui.column(Node::column().w_px(left).role(Role::Label), |ui| {
+                title_and_tag(ui, shortcut.title, shortcut.command, left);
+            });
+            ui.a11y_name(&label, shortcut.title);
             text(
                 ui,
                 &shortcut.keys,
@@ -175,6 +169,46 @@ fn row(ui: &mut Ui, shortcut: &ShortcutRow, width: f32) {
         },
     );
     line(ui, "shortcut-row-rule");
+}
+
+fn title_and_tag(ui: &mut Ui, title: &str, tag: &str, width: f32) {
+    let body = BODY.role(Role::Unknown);
+    let tag_style = TAG.line_height(ROW_LINE);
+    let mut start = 0;
+    let mut end = 0;
+    // PXUI spans share a font size. Keep the smaller command tag in its own label,
+    // packing title words into measured lines and using any space left on the final line.
+    for word in title.split_inclusive(' ') {
+        let boundary = end;
+        end += word.len();
+        if boundary > start && measure(ui, title[start..end].trim_end(), body) > width {
+            text(
+                ui,
+                title[start..boundary].trim_end(),
+                body.w_px(width).wrap_glyph(),
+                INK,
+            );
+            start = boundary;
+        }
+    }
+    let tail = title[start..].trim_end();
+    let title_width = measure(ui, tail, body);
+    let tag_width = measure(ui, tag, tag_style);
+    if title_width + TAG_GAP + tag_width <= width {
+        ui.row(Node::row().w_px(width).gap(TAG_GAP), |ui| {
+            text(ui, tail, body.w_px(title_width), INK);
+            text(ui, tag, tag_style.w_px(tag_width), TAG_INK);
+        });
+    } else {
+        text(ui, tail, body.w_px(width).wrap_glyph(), INK);
+        text(ui, tag, tag_style.w_px(width).wrap_glyph(), TAG_INK);
+    }
+}
+
+fn measure(ui: &mut Ui, label: &str, style: Label) -> f32 {
+    ui.text_service()
+        .width(label, style.pad(0.0), None)
+        .unwrap_or(f32::INFINITY)
 }
 
 fn line(ui: &mut Ui, key: &'static str) {
@@ -200,7 +234,8 @@ fn text(ui: &mut Ui, value: &str, style: Label, color: Rgba) {
 mod tests {
     use super::*;
     use crate::commands;
-    use pxui::{Event, FontData, FrameIn, KeyCode, Rect, UiDesc, testing};
+    use input::Key;
+    use pxui::{Event, FontData, FrameIn, Rect, UiDesc, testing};
 
     fn headless() -> Ui {
         let fonts = [
@@ -216,6 +251,80 @@ mod tests {
 
     fn bounds(ui: &Ui, role: Role, name: &str) -> Rect {
         testing::find(ui, role, name).unwrap_or_else(|| panic!("missing {role:?} {name}"))
+    }
+
+    #[test]
+    fn shortcut_rows_keep_words_and_flow_tags_at_authored_cadence() {
+        let keys = commands::Keys::new(None);
+        assert_eq!(keys.shortcuts().len(), 34);
+        mem_sys::set_peer(pxui::library_counter);
+        for (width, dialog_x, dialog_width, edit_x) in [
+            (960.0, 120.0, 720.0, 609.0),
+            (800.0, 40.0, 720.0, 529.0),
+            (480.0, 16.0, 448.0, 29.0),
+        ] {
+            let mut ui = headless();
+            let input = FrameIn::new(width, 640.0);
+            let mut draw = |ui: &mut Ui| assert!(!paint(ui, keys.shortcuts(), [width, 640.0]));
+            for _ in 0..4 {
+                ui.frame(&input, &mut draw).unwrap();
+            }
+            let dialog = bounds(&ui, Role::Dialog, TITLE);
+            assert_eq!(dialog, Rect::new(dialog_x, 64.0, dialog_width, 512.0));
+            for row in keys.shortcuts() {
+                bounds(&ui, Role::Label, row.title);
+            }
+            let title = |name| bounds(&ui, Role::Label, name);
+            let tag = |owner: Rect, command| {
+                ui.a11y_nodes()
+                    .iter()
+                    .find(|node| {
+                        node.is_role(Role::Label)
+                            && ui.a11y_name_of(node) == command
+                            && node.rect.x >= owner.x
+                            && node.rect.x + node.rect.w <= owner.x + owner.w + 0.01
+                            && node.rect.y >= owner.y
+                            && node.rect.y + node.rect.h <= owner.y + owner.h + 0.01
+                    })
+                    .unwrap_or_else(|| panic!("missing {command} in {owner:?}"))
+                    .rect
+            };
+            let play = title("Play / pause");
+            let reverse = title("Reverse · stop · forward (repeat for 2× 4×)");
+            let step = title("Step frame / second");
+            let trim = title("Trim start / end to playhead");
+            let split = title("Split at playhead (a caption: caption.split)");
+            let compact = width == 480.0;
+            let step_tag = tag(step, "ui.show");
+            let trim_tag = tag(trim, "item.trim");
+            let reverse_tag = tag(reverse, "ui.play");
+            println!(
+                "SHORTCUTS {width} dialog={dialog:?} play={} reverse={} step={} step tag={:?} trim={} trim tag={:?} split={}",
+                play.y, reverse.y, step.y, step_tag, trim.y, trim_tag, split.y
+            );
+            assert!((play.x - dialog_x - 13.0).abs() < 0.15);
+            assert!((play.y - 142.0).abs() < 0.15);
+            assert!((split.x - edit_x).abs() < 0.15);
+            assert!((reverse.y - play.y - 22.4).abs() < 0.15);
+            assert!((step.y - reverse.y - if compact { 53.2 } else { 37.8 }).abs() < 0.15);
+            assert!((trim.y - split.y - if compact { 53.2 } else { 37.8 }).abs() < 0.15);
+            assert!((step_tag.y - step.y - ROW_LINE).abs() < 0.15);
+            assert!((trim_tag.y - trim.y - ROW_LINE).abs() < 0.15);
+            if compact {
+                let second = measure(&mut ui, "second", BODY);
+                let playhead = measure(&mut ui, "playhead", BODY);
+                assert!((step_tag.x - step.x - second - TAG_GAP).abs() < 0.15);
+                assert!((trim_tag.x - trim.x - playhead - TAG_GAP).abs() < 0.15);
+                assert!((reverse_tag.x - reverse.x).abs() < 0.15);
+            } else {
+                assert!(reverse_tag.x > reverse.x);
+                assert!((reverse_tag.y - reverse.y - ROW_LINE).abs() < 0.15);
+            }
+            splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
+                .warm(&mut || {
+                    ui.frame(&input, &mut draw).unwrap();
+                });
+        }
     }
 
     #[test]
@@ -240,11 +349,11 @@ mod tests {
             .unwrap();
         assert!(play.keys.contains("PageDown") && play.keys.starts_with("Space"));
         mem_sys::set_peer(pxui::library_counter);
-        for (width, sheet_width, columns) in [
-            (960.0, 720.0, 3),
-            (800.0, 720.0, 3),
-            (480.0, 448.0, 2),
-            (400.0, 368.0, 1),
+        for (width, sheet_width, columns, column_width) in [
+            (960.0, 720.0, 3, 218.0),
+            (800.0, 720.0, 3, 218.0),
+            (480.0, 448.0, 2, 201.0),
+            (400.0, 368.0, 1, 342.0),
         ] {
             let height = 940.0;
             let mut ui = headless();
@@ -287,7 +396,7 @@ mod tests {
                 title.x + title.w <= chord.x && tag.x + tag.w <= chord.x,
                 "title {title:?}, tag {tag:?}, chord {chord:?}"
             );
-            assert!(chord.x + chord.w <= dialog.x + dialog.w - 10.0);
+            assert!((chord.x + chord.w - first.x - column_width).abs() < 0.15);
             assert!(chord.h > 14.0, "{chord:?}");
             bounds(&ui, Role::Label, "C · F5");
             bounds(&ui, Role::Label, "⌦ · ⇧⌫");
@@ -302,38 +411,48 @@ mod tests {
     #[test]
     fn shortcut_dialog_closes_from_button_keyboard_and_escape() {
         let keys = commands::Keys::new(None);
-        for action in [None, Some(KeyCode::Enter), Some(KeyCode::Escape)] {
-            let mut closed = false;
-            let build = &mut |ui: &mut Ui| closed |= paint(ui, keys.shortcuts(), [320.0, 240.0]);
-            let mut ui = headless();
-            for _ in 0..3 {
-                testing::frame(&mut ui, &[], build);
-            }
-            let scroll = ui
-                .a11y_nodes()
-                .iter()
-                .find(|node| node.is_role(Role::ScrollArea))
-                .unwrap();
-            assert!(scroll.rect.h <= 240.0 * 0.8 - HEADER);
-            match action {
-                Some(key) => testing::key(&mut ui, key, build),
-                None => {
-                    let button = bounds(&ui, Role::Button, "Close");
-                    let x = f64::from(button.x + button.w * 0.5);
-                    let y = f64::from(button.y + button.h * 0.5);
-                    testing::frame(
-                        &mut ui,
-                        &[Event::pointer(Event::POINTER_PRESSED, 0, x, y)],
-                        build,
-                    );
-                    testing::frame(
-                        &mut ui,
-                        &[Event::pointer(Event::POINTER_RELEASED, 0, x, y)],
-                        build,
-                    );
+        for (width, height) in [
+            (960.0, 640.0),
+            (800.0, 640.0),
+            (480.0, 640.0),
+            (320.0, 240.0),
+        ] {
+            for action in [None, Some(Key::Enter), Some(Key::Escape)] {
+                let mut closed = false;
+                let mut build =
+                    |ui: &mut Ui| closed |= paint(ui, keys.shortcuts(), [width, height]);
+                let mut frame = |ui: &mut Ui, events: &[Event]| {
+                    ui.frame(&FrameIn::new(width, height).events(events), &mut build)
+                        .unwrap();
+                };
+                let mut ui = headless();
+                for _ in 0..3 {
+                    frame(&mut ui, &[]);
                 }
+                let scroll = ui
+                    .a11y_nodes()
+                    .iter()
+                    .find(|node| node.is_role(Role::ScrollArea))
+                    .unwrap();
+                assert!(scroll.rect.h <= height * 0.8 - HEADER);
+                match action {
+                    Some(key) => frame(
+                        &mut ui,
+                        &[
+                            Event::key(Event::KEY_PRESSED, key.code()),
+                            Event::key(Event::KEY_RELEASED, key.code()),
+                        ],
+                    ),
+                    None => {
+                        let button = bounds(&ui, Role::Button, "Close");
+                        let x = f64::from(button.x + button.w * 0.5);
+                        let y = f64::from(button.y + button.h * 0.5);
+                        frame(&mut ui, &[Event::pointer(Event::POINTER_PRESSED, 0, x, y)]);
+                        frame(&mut ui, &[Event::pointer(Event::POINTER_RELEASED, 0, x, y)]);
+                    }
+                }
+                assert!(closed, "{width} {action:?}");
             }
-            assert!(closed, "{action:?}");
         }
     }
 }

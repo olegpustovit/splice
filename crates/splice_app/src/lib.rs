@@ -2116,21 +2116,24 @@ fn paint_viewer(
             intents.timeline.state = timeline.clone();
             return;
         }
-        paint_titlebar(ui);
         if active_view != editor_titlebar::View::Editor {
             if active_view == editor_titlebar::View::Agent
                 && let Some((lab, images)) = lab
             {
-                intents.lab = editor_lab::paint(
+                intents.lab = editor_lab::paint_with_titlebar(
                     ui,
                     project
                         .map(|project| (project.rev, session.and_then(|(state, _)| state.open()))),
                     lab,
                     images,
                     session,
-                    titlebar.height(),
+                    (titlebar.height(), &mut paint_titlebar),
                 );
+                if sheet.is_none() && drawer.is_none() {
+                    intents.lab.route_scroll_keys(ui);
+                }
             } else {
+                paint_titlebar(ui);
                 intents.view_selection = editor_views::paint_with_parity(
                     ui,
                     project,
@@ -2143,6 +2146,7 @@ fn paint_viewer(
             intents.timeline.state = timeline.clone();
             return;
         }
+        paint_titlebar(ui);
         let component = timeline.component();
         let selection = if let Some((clip, part, key)) = component {
             inspector::Selection::Component(clip, part, key)
@@ -3094,6 +3098,300 @@ mod viewer_tests {
         assert!(testing::find(&ui, Role::Label, "mrk_1 · absent → 00:00:08–00:00:08").is_some());
         assert_eq!(viewer.store().project().rev, 0);
         assert!(viewer.store().project().markers.is_empty());
+        viewer.close().unwrap();
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn agent_page_scroll_moves_compact_titlebar_and_restores_the_anchor() {
+        use pxui::{A11yAction, A11yStates, Event, testing};
+
+        const REQUEST: &str = "Request · tools/call arguments (JSON)";
+        const RESULT: &str = "Result · edit.apply";
+        const AGENT: &str = "Agent · MCP";
+
+        let folder = std::env::temp_dir().join(format!("splice-lab-page-{}", std::process::id()));
+        fs::create_dir(&folder).unwrap();
+        let mut store = Store::create(&folder.join("Lab.splice"), &Project::default()).unwrap();
+        let session_id = store.start_session("fixture", 1).unwrap().id;
+        let mut session = editor_session::State::default();
+        session.refresh(Some(&store), Some(session_id));
+        let mut viewer = Viewer::new(store, None);
+        let mut lab = editor_lab::Lab::new();
+        let args = splice_json::parse(&format!(
+            r#"{{"projectId":"prj_1","sessionId":"{session_id}","ifRevision":"r0","dryRun":true,"ops":[{{"cmd":"marker.add","at":8,"name":"Beat"}}]}}"#
+        ))
+        .unwrap();
+        let request = Json::Object(vec![
+            ("command".into(), Json::String("tool".into())),
+            ("name".into(), Json::String("edit.apply".into())),
+            ("args".into(), args.clone()),
+            ("client".into(), Json::String("lab-page-test".into())),
+        ]);
+        let mut draft = String::new();
+        splice_json::write(&args, &mut draft).unwrap();
+        lab.set_draft(draft);
+        // Keep enough real call history below the result for a full-height viewport.
+        for _ in 0..8 {
+            let reply = viewer.handle(&request, 0, &mut |_, _| panic!("unexpected viewer command"));
+            assert_eq!(
+                reply
+                    .field("result")
+                    .and_then(|result| result.field("isError"))
+                    .and_then(Json::as_bool),
+                Some(false),
+            );
+            lab.set_reply("edit.apply", &args, &reply);
+        }
+        assert_eq!(viewer.store().project().rev, 0);
+        let store = viewer.store();
+        let keys = commands::Keys::new(None);
+        let bounds = |ui: &Ui, role, name| {
+            testing::find(ui, role, name).unwrap_or_else(|| panic!("missing {name}"))
+        };
+        let tab = |ui: &Ui, name| bounds(ui, Role::Button, name);
+        let shown = |ui: &Ui, name| {
+            ui.a11y_nodes().iter().any(|node| {
+                node.is_role(Role::Button)
+                    && ui.a11y_name_of(node) == name
+                    && node.states & A11yStates::VISIBLE.bits() != 0
+            })
+        };
+        mem_sys::set_peer(pxui::library_counter);
+
+        for width in [1280.0, 960.0, 800.0, 480.0] {
+            use editor_titlebar::View;
+            let size = [width, 640.0];
+            let compact = width <= 820.0;
+            let mut ui = viewer_ui().unwrap();
+            ui.set_a11y(true);
+            let mut layout = EditorLayout::new(size);
+            layout.show_view(View::Agent);
+            let mut cache = ViewerCache::default();
+            let mut draw = |ui: &mut Ui, layout: &mut EditorLayout, events: &[Event]| {
+                let mut intents = ViewerIntents::default();
+                ui.frame(&FrameIn::new(width, 640.0).events(events), &mut |ui| {
+                    intents.merge(paint_viewer(
+                        ui,
+                        Some("Lab fixture"),
+                        (
+                            Some(store.project()),
+                            Some((&lab, &[])),
+                            None,
+                            Some((&session, store)),
+                            Some(&keys),
+                        ),
+                        layout.clone(),
+                        ([None; 3], &[]),
+                        (&mut cache, &[], None),
+                        playbar::View {
+                            at: 0,
+                            end: 0,
+                            fps: 30,
+                            play: splice_kit::CommandState::default(),
+                            rate: 0,
+                            dragging: false,
+                        },
+                    ));
+                })
+                .unwrap();
+                layout.lab_scroll.settle(ui, &intents.lab);
+                assert!(!intents.lab.changed());
+                if let Some(editor_titlebar::Action::View(view)) = intents.titlebar {
+                    layout.show_view(view);
+                    layout.sheet = None;
+                }
+                if let Some(selection) = intents.view_selection {
+                    layout.view_selection = selection.resolve();
+                }
+            };
+            let tap = |ui: &mut Ui,
+                       draw: &mut dyn FnMut(&mut Ui, &mut EditorLayout, &[Event]),
+                       layout: &mut EditorLayout,
+                       rect: Rect| {
+                let x = f64::from(rect.x + rect.w * 0.5);
+                let y = f64::from(rect.y + rect.h * 0.5);
+                for kind in [Event::POINTER_PRESSED, Event::POINTER_RELEASED] {
+                    draw(ui, layout, &[Event::pointer(kind, 0, x, y)]);
+                }
+            };
+            let mut encoded = Events::default();
+            let key = |key| {
+                [
+                    input::Event::KeyPressed(key),
+                    input::Event::KeyReleased(key),
+                ]
+            };
+            for _ in 0..4 {
+                draw(&mut ui, &mut layout, &[]);
+            }
+            let top_tab = tab(&ui, AGENT);
+            let spec_tab = tab(&ui, "Spec");
+            assert!(shown(&ui, AGENT) && shown(&ui, "Spec"));
+            let area = if compact {
+                "Agent Lab"
+            } else {
+                "Agent request and result"
+            };
+            let pane = bounds(&ui, Role::ScrollArea, area);
+            let request_y = bounds(&ui, Role::Label, REQUEST).y;
+            let result_y = bounds(&ui, Role::Label, RESULT).y;
+            eprintln!(
+                "AGENT|{width}|top tab {top_tab:?}|pane {pane:?}|request {request_y}|result {result_y}"
+            );
+
+            if !compact {
+                let rail = bounds(&ui, Role::ScrollArea, "MCP tools");
+                let dock = bounds(&ui, Role::ScrollArea, "Session activity");
+                let events = [
+                    Event::pointer(
+                        Event::POINTER_MOVED,
+                        0,
+                        (pane.x + 2.0).into(),
+                        (pane.y + 40.0).into(),
+                    ),
+                    Event::pointer(Event::SCROLLED, 0, 0.0, -4.0),
+                ];
+                draw(&mut ui, &mut layout, &events);
+                assert_eq!(tab(&ui, AGENT), top_tab);
+                assert_eq!(bounds(&ui, Role::ScrollArea, "MCP tools"), rail);
+                assert_eq!(bounds(&ui, Role::ScrollArea, "Session activity"), dock);
+                assert!(bounds(&ui, Role::Label, REQUEST).y < request_y);
+                let scrolled = bounds(&ui, Role::Label, REQUEST).y;
+                draw(&mut ui, &mut layout, encoded.encode(&key(input::Key::Home)));
+                assert_eq!(bounds(&ui, Role::Label, REQUEST).y, scrolled);
+                splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
+                    .warm(&mut || draw(&mut ui, &mut layout, &[]));
+                continue;
+            }
+
+            assert_eq!(pane, Rect::new(0.0, 0.0, width, 640.0));
+            let moved = [
+                Event::pointer(Event::POINTER_MOVED, 0, 7.0, 16.0),
+                Event::pointer(Event::TRACKPAD_SCROLLED, 0, 0.0, -16.0),
+                Event::pointer(Event::TRACKPAD_SCROLLED, 1, 0.0, -42.0),
+                Event::pointer(Event::SCROLLED, 0, 0.0, -2.0),
+            ];
+            draw(&mut ui, &mut layout, &moved);
+            assert!((tab(&ui, AGENT).y - top_tab.y + 58.0).abs() < 0.01);
+            assert!(!shown(&ui, AGENT) && !shown(&ui, "Spec"));
+            tap(&mut ui, &mut draw, &mut layout, spec_tab);
+            assert_eq!(layout.view, View::Agent);
+
+            let scroll_id = ui
+                .a11y_nodes()
+                .iter()
+                .find(|node| node.is_role(Role::ScrollArea) && ui.a11y_name_of(node) == area)
+                .unwrap()
+                .id;
+            let anchor = |ui: &Ui, name| bounds(ui, Role::Label, name).y;
+            let scroll_to = |ui: &mut Ui, name, inset| {
+                ui.inject_a11y(&[A11yAction {
+                    id: scroll_id,
+                    action_code: 8,
+                    payload: f64::from(anchor(ui, name) - inset),
+                    ..A11yAction::default()
+                }]);
+            };
+            scroll_to(&mut ui, REQUEST, 0.0);
+            draw(&mut ui, &mut layout, &[]);
+            assert!(anchor(&ui, REQUEST).abs() < 0.02);
+            let editor = bounds(&ui, Role::TextArea, "Request arguments (JSON)");
+            tap(&mut ui, &mut draw, &mut layout, editor);
+            assert!(ui.text_input_focused());
+            draw(&mut ui, &mut layout, encoded.encode(&key(input::Key::Home)));
+            assert!(anchor(&ui, REQUEST).abs() < 0.02);
+            draw(&mut ui, &mut layout, &[Event::new(Event::FOCUS_LOST)]);
+
+            scroll_to(&mut ui, RESULT, 8.0);
+            draw(&mut ui, &mut layout, &[]);
+            assert!((anchor(&ui, RESULT) - 8.0).abs() < 0.02);
+            scroll_to(&mut ui, RESULT, 0.0);
+            draw(&mut ui, &mut layout, &[]);
+            let saved = bounds(&ui, Role::Label, RESULT);
+            eprintln!(
+                "AGENT|{width}|result {saved:?}|scrolled tab {:?}",
+                tab(&ui, AGENT)
+            );
+            assert!(saved.y.abs() < 0.02);
+            assert!(!shown(&ui, AGENT));
+            let mut fresh = viewer_ui().unwrap();
+            fresh.set_a11y(true);
+            let mut capture = layout.clone();
+            assert!(capture.lab_scroll.restore());
+            for _ in 0..3 {
+                draw(&mut fresh, &mut capture, &[]);
+            }
+            assert_eq!(bounds(&fresh, Role::Label, RESULT), saved);
+            assert!(!shown(&fresh, AGENT));
+
+            layout.show_view(View::Spec);
+            draw(&mut ui, &mut layout, &[]);
+            assert!(shown(&ui, AGENT));
+            let to_agent = tab(&ui, AGENT);
+            tap(&mut ui, &mut draw, &mut layout, to_agent);
+            assert_eq!(layout.view, View::Agent);
+            for _ in 0..3 {
+                draw(&mut ui, &mut layout, &[]);
+            }
+            assert_eq!(bounds(&ui, Role::Label, RESULT), saved);
+            assert!(!shown(&ui, AGENT));
+            draw(&mut ui, &mut layout, encoded.encode(&key(input::Key::Home)));
+            draw(&mut ui, &mut layout, &[]);
+            assert_eq!(tab(&ui, AGENT), top_tab);
+            assert!(shown(&ui, AGENT));
+
+            draw(
+                &mut ui,
+                &mut layout,
+                encoded.encode(&key(input::Key::PageDown)),
+            );
+            draw(&mut ui, &mut layout, &[]);
+            assert!((anchor(&ui, REQUEST) - request_y + 640.0).abs() < 0.02);
+            draw(
+                &mut ui,
+                &mut layout,
+                encoded.encode(&key(input::Key::PageUp)),
+            );
+            draw(&mut ui, &mut layout, &[]);
+            assert_eq!(tab(&ui, AGENT), top_tab);
+            draw(&mut ui, &mut layout, encoded.encode(&key(input::Key::End)));
+            draw(&mut ui, &mut layout, &[]);
+            assert!(anchor(&ui, RESULT) < 0.0);
+            draw(&mut ui, &mut layout, encoded.encode(&key(input::Key::Home)));
+            draw(&mut ui, &mut layout, &[Event::new(Event::FOCUS_LOST)]);
+            draw(&mut ui, &mut layout, encoded.encode(&key(input::Key::Tab)));
+            draw(
+                &mut ui,
+                &mut layout,
+                encoded.encode(&key(input::Key::Enter)),
+            );
+            assert_eq!(layout.view, View::Editor);
+            draw(&mut ui, &mut layout, &[]);
+            let to_agent = tab(&ui, AGENT);
+            tap(&mut ui, &mut draw, &mut layout, to_agent);
+            assert_eq!(layout.view, View::Agent);
+            for _ in 0..4 {
+                draw(&mut ui, &mut layout, &[]);
+            }
+            assert_eq!(tab(&ui, AGENT), top_tab);
+
+            let hover = Event::pointer(Event::POINTER_MOVED, 0, 2.0, 200.0);
+            draw(&mut ui, &mut layout, &[hover]);
+            let down = Event::pointer(Event::SCROLLED, 0, 0.0, -5.0);
+            let up = Event::pointer(Event::SCROLLED, 0, 0.0, 5.0);
+            let mut cycle = || {
+                for events in [&[down][..], &[], &[up]] {
+                    draw(&mut ui, &mut layout, events);
+                }
+            };
+            for _ in 0..8 {
+                cycle();
+            }
+            splice_testkit::alloc::Meter::new(mem_sys::local_alloc_count, mem_sys::local_reset)
+                .warm(&mut cycle);
+            assert_eq!(tab(&ui, AGENT), top_tab);
+        }
         viewer.close().unwrap();
         fs::remove_dir_all(folder).unwrap();
     }
